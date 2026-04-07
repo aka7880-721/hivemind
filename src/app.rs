@@ -30,7 +30,7 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
@@ -186,21 +186,6 @@ impl App {
         frame.render_widget(block, area);
         self.render_header_contact(frame, area);
 
-        let logo = self.logo.render(inner.height);
-
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(4),
-                Constraint::Length(logo.width()),
-                Constraint::Length(6),
-                Constraint::Min(30),
-            ])
-            .split(inner);
-
-        let logo_area = center_vertically(chunks[1], logo.lines().len() as u16);
-        frame.render_widget(Paragraph::new(logo.lines().to_vec()), logo_area);
-
         let version_label = format!("v{}", APP_VERSION);
         let banner = ASCII_HEADER
             .into_iter()
@@ -219,7 +204,30 @@ impl App {
             })
             .collect::<Vec<_>>();
 
-        let banner_area = center_vertically(chunks[3], banner.len() as u16);
+        let logo = self.logo.render(inner.height);
+        let banner_width = banner
+            .iter()
+            .map(|line| line.width() as u16)
+            .max()
+            .unwrap_or(0);
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Fill(1),
+                Constraint::Length(4),
+                Constraint::Length(logo.width()),
+                Constraint::Length(6),
+                Constraint::Length(banner_width),
+                Constraint::Fill(1),
+            ])
+            .flex(Flex::Center)
+            .split(inner);
+
+        let logo_area = center_vertically(chunks[2], logo.lines().len() as u16);
+        frame.render_widget(Paragraph::new(logo.lines().to_vec()), logo_area);
+
+        let banner_area = center_vertically(chunks[4], banner.len() as u16);
         frame.render_widget(Paragraph::new(banner), banner_area);
     }
 
@@ -657,58 +665,56 @@ impl App {
 
         let sections = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(4), Constraint::Min(8), Constraint::Length(3)])
+            .constraints([Constraint::Length(4), Constraint::Min(8)])
             .split(inner);
 
         let header = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
-            Line::from("Edit paths and git settings, then press F2 or Save."),
-            Line::from("Tab/Shift+Tab moves between fields. Mouse clicks also focus fields."),
+            Line::from("Edit the same core fields as New Project, then press F2 or Save."),
+            Line::from("Tab/Shift+Tab moves between fields. Left/Right changes enums. Del removes the project."),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
-        let field_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Length(2); dialog.fields.len()])
-            .split(sections[1]);
-        for (index, (field, row)) in dialog.fields.iter().zip(field_rows.iter()).enumerate() {
-            let focused = dialog.focus_index == index;
-            let row_split = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(20), Constraint::Min(10)])
-                .split(*row);
-            frame.render_widget(Paragraph::new(field.label.clone()), row_split[0]);
-            let style = if focused {
-                Style::default().fg(Color::White)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let block = if focused {
-                Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan))
-            } else {
-                Block::default().borders(Borders::ALL)
-            };
-            frame.render_widget(
-                Paragraph::new(field.input.display_value(focused)).style(style).block(block),
-                row_split[1],
-            );
-            self.hit_targets.push(HitTarget::new(*row, HitAction::EditProjectField(index)));
+        let fields = dialog.visible_fields();
+        let button_gap_count = fields
+            .iter()
+            .filter(|field| matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove))
+            .count() as u16;
+        let preferred_row_height = 3;
+        let row_height = if (fields.len() as u16 * preferred_row_height) + button_gap_count <= sections[1].height {
+            preferred_row_height
+        } else {
+            2
+        };
+        let button_gap = if row_height >= 3 { 1 } else { 0 };
+
+        let mut constraints = Vec::with_capacity(fields.len() + button_gap_count as usize);
+        for field in &fields {
+            constraints.push(Constraint::Length(row_height));
+            if button_gap > 0 && matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove) {
+                constraints.push(Constraint::Length(button_gap));
+            }
         }
 
-        let buttons = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(18), Constraint::Min(10)])
-            .split(sections[2]);
-        frame.render_widget(
-            Paragraph::new(" Save ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Green)),
-            buttons[0],
-        );
-        frame.render_widget(
-            Paragraph::new(" Cancel ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Red)),
-            buttons[1],
-        );
-        self.hit_targets.push(HitTarget::new(buttons[0], HitAction::SaveProjectEdit));
-        self.hit_targets.push(HitTarget::new(buttons[1], HitAction::CancelProjectEdit));
+        let field_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(sections[1]);
+
+        let mut row_index = 0;
+        for field in &fields {
+            let row = field_rows[row_index];
+            row_index += 1;
+            if button_gap > 0 && matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove) {
+                row_index += 1;
+            }
+
+            let focused = *field == dialog.focus;
+            let (label, action) = dialog.render_field(*field);
+            let value = dialog.display_value_for_field(*field, focused);
+            self.render_form_row(frame, row, label, value, focused, action.clone());
+            self.hit_targets.push(HitTarget::new(row, action));
+        }
     }
 
     fn render_wizard(&mut self, frame: &mut Frame, area: Rect) {
@@ -828,7 +834,15 @@ impl App {
             label_area,
         );
 
-        let is_action_button = matches!(action, HitAction::ValidateWizard | HitAction::SaveWizard | HitAction::CancelWizard);
+        let is_action_button = matches!(
+            action,
+            HitAction::ValidateWizard
+                | HitAction::SaveWizard
+                | HitAction::CancelWizard
+                | HitAction::SaveProjectEdit
+                | HitAction::RemoveProject
+                | HitAction::CancelProjectEdit
+        );
         let field_area = if is_action_button {
             let button_width = (value.len() as u16 + 4).max(12);
             Rect {
@@ -856,7 +870,19 @@ impl App {
                 Style::default().fg(Color::Black).bg(Color::Green),
                 Block::default().borders(Borders::ALL).title(" action "),
             ),
+            HitAction::SaveProjectEdit => (
+                Style::default().fg(Color::Black).bg(Color::Green),
+                Block::default().borders(Borders::ALL).title(" action "),
+            ),
+            HitAction::RemoveProject => (
+                Style::default().fg(Color::White).bg(Color::Red),
+                Block::default().borders(Borders::ALL).title(" action "),
+            ),
             HitAction::CancelWizard => (
+                Style::default().fg(Color::Black).bg(Color::Yellow),
+                Block::default().borders(Borders::ALL).title(" action "),
+            ),
+            HitAction::CancelProjectEdit => (
                 Style::default().fg(Color::White).bg(Color::Red),
                 Block::default().borders(Borders::ALL).title(" action "),
             ),
@@ -892,7 +918,7 @@ impl App {
         frame.render_widget(block, area);
 
         let help = match self.screen {
-            Screen::Settings if self.project_edit_dialog.is_some() => "Tab move | F2 save | Esc cancel",
+            Screen::Settings if self.project_edit_dialog.is_some() => "Tab move | Left/Right change enums | F2 save | Del remove | Esc cancel",
             Screen::Dashboard if self.tag_dialog.is_some() => "Type tag name | Left/Right action | Enter run | Esc cancel",
             Screen::Dashboard if self.recent_changes_dialog.is_some() => "Up/Down scroll | T create tag | Esc close",
             Screen::Dashboard if self.bump_dialog.is_some() => "Left/Right change bump action | Enter apply | Esc cancel",
@@ -1063,6 +1089,43 @@ impl App {
     }
 
     fn handle_project_edit_key(&mut self, key: KeyEvent) -> Result<()> {
+        let focus_accepts_text = self
+            .project_edit_dialog
+            .as_ref()
+            .map(|dialog| dialog.focus_accepts_text())
+            .unwrap_or(false);
+
+        if focus_accepts_text {
+            match key.code {
+                KeyCode::Esc => {
+                    self.project_edit_dialog = None;
+                    self.status = StatusMessage::info("Project edit cancelled.");
+                }
+                KeyCode::Tab | KeyCode::Down => {
+                    if let Some(dialog) = &mut self.project_edit_dialog {
+                        dialog.focus_next();
+                    }
+                }
+                KeyCode::BackTab | KeyCode::Up => {
+                    if let Some(dialog) = &mut self.project_edit_dialog {
+                        dialog.focus_previous();
+                    }
+                }
+                KeyCode::F(2) => return self.save_project_edit(),
+                KeyCode::Enter => {
+                    if let Some(dialog) = &mut self.project_edit_dialog {
+                        dialog.focus_next();
+                    }
+                }
+                _ => {
+                    if let Some(dialog) = &mut self.project_edit_dialog {
+                        dialog.handle_text_input(key);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Esc => {
                 self.project_edit_dialog = None;
@@ -1083,6 +1146,9 @@ impl App {
                     if dialog.is_save_focused() {
                         return self.save_project_edit();
                     }
+                    if dialog.is_remove_focused() {
+                        return self.remove_project();
+                    }
                     if dialog.is_cancel_focused() {
                         self.project_edit_dialog = None;
                         self.status = StatusMessage::info("Project edit cancelled.");
@@ -1091,6 +1157,17 @@ impl App {
                 }
             }
             KeyCode::F(2) => return self.save_project_edit(),
+            KeyCode::Delete if key.modifiers.is_empty() => return self.remove_project(),
+            KeyCode::Left => {
+                if let Some(dialog) = &mut self.project_edit_dialog {
+                    dialog.adjust_current_enum(-1);
+                }
+            }
+            KeyCode::Right => {
+                if let Some(dialog) = &mut self.project_edit_dialog {
+                    dialog.adjust_current_enum(1);
+                }
+            }
             _ => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.handle_text_input(key);
@@ -1204,12 +1281,13 @@ impl App {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
             }
             HitAction::OpenProjectEdit => return self.open_project_edit_dialog(),
-            HitAction::EditProjectField(index) => {
+            HitAction::EditProjectField(field) => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
-                    dialog.focus_index = index;
+                    dialog.focus = field;
                 }
             }
             HitAction::SaveProjectEdit => return self.save_project_edit(),
+            HitAction::RemoveProject => return self.remove_project(),
             HitAction::CancelProjectEdit => {
                 self.project_edit_dialog = None;
                 self.status = StatusMessage::info("Project edit cancelled.");
@@ -1269,7 +1347,7 @@ impl App {
         let project = self.selected_project()?;
         let dialog = ProjectEditDialog::from_project(project_index, project)?;
         self.project_edit_dialog = Some(dialog);
-        self.status = StatusMessage::info("Amend repo roots, remotes, or target paths, then save the project.");
+        self.status = StatusMessage::info("Amend project settings, then save or remove the project.");
         Ok(())
     }
 
@@ -1287,6 +1365,27 @@ impl App {
         self.config_store.save(&self.config)?;
         self.project_edit_dialog = None;
         self.status = StatusMessage::success("Project settings updated.");
+        Ok(())
+    }
+
+    fn remove_project(&mut self) -> Result<()> {
+        let dialog = self
+            .project_edit_dialog
+            .clone()
+            .ok_or_else(|| anyhow!("no project edit is in progress"))?;
+        if dialog.project_index >= self.config.projects.len() {
+            bail!("selected project no longer exists");
+        }
+
+        let removed = self.config.projects.remove(dialog.project_index);
+        self.config_store.save(&self.config)?;
+        self.project_edit_dialog = None;
+        if self.config.projects.is_empty() {
+            self.selected_project = 0;
+        } else {
+            self.selected_project = dialog.project_index.min(self.config.projects.len().saturating_sub(1));
+        }
+        self.status = StatusMessage::success(format!("Removed project '{}'.", removed.name));
         Ok(())
     }
 
@@ -1512,8 +1611,9 @@ enum HitAction {
     Quit,
     SelectProject(usize),
     OpenProjectEdit,
-    EditProjectField(usize),
+    EditProjectField(ProjectEditFocus),
     SaveProjectEdit,
+    RemoveProject,
     CancelProjectEdit,
     CloseRecentChanges,
     ScrollRecentChanges(i16),
@@ -1636,136 +1736,313 @@ impl TagAction {
 struct ProjectEditDialog {
     project_index: usize,
     project_name: String,
-    fields: Vec<ProjectEditField>,
-    focus_index: usize,
+    name: TextInput,
+    branch_name: TextInput,
+    target_path: TextInput,
+    target_key: TextInput,
+    repo_root: TextInput,
+    remote_url: TextInput,
+    project_type: ProjectType,
+    integration_mode: IntegrationMode,
+    version_scheme: VersionScheme,
+    focus: ProjectEditFocus,
 }
 
 impl ProjectEditDialog {
     fn from_project(project_index: usize, project: &ProjectConfig) -> Result<Self> {
-        let mut fields = Vec::new();
-        if let Some(repo) = &project.repo {
-            fields.push(ProjectEditField {
-                label: "Repo root".to_string(),
-                input: TextInput::with_value(repo.local_root.clone()),
-                kind: ProjectEditFieldKind::RepoRoot,
-            });
-            if project.integration_mode.requires_remote() {
-                fields.push(ProjectEditField {
-                    label: "Remote URL".to_string(),
-                    input: TextInput::with_value(repo.remote_url.clone().unwrap_or_default()),
-                    kind: ProjectEditFieldKind::RemoteUrl,
-                });
-            }
-        }
-
-        if project.project_type == ProjectType::AllInOne {
-            for (target_index, target) in project.targets.iter().enumerate() {
-                fields.push(ProjectEditField {
-                    label: format!("Target {} path", target_index + 1),
-                    input: TextInput::with_value(target.path.clone()),
-                    kind: ProjectEditFieldKind::TargetPath { branch_index: None, target_index },
-                });
-            }
+        let primary_target = if project.project_type == ProjectType::AllInOne {
+            project.targets.first()
         } else {
-            for (branch_index, branch) in project.branches.iter().enumerate() {
-                for (target_index, target) in branch.targets.iter().enumerate() {
-                    fields.push(ProjectEditField {
-                        label: format!("{} path", branch.name),
-                        input: TextInput::with_value(target.path.clone()),
-                        kind: ProjectEditFieldKind::TargetPath {
-                            branch_index: Some(branch_index),
-                            target_index,
-                        },
-                    });
-                }
-            }
+            project.branches.first().and_then(|branch| branch.targets.first())
         }
+        .ok_or_else(|| anyhow!("selected project does not contain any editable targets yet"))?;
 
-        if fields.is_empty() {
-            bail!("there are no editable settings for the selected project yet");
-        }
+        let branch_name = if project.project_type == ProjectType::Branched {
+            project
+                .branches
+                .first()
+                .map(|branch| branch.name.clone())
+                .ok_or_else(|| anyhow!("branched project does not contain any branches"))?
+        } else {
+            String::new()
+        };
+
+        let repo_root = project.repo.as_ref().map(|repo| repo.local_root.clone()).unwrap_or_default();
+        let remote_url = project
+            .repo
+            .as_ref()
+            .and_then(|repo| repo.remote_url.clone())
+            .unwrap_or_default();
 
         Ok(Self {
             project_index,
             project_name: project.name.clone(),
-            fields,
-            focus_index: 0,
+            name: TextInput::with_value(project.name.clone()),
+            branch_name: TextInput::with_value(branch_name),
+            target_path: TextInput::with_value(primary_target.path.clone()),
+            target_key: TextInput::with_value(primary_target.key_path.clone()),
+            repo_root: TextInput::with_value(repo_root),
+            remote_url: TextInput::with_value(remote_url),
+            project_type: project.project_type,
+            integration_mode: project.integration_mode,
+            version_scheme: project.version_scheme,
+            focus: ProjectEditFocus::Name,
         })
     }
 
     fn focus_next(&mut self) {
-        self.focus_index = (self.focus_index + 1) % (self.fields.len() + 2);
+        let fields = self.visible_fields();
+        let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
+        self.focus = fields[(index + 1) % fields.len()];
     }
 
     fn focus_previous(&mut self) {
-        self.focus_index = (self.focus_index + self.fields.len() + 1) % (self.fields.len() + 2);
+        let fields = self.visible_fields();
+        let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
+        self.focus = fields[(index + fields.len() - 1) % fields.len()];
     }
 
     fn is_save_focused(&self) -> bool {
-        self.focus_index == self.fields.len()
+        self.focus == ProjectEditFocus::Save
+    }
+
+    fn is_remove_focused(&self) -> bool {
+        self.focus == ProjectEditFocus::Remove
     }
 
     fn is_cancel_focused(&self) -> bool {
-        self.focus_index == self.fields.len() + 1
+        self.focus == ProjectEditFocus::Cancel
+    }
+
+    fn focus_accepts_text(&self) -> bool {
+        matches!(
+            self.focus,
+            ProjectEditFocus::Name
+                | ProjectEditFocus::BranchName
+                | ProjectEditFocus::TargetPath
+                | ProjectEditFocus::TargetKey
+                | ProjectEditFocus::RepoRoot
+                | ProjectEditFocus::RemoteUrl
+        )
+    }
+
+    fn visible_fields(&self) -> Vec<ProjectEditFocus> {
+        let mut fields = vec![ProjectEditFocus::Name, ProjectEditFocus::ProjectType];
+        if self.project_type == ProjectType::Branched {
+            fields.push(ProjectEditFocus::BranchName);
+        }
+        fields.extend([
+            ProjectEditFocus::VersionScheme,
+            ProjectEditFocus::IntegrationMode,
+            ProjectEditFocus::TargetPath,
+            ProjectEditFocus::TargetKey,
+        ]);
+        if self.integration_mode.requires_repo() {
+            fields.push(ProjectEditFocus::RepoRoot);
+        }
+        if self.integration_mode.requires_remote() {
+            fields.push(ProjectEditFocus::RemoteUrl);
+        }
+        fields.extend([ProjectEditFocus::Save, ProjectEditFocus::Remove, ProjectEditFocus::Cancel]);
+        fields
+    }
+
+    fn render_field(&self, field: ProjectEditFocus) -> (&'static str, HitAction) {
+        match field {
+            ProjectEditFocus::Name => ("Project name", HitAction::EditProjectField(field)),
+            ProjectEditFocus::ProjectType => ("Project type", HitAction::EditProjectField(field)),
+            ProjectEditFocus::BranchName => ("Initial branch", HitAction::EditProjectField(field)),
+            ProjectEditFocus::VersionScheme => ("Version scheme", HitAction::EditProjectField(field)),
+            ProjectEditFocus::IntegrationMode => ("Integration", HitAction::EditProjectField(field)),
+            ProjectEditFocus::TargetPath => ("Target path", HitAction::EditProjectField(field)),
+            ProjectEditFocus::TargetKey => ("Target key", HitAction::EditProjectField(field)),
+            ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
+            ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
+            ProjectEditFocus::Save => ("Save", HitAction::SaveProjectEdit),
+            ProjectEditFocus::Remove => ("Remove", HitAction::RemoveProject),
+            ProjectEditFocus::Cancel => ("Cancel", HitAction::CancelProjectEdit),
+        }
+    }
+
+    fn display_value_for_field(&self, field: ProjectEditFocus, focused: bool) -> String {
+        match field {
+            ProjectEditFocus::Name => self.name.display_value(focused),
+            ProjectEditFocus::ProjectType => format!("< {} >", self.project_type.display_name()),
+            ProjectEditFocus::BranchName => self.branch_name.display_value(focused),
+            ProjectEditFocus::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
+            ProjectEditFocus::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
+            ProjectEditFocus::TargetPath => self.target_path.display_value(focused),
+            ProjectEditFocus::TargetKey => self.target_key.display_value(focused),
+            ProjectEditFocus::RepoRoot => self.repo_root.display_value(focused),
+            ProjectEditFocus::RemoteUrl => self.remote_url.display_value(focused),
+            ProjectEditFocus::Save => "Persist project".to_string(),
+            ProjectEditFocus::Remove => "Delete project".to_string(),
+            ProjectEditFocus::Cancel => "Discard changes".to_string(),
+        }
+    }
+
+    fn adjust_current_enum(&mut self, delta: i32) {
+        match self.focus {
+            ProjectEditFocus::ProjectType => {
+                self.project_type = if delta >= 0 {
+                    self.project_type.next()
+                } else {
+                    self.project_type.previous()
+                };
+            }
+            ProjectEditFocus::VersionScheme => {
+                self.version_scheme = if delta >= 0 {
+                    self.version_scheme.next()
+                } else {
+                    self.version_scheme.previous()
+                };
+            }
+            ProjectEditFocus::IntegrationMode => {
+                self.integration_mode = if delta >= 0 {
+                    self.integration_mode.next()
+                } else {
+                    self.integration_mode.previous()
+                };
+            }
+            _ => {}
+        }
     }
 
     fn handle_text_input(&mut self, key: KeyEvent) {
-        if let Some(field) = self.fields.get_mut(self.focus_index) {
-            field.input.handle_key(key);
+        let Some(input) = self.active_input_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Char(character) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => input.insert(character),
+            KeyCode::Backspace => input.backspace(),
+            KeyCode::Delete => input.delete(),
+            KeyCode::Left => input.move_left(),
+            KeyCode::Right => input.move_right(),
+            KeyCode::Home => input.home(),
+            KeyCode::End => input.end(),
+            _ => {}
         }
     }
 
     fn insert_text(&mut self, text: &str) -> bool {
-        if let Some(field) = self.fields.get_mut(self.focus_index) {
-            field.input.insert_str(text);
+        if let Some(input) = self.active_input_mut() {
+            input.insert_str(text);
             return true;
         }
         false
     }
 
+    fn active_input_mut(&mut self) -> Option<&mut TextInput> {
+        match self.focus {
+            ProjectEditFocus::Name => Some(&mut self.name),
+            ProjectEditFocus::BranchName => Some(&mut self.branch_name),
+            ProjectEditFocus::TargetPath => Some(&mut self.target_path),
+            ProjectEditFocus::TargetKey => Some(&mut self.target_key),
+            ProjectEditFocus::RepoRoot => Some(&mut self.repo_root),
+            ProjectEditFocus::RemoteUrl => Some(&mut self.remote_url),
+            _ => None,
+        }
+    }
+
     fn apply(&self, project: &mut ProjectConfig) -> Result<()> {
-        for field in &self.fields {
-            let value = field.input.value.trim();
-            if value.is_empty() {
-                bail!("{} cannot be empty", field.label);
+        let project_name = self.name.value.trim();
+        if project_name.is_empty() {
+            bail!("project name cannot be empty");
+        }
+
+        let target_path = self.target_path.value.trim();
+        if target_path.is_empty() {
+            bail!("target path cannot be empty");
+        }
+
+        let target_key = self.target_key.value.trim();
+        if target_key.is_empty() {
+            bail!("target key cannot be empty");
+        }
+
+        let branch_name = self.branch_name.value.trim();
+        if self.project_type == ProjectType::Branched && branch_name.is_empty() {
+            bail!("initial branch cannot be empty");
+        }
+
+        let existing_target = if project.project_type == ProjectType::AllInOne {
+            project.targets.first()
+        } else {
+            project.branches.first().and_then(|branch| branch.targets.first())
+        }
+        .ok_or_else(|| anyhow!("selected project does not contain any editable targets yet"))?
+        .clone();
+
+        project.name = project_name.to_string();
+        project.project_type = self.project_type;
+        project.integration_mode = self.integration_mode;
+        project.unified_versioning = true;
+        project.version_scheme = self.version_scheme;
+
+        let target = TargetSpec {
+            label: existing_target.label,
+            path: target_path.to_string(),
+            key_path: target_key.to_string(),
+            format: existing_target.format,
+        };
+
+        if self.project_type == ProjectType::AllInOne {
+            project.targets = vec![target];
+            project.branches.clear();
+        } else {
+            project.targets.clear();
+            project.branches = vec![BranchConfig {
+                name: branch_name.to_string(),
+                version_scheme: self.version_scheme,
+                targets: vec![target],
+            }];
+        }
+
+        if self.integration_mode.requires_repo() {
+            let repo_root = self.repo_root.value.trim();
+            if repo_root.is_empty() {
+                bail!("repo root cannot be empty");
+            }
+            if !Path::new(repo_root).is_dir() {
+                bail!("repo root does not exist: {}", repo_root);
             }
 
-            match field.kind {
-                ProjectEditFieldKind::RepoRoot => {
-                    let repo = project.repo.as_mut().ok_or_else(|| anyhow!("project is not git-backed"))?;
-                    repo.local_root = value.to_string();
+            let remote_url = if self.integration_mode.requires_remote() {
+                let remote_url = self.remote_url.value.trim();
+                if remote_url.is_empty() {
+                    bail!("remote URL cannot be empty");
                 }
-                ProjectEditFieldKind::RemoteUrl => {
-                    let repo = project.repo.as_mut().ok_or_else(|| anyhow!("project is not git-backed"))?;
-                    repo.remote_url = Some(value.to_string());
-                }
-                ProjectEditFieldKind::TargetPath { branch_index: None, target_index } => {
-                    let target = project.targets.get_mut(target_index).ok_or_else(|| anyhow!("target index is out of range"))?;
-                    target.path = value.to_string();
-                }
-                ProjectEditFieldKind::TargetPath { branch_index: Some(branch_index), target_index } => {
-                    let branch = project.branches.get_mut(branch_index).ok_or_else(|| anyhow!("branch index is out of range"))?;
-                    let target = branch.targets.get_mut(target_index).ok_or_else(|| anyhow!("target index is out of range"))?;
-                    target.path = value.to_string();
-                }
-            }
+                Some(remote_url.to_string())
+            } else {
+                None
+            };
+
+            project.repo = Some(RepoConfig {
+                local_root: repo_root.to_string(),
+                remote_url,
+            });
+        } else {
+            project.repo = None;
         }
+
         Ok(())
     }
 }
 
-#[derive(Clone)]
-struct ProjectEditField {
-    label: String,
-    input: TextInput,
-    kind: ProjectEditFieldKind,
-}
-
-#[derive(Clone, Copy)]
-enum ProjectEditFieldKind {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProjectEditFocus {
+    Name,
+    ProjectType,
+    BranchName,
+    VersionScheme,
+    IntegrationMode,
+    TargetPath,
+    TargetKey,
     RepoRoot,
     RemoteUrl,
-    TargetPath { branch_index: Option<usize>, target_index: usize },
+    Save,
+    Remove,
+    Cancel,
 }
 
 #[derive(Clone)]
