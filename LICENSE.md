@@ -111,7 +111,7 @@ Pull Requests (PRs) are welcome under the following conditions:
 - Contributor grants ComfyHome™ the right to relicense contributions under commercial terms if needed
 
 Submitting a PR constitutes acceptance of these terms.
-For more info, please see CONTRIBUTING.md
+For more info, please see [CONTRIBUTING](https://github.com/comfy-home/perk-ComfyVersionBumper/edit/main/CONTRIBUTING.md)
 
 ---
 
