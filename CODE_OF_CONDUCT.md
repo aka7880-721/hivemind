@@ -50,7 +50,7 @@ It applies equally to contributors, maintainers, and users.
 
 If you experience or witness behaviour that violates this Code of Conduct, please report it privately to:
 
-**conduct@comfyhome.io**
+**support@comfyhome.io**
 
 Include:
 

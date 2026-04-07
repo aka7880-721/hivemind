@@ -40,7 +40,7 @@ By submitting a PR, you agree to the following:
 ### 3.1 Contribution License Agreement
 All contributions are:
 - Your original work
-- Licensed to ComfyHome™ under the **ComfyVersionBumper License v1.1**
+- Licensed to ComfyHome™ under the **ComfyVersionBumper License v1.2**
 - Assigning ComfyHome™ the right to:
   - Use your contribution
   - Modify it
