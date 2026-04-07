@@ -81,7 +81,7 @@ Features outside this scope may be declined.
 ---
 
 ## 5. Non‑Commercial License Reminder
-This project is distributed under the **ComfyVersionBumper License v1.1**, which:
+This project is distributed under the **ComfyVersionBumper License v1.2**, which:
 - Allows non‑commercial use
 - Prohibits commercial use without a separate license
 - Protects Branding Elements and trademarks

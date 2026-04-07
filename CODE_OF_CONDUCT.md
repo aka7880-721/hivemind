@@ -84,7 +84,7 @@ By participating in this project, you agree to:
 - Respect the project’s licensing model  
 - Avoid introducing harmful, insecure, or malicious code  
 - Use GitHub Issues for problem reporting  
-- Submit Pull Requests that follow the CONTRIBUTING guidelines  
+- Submit Pull Requests that follow the [CONTRIBUTING](https://github.com/comfy-home/perk-ComfyVersionBumper?tab=contributing-ov-file) guidelines  
 
 ---
 
