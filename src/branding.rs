@@ -1,9 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.1.
-// You may use, modify, and redistribute this file for non‑commercial purposes only,
-// provided that attribution is preserved and Branding Elements remain intact.
+// Licensed under the ComfyVersionBumper License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -27,6 +25,34 @@ pub const ASCII_HEADER: [&str; 4] = [
  r"▀█████ ▀███▀ ██   ██ ██      █    ▀██▀  ██▄▄▄ ██ ██ ▄▄██▀ ██ ▀███▀ ██ ▀██ ██▄▄█▀ ▀███▀ ██   ██ ██    ██▄▄▄ ██ ██",
  r"                                                                                                            {APP_VERSION}",
 ];
+
+pub const NARROW_ASCII_HEADER: [&str; 8] = [
+ r"                        ",
+ r" ██████╗██╗   ██╗██████╗ ",
+ r"██╔════╝██║   ██║██╔══██╗",
+ r"██║     ██║   ██║██████╔╝",
+ r"██║     ╚██╗ ██╔╝██╔══██╗",
+ r"╚██████╗ ╚████╔╝ ██████╔╝",
+ r" ╚═════╝  ╚═══╝  ╚═════╝ ",
+ r"                      {APP_VERSION}",
+ ];
+
+const HEADER_LOGO_MARGIN: u16 = 4;
+const HEADER_LOGO_GAP: u16 = 6;
+
+#[derive(Clone)]
+pub struct HeaderBanner {
+    lines: Vec<Line<'static>>,
+    width: u16,
+}
+
+#[derive(Clone)]
+pub struct HeaderContent {
+    banner: HeaderBanner,
+    show_logo: bool,
+    logo_margin: u16,
+    logo_gap: u16,
+}
 
 #[derive(Clone)]
 pub struct PixelLogo {
@@ -93,6 +119,100 @@ impl PixelLogoRender {
 
     pub fn width(&self) -> u16 {
         self.width
+    }
+}
+
+impl HeaderBanner {
+    pub fn lines(&self) -> &[Line<'static>] {
+        &self.lines
+    }
+
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+}
+
+impl HeaderContent {
+    pub fn banner(&self) -> &HeaderBanner {
+        &self.banner
+    }
+
+    pub fn show_logo(&self) -> bool {
+        self.show_logo
+    }
+
+    pub fn logo_margin(&self) -> u16 {
+        self.logo_margin
+    }
+
+    pub fn logo_gap(&self) -> u16 {
+        self.logo_gap
+    }
+}
+
+pub fn choose_header_content(inner_width: u16, logo_width: u16, version_label: &str) -> HeaderContent {
+    let wide_banner = build_header_banner(&ASCII_HEADER, version_label);
+    let narrow_banner = build_header_banner(&NARROW_ASCII_HEADER, version_label);
+    let wide_with_logo_width = HEADER_LOGO_MARGIN + logo_width + HEADER_LOGO_GAP + wide_banner.width();
+    let narrow_with_logo_width = HEADER_LOGO_MARGIN + logo_width + HEADER_LOGO_GAP + narrow_banner.width();
+
+    if inner_width >= wide_with_logo_width {
+        HeaderContent {
+            banner: wide_banner,
+            show_logo: true,
+            logo_margin: HEADER_LOGO_MARGIN,
+            logo_gap: HEADER_LOGO_GAP,
+        }
+    } else if inner_width >= wide_banner.width() {
+        HeaderContent {
+            banner: wide_banner,
+            show_logo: false,
+            logo_margin: 0,
+            logo_gap: 0,
+        }
+    } else if inner_width >= narrow_with_logo_width {
+        HeaderContent {
+            banner: narrow_banner,
+            show_logo: true,
+            logo_margin: HEADER_LOGO_MARGIN,
+            logo_gap: HEADER_LOGO_GAP,
+        }
+    } else {
+        HeaderContent {
+            banner: narrow_banner,
+            show_logo: false,
+            logo_margin: 0,
+            logo_gap: 0,
+        }
+    }
+}
+
+fn build_header_banner(lines: &[&str], version_label: &str) -> HeaderBanner {
+    let rendered = lines
+        .iter()
+        .map(|line| {
+            if let Some(index) = line.find("{APP_VERSION}") {
+                let prefix = &line[..index];
+                let suffix = &line[index + "{APP_VERSION}".len()..];
+                let spans = vec![
+                    Span::styled(prefix.to_string(), Style::default().fg(Color::White).bold()),
+                    Span::styled(version_label.to_string(), Style::default().fg(Color::Cyan).bold()),
+                    Span::styled(suffix.to_string(), Style::default().fg(Color::White).bold()),
+                ];
+                Line::from(spans)
+            } else {
+                Line::from(Span::styled(
+                    (*line).to_string(),
+                    Style::default().fg(Color::White).bold(),
+                ))
+            }
+        })
+        .collect::<Vec<_>>();
+    let width = rendered.iter().map(|line| line.width() as u16).max().unwrap_or(0);
+
+    HeaderBanner {
+        lines: rendered,
+        width,
     }
 }
 
