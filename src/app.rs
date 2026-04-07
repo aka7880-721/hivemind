@@ -1,23 +1,18 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.1.
-// You may use, modify, and redistribute this file for non‑commercial purposes only,
-// provided that attribution is preserved and Branding Elements remain intact.
+// Licensed under the ComfyVersionBumper License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
 use std::{
-    fs,
     io,
     path::Path,
-    process::Command,
     time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use arboard::Clipboard;
-use chrono::Local;
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
@@ -35,15 +30,18 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use toml_edit::{DocumentMut, Item, Value, value};
 
 use crate::{
-    branding::{ASCII_HEADER, PixelLogo},
+    branding::{PixelLogo, choose_header_content},
     config::{
         AppConfig, BranchConfig, ConfigStore, IntegrationMode, ProjectConfig, ProjectType,
         RepoConfig, TargetFormat, TargetSpec,
     },
-    versioning::{BumpAction, VersionScheme},
+    dialogs::{BumpDialog, RecentChangesDialog, TagDialog, TagAction, TextInput},
+    git::{ensure_gh_available, ensure_local_tag, run_gh_checked, run_git_checked},
+    targets::{ProbeKind, TargetProbe, probe_target, write_target_version},
+    ui::{center_vertically, centered_rect},
+    versioning::VersionScheme,
 };
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -186,49 +184,41 @@ impl App {
         frame.render_widget(block, area);
         self.render_header_contact(frame, area);
 
-        let version_label = format!("v{}", APP_VERSION);
-        let banner = ASCII_HEADER
-            .into_iter()
-            .map(|line| {
-                if let Some(index) = line.find("{APP_VERSION}") {
-                    let prefix = &line[..index];
-                    let suffix = &line[index + "{APP_VERSION}".len()..];
-                    let mut spans = Vec::new();
-                    spans.push(Span::styled(prefix, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
-                    spans.push(Span::styled(&version_label, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
-                    spans.push(Span::styled(suffix, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
-                    Line::from(spans)
-                } else {
-                    Line::from(Span::styled(line, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)))
-                }
-            })
-            .collect::<Vec<_>>();
-
         let logo = self.logo.render(inner.height);
-        let banner_width = banner
-            .iter()
-            .map(|line| line.width() as u16)
-            .max()
-            .unwrap_or(0);
+        let header = choose_header_content(inner.width, logo.width(), &format!("v{}", APP_VERSION));
 
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Fill(1),
-                Constraint::Length(4),
-                Constraint::Length(logo.width()),
-                Constraint::Length(6),
-                Constraint::Length(banner_width),
-                Constraint::Fill(1),
-            ])
-            .flex(Flex::Center)
-            .split(inner);
+        if header.show_logo() {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Fill(1),
+                    Constraint::Length(header.logo_margin()),
+                    Constraint::Length(logo.width()),
+                    Constraint::Length(header.logo_gap()),
+                    Constraint::Length(header.banner().width()),
+                    Constraint::Fill(1),
+                ])
+                .flex(Flex::Center)
+                .split(inner);
 
-        let logo_area = center_vertically(chunks[2], logo.lines().len() as u16);
-        frame.render_widget(Paragraph::new(logo.lines().to_vec()), logo_area);
+            let logo_area = center_vertically(chunks[2], logo.lines().len() as u16);
+            frame.render_widget(Paragraph::new(logo.lines().to_vec()), logo_area);
 
-        let banner_area = center_vertically(chunks[4], banner.len() as u16);
-        frame.render_widget(Paragraph::new(banner), banner_area);
+            let banner_area = center_vertically(chunks[4], header.banner().lines().len() as u16);
+            frame.render_widget(Paragraph::new(header.banner().lines().to_vec()), banner_area);
+        } else {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Fill(1),
+                    Constraint::Length(header.banner().width()),
+                    Constraint::Fill(1),
+                ])
+                .flex(Flex::Center)
+                .split(inner);
+            let banner_area = center_vertically(chunks[1], header.banner().lines().len() as u16);
+            frame.render_widget(Paragraph::new(header.banner().lines().to_vec()), banner_area);
+        }
     }
 
     fn render_header_contact(&self, frame: &mut Frame, area: Rect) {
@@ -1568,17 +1558,6 @@ impl App {
     }
 }
 
-fn center_vertically(area: Rect, content_height: u16) -> Rect {
-    let height = content_height.min(area.height);
-    let offset = area.height.saturating_sub(height) / 2;
-    Rect {
-        x: area.x,
-        y: area.y + offset,
-        width: area.width,
-        height,
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Dashboard,
@@ -1628,108 +1607,6 @@ enum HitAction {
     ValidateWizard,
     SaveWizard,
     CancelWizard,
-}
-
-#[derive(Clone)]
-struct RecentChangesDialog {
-    project_name: String,
-    repo_root: String,
-    range_label: String,
-    lines: Vec<String>,
-    scroll: u16,
-}
-
-impl RecentChangesDialog {
-    fn from_project(project: &ProjectConfig) -> Result<Self> {
-        let repo_root = project_repo_root(project)?;
-        ensure_git_repo(&repo_root)?;
-
-        let describe = run_git(&repo_root, &["describe", "--tags", "--abbrev=0"])?;
-        let (range_label, lines) = if describe.success {
-            let tag = describe.stdout.trim().to_string();
-            let range = format!("{}..HEAD", tag);
-            let output = run_git_checked(&repo_root, &["log", "--oneline", "--graph", &range])?;
-            let lines = split_output_lines(&output);
-            (range, lines)
-        } else {
-            let output = run_git_checked(&repo_root, &["log", "--oneline", "--graph", "-n", "60"])?;
-            ("no tags found; showing the latest 60 commits".to_string(), split_output_lines(&output))
-        };
-
-        Ok(Self {
-            project_name: project.name.clone(),
-            repo_root,
-            range_label,
-            lines,
-            scroll: 0,
-        })
-    }
-}
-
-#[derive(Clone)]
-struct TagDialog {
-    project_name: String,
-    repo_root: String,
-    remote_spec: Option<String>,
-    tag_name: TextInput,
-    actions: Vec<TagAction>,
-    action_index: usize,
-}
-
-impl TagDialog {
-    fn from_project(project: &ProjectConfig) -> Result<Self> {
-        let repo_root = project_repo_root(project)?;
-        ensure_git_repo(&repo_root)?;
-        let default_tag = suggested_tag_name(project);
-        let remote_spec = project.repo.as_ref().and_then(|repo| repo.remote_url.clone());
-        let actions = match project.integration_mode {
-            IntegrationMode::LocalOnly => bail!("local-only projects do not support git tags"),
-            IntegrationMode::GitLocalOnly => vec![TagAction::CreateLocal],
-            IntegrationMode::GitHubEnabled => vec![
-                TagAction::CreateLocal,
-                TagAction::CreateAndPush,
-                TagAction::CreatePushAndRelease,
-            ],
-        };
-        Ok(Self {
-            project_name: project.name.clone(),
-            repo_root,
-            remote_spec,
-            tag_name: TextInput::with_value(default_tag),
-            actions,
-            action_index: 0,
-        })
-    }
-
-    fn selected_action(&self) -> TagAction {
-        self.actions[self.action_index]
-    }
-
-    fn rotate_action(&mut self, delta: isize) {
-        if self.actions.len() <= 1 {
-            self.action_index = 0;
-            return;
-        }
-        let len = self.actions.len() as isize;
-        self.action_index = (self.action_index as isize + delta).rem_euclid(len) as usize;
-    }
-}
-
-#[derive(Clone, Copy)]
-enum TagAction {
-    CreateLocal,
-    CreateAndPush,
-    CreatePushAndRelease,
-}
-
-impl TagAction {
-    fn display_name(self) -> &'static str {
-        match self {
-            TagAction::CreateLocal => "Local Tag",
-            TagAction::CreateAndPush => "Tag + Push",
-            TagAction::CreatePushAndRelease => "Tag + Push + Release",
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -2046,78 +1923,6 @@ enum ProjectEditFocus {
 }
 
 #[derive(Clone)]
-struct BumpDialog {
-    project_name: String,
-    scheme: VersionScheme,
-    current_version: String,
-    targets: Vec<BumpTarget>,
-    action_index: usize,
-}
-
-impl BumpDialog {
-    fn from_project(project: &ProjectConfig) -> Result<Self> {
-        let targets = collect_bump_targets(project)?;
-        if targets.is_empty() {
-            bail!("selected project does not contain any configured targets");
-        }
-
-        let scheme = targets[0].scheme;
-        if targets.iter().any(|target| target.scheme != scheme) {
-            bail!("projects with mixed version schemes are not supported in the bump preview yet");
-        }
-
-        let current_version = targets[0].current_version.clone();
-        if targets.iter().any(|target| target.current_version != current_version) {
-            bail!("configured targets do not currently share the same version value");
-        }
-
-        Ok(Self {
-            project_name: project.name.clone(),
-            scheme,
-            current_version,
-            targets,
-            action_index: 0,
-        })
-    }
-
-    fn actions(&self) -> &'static [BumpAction] {
-        self.scheme.supported_actions()
-    }
-
-    fn selected_action(&self) -> BumpAction {
-        self.actions()[self.action_index]
-    }
-
-    fn rotate_action(&mut self, delta: isize) {
-        let actions = self.actions();
-        if actions.len() <= 1 {
-            self.action_index = 0;
-            return;
-        }
-        let len = actions.len() as isize;
-        let next = (self.action_index as isize + delta).rem_euclid(len);
-        self.action_index = next as usize;
-    }
-
-    fn preview_next_version(&self) -> Result<String> {
-        let today = Local::now().date_naive();
-        self.scheme
-            .bump(&self.current_version, self.selected_action(), today)
-            .map_err(anyhow::Error::msg)
-    }
-}
-
-#[derive(Clone)]
-struct BumpTarget {
-    label: String,
-    path: String,
-    key_path: String,
-    format: TargetFormat,
-    scheme: VersionScheme,
-    current_version: String,
-}
-
-#[derive(Clone)]
 struct StatusMessage {
     kind: StatusKind,
     text: String,
@@ -2147,103 +1952,6 @@ enum StatusKind {
     Success,
     Warning,
     Error,
-}
-
-#[derive(Clone)]
-struct TargetProbe {
-    kind: ProbeKind,
-    message: String,
-    version: Option<String>,
-    format: Option<TargetFormat>,
-}
-
-#[derive(Clone, Copy)]
-enum ProbeKind {
-    Success,
-    Warning,
-    Error,
-}
-
-#[derive(Clone)]
-struct TextInput {
-    value: String,
-    cursor: usize,
-}
-
-impl TextInput {
-    fn with_value(value: impl Into<String>) -> Self {
-        let value = value.into();
-        let cursor = value.len();
-        Self { value, cursor }
-    }
-
-    fn insert(&mut self, character: char) {
-        self.value.insert(self.cursor, character);
-        self.cursor += character.len_utf8();
-    }
-
-    fn insert_str(&mut self, text: &str) {
-        self.value.insert_str(self.cursor, text);
-        self.cursor = (self.cursor + text.len()).min(self.value.len());
-    }
-
-    fn backspace(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        self.cursor -= 1;
-        self.value.remove(self.cursor);
-    }
-
-    fn delete(&mut self) {
-        if self.cursor >= self.value.len() {
-            return;
-        }
-        self.value.remove(self.cursor);
-    }
-
-    fn move_left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    fn move_right(&mut self) {
-        self.cursor = (self.cursor + 1).min(self.value.len());
-    }
-
-    fn home(&mut self) {
-        self.cursor = 0;
-    }
-
-    fn end(&mut self) {
-        self.cursor = self.value.len();
-    }
-
-    fn handle_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char(character) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => self.insert(character),
-            KeyCode::Backspace => self.backspace(),
-            KeyCode::Delete => self.delete(),
-            KeyCode::Left => self.move_left(),
-            KeyCode::Right => self.move_right(),
-            KeyCode::Home => self.home(),
-            KeyCode::End => self.end(),
-            _ => {}
-        }
-    }
-
-    fn display_value(&self, focused: bool) -> String {
-        if !focused {
-            return self.value.clone();
-        }
-
-        let cursor = self.cursor.min(self.value.len());
-        let (left, right) = self.value.split_at(cursor);
-        if right.is_empty() {
-            format!("{}|", left)
-        } else {
-            format!("{}|{}", left, right)
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2546,385 +2254,6 @@ impl ProjectWizard {
     }
 }
 
-fn probe_target(path: &str, key_path: &str, scheme: VersionScheme) -> Result<TargetProbe> {
-    if path.is_empty() {
-        bail!("target path is empty");
-    }
-    if key_path.is_empty() {
-        bail!("target key is empty");
-    }
-
-    let target = read_target_value(path, key_path, TargetFormat::Auto)?;
-    let format = target.format;
-    let version = target.version;
-
-    let kind = match scheme.validate(&version) {
-        Ok(()) => ProbeKind::Success,
-        Err(_) => ProbeKind::Warning,
-    };
-    let message = match scheme.validate(&version) {
-        Ok(()) => format!("{} -> {} matches {}", path, key_path, scheme.display_name()),
-        Err(error) => format!("{} -> {} is readable, but '{}' does not match {}: {}", path, key_path, version, scheme.display_name(), error),
-    };
-
-    Ok(TargetProbe {
-        kind,
-        message,
-        version: Some(version),
-        format: Some(format),
-    })
-}
-
-fn collect_bump_targets(project: &ProjectConfig) -> Result<Vec<BumpTarget>> {
-    let mut targets = Vec::new();
-
-    if project.project_type == ProjectType::AllInOne {
-        for target in &project.targets {
-            let target_value = read_target_value(&target.path, &target.key_path, target.format)?;
-            targets.push(BumpTarget {
-                label: target.label.clone(),
-                path: target.path.clone(),
-                key_path: target.key_path.clone(),
-                format: target_value.format,
-                scheme: project.version_scheme,
-                current_version: target_value.version,
-            });
-        }
-    } else {
-        for branch in &project.branches {
-            let scheme = if project.unified_versioning { project.version_scheme } else { branch.version_scheme };
-            for target in &branch.targets {
-                let target_value = read_target_value(&target.path, &target.key_path, target.format)?;
-                targets.push(BumpTarget {
-                    label: format!("{} / {}", branch.name, target.label),
-                    path: target.path.clone(),
-                    key_path: target.key_path.clone(),
-                    format: target_value.format,
-                    scheme,
-                    current_version: target_value.version,
-                });
-            }
-        }
-    }
-
-    Ok(targets)
-}
-
-#[derive(Clone)]
-struct TargetValue {
-    version: String,
-    format: TargetFormat,
-}
-
-fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<TargetValue> {
-    let content = fs::read_to_string(path).with_context(|| format!("failed to read {}", path))?;
-    let format = if hint == TargetFormat::Auto {
-        detect_format(path, &content)?
-    } else {
-        hint
-    };
-
-    let version = match format {
-        TargetFormat::Json => extract_json_value(&content, key_path)?,
-        TargetFormat::Toml => extract_toml_value(&content, key_path)?,
-        TargetFormat::Auto => unreachable!(),
-    };
-
-    Ok(TargetValue { version, format })
-}
-
-fn write_target_version(target: &BumpTarget, new_version: &str) -> Result<()> {
-    let content = fs::read_to_string(&target.path).with_context(|| format!("failed to read {}", target.path))?;
-    match target.format {
-        TargetFormat::Json => write_json_value(&target.path, &content, &target.key_path, new_version),
-        TargetFormat::Toml => write_toml_value(&target.path, &content, &target.key_path, new_version),
-        TargetFormat::Auto => bail!("cannot write target with unresolved format"),
-    }
-}
-
-fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
-    let extension = Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase());
-
-    match extension.as_deref() {
-        Some("json") => Ok(TargetFormat::Json),
-        Some("toml") => Ok(TargetFormat::Toml),
-        _ => {
-            if serde_json::from_str::<serde_json::Value>(content).is_ok() {
-                Ok(TargetFormat::Json)
-            } else if toml::from_str::<toml::Value>(content).is_ok() {
-                Ok(TargetFormat::Toml)
-            } else {
-                Err(anyhow!("unable to detect JSON or TOML format from target file"))
-            }
-        }
-    }
-}
-
-fn write_json_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
-    let mut value = serde_json::from_str::<serde_json::Value>(content).context("invalid JSON target")?;
-    let located = locate_json_value_mut(&mut value, key_path)?;
-    *located = serde_json::Value::String(new_value.to_string());
-    let mut rendered = serde_json::to_string_pretty(&value).context("failed to serialize JSON target")?;
-    rendered.push('\n');
-    fs::write(path, rendered).with_context(|| format!("failed to write {}", path))?;
-    Ok(())
-}
-
-fn write_toml_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
-    let mut document = content.parse::<DocumentMut>().context("invalid TOML target")?;
-    let target_key = if locate_toml_item_mut(document.as_item_mut(), key_path).is_ok() {
-        key_path.to_string()
-    } else if !key_path.contains('.') {
-        if let Some(package) = document.as_item().get("package") {
-            if package.get(key_path).is_some() {
-                format!("package.{}", key_path)
-            } else {
-                key_path.to_string()
-            }
-        } else {
-            key_path.to_string()
-        }
-    } else {
-        key_path.to_string()
-    };
-
-    let item = locate_toml_item_mut(document.as_item_mut(), &target_key)?;
-    if item.is_value() {
-        *item = Item::Value(Value::from(new_value.to_string()));
-    } else {
-        *item = value(new_value);
-    }
-    fs::write(path, document.to_string()).with_context(|| format!("failed to write {}", path))?;
-    Ok(())
-}
-
-fn extract_json_value(content: &str, key_path: &str) -> Result<String> {
-    let value = serde_json::from_str::<serde_json::Value>(content).context("invalid JSON target")?;
-    let located = key_path.split('.').try_fold(&value, |current, segment| {
-        current.get(segment).ok_or_else(|| anyhow!("missing key '{}'", key_path))
-    })?;
-    located
-        .as_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("key '{}' is present, but its value is not a string", key_path))
-}
-
-fn extract_toml_value(content: &str, key_path: &str) -> Result<String> {
-    let value = toml::from_str::<toml::Value>(content).context("invalid TOML target")?;
-    let key_path = expand_toml_key_path(&value, key_path);
-    let located = locate_toml_value(&value, &key_path)?;
-    located
-        .as_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("key '{}' is present, but its value is not a string", key_path))
-}
-
-fn expand_toml_key_path<'a>(value: &'a toml::Value, key_path: &'a str) -> std::borrow::Cow<'a, str> {
-    if key_path.contains('.') {
-        return std::borrow::Cow::Borrowed(key_path);
-    }
-
-    if value.get(key_path).is_some() {
-        return std::borrow::Cow::Borrowed(key_path);
-    }
-
-    if let Some(package) = value.get("package") {
-        if package.get(key_path).is_some() {
-            return std::borrow::Cow::Owned(format!("package.{}", key_path));
-        }
-    }
-
-    std::borrow::Cow::Borrowed(key_path)
-}
-
-fn locate_toml_value<'a>(value: &'a toml::Value, key_path: &str) -> Result<&'a toml::Value> {
-    let mut current = value;
-    for segment in key_path.split('.') {
-        current = current
-            .get(segment)
-            .ok_or_else(|| anyhow!("missing key '{}'", key_path))?;
-    }
-    Ok(current)
-}
-
-fn locate_json_value_mut<'a>(value: &'a mut serde_json::Value, key_path: &str) -> Result<&'a mut serde_json::Value> {
-    let mut current = value;
-    for segment in key_path.split('.') {
-        current = current
-            .get_mut(segment)
-            .ok_or_else(|| anyhow!("missing key '{}'", key_path))?;
-    }
-    Ok(current)
-}
-
-fn locate_toml_item_mut<'a>(item: &'a mut Item, key_path: &str) -> Result<&'a mut Item> {
-    let mut current = item;
-    for segment in key_path.split('.') {
-        current = current
-            .get_mut(segment)
-            .ok_or_else(|| anyhow!("missing key '{}'", key_path))?;
-    }
-    Ok(current)
-}
-
-fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - height_percent) / 2),
-            Constraint::Percentage(height_percent),
-            Constraint::Percentage((100 - height_percent) / 2),
-        ])
-        .split(area);
-    let horizontal = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - width_percent) / 2),
-            Constraint::Percentage(width_percent),
-            Constraint::Percentage((100 - width_percent) / 2),
-        ])
-        .split(vertical[1]);
-    horizontal[1]
-}
-
 fn sanitize_pasted_text(text: &str) -> String {
     text.chars().filter(|character| *character != '\r' && *character != '\n').collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_cargo_toml_version_without_package_prefix() {
-        let content = r#"
-[package]
-name = "comfy-version-bumper"
-version = "0.1.0"
-edition = "2024"
-"#;
-        let resolved = extract_toml_value(content, "version").expect("should resolve package.version");
-        assert_eq!(resolved, "0.1.0");
-    }
-}
-
-fn project_repo_root(project: &ProjectConfig) -> Result<String> {
-    let repo = project
-        .repo
-        .as_ref()
-        .ok_or_else(|| anyhow!("this project is local-only and has no git repository configured"))?;
-    Ok(repo.local_root.clone())
-}
-
-fn suggested_tag_name(project: &ProjectConfig) -> String {
-    if let Ok(targets) = collect_bump_targets(project) {
-        if let Some(first) = targets.first() {
-            if targets.iter().all(|target| target.current_version == first.current_version) {
-                return format!("v{}", first.current_version);
-            }
-        }
-    }
-
-    let fallback = project
-        .name
-        .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '-' })
-        .collect::<String>();
-    fallback.trim_matches('-').to_string()
-}
-
-fn ensure_git_repo(repo_root: &str) -> Result<()> {
-    let output = run_git_checked(repo_root, &["rev-parse", "--is-inside-work-tree"])?;
-    if output.trim() == "true" {
-        Ok(())
-    } else {
-        bail!("{} is not a git working tree", repo_root)
-    }
-}
-
-fn ensure_local_tag(repo_root: &str, tag_name: &str) -> Result<bool> {
-    let existing = run_git_checked(repo_root, &["tag", "--list", tag_name])?;
-    if existing.lines().any(|line| line.trim() == tag_name) {
-        Ok(false)
-    } else {
-        run_git_checked(repo_root, &["tag", tag_name])?;
-        Ok(true)
-    }
-}
-
-fn ensure_gh_available() -> Result<()> {
-    let output = Command::new("gh")
-        .arg("--version")
-        .output()
-        .context("failed to invoke gh; install GitHub CLI to create releases")?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        bail!("gh is not available or not functioning; install GitHub CLI to create releases")
-    }
-}
-
-struct GitOutput {
-    success: bool,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_git(repo_root: &str, args: &[&str]) -> Result<GitOutput> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run git in {}", repo_root))?;
-
-    Ok(GitOutput {
-        success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    })
-}
-
-fn run_git_checked(repo_root: &str, args: &[&str]) -> Result<String> {
-    let output = run_git(repo_root, args)?;
-    if output.success {
-        Ok(output.stdout)
-    } else {
-        let details = output.stderr.trim();
-        if details.is_empty() {
-            bail!("git {:?} failed in {}", args, repo_root)
-        } else {
-            bail!("git {:?} failed in {}: {}", args, repo_root, details)
-        }
-    }
-}
-
-fn run_gh_checked(repo_root: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run gh in {}", repo_root))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if details.is_empty() {
-            bail!("gh {:?} failed in {}", args, repo_root)
-        } else {
-            bail!("gh {:?} failed in {}: {}", args, repo_root, details)
-        }
-    }
-}
-
-fn split_output_lines(output: &str) -> Vec<String> {
-    output
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
 }
