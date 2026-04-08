@@ -9,7 +9,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{config::ProjectConfig, targets::collect_bump_targets};
+use crate::{config::ProjectConfig, targets::{collect_bump_scopes, shared_bump_version}};
 
 pub(crate) struct GitOutput {
     pub(crate) success: bool,
@@ -26,11 +26,9 @@ pub(crate) fn project_repo_root(project: &ProjectConfig) -> Result<String> {
 }
 
 pub(crate) fn suggested_tag_name(project: &ProjectConfig) -> String {
-    if let Ok(targets) = collect_bump_targets(project) {
-        if let Some(first) = targets.first() {
-            if targets.iter().all(|target| target.current_version == first.current_version) {
-                return format!("v{}", first.current_version);
-            }
+    if let Ok(scopes) = collect_bump_scopes(project) {
+        if let Some(version) = shared_bump_version(&scopes) {
+            return format!("v{}", version);
         }
     }
 
