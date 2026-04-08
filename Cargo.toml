@@ -19,6 +19,8 @@ crossterm = "0.29"
 directories = "6"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 ratatui = "0.30"
+ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
+ratatui-explorer = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 toml = "1"
