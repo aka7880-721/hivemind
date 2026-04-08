@@ -20,9 +20,23 @@ use crate::{
 pub(crate) struct RecentChangesDialog {
     pub(crate) project_name: String,
     pub(crate) repo_root: String,
-    pub(crate) range_label: String,
-    pub(crate) lines: Vec<String>,
+    pub(crate) recent_range: ChangeRange,
+    pub(crate) history_ranges: Vec<ChangeRange>,
+    pub(crate) active_tab: RecentChangesTab,
+    pub(crate) history_index: usize,
     pub(crate) scroll: u16,
+}
+
+#[derive(Clone)]
+pub(crate) struct ChangeRange {
+    pub(crate) label: String,
+    pub(crate) lines: Vec<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecentChangesTab {
+    Recent,
+    History,
 }
 
 impl RecentChangesDialog {
@@ -31,24 +45,80 @@ impl RecentChangesDialog {
         ensure_git_repo(&repo_root)?;
 
         let describe = run_git(&repo_root, &["describe", "--tags", "--abbrev=0"])?;
-        let (range_label, lines) = if describe.success {
+        let recent_range = if describe.success {
             let tag = describe.stdout.trim().to_string();
             let range = format!("{}..HEAD", tag);
             let output = run_git_checked(&repo_root, &["log", "--oneline", "--graph", &range])?;
             let lines = split_output_lines(&output);
-            (range, lines)
+            ChangeRange { label: range, lines }
         } else {
             let output = run_git_checked(&repo_root, &["log", "--oneline", "--graph", "-n", "60"])?;
-            ("no tags found; showing the latest 60 commits".to_string(), split_output_lines(&output))
+            ChangeRange {
+                label: "no tags found; showing the latest 60 commits".to_string(),
+                lines: split_output_lines(&output),
+            }
         };
+
+        let tags = split_output_lines(&run_git_checked(&repo_root, &["tag", "--sort=-creatordate"])?);
+        let mut history_ranges = Vec::new();
+        for window in tags.windows(2) {
+            let newer = &window[0];
+            let older = &window[1];
+            let range = format!("{}..{}", older, newer);
+            let output = run_git_checked(&repo_root, &["log", "--oneline", "--graph", &range])?;
+            history_ranges.push(ChangeRange {
+                label: range,
+                lines: split_output_lines(&output),
+            });
+        }
 
         Ok(Self {
             project_name: project.name.clone(),
             repo_root,
-            range_label,
-            lines,
+            recent_range,
+            history_ranges,
+            active_tab: RecentChangesTab::Recent,
+            history_index: 0,
             scroll: 0,
         })
+    }
+
+    pub(crate) fn current_range(&self) -> &ChangeRange {
+        match self.active_tab {
+            RecentChangesTab::Recent => &self.recent_range,
+            RecentChangesTab::History => self
+                .history_ranges
+                .get(self.history_index)
+                .unwrap_or(&self.recent_range),
+        }
+    }
+
+    pub(crate) fn switch_tab(&mut self, tab: RecentChangesTab) {
+        self.active_tab = tab;
+        self.scroll = 0;
+    }
+
+    pub(crate) fn cycle_tab(&mut self, delta: isize) {
+        let tabs = [RecentChangesTab::Recent, RecentChangesTab::History];
+        let current = match self.active_tab {
+            RecentChangesTab::Recent => 0,
+            RecentChangesTab::History => 1,
+        } as isize;
+        let next = (current + delta).rem_euclid(tabs.len() as isize) as usize;
+        self.switch_tab(tabs[next]);
+    }
+
+    pub(crate) fn navigate_history(&mut self, delta: isize) {
+        if self.history_ranges.is_empty() {
+            return;
+        }
+
+        let next = (self.history_index as isize + delta)
+            .clamp(0, self.history_ranges.len().saturating_sub(1) as isize) as usize;
+        if next != self.history_index {
+            self.history_index = next;
+            self.scroll = 0;
+        }
     }
 }
 
