@@ -29,13 +29,14 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, FrameExt as _, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use ratatui_comfy_toaster::{
     ToastBuilder, ToastEngine, ToastEngineBuilder, ToastInteraction, ToastMouseButton,
-    ToastPosition, ToastShortcut, ToastType,
+    ToastShortcut, ToastType,
 };
 use ratatui_explorer::{FileExplorer, FileExplorerBuilder};
+use tui_tabs::TabNav;
 
 use crate::{
     branding::{PixelLogo, choose_header_content},
@@ -43,7 +44,7 @@ use crate::{
         AppConfig, BranchConfig, ConfigStore, IntegrationMode, ProjectConfig, ProjectType,
         RepoConfig, TargetFormat, TargetSpec,
     },
-    dialogs::{BumpDialog, RecentChangesDialog, TagDialog, TagAction, TextInput},
+    dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput},
     git::{ensure_gh_available, ensure_local_tag, run_gh_checked, run_git_checked},
     targets::{ProbeKind, TargetProbe, probe_target, write_target_version},
     ui::{center_vertically, centered_rect},
@@ -183,6 +184,7 @@ impl App {
             Screen::Dashboard => self.render_dashboard(frame, root[2]),
             Screen::Wizard => self.render_wizard(frame, root[2]),
             Screen::Settings => self.render_settings(frame, root[2]),
+            Screen::UiSettings => self.render_ui_settings(frame, root[2]),
         }
 
         if self.bump_dialog.is_some() {
@@ -273,35 +275,39 @@ impl App {
     }
 
     fn render_nav(&mut self, frame: &mut Frame, area: Rect) {
-        let labels = [
-            ("Dashboard", Screen::Dashboard),
-            ("New Project", Screen::Wizard),
-            ("Settings", Screen::Settings),
-            ("Quit", Screen::Dashboard),
-        ];
+        let sections = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(10), Constraint::Length(12)])
+            .split(area);
+
+        let labels = self.main_tab_labels();
+        let label_refs = labels.iter().map(String::as_str).collect::<Vec<_>>();
+        let tabs = TabNav::new(&label_refs, self.current_main_tab_index())
+            .highlight_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::White))
+            .indicator(None);
+        frame.render_widget(tabs, sections[0]);
 
         let widths = labels
             .iter()
-            .map(|(label, _)| Constraint::Length(label.len() as u16 + 4))
+            .map(|label| Constraint::Length(label.chars().count() as u16 + 6))
             .collect::<Vec<_>>();
         let layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(widths)
-            .split(area);
-
-        for (index, ((label, screen), rect)) in labels.into_iter().zip(layout.into_iter()).enumerate() {
-            let mut style = Style::default().fg(Color::White);
-            if index < 3 && self.screen == screen {
-                style = style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
-            }
-            if index == 3 {
-                style = Style::default().fg(Color::Red);
-                self.hit_targets.push(HitTarget::new(*rect, HitAction::Quit));
-            } else {
-                self.hit_targets.push(HitTarget::new(*rect, HitAction::Switch(screen)));
-            }
-            frame.render_widget(Paragraph::new(format!(" {} ", label)).style(style), *rect);
+            .split(sections[0]);
+        for (index, rect) in layout.iter().enumerate() {
+            self.hit_targets.push(HitTarget::new(*rect, HitAction::Switch(main_screen_from_index(index))));
         }
+
+        frame.render_widget(
+            Paragraph::new(" Q Quit ")
+                .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                .alignment(Alignment::Center),
+            sections[1],
+        );
+        self.hit_targets.push(HitTarget::new(sections[1], HitAction::Quit));
     }
 
     fn render_dashboard(&mut self, frame: &mut Frame, area: Rect) {
@@ -369,7 +375,7 @@ impl App {
             lines.push(Line::from("Available actions:".yellow().bold()));
             lines.push(Line::from("- B opens a bump preview for the selected project"));
             if project.integration_mode.requires_repo() {
-                lines.push(Line::from("- V opens recent git changes from the configured repo"));
+                lines.push(Line::from("- V opens view changes from the configured repo"));
                 lines.push(Line::from("- T creates a local tag in the configured repo"));
             } else {
                 lines.push(Line::from("- git actions unlock once the project is git-backed"));
@@ -461,30 +467,50 @@ impl App {
 
         let popup = centered_rect(area, 82, 72);
         frame.render_widget(Clear, popup);
-        let block = Block::default().borders(Borders::ALL).title(" Recent Changes ").border_style(Style::default().fg(Color::Cyan));
+        let block = Block::default().borders(Borders::ALL).title(" Git Commits ").border_style(Style::default().fg(Color::Cyan));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
         let sections = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(5), Constraint::Min(8), Constraint::Length(3)])
+            .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Min(8), Constraint::Length(3)])
             .split(inner);
 
         let header = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
             Line::from(format!("Repo: {}", dialog.repo_root)),
-            Line::from(format!("View: {}", dialog.range_label)),
-            Line::from("Up/Down or mouse wheel scrolls. Esc closes."),
+            Line::from(format!("View: {}", dialog.current_range().label)),
+            Line::from("Tab switches view. Left/Right moves history when History is active."),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
+        let tab_labels = ["Recent Changes", "History"];
+        let tab_index = if dialog.active_tab == RecentChangesTab::Recent { 0 } else { 1 };
+        let tabs = TabNav::new(&tab_labels, tab_index)
+            .highlight_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::White))
+            .indicator(None);
+        frame.render_widget(tabs, sections[1]);
+
+        let tab_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(22), Constraint::Length(14)])
+            .split(sections[1]);
+        self.hit_targets.push(HitTarget::new(tab_layout[0], HitAction::SelectRecentChangesTab(RecentChangesTab::Recent)));
+        self.hit_targets.push(HitTarget::new(tab_layout[1], HitAction::SelectRecentChangesTab(RecentChangesTab::History)));
+
         let body_block = Block::default().borders(Borders::ALL).title(" git log ");
-        let body_inner = body_block.inner(sections[1]);
-        frame.render_widget(body_block, sections[1]);
-        let body = if dialog.lines.is_empty() {
-            vec![Line::from("No recent changes to display.")]
+        let body_inner = body_block.inner(sections[2]);
+        frame.render_widget(body_block, sections[2]);
+        let body = if dialog.current_range().lines.is_empty() {
+            vec![Line::from(if dialog.active_tab == RecentChangesTab::History {
+                "No history range is available yet."
+            } else {
+                "No recent changes to display."
+            })]
         } else {
-            dialog.lines.iter().cloned().map(Line::from).collect::<Vec<_>>()
+            dialog.current_range().lines.iter().cloned().map(Line::from).collect::<Vec<_>>()
         };
         frame.render_widget(
             Paragraph::new(body)
@@ -496,7 +522,7 @@ impl App {
         let footer = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(18), Constraint::Length(18), Constraint::Min(10)])
-            .split(sections[2]);
+            .split(sections[3]);
         frame.render_widget(
             Paragraph::new(" Scroll ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Yellow)),
             footer[0],
@@ -646,6 +672,7 @@ impl App {
             Line::from(format!("Schema version: {}", self.config.schema_version)),
             Line::from(format!("Saved projects: {}", self.config.projects.len())),
             Line::from(format!("Mouse hints: {}", if self.config.ui.show_mouse_hints { "on" } else { "off" })),
+            Line::from(format!("Tab hints: {}", if self.config.ui.show_tab_hints { "on" } else { "off" })),
             Line::raw(""),
         ];
         if let Some(project) = self.config.projects.get(self.selected_project) {
@@ -673,6 +700,40 @@ impl App {
         );
         self.hit_targets.push(HitTarget::new(buttons[0], HitAction::OpenProjectEdit));
         self.hit_targets.push(HitTarget::new(buttons[1], HitAction::Switch(Screen::Dashboard)));
+    }
+
+    fn render_ui_settings(&mut self, frame: &mut Frame, area: Rect) {
+        let block = Block::default().borders(Borders::ALL).title(" UI Settings ");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(8), Constraint::Length(BUTTON_ROW_HEIGHT)])
+            .split(inner);
+
+        let lines = vec![
+            Line::from("Adjust interface preferences for the current config.").bold(),
+            Line::raw(""),
+            Line::from(format!(
+                "Tab hints: {}",
+                if self.config.ui.show_tab_hints { "visible" } else { "hidden" }
+            )),
+            Line::from("When enabled, the main tabs show [1]..[4] hints."),
+            Line::from("Press Enter, Space, T, Left, or Right to toggle."),
+        ];
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sections[0]);
+
+        self.render_button_row(
+            frame,
+            sections[1],
+            &[DialogButton::new(
+                if self.config.ui.show_tab_hints { "Hide Tab Hints" } else { "Show Tab Hints" },
+                true,
+                HitAction::ToggleTabHints,
+                Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+            )],
+        );
     }
 
     fn render_project_edit_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -960,14 +1021,23 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let help = match self.screen {
-            Screen::Settings if self.project_edit_dialog.is_some() => "Tab move | Left/Right change enums | F2 save | Del remove | Esc cancel",
-            Screen::Dashboard if self.tag_dialog.is_some() => "Type tag name | Left/Right action | Enter run | Esc cancel",
-            Screen::Dashboard if self.recent_changes_dialog.is_some() => "Up/Down scroll | T create tag | Esc close",
-            Screen::Dashboard if self.bump_dialog.is_some() => "Left/Right change bump action | Enter apply | Esc cancel",
-            Screen::Dashboard => "N new project | B bump | V recent changes | T create tag | Up/Down select | S settings | Q quit",
-            Screen::Settings => "Up/Down select project | E edit selected project | D dashboard | N new project | Q quit",
-            Screen::Wizard => "Tab move | Left/Right change enums | F5 read target | F2 save | Esc cancel",
+        let help = if self.browser_dialog.is_some() {
+            "Arrows navigate | Enter select | U use folder | Mouse click or wheel | Esc cancel"
+        } else if self.project_edit_dialog.is_some() {
+            "Tab move | Left/Right change enums | Ctrl+O browse | F2 save | Del remove | Esc cancel"
+        } else if self.tag_dialog.is_some() {
+            "Type tag name | Left/Right action | Enter run | Esc cancel"
+        } else if self.recent_changes_dialog.is_some() {
+            "1/2 switch tabs | Left/Right history | Up/Down scroll | T create tag | Esc close"
+        } else if self.bump_dialog.is_some() {
+            "Left/Right change bump action | Enter apply | Esc cancel"
+        } else {
+            match self.screen {
+                Screen::Dashboard => "1-4 tabs | N new project | B bump | V view changes | T create tag | Up/Down select | Q quit",
+                Screen::Settings => "1-4 tabs | Up/Down select project | E edit selected project | N new project | Q quit",
+                Screen::UiSettings => "1-4 tabs | Enter, Space, T, Left, Right toggle tab hints | N new project | Q quit",
+                Screen::Wizard => "Tab move | Left/Right change enums | Ctrl+O browse | F5 read target | F2 save | Esc cancel",
+            }
         };
         frame.render_widget(Paragraph::new(help), inner);
     }
@@ -992,12 +1062,47 @@ impl App {
             .split(inner);
 
         let instructions = if dialog.select_directories {
-            "Arrows navigate | Enter select directory | Esc cancel"
+            "Arrows navigate | Enter use folder | U use current file's folder | Esc cancel"
         } else {
-            "Arrows navigate | Right enters directory | Enter select file | Esc cancel"
+            "Arrows navigate | Enter select file | Mouse click selects | Esc cancel"
         };
         frame.render_widget(Paragraph::new(instructions), sections[0]);
-        frame.render_widget_ref(dialog.explorer.widget(), sections[1]);
+
+        let body_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", dialog.explorer.cwd().display()));
+        let body_inner = body_block.inner(sections[1]);
+        frame.render_widget(body_block, sections[1]);
+
+        let files = dialog.explorer.files();
+        let selected = dialog.explorer.selected_idx();
+        let (start, end) = browser_visible_range(files.len(), selected, body_inner.height as usize);
+        let items = files[start..end]
+            .iter()
+            .map(|file| ListItem::new(file.name.clone()))
+            .collect::<Vec<_>>();
+        let mut state = ListState::default();
+        state.select(Some(selected.saturating_sub(start)));
+        let list = List::new(items)
+            .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .highlight_symbol("> ");
+        frame.render_stateful_widget(list, body_inner, &mut state);
+
+        for (offset, _) in files[start..end].iter().enumerate() {
+            let rect = Rect {
+                x: body_inner.x,
+                y: body_inner.y + offset as u16,
+                width: body_inner.width,
+                height: 1,
+            };
+            self.hit_targets.push(HitTarget::new(rect, HitAction::BrowserSelect(start + offset)));
+        }
+
+        let selected_path = dialog.explorer.current().path.display().to_string();
+        frame.render_widget(
+            Paragraph::new(format!("Selected: {}", selected_path)).wrap(Wrap { trim: false }),
+            sections[2],
+        );
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -1030,6 +1135,10 @@ impl App {
             return self.handle_bump_key(key);
         }
 
+        if self.handle_tab_shortcut(key) {
+            return Ok(());
+        }
+
         if key.code == KeyCode::Char('q') && key.modifiers.is_empty() {
             self.should_quit = true;
             return Ok(());
@@ -1038,6 +1147,7 @@ impl App {
         match self.screen {
             Screen::Dashboard => self.handle_dashboard_key(key),
             Screen::Settings => self.handle_settings_key(key),
+            Screen::UiSettings => self.handle_ui_settings_key(key),
             Screen::Wizard => self.handle_wizard_key(key),
         }
     }
@@ -1063,6 +1173,18 @@ impl App {
             KeyCode::Char('e') => self.open_project_edit_dialog()?,
             KeyCode::Up => self.move_project_selection(-1),
             KeyCode::Down => self.move_project_selection(1),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_ui_settings_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('d') => self.screen = Screen::Dashboard,
+            KeyCode::Char('n') => self.open_wizard(),
+            KeyCode::Char('t') | KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right => {
+                self.toggle_tab_hints()?;
+            }
             _ => {}
         }
         Ok(())
@@ -1130,12 +1252,46 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.recent_changes_dialog = None;
-                self.status = StatusMessage::info("Recent changes closed.");
+                self.status = StatusMessage::info("View changes closed.");
             }
             KeyCode::Up => self.scroll_recent_changes(-1),
             KeyCode::Down => self.scroll_recent_changes(1),
             KeyCode::PageUp => self.scroll_recent_changes(-8),
             KeyCode::PageDown => self.scroll_recent_changes(8),
+            KeyCode::Tab => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.cycle_tab(1);
+                }
+            }
+            KeyCode::BackTab => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.cycle_tab(-1);
+                }
+            }
+            KeyCode::Char('1') => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.switch_tab(RecentChangesTab::Recent);
+                }
+            }
+            KeyCode::Char('2') => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.switch_tab(RecentChangesTab::History);
+                }
+            }
+            KeyCode::Left => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    if dialog.active_tab == RecentChangesTab::History {
+                        dialog.navigate_history(1);
+                    }
+                }
+            }
+            KeyCode::Right => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    if dialog.active_tab == RecentChangesTab::History {
+                        dialog.navigate_history(-1);
+                    }
+                }
+            }
             KeyCode::Char('t') => self.open_tag_dialog()?,
             _ => {}
         }
@@ -1259,7 +1415,17 @@ impl App {
         }
 
         if self.browser_dialog.is_some() {
-            return;
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.move_browser_selection(-1);
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.move_browser_selection(1);
+                    return;
+                }
+                _ => {}
+            }
         }
 
         match mouse.kind {
@@ -1286,7 +1452,7 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(action) = self.hit_targets.iter().find_map(|target| {
+                if let Some(action) = self.hit_targets.iter().rev().find_map(|target| {
                     if target.contains(mouse.column, mouse.row) {
                         Some(target.action.clone())
                     } else {
@@ -1310,6 +1476,7 @@ impl App {
                 self.status = StatusMessage::info("Browse cancelled.");
             }
             KeyCode::Enter | KeyCode::F(2) => return self.confirm_browser_selection(),
+            KeyCode::Char('u') | KeyCode::Char('U') => return self.confirm_browser_directory_selection(),
             _ => {
                 if let Some(dialog) = &mut self.browser_dialog {
                     let event = Event::Key(key);
@@ -1393,10 +1560,17 @@ impl App {
                 self.project_edit_dialog = None;
                 self.status = StatusMessage::info("Project edit cancelled.");
             }
+            HitAction::ToggleTabHints => return self.toggle_tab_hints(),
             HitAction::BrowseWizardTargetPath => return self.open_browser(BrowseTarget::WizardTargetPath),
             HitAction::BrowseWizardRepoRoot => return self.open_browser(BrowseTarget::WizardRepoRoot),
             HitAction::BrowseProjectTargetPath => return self.open_browser(BrowseTarget::ProjectEditTargetPath),
             HitAction::BrowseProjectRepoRoot => return self.open_browser(BrowseTarget::ProjectEditRepoRoot),
+            HitAction::BrowserSelect(index) => self.select_browser_index(index),
+            HitAction::SelectRecentChangesTab(tab) => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.switch_tab(tab);
+                }
+            }
             HitAction::CycleBumpAction(delta) => self.rotate_bump_action(delta),
             HitAction::ApplyBump => return self.apply_bump(),
             HitAction::CancelBump => {
@@ -1405,7 +1579,7 @@ impl App {
             }
             HitAction::CloseRecentChanges => {
                 self.recent_changes_dialog = None;
-                self.status = StatusMessage::info("Recent changes closed.");
+                self.status = StatusMessage::info("View changes closed.");
             }
             HitAction::ScrollRecentChanges(delta) => self.scroll_recent_changes(delta),
             HitAction::OpenTagDialog => return self.open_tag_dialog(),
@@ -1433,7 +1607,7 @@ impl App {
         self.tag_dialog = None;
         self.project_edit_dialog = None;
         self.recent_changes_dialog = Some(dialog);
-        self.status = StatusMessage::info("Showing recent git history for the selected project.");
+        self.status = StatusMessage::info("Showing git changes for the selected project.");
         Ok(())
     }
 
@@ -1444,6 +1618,35 @@ impl App {
             } else {
                 dialog.scroll = dialog.scroll.saturating_add(delta as u16);
             }
+        }
+    }
+
+    fn move_browser_selection(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.browser_dialog {
+            if dialog.explorer.files().is_empty() {
+                return;
+            }
+            let len = dialog.explorer.files().len() as isize;
+            let next = (dialog.explorer.selected_idx() as isize + delta).clamp(0, len - 1) as usize;
+            dialog.explorer.set_selected_idx(next);
+        }
+    }
+
+    fn select_browser_index(&mut self, index: usize) {
+        let mut confirm_file = false;
+        if let Some(dialog) = &mut self.browser_dialog {
+            let len = dialog.explorer.files().len();
+            if len == 0 || index >= len {
+                return;
+            }
+            let already_selected = dialog.explorer.selected_idx() == index;
+            dialog.explorer.set_selected_idx(index);
+            if already_selected && !dialog.select_directories && dialog.explorer.current().path.is_file() {
+                confirm_file = true;
+            }
+        }
+        if confirm_file {
+            let _ = self.confirm_browser_selection();
         }
     }
 
@@ -1761,6 +1964,78 @@ impl App {
         Ok(())
     }
 
+    fn confirm_browser_directory_selection(&mut self) -> Result<()> {
+        let Some(dialog) = &self.browser_dialog else {
+            return Ok(());
+        };
+        if !dialog.select_directories {
+            return Ok(());
+        }
+
+        let selected = dialog.explorer.current().path.clone();
+        let directory = if selected.is_dir() {
+            selected
+        } else if let Some(parent) = selected.parent() {
+            parent.to_path_buf()
+        } else {
+            selected
+        };
+
+        let selected = directory.display().to_string();
+        match dialog.target {
+            BrowseTarget::WizardRepoRoot => self.wizard.set_repo_root_from_browse(selected),
+            BrowseTarget::ProjectEditRepoRoot => {
+                if let Some(dialog) = &mut self.project_edit_dialog {
+                    dialog.set_repo_root_from_browse(selected);
+                }
+            }
+            _ => {}
+        }
+
+        self.browser_dialog = None;
+        self.status = StatusMessage::success("Folder selection applied.");
+        Ok(())
+    }
+
+    fn toggle_tab_hints(&mut self) -> Result<()> {
+        self.config.ui.show_tab_hints = !self.config.ui.show_tab_hints;
+        self.config_store.save(&self.config)?;
+        self.status = StatusMessage::success(if self.config.ui.show_tab_hints {
+            "Tab hints enabled."
+        } else {
+            "Tab hints hidden."
+        });
+        Ok(())
+    }
+
+    fn handle_tab_shortcut(&mut self, key: KeyEvent) -> bool {
+        if !key.modifiers.is_empty() {
+            return false;
+        }
+
+        if matches!(self.screen, Screen::Wizard) && self.wizard.focus_accepts_text() {
+            return false;
+        }
+
+        let target = match key.code {
+            KeyCode::Char('1') => Some(Screen::Dashboard),
+            KeyCode::Char('2') => Some(Screen::Wizard),
+            KeyCode::Char('3') => Some(Screen::Settings),
+            KeyCode::Char('4') => Some(Screen::UiSettings),
+            _ => None,
+        };
+
+        let Some(target) = target else {
+            return false;
+        };
+
+        match target {
+            Screen::Wizard => self.open_wizard(),
+            _ => self.screen = target,
+        }
+        true
+    }
+
     fn try_handle_toast_shortcut(&mut self, key: KeyEvent) -> bool {
         if key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
@@ -1827,27 +2102,13 @@ impl App {
         self.last_status_toast_id = self.status.id;
         let builder = ToastBuilder::new(self.status.text.clone().into());
         match self.status.kind {
-            StatusKind::Info => self.transient_toaster.show_toast(
-                builder
-                    .toast_type(ToastType::Info)
-                    .position(ToastPosition::TopRight),
-            ),
-            StatusKind::Success => self.transient_toaster.show_toast(
-                builder
-                    .toast_type(ToastType::Success)
-                    .position(ToastPosition::TopRight),
-            ),
-            StatusKind::Warning => self.transient_toaster.show_toast(
-                builder
-                    .toast_type(ToastType::Warning)
-                    .position(ToastPosition::TopRight),
-            ),
+            StatusKind::Info => self.transient_toaster.show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Success => self.transient_toaster.show_toast(builder.toast_type(ToastType::Success)),
+            StatusKind::Warning => self.transient_toaster.show_toast(builder.toast_type(ToastType::Warning)),
             StatusKind::Error => self.sticky_toaster.show_toast(
                 builder
                     .toast_type(ToastType::Error)
-                    .position(ToastPosition::BottomRight)
-                    .keep_on(1)
-                    .offset(-2, -1),
+                    .keep_on(1),
             ),
         }
     }
@@ -1858,6 +2119,7 @@ enum Screen {
     Dashboard,
     Wizard,
     Settings,
+    UiSettings,
 }
 
 #[derive(Clone)]
@@ -1889,10 +2151,13 @@ enum HitAction {
     SaveProjectEdit,
     RemoveProject,
     CancelProjectEdit,
+    ToggleTabHints,
     BrowseWizardTargetPath,
     BrowseWizardRepoRoot,
     BrowseProjectTargetPath,
     BrowseProjectRepoRoot,
+    BrowserSelect(usize),
+    SelectRecentChangesTab(RecentChangesTab),
     CloseRecentChanges,
     ScrollRecentChanges(i16),
     OpenTagDialog,
@@ -2680,12 +2945,7 @@ impl FileBrowserDialog {
             target,
             BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot
         );
-        let mut builder = FileExplorerBuilder::default();
-        if select_directories {
-            builder = builder.filter_map(|file| if file.is_dir { Some(file) } else { None });
-        }
-
-        let explorer = configure_file_explorer(builder, &initial_path, select_directories)?;
+        let explorer = configure_file_explorer(FileExplorerBuilder::default(), &initial_path, select_directories)?;
         let title = if select_directories {
             "Browse Repo Root"
         } else {
@@ -2767,6 +3027,50 @@ fn project_edit_browse_action(field: ProjectEditFocus) -> Option<HitAction> {
         ProjectEditFocus::TargetPath => Some(HitAction::BrowseProjectTargetPath),
         ProjectEditFocus::RepoRoot => Some(HitAction::BrowseProjectRepoRoot),
         _ => None,
+    }
+}
+
+fn browser_visible_range(total: usize, selected: usize, height: usize) -> (usize, usize) {
+    if total == 0 || height == 0 {
+        return (0, 0);
+    }
+
+    let start = selected.saturating_sub(height / 2).min(total.saturating_sub(height));
+    let end = (start + height).min(total);
+    (start, end)
+}
+
+fn main_screen_from_index(index: usize) -> Screen {
+    match index {
+        1 => Screen::Wizard,
+        2 => Screen::Settings,
+        3 => Screen::UiSettings,
+        _ => Screen::Dashboard,
+    }
+}
+
+impl App {
+    fn main_tab_labels(&self) -> Vec<String> {
+        ["Dashboard", "New Project", "Settings", "UI Settings"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, label)| {
+                if self.config.ui.show_tab_hints {
+                    format!("{} [{}]", label, index + 1)
+                } else {
+                    label.to_string()
+                }
+            })
+            .collect()
+    }
+
+    fn current_main_tab_index(&self) -> usize {
+        match self.screen {
+            Screen::Dashboard => 0,
+            Screen::Wizard => 1,
+            Screen::Settings => 2,
+            Screen::UiSettings => 3,
+        }
     }
 }
 
