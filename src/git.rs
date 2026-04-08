@@ -51,12 +51,16 @@ pub(crate) fn ensure_git_repo(repo_root: &str) -> Result<()> {
     }
 }
 
-pub(crate) fn ensure_local_tag(repo_root: &str, tag_name: &str) -> Result<bool> {
+pub(crate) fn ensure_local_tag(repo_root: &str, tag_name: &str, annotation: Option<&str>) -> Result<bool> {
     let existing = run_git_checked(repo_root, &["tag", "--list", tag_name])?;
     if existing.lines().any(|line| line.trim() == tag_name) {
         Ok(false)
     } else {
-        run_git_checked(repo_root, &["tag", tag_name])?;
+        if let Some(annotation) = annotation.filter(|annotation| !annotation.trim().is_empty()) {
+            run_git_checked(repo_root, &["tag", "-a", tag_name, "-m", annotation])?;
+        } else {
+            run_git_checked(repo_root, &["tag", tag_name])?;
+        }
         Ok(true)
     }
 }
