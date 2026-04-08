@@ -108,7 +108,7 @@ pub(crate) fn collect_bump_targets(project: &ProjectConfig) -> Result<Vec<BumpTa
             for target in &branch.targets {
                 let target_value = read_target_value(&target.path, &target.key_path, target.format)?;
                 targets.push(BumpTarget {
-                    label: format!("{} / {}", branch.name, target.label),
+                    label: format!("{} / {}", branch.display_name(), target.label),
                     path: target.path.clone(),
                     key_path: target.key_path.clone(),
                     format: target_value.format,
