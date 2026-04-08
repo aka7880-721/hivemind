@@ -35,8 +35,9 @@ use ratatui_comfy_toaster::{
     ToastBuilder, ToastEngine, ToastEngineBuilder, ToastInteraction, ToastMouseButton,
     ToastShortcut, ToastType,
 };
-use ratatui_explorer::{FileExplorer, FileExplorerBuilder};
+use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Input as ExplorerInput};
 use tui_tabs::TabNav;
+use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTextArea};
 
 use crate::{
     branding::{PixelLogo, choose_header_content},
@@ -57,6 +58,14 @@ const FORM_LABEL_WIDTH: u16 = 18;
 const BROWSE_BUTTON_WIDTH: u16 = 12;
 const BUTTON_ROW_HEIGHT: u16 = 3;
 const BUTTON_GAP_HEIGHT: u16 = 3;
+const GIT_BRANCH_COLORS: [Color; 6] = [
+    Color::Green,
+    Color::Cyan,
+    Color::Yellow,
+    Color::Magenta,
+    Color::Blue,
+    Color::Red,
+];
 
 pub fn run() -> Result<()> {
     let mut terminal = setup_terminal()?;
@@ -120,6 +129,7 @@ struct App {
     bump_dialog: Option<BumpDialog>,
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
+    tag_annotation_dialog: Option<TagAnnotationDialog>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
@@ -145,6 +155,7 @@ impl App {
             bump_dialog: None,
             recent_changes_dialog: None,
             tag_dialog: None,
+            tag_annotation_dialog: None,
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
@@ -195,6 +206,9 @@ impl App {
         }
         if self.tag_dialog.is_some() {
             self.render_tag_dialog(frame, frame.area());
+        }
+        if self.tag_annotation_dialog.is_some() {
+            self.render_tag_annotation_dialog(frame, frame.area());
         }
         if self.project_edit_dialog.is_some() {
             self.render_project_edit_dialog(frame, frame.area());
@@ -275,11 +289,6 @@ impl App {
     }
 
     fn render_nav(&mut self, frame: &mut Frame, area: Rect) {
-        let sections = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(10), Constraint::Length(12)])
-            .split(area);
-
         let labels = self.main_tab_labels();
         let label_refs = labels.iter().map(String::as_str).collect::<Vec<_>>();
         let tabs = TabNav::new(&label_refs, self.current_main_tab_index())
@@ -287,7 +296,7 @@ impl App {
             .border_style(Style::default().fg(Color::DarkGray))
             .style(Style::default().fg(Color::White))
             .indicator(None);
-        frame.render_widget(tabs, sections[0]);
+        frame.render_widget(tabs, area);
 
         let widths = labels
             .iter()
@@ -296,18 +305,10 @@ impl App {
         let layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(widths)
-            .split(sections[0]);
+            .split(area);
         for (index, rect) in layout.iter().enumerate() {
             self.hit_targets.push(HitTarget::new(*rect, HitAction::Switch(main_screen_from_index(index))));
         }
-
-        frame.render_widget(
-            Paragraph::new(" Q Quit ")
-                .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                .alignment(Alignment::Center),
-            sections[1],
-        );
-        self.hit_targets.push(HitTarget::new(sections[1], HitAction::Quit));
     }
 
     fn render_dashboard(&mut self, frame: &mut Frame, area: Rect) {
@@ -445,19 +446,20 @@ impl App {
         frame.render_widget(target_block, sections[1]);
         frame.render_widget(Paragraph::new(target_lines).wrap(Wrap { trim: false }), target_inner);
 
-        let button_row = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(20), Constraint::Length(20), Constraint::Min(10)])
-            .split(sections[2]);
-        let action_rect = button_row[0];
-        let apply_rect = button_row[1];
-        let cancel_rect = button_row[2];
-        frame.render_widget(Paragraph::new(format!(" < {} > ", dialog.selected_action().display_name())).block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Yellow)), action_rect);
-        frame.render_widget(Paragraph::new(" Apply ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Green)), apply_rect);
-        frame.render_widget(Paragraph::new(" Cancel ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Red)), cancel_rect);
-        self.hit_targets.push(HitTarget::new(action_rect, HitAction::CycleBumpAction(1)));
-        self.hit_targets.push(HitTarget::new(apply_rect, HitAction::ApplyBump));
-        self.hit_targets.push(HitTarget::new(cancel_rect, HitAction::CancelBump));
+        self.render_button_row(
+            frame,
+            sections[2],
+            &[
+                DialogButton::new(
+                    format!("< {} >", dialog.selected_action().display_name()),
+                    false,
+                    HitAction::CycleBumpAction(1),
+                    Style::default().fg(Color::Black).bg(Color::Yellow),
+                ),
+                DialogButton::new("Apply", false, HitAction::ApplyBump, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Cancel", false, HitAction::CancelBump, Style::default().fg(Color::White).bg(Color::Red)),
+            ],
+        );
     }
 
     fn render_recent_changes_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -503,6 +505,7 @@ impl App {
         let body_block = Block::default().borders(Borders::ALL).title(" git log ");
         let body_inner = body_block.inner(sections[2]);
         frame.render_widget(body_block, sections[2]);
+        let graph_base_column = git_graph_base_column(&dialog.current_range().lines);
         let body = if dialog.current_range().lines.is_empty() {
             vec![Line::from(if dialog.active_tab == RecentChangesTab::History {
                 "No history range is available yet."
@@ -510,7 +513,12 @@ impl App {
                 "No recent changes to display."
             })]
         } else {
-            dialog.current_range().lines.iter().cloned().map(Line::from).collect::<Vec<_>>()
+            dialog
+                .current_range()
+                .lines
+                .iter()
+                .map(|line| colorize_git_log_line(line, graph_base_column))
+                .collect::<Vec<_>>()
         };
         frame.render_widget(
             Paragraph::new(body)
@@ -519,25 +527,15 @@ impl App {
             body_inner,
         );
 
-        let footer = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(18), Constraint::Length(18), Constraint::Min(10)])
-            .split(sections[3]);
-        frame.render_widget(
-            Paragraph::new(" Scroll ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Yellow)),
-            footer[0],
+        self.render_button_row(
+            frame,
+            sections[3],
+            &[
+                DialogButton::new("Scroll", false, HitAction::ScrollRecentChanges(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
+                DialogButton::new("Create Tag", false, HitAction::OpenTagDialog, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Close", false, HitAction::CloseRecentChanges, Style::default().fg(Color::White).bg(Color::Red)),
+            ],
         );
-        frame.render_widget(
-            Paragraph::new(" Create Tag ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Green)),
-            footer[1],
-        );
-        frame.render_widget(
-            Paragraph::new(" Close ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Red)),
-            footer[2],
-        );
-        self.hit_targets.push(HitTarget::new(footer[0], HitAction::ScrollRecentChanges(3)));
-        self.hit_targets.push(HitTarget::new(footer[1], HitAction::OpenTagDialog));
-        self.hit_targets.push(HitTarget::new(footer[2], HitAction::CloseRecentChanges));
     }
 
     fn render_tag_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -545,22 +543,22 @@ impl App {
             return;
         };
 
-        let popup = centered_rect(area, 70, 34);
+        let popup = centered_rect(area, 74, 42);
         frame.render_widget(Clear, popup);
-        let block = Block::default().borders(Borders::ALL).title(" Create Local Tag ").border_style(Style::default().fg(Color::Cyan));
+        let block = Block::default().borders(Borders::ALL).title(" Create Tag ").border_style(Style::default().fg(Color::Cyan));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
         let sections = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Min(4), Constraint::Length(3)])
+            .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Min(8), Constraint::Length(BUTTON_ROW_HEIGHT)])
             .split(inner);
 
         let header = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
             Line::from(format!("Repo: {}", dialog.repo_root)),
             Line::from(format!("Action: < {} >", dialog.selected_action().display_name())).style(Style::default().fg(Color::Yellow)),
-            Line::from("Edit the tag name, then press Enter to run the selected action."),
+            Line::from("Edit the tag name, add an optional annotation, then run the selected action."),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
@@ -582,6 +580,11 @@ impl App {
 
         let notes = vec![
             Line::from(format!("Suggested tag: {}", dialog.tag_name.value)),
+            Line::from(if dialog.annotation.trim().is_empty() {
+                "Annotation: none"
+            } else {
+                "Annotation: attached"
+            }),
             Line::from(match dialog.selected_action() {
                 TagAction::CreateLocal => "Creates a local tag only.",
                 TagAction::CreateAndPush => "Creates the local tag if needed, then pushes it.",
@@ -590,25 +593,30 @@ impl App {
         ];
         frame.render_widget(Paragraph::new(notes).wrap(Wrap { trim: false }), sections[2]);
 
-        let footer = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(18), Constraint::Length(18), Constraint::Min(10)])
-            .split(sections[3]);
-        frame.render_widget(
-            Paragraph::new(format!(" < {} > ", dialog.selected_action().display_name())).block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Yellow)),
-            footer[0],
+        self.render_button_row(
+            frame,
+            sections[3],
+            &[
+                DialogButton::new(
+                    format!("< {} >", dialog.selected_action().display_name()),
+                    false,
+                    HitAction::CycleTagAction(1),
+                    Style::default().fg(Color::Black).bg(Color::Yellow),
+                ),
+                DialogButton::new(
+                    if dialog.annotation.trim().is_empty() {
+                        "Annotation"
+                    } else {
+                        "Annotation Added"
+                    },
+                    false,
+                    HitAction::OpenTagAnnotation,
+                    Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+                ),
+                DialogButton::new("Run", false, HitAction::CreateTag, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Cancel", false, HitAction::CancelTagDialog, Style::default().fg(Color::White).bg(Color::Red)),
+            ],
         );
-        frame.render_widget(
-            Paragraph::new(" Run ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Green)),
-            footer[1],
-        );
-        frame.render_widget(
-            Paragraph::new(" Cancel ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Red)),
-            footer[2],
-        );
-        self.hit_targets.push(HitTarget::new(footer[0], HitAction::CycleTagAction(1)));
-        self.hit_targets.push(HitTarget::new(footer[1], HitAction::CreateTag));
-        self.hit_targets.push(HitTarget::new(footer[2], HitAction::CancelTagDialog));
     }
 
     fn render_settings(&mut self, frame: &mut Frame, area: Rect) {
@@ -984,7 +992,7 @@ impl App {
         let mut constraints = Vec::with_capacity(buttons.len() * 2 + 1);
         constraints.push(Constraint::Fill(1));
         for button in buttons {
-            constraints.push(Constraint::Length((button.label.len() as u16 + 6).max(14)));
+            constraints.push(Constraint::Length((button.label.chars().count() as u16 + 6).max(14)));
             constraints.push(Constraint::Fill(1));
         }
         let chunks = Layout::default()
@@ -1006,7 +1014,7 @@ impl App {
                 Block::default().borders(Borders::ALL)
             };
             frame.render_widget(
-                Paragraph::new(button.label)
+                Paragraph::new(button.label.as_str())
                     .alignment(Alignment::Center)
                     .style(style)
                     .block(block),
@@ -1016,17 +1024,90 @@ impl App {
         }
     }
 
+    fn render_tag_annotation_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.tag_annotation_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 78, 62);
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Tag Annotation ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(8), Constraint::Length(BUTTON_ROW_HEIGHT)])
+            .split(inner);
+
+        frame.render_widget(
+            Paragraph::new("Enter inserts a new line. F2 or Ctrl+S saves the annotation. Esc cancels."),
+            sections[0],
+        );
+        self.render_tag_annotation_editor(frame, sections[1], dialog);
+
+        self.render_button_row(
+            frame,
+            sections[2],
+            &[
+                DialogButton::new("Save", false, HitAction::SaveTagAnnotation, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Cancel", false, HitAction::CancelTagAnnotation, Style::default().fg(Color::White).bg(Color::Red)),
+            ],
+        );
+    }
+
+    fn render_tag_annotation_editor(&self, frame: &mut Frame, area: Rect, dialog: &TagAnnotationDialog) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Annotation ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let lines = dialog.editor.lines();
+        let (cursor_row, cursor_col) = dialog.editor.cursor();
+        let visible_height = inner.height.max(1) as usize;
+        let start_row = cursor_row.saturating_sub(visible_height / 2).min(lines.len().saturating_sub(visible_height));
+        let end_row = (start_row + visible_height).min(lines.len());
+        let number_width = end_row.max(1).to_string().len().max(2);
+        let content_width = inner.width.saturating_sub(number_width as u16 + 1).max(1) as usize;
+
+        let body = if lines.len() == 1 && lines[0].is_empty() {
+            vec![Line::from(Span::styled(
+                dialog.placeholder.as_str(),
+                Style::default().fg(Color::DarkGray),
+            ))]
+        } else {
+            lines[start_row..end_row]
+                .iter()
+                .enumerate()
+                .map(|(offset, line)| {
+                    let row_index = start_row + offset;
+                    let active = row_index == cursor_row;
+                    render_annotation_line(line, row_index + 1, number_width, content_width, active.then_some(cursor_col))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        frame.render_widget(Paragraph::new(body), inner);
+    }
+
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default().borders(Borders::ALL).title(" Controls ");
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         let help = if self.browser_dialog.is_some() {
-            "Arrows navigate | Enter select | U use folder | Mouse click or wheel | Esc cancel"
+            "Arrows navigate | Enter open folder or select file | U use folder | Mouse click or wheel | Esc cancel"
         } else if self.project_edit_dialog.is_some() {
             "Tab move | Left/Right change enums | Ctrl+O browse | F2 save | Del remove | Esc cancel"
+        } else if self.tag_annotation_dialog.is_some() {
+            "Type annotation | Enter newline | F2 or Ctrl+S save | Esc cancel"
         } else if self.tag_dialog.is_some() {
-            "Type tag name | Left/Right action | Enter run | Esc cancel"
+            "Type tag name | A annotation | Left/Right action | Enter run | Esc cancel"
         } else if self.recent_changes_dialog.is_some() {
             "1/2 switch tabs | Left/Right history | Up/Down scroll | T create tag | Esc close"
         } else if self.bump_dialog.is_some() {
@@ -1062,9 +1143,9 @@ impl App {
             .split(inner);
 
         let instructions = if dialog.select_directories {
-            "Arrows navigate | Enter use folder | U use current file's folder | Esc cancel"
+            "Arrows navigate | Enter open folder | U use highlighted folder | Esc cancel"
         } else {
-            "Arrows navigate | Enter select file | Mouse click selects | Esc cancel"
+            "Arrows navigate | Enter select file or open folder | Mouse click selects | Esc cancel"
         };
         frame.render_widget(Paragraph::new(instructions), sections[0]);
 
@@ -1121,6 +1202,10 @@ impl App {
 
         if self.project_edit_dialog.is_some() {
             return self.handle_project_edit_key(key);
+        }
+
+        if self.tag_annotation_dialog.is_some() {
+            return self.handle_tag_annotation_key(key);
         }
 
         if self.tag_dialog.is_some() {
@@ -1302,8 +1387,10 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.tag_dialog = None;
+                self.tag_annotation_dialog = None;
                 self.status = StatusMessage::info("Tag creation cancelled.");
             }
+            KeyCode::Char('a') => self.open_tag_annotation_dialog()?,
             KeyCode::Left => self.rotate_tag_action(-1),
             KeyCode::Right => self.rotate_tag_action(1),
             KeyCode::Enter | KeyCode::F(2) => self.create_local_tag()?,
@@ -1313,6 +1400,29 @@ impl App {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn handle_tag_annotation_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            return self.save_tag_annotation();
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.tag_annotation_dialog = None;
+                self.status = StatusMessage::info("Tag annotation editor closed.");
+            }
+            KeyCode::F(2) => return self.save_tag_annotation(),
+            _ => {
+                if let Some(dialog) = &mut self.tag_annotation_dialog {
+                    if let Some(input) = convert_to_textarea_input(key) {
+                        dialog.editor.input(input);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1488,6 +1598,12 @@ impl App {
     }
 
     fn handle_paste(&mut self, text: String) {
+        if let Some(dialog) = &mut self.tag_annotation_dialog {
+            dialog.editor.insert_str(text);
+            self.status = StatusMessage::info("Pasted into the tag annotation.");
+            return;
+        }
+
         let sanitized = sanitize_pasted_text(&text);
         if self.insert_text(&sanitized) {
             self.status = StatusMessage::info("Pasted into the active field.");
@@ -1502,6 +1618,12 @@ impl App {
 
         match clipboard.get_text() {
             Ok(text) => {
+                if let Some(dialog) = &mut self.tag_annotation_dialog {
+                    dialog.editor.insert_str(text);
+                    self.status = StatusMessage::info("Pasted into the tag annotation.");
+                    return;
+                }
+
                 let sanitized = sanitize_pasted_text(&text);
                 if self.insert_text(&sanitized) {
                     self.status = StatusMessage::info("Pasted into the active field.");
@@ -1544,7 +1666,6 @@ impl App {
                     self.wizard = ProjectWizard::default();
                 }
             }
-            HitAction::Quit => self.should_quit = true,
             HitAction::SelectProject(index) => {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
             }
@@ -1583,10 +1704,17 @@ impl App {
             }
             HitAction::ScrollRecentChanges(delta) => self.scroll_recent_changes(delta),
             HitAction::OpenTagDialog => return self.open_tag_dialog(),
+            HitAction::OpenTagAnnotation => return self.open_tag_annotation_dialog(),
             HitAction::CycleTagAction(delta) => self.rotate_tag_action(delta),
             HitAction::CreateTag => return self.create_local_tag(),
+            HitAction::SaveTagAnnotation => return self.save_tag_annotation(),
+            HitAction::CancelTagAnnotation => {
+                self.tag_annotation_dialog = None;
+                self.status = StatusMessage::info("Tag annotation editor closed.");
+            }
             HitAction::CancelTagDialog => {
                 self.tag_dialog = None;
+                self.tag_annotation_dialog = None;
                 self.status = StatusMessage::info("Tag creation cancelled.");
             }
             HitAction::WizardField(field) => self.wizard.focus = field,
@@ -1704,8 +1832,9 @@ impl App {
         self.bump_dialog = None;
         self.project_edit_dialog = None;
         self.browser_dialog = None;
+        self.tag_annotation_dialog = None;
         self.tag_dialog = Some(dialog);
-        self.status = StatusMessage::info("Review the proposed tag name, then press Enter to create it locally.");
+        self.status = StatusMessage::info("Review the proposed tag name, add an optional annotation, then run the tag action.");
         Ok(())
     }
 
@@ -1729,8 +1858,13 @@ impl App {
         let project_name = dialog.project_name.clone();
         let action = dialog.selected_action();
         let remote_spec = dialog.remote_spec.clone();
+        let annotation = dialog.annotation.trim().to_string();
         let tag_name = tag_name.to_string();
-        let created = ensure_local_tag(&repo_root, &tag_name)?;
+        let created = ensure_local_tag(
+            &repo_root,
+            &tag_name,
+            if annotation.is_empty() { None } else { Some(annotation.as_str()) },
+        )?;
 
         if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
             let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
@@ -1743,13 +1877,45 @@ impl App {
         }
 
         self.tag_dialog = None;
+        self.tag_annotation_dialog = None;
         let summary = match action {
             TagAction::CreateLocal if created => format!("Created local tag '{}' in {}.", tag_name, project_name),
             TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}.", tag_name, project_name),
             TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}.", tag_name, project_name),
             TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}.", tag_name, project_name),
         };
-        self.status = StatusMessage::success(summary);
+        self.status = StatusMessage::success(if annotation.is_empty() {
+            summary
+        } else {
+            format!("{} Annotation included.", summary)
+        });
+        Ok(())
+    }
+
+    fn open_tag_annotation_dialog(&mut self) -> Result<()> {
+        let current_annotation = self
+            .tag_dialog
+            .as_ref()
+            .map(|dialog| dialog.annotation.clone())
+            .ok_or_else(|| anyhow!("no tag dialog is active"))?;
+
+        self.tag_annotation_dialog = Some(TagAnnotationDialog::new(&current_annotation));
+        self.status = StatusMessage::info("Editing tag annotation. F2 or Ctrl+S saves it.");
+        Ok(())
+    }
+
+    fn save_tag_annotation(&mut self) -> Result<()> {
+        let dialog = self
+            .tag_annotation_dialog
+            .take()
+            .ok_or_else(|| anyhow!("no tag annotation editor is active"))?;
+        let annotation = dialog.editor.lines().join("\n");
+
+        if let Some(tag_dialog) = &mut self.tag_dialog {
+            tag_dialog.annotation = annotation;
+        }
+
+        self.status = StatusMessage::success("Tag annotation saved.");
         Ok(())
     }
 
@@ -1930,11 +2096,24 @@ impl App {
         };
 
         let selected = dialog.explorer.current().path.clone();
+        let selected_name = dialog.explorer.current().name.clone();
         let target = dialog.target;
         let select_directories = dialog.select_directories;
 
+        if selected.is_dir() {
+            if let Some(dialog) = &mut self.browser_dialog {
+                dialog.explorer.handle(ExplorerInput::Right)?;
+            }
+            self.status = StatusMessage::info(if selected_name == "../" {
+                "Moved to the parent folder.".to_string()
+            } else {
+                format!("Entered folder '{}'.", selected_name)
+            });
+            return Ok(());
+        }
+
         if select_directories && !selected.is_dir() {
-            self.status = StatusMessage::warning("Select a directory for Repo root.");
+            self.status = StatusMessage::warning("Select a directory for Repo root, or press U to use the current file's folder.");
             return Ok(());
         }
 
@@ -2144,7 +2323,6 @@ impl HitTarget {
 #[derive(Clone)]
 enum HitAction {
     Switch(Screen),
-    Quit,
     SelectProject(usize),
     OpenProjectEdit,
     EditProjectField(ProjectEditFocus),
@@ -2161,11 +2339,14 @@ enum HitAction {
     CloseRecentChanges,
     ScrollRecentChanges(i16),
     OpenTagDialog,
+    OpenTagAnnotation,
     CycleTagAction(isize),
     CycleBumpAction(isize),
     ApplyBump,
     CancelBump,
     CreateTag,
+    SaveTagAnnotation,
+    CancelTagAnnotation,
     CancelTagDialog,
     WizardField(WizardField),
     ValidateWizard,
@@ -2907,19 +3088,41 @@ fn sanitize_pasted_text(text: &str) -> String {
 
 #[derive(Clone)]
 struct DialogButton {
-    label: &'static str,
+    label: String,
     focused: bool,
     action: HitAction,
     style: Style,
 }
 
 impl DialogButton {
-    fn new(label: &'static str, focused: bool, action: HitAction, style: Style) -> Self {
+    fn new(label: impl Into<String>, focused: bool, action: HitAction, style: Style) -> Self {
         Self {
-            label,
+            label: label.into(),
             focused,
             action,
             style,
+        }
+    }
+}
+
+struct TagAnnotationDialog {
+    editor: TuiTextArea<'static>,
+    placeholder: String,
+}
+
+impl TagAnnotationDialog {
+    fn new(existing_annotation: &str) -> Self {
+        let mut editor = if existing_annotation.trim().is_empty() {
+            TuiTextArea::default()
+        } else {
+            TuiTextArea::from(existing_annotation.lines())
+        };
+        editor.set_placeholder_text("Optional multi-line tag annotation");
+        editor.set_tab_length(2);
+        editor.set_max_histories(100);
+        Self {
+            editor,
+            placeholder: "Optional multi-line tag annotation".to_string(),
         }
     }
 }
@@ -3012,6 +3215,182 @@ fn derive_repo_root_from_target_path(path: &str) -> Option<String> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(|parent| parent.display().to_string())
+}
+
+fn git_graph_base_column(lines: &[String]) -> usize {
+    lines
+        .iter()
+        .flat_map(|line| line.char_indices())
+        .filter_map(|(index, character)| matches!(character, '*' | '|').then_some(index))
+        .min()
+        .unwrap_or(0)
+}
+
+fn colorize_git_log_line(line: &str, graph_base_column: usize) -> Line<'static> {
+    let Some((hash_start, hash_end)) = find_commit_hash_range(line) else {
+        return Line::from(line.to_string());
+    };
+
+    let prefix = &line[..hash_start];
+    let hash = &line[hash_start..hash_end];
+    let suffix = &line[hash_end..];
+    let hash_color = git_hash_color(prefix, graph_base_column).unwrap_or(Color::White);
+    let mut spans = Vec::new();
+
+    for (index, character) in prefix.chars().enumerate() {
+        if is_git_graph_character(character) {
+            spans.push(Span::styled(
+                character.to_string(),
+                Style::default()
+                    .fg(git_branch_color(index.saturating_sub(graph_base_column) / 2))
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::raw(character.to_string()));
+        }
+    }
+
+    spans.push(Span::styled(
+        hash.to_string(),
+        Style::default().fg(hash_color).add_modifier(Modifier::BOLD),
+    ));
+    if !suffix.is_empty() {
+        spans.push(Span::raw(suffix.to_string()));
+    }
+
+    Line::from(spans)
+}
+
+fn git_hash_color(prefix: &str, graph_base_column: usize) -> Option<Color> {
+    prefix
+        .chars()
+        .enumerate()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .find_map(|(index, character)| {
+            is_git_graph_character(character)
+                .then_some(git_branch_color(index.saturating_sub(graph_base_column) / 2))
+        })
+}
+
+fn git_branch_color(slot: usize) -> Color {
+    GIT_BRANCH_COLORS[slot % GIT_BRANCH_COLORS.len()]
+}
+
+fn is_git_graph_character(character: char) -> bool {
+    matches!(character, '|' | '\\' | ',' | '/' | '*')
+}
+
+fn find_commit_hash_range(line: &str) -> Option<(usize, usize)> {
+    let indices = line.char_indices().collect::<Vec<_>>();
+    for (position, (byte_index, character)) in indices.iter().enumerate() {
+        if !character.is_ascii_hexdigit() {
+            continue;
+        }
+
+        let previous_is_space = position == 0 || indices[position - 1].1 == ' ';
+        if !previous_is_space {
+            continue;
+        }
+
+        let mut end = position;
+        while end < indices.len() && indices[end].1.is_ascii_hexdigit() {
+            end += 1;
+        }
+
+        if end - position < 7 {
+            continue;
+        }
+
+        let next_is_space = end == indices.len() || indices[end].1 == ' ';
+        if !next_is_space {
+            continue;
+        }
+
+        let end_byte = if end < indices.len() { indices[end].0 } else { line.len() };
+        return Some((*byte_index, end_byte));
+    }
+
+    None
+}
+
+fn convert_to_textarea_input(key: KeyEvent) -> Option<TextAreaInput> {
+    let text_key = match key.code {
+        KeyCode::Backspace => TextAreaKey::Backspace,
+        KeyCode::Enter => TextAreaKey::Enter,
+        KeyCode::Left => TextAreaKey::Left,
+        KeyCode::Right => TextAreaKey::Right,
+        KeyCode::Up => TextAreaKey::Up,
+        KeyCode::Down => TextAreaKey::Down,
+        KeyCode::Home => TextAreaKey::Home,
+        KeyCode::End => TextAreaKey::End,
+        KeyCode::PageUp => TextAreaKey::PageUp,
+        KeyCode::PageDown => TextAreaKey::PageDown,
+        KeyCode::Tab | KeyCode::BackTab => TextAreaKey::Tab,
+        KeyCode::Delete => TextAreaKey::Delete,
+        KeyCode::Esc => TextAreaKey::Esc,
+        KeyCode::Char(character) => TextAreaKey::Char(character),
+        _ => return None,
+    };
+
+    Some(TextAreaInput {
+        key: text_key,
+        ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+        alt: key.modifiers.contains(KeyModifiers::ALT),
+        shift: key.modifiers.contains(KeyModifiers::SHIFT),
+    })
+}
+
+fn render_annotation_line(
+    line: &str,
+    line_number: usize,
+    number_width: usize,
+    content_width: usize,
+    active_cursor_col: Option<usize>,
+) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        format!("{:>width$} ", line_number, width = number_width),
+        Style::default().fg(Color::DarkGray),
+    )];
+
+    let (visible_text, visible_cursor_col) = annotation_visible_segment(line, active_cursor_col.unwrap_or(0), content_width);
+    if active_cursor_col.is_some() {
+        let chars = visible_text.chars().collect::<Vec<_>>();
+        let highlight_index = visible_cursor_col.min(content_width.saturating_sub(1));
+        for (index, character) in chars.iter().enumerate() {
+            let style = if index == highlight_index {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else if active_cursor_col.is_some() {
+                Style::default().bg(Color::Rgb(35, 45, 60))
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(character.to_string(), style));
+        }
+
+        if chars.is_empty() {
+            spans.push(Span::styled(" ".to_string(), Style::default().fg(Color::Black).bg(Color::Cyan)));
+        } else if visible_cursor_col >= chars.len() && chars.len() < content_width {
+            spans.push(Span::styled(" ".to_string(), Style::default().fg(Color::Black).bg(Color::Cyan)));
+        }
+    } else {
+        spans.push(Span::raw(visible_text));
+    }
+
+    Line::from(spans)
+}
+
+fn annotation_visible_segment(line: &str, cursor_col: usize, width: usize) -> (String, usize) {
+    let characters = line.chars().collect::<Vec<_>>();
+    if width == 0 {
+        return (String::new(), 0);
+    }
+
+    let start = cursor_col.saturating_sub(width.saturating_sub(1)).min(characters.len().saturating_sub(width));
+    let end = (start + width).min(characters.len());
+    let visible = characters[start..end].iter().collect::<String>();
+    (visible, cursor_col.saturating_sub(start))
 }
 
 fn wizard_browse_action(field: WizardField) -> Option<HitAction> {
