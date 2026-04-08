@@ -57,8 +57,11 @@ pub struct ProjectConfig {
     pub integration_mode: IntegrationMode,
     pub unified_versioning: bool,
     pub version_scheme: VersionScheme,
+    #[serde(default)]
     pub targets: Vec<TargetSpec>,
+    #[serde(default)]
     pub branches: Vec<BranchConfig>,
+    #[serde(default)]
     pub repo: Option<RepoConfig>,
 }
 
@@ -73,10 +76,10 @@ impl ProjectConfig {
                 if self.targets.len() == 1 { "" } else { "s" }
             ),
             ProjectType::Branched => format!(
-                "{} | {} branch{} | {}",
+                "{} | {} scope{} | {}",
                 self.project_type.display_name(),
                 self.branches.len(),
-                if self.branches.len() == 1 { "" } else { "es" },
+                if self.branches.len() == 1 { "" } else { "s" },
                 if self.unified_versioning {
                     format!("unified {}", self.version_scheme.display_name())
                 } else {
@@ -101,7 +104,18 @@ impl ProjectConfig {
         } else {
             lines.push(format!("Unified versioning: {}", if self.unified_versioning { "yes" } else { "no" }));
             for branch in &self.branches {
-                lines.push(format!("Branch: {} ({})", branch.name, branch.version_scheme.display_name()));
+                lines.push(format!(
+                    "{}: {} ({})",
+                    branch.scope_kind.display_name(),
+                    branch.display_name(),
+                    branch.version_scheme.display_name()
+                ));
+                if let Some(repo) = &branch.repo {
+                    lines.push(format!("  Scope repo override: {}", repo.local_root));
+                    if let Some(remote) = &repo.remote_url {
+                        lines.push(format!("    Remote override: {}", remote));
+                    }
+                }
                 for target in &branch.targets {
                     lines.push(format!("  {} -> {} [{}]", target.path, target.key_path, target.format.display_name()));
                 }
@@ -193,8 +207,56 @@ impl IntegrationMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchConfig {
     pub name: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub scope_kind: BranchScopeKind,
+    #[serde(default)]
+    pub repo: Option<RepoConfig>,
     pub version_scheme: VersionScheme,
+    #[serde(default)]
     pub targets: Vec<TargetSpec>,
+}
+
+impl BranchConfig {
+    pub fn new(name: impl Into<String>, version_scheme: VersionScheme, targets: Vec<TargetSpec>) -> Self {
+        let name = name.into();
+        Self {
+            label: name.clone(),
+            name,
+            scope_kind: BranchScopeKind::default(),
+            repo: None,
+            version_scheme,
+            targets,
+        }
+    }
+
+    pub fn display_name(&self) -> &str {
+        if self.label.trim().is_empty() {
+            &self.name
+        } else {
+            &self.label
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchScopeKind {
+    #[default]
+    Branch,
+    Module,
+    Service,
+}
+
+impl BranchScopeKind {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            BranchScopeKind::Branch => "Branch",
+            BranchScopeKind::Module => "Module",
+            BranchScopeKind::Service => "Service",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,5 +334,63 @@ impl ConfigStore {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_display_name_falls_back_to_name() {
+        let branch = BranchConfig {
+            name: "core".to_string(),
+            label: String::new(),
+            scope_kind: BranchScopeKind::Branch,
+            repo: None,
+            version_scheme: VersionScheme::SemVer,
+            targets: Vec::new(),
+        };
+
+        assert_eq!(branch.display_name(), "core");
+    }
+
+    #[test]
+    fn legacy_branch_config_deserializes_with_new_defaults() {
+        let raw = r#"
+schema_version = 1
+
+[ui]
+accent_color = "cyan"
+show_mouse_hints = true
+show_tab_hints = true
+
+[[projects]]
+name = "Example"
+project_type = "branched"
+integration_mode = "git_local_only"
+unified_versioning = true
+version_scheme = "sem_ver"
+targets = []
+
+[[projects.branches]]
+name = "core"
+version_scheme = "sem_ver"
+
+[[projects.branches.targets]]
+label = "Version"
+path = "package.json"
+key_path = "version"
+format = "json"
+"#;
+
+        let config = toml::from_str::<AppConfig>(raw).expect("legacy config should parse");
+        let branch = &config.projects[0].branches[0];
+
+        assert_eq!(branch.name, "core");
+        assert_eq!(branch.display_name(), "core");
+        assert_eq!(branch.scope_kind, BranchScopeKind::Branch);
+        assert!(branch.repo.is_none());
+        assert_eq!(branch.targets.len(), 1);
     }
 }
