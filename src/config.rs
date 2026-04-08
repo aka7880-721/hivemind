@@ -219,18 +219,6 @@ pub struct BranchConfig {
 }
 
 impl BranchConfig {
-    pub fn new(name: impl Into<String>, version_scheme: VersionScheme, targets: Vec<TargetSpec>) -> Self {
-        let name = name.into();
-        Self {
-            label: name.clone(),
-            name,
-            scope_kind: BranchScopeKind::default(),
-            repo: None,
-            version_scheme,
-            targets,
-        }
-    }
-
     pub fn display_name(&self) -> &str {
         if self.label.trim().is_empty() {
             &self.name
