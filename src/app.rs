@@ -2648,11 +2648,17 @@ impl ProjectEditDialog {
             project.branches.clear();
         } else {
             project.targets.clear();
-            project.branches = vec![BranchConfig {
-                name: branch_name.to_string(),
-                version_scheme: self.version_scheme,
-                targets: vec![target],
-            }];
+            let existing_branch = project.branches.first().cloned();
+            let mut branch = existing_branch
+                .unwrap_or_else(|| BranchConfig::new(branch_name.to_string(), self.version_scheme, Vec::new()));
+            let previous_name = branch.name.clone();
+            branch.name = branch_name.to_string();
+            if branch.label.trim().is_empty() || branch.label == previous_name {
+                branch.label = branch.name.clone();
+            }
+            branch.version_scheme = self.version_scheme;
+            branch.targets = vec![target];
+            project.branches = vec![branch];
         }
 
         if self.integration_mode.requires_repo() {
@@ -3069,11 +3075,7 @@ impl ProjectWizard {
                 unified_versioning: true,
                 version_scheme: self.version_scheme,
                 targets: Vec::new(),
-                branches: vec![BranchConfig {
-                    name: branch_name.to_string(),
-                    version_scheme: self.version_scheme,
-                    targets: vec![target],
-                }],
+                branches: vec![BranchConfig::new(branch_name.to_string(), self.version_scheme, vec![target])],
                 repo,
             }
         };
