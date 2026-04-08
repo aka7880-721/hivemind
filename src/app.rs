@@ -421,25 +421,73 @@ impl App {
         let next_version = dialog.preview_next_version();
         let mut summary = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
-            Line::from(format!("Scheme: {}", dialog.scheme.display_name())),
-            Line::from(format!("Current version: {}", dialog.current_version)),
+            Line::from(format!(
+                "Mode: {}",
+                if dialog.unified_versioning {
+                    "Project-wide synchronized"
+                } else {
+                    "Selected scope only"
+                }
+            )),
+            Line::from(format!("Scheme: {}", dialog.active_scheme().display_name())),
+            Line::from(format!("Current version: {}", dialog.current_version_label())),
             Line::from(format!("Action: < {} >", dialog.selected_action().display_name())).style(Style::default().fg(Color::Yellow)),
         ];
+        if dialog.can_select_scope() {
+            let scope = dialog.active_scope();
+            summary.push(Line::from(format!(
+                "Selected scope: < {} ({}) >",
+                scope.display_name,
+                scope.scope_kind.map(|kind| kind.display_name()).unwrap_or("Project")
+            )));
+        }
         match next_version {
             Ok(next_version) => summary.push(Line::from(format!("Next version: {}", next_version)).style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
             Err(error) => summary.push(Line::from(format!("Next version: {}", error)).style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
         }
-        summary.push(Line::from("Left/Right changes the action. Enter applies it to every listed target."));
+        summary.push(Line::from(if dialog.can_select_scope() {
+            "Left/Right changes the action. Up/Down changes scope. Enter applies to the selected scope."
+        } else {
+            "Left/Right changes the action. Enter applies it to every listed target."
+        }));
         frame.render_widget(Paragraph::new(summary).wrap(Wrap { trim: false }), sections[0]);
 
         let target_lines = dialog
-            .targets
+            .scopes
             .iter()
-            .flat_map(|target| {
-                [
-                    Line::from(target.label.clone()).style(Style::default().add_modifier(Modifier::BOLD)),
-                    Line::from(format!("  {} -> {} [{}]", target.path, target.key_path, target.format.display_name())),
-                ]
+            .enumerate()
+            .flat_map(|(index, scope)| {
+                let marker = if dialog.can_select_scope() && index == dialog.selected_scope {
+                    ">"
+                } else {
+                    "-"
+                };
+                let header_style = if scope.has_mismatch() {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else if dialog.can_select_scope() && index == dialog.selected_scope {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                };
+                std::iter::once(
+                    Line::from(format!(
+                        "{} {} ({}) -> {}",
+                        marker,
+                        scope.display_name,
+                        scope.scope_kind.map(|kind| kind.display_name()).unwrap_or("Project"),
+                        scope.version_label()
+                    ))
+                    .style(header_style),
+                )
+                .chain(scope.targets.iter().map(|target| {
+                    Line::from(format!(
+                        "  {}: {} -> {} [{}]",
+                        target.label,
+                        target.path,
+                        target.key_path,
+                        target.format.display_name()
+                    ))
+                }))
             })
             .collect::<Vec<_>>();
         let target_block = Block::default().borders(Borders::ALL).title(" Targets ");
@@ -447,20 +495,24 @@ impl App {
         frame.render_widget(target_block, sections[1]);
         frame.render_widget(Paragraph::new(target_lines).wrap(Wrap { trim: false }), target_inner);
 
-        self.render_button_row(
-            frame,
-            sections[2],
-            &[
-                DialogButton::new(
-                    format!("< {} >", dialog.selected_action().display_name()),
-                    false,
-                    HitAction::CycleBumpAction(1),
-                    Style::default().fg(Color::Black).bg(Color::Yellow),
-                ),
-                DialogButton::new("Apply", false, HitAction::ApplyBump, Style::default().fg(Color::Black).bg(Color::Green)),
-                DialogButton::new("Cancel", false, HitAction::CancelBump, Style::default().fg(Color::White).bg(Color::Red)),
-            ],
-        );
+        let mut buttons = Vec::new();
+        if dialog.can_select_scope() {
+            buttons.push(DialogButton::new(
+                format!("Scope: < {} >", dialog.active_scope().display_name),
+                false,
+                HitAction::CycleBumpScope(1),
+                Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+            ));
+        }
+        buttons.push(DialogButton::new(
+            format!("< {} >", dialog.selected_action().display_name()),
+            false,
+            HitAction::CycleBumpAction(1),
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ));
+        buttons.push(DialogButton::new("Apply", false, HitAction::ApplyBump, Style::default().fg(Color::Black).bg(Color::Green)));
+        buttons.push(DialogButton::new("Cancel", false, HitAction::CancelBump, Style::default().fg(Color::White).bg(Color::Red)));
+        self.render_button_row(frame, sections[2], &buttons);
     }
 
     fn render_recent_changes_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -1346,6 +1398,8 @@ impl App {
                 self.bump_dialog = None;
                 self.status = StatusMessage::info("Bump preview closed.");
             }
+            KeyCode::Up | KeyCode::BackTab => self.rotate_bump_scope(-1),
+            KeyCode::Down | KeyCode::Tab => self.rotate_bump_scope(1),
             KeyCode::Left => self.rotate_bump_action(-1),
             KeyCode::Right => self.rotate_bump_action(1),
             KeyCode::Enter | KeyCode::F(2) => self.apply_bump()?,
@@ -1726,6 +1780,7 @@ impl App {
                     dialog.switch_tab(tab);
                 }
             }
+            HitAction::CycleBumpScope(delta) => self.rotate_bump_scope(delta),
             HitAction::CycleBumpAction(delta) => self.rotate_bump_action(delta),
             HitAction::ApplyBump => return self.apply_bump(),
             HitAction::CancelBump => {
@@ -1969,7 +2024,7 @@ impl App {
         self.project_edit_dialog = None;
         self.browser_dialog = None;
         self.bump_dialog = Some(dialog);
-        self.status = StatusMessage::info("Review the preview, then press Enter to apply the bump.");
+        self.status = StatusMessage::info("Review the preview, then press Enter to apply the bump for the active target set.");
         Ok(())
     }
 
@@ -1979,23 +2034,36 @@ impl App {
         }
     }
 
+    fn rotate_bump_scope(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.bump_dialog {
+            dialog.rotate_scope(delta);
+        }
+    }
+
     fn apply_bump(&mut self) -> Result<()> {
         let Some(dialog) = &self.bump_dialog else {
             return Ok(());
         };
 
         let next_version = dialog.preview_next_version().map_err(anyhow::Error::msg)?;
-        for target in &dialog.targets {
+        let targets = dialog.active_targets();
+        for target in &targets {
             write_target_version(target, &next_version)?;
         }
 
-        let target_count = dialog.targets.len();
+        let target_count = targets.len();
+        let scope_notice = if dialog.unified_versioning {
+            String::new()
+        } else {
+            format!(" in scope '{}'", dialog.active_scope().display_name)
+        };
         self.bump_dialog = None;
         let repo_backed = self.selected_project()?.integration_mode.requires_repo();
         self.status = StatusMessage::success(format!(
-            "Updated {} target{} to {}.",
+            "Updated {} target{}{} to {}.",
             target_count,
             if target_count == 1 { "" } else { "s" },
+            scope_notice,
             next_version
         ));
         if repo_backed {
@@ -2452,6 +2520,7 @@ enum HitAction {
     OpenTagAnnotation,
     CycleTagAction(isize),
     CycleBumpAction(isize),
+    CycleBumpScope(isize),
     ApplyBump,
     CancelBump,
     CreateTag,
