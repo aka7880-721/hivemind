@@ -232,6 +232,7 @@ dependencies = [
  "serde_json",
  "toml",
  "toml_edit",
+ "tui-tabs",
 ]
 
 [[package]]
@@ -2019,6 +2020,15 @@ name = "toml_writer"
 version = "1.1.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
+
+[[package]]
+name = "tui-tabs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c8451ff3e37e3418372d5ff99e654684f92639ed671b0317bf1f473693fda54"
+dependencies = [
+ "ratatui-core",
+]
 
 [[package]]
 name = "typenum"

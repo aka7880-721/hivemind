@@ -25,3 +25,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 toml = "1"
 toml_edit = "0.25"
+tui-tabs = "0.1.1"
