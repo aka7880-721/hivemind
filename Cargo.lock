@@ -116,6 +116,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bon"
+version = "3.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f47dbe92550676ee653353c310dfb9cf6ba17ee70396e1f7cf0a2020ad49b2fe"
+dependencies = [
+ "bon-macros",
+ "rustversion",
+]
+
+[[package]]
+name = "bon-macros"
+version = "3.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "519bd3116aeeb42d5372c29d982d16d0170d3d4a5ed85fc7dd91642ffff3c67c"
+dependencies = [
+ "darling",
+ "ident_case",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -132,6 +157,12 @@ name = "byteorder-lite"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
+
+[[package]]
+name = "bytes"
+version = "1.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "castaway"
@@ -195,6 +226,8 @@ dependencies = [
  "directories",
  "image",
  "ratatui",
+ "ratatui-comfy-toaster",
+ "ratatui-explorer",
  "serde",
  "serde_json",
  "toml",
@@ -423,10 +456,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "educe"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d7bc049e1bd8cdeb31b68bbd586a9464ecf9f3944af3958a7a9d0f8b9799417"
+dependencies = [
+ "enum-ordinalize",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "enum-ordinalize"
+version = "4.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a1091a7bb1f8f2c4b28f1fe2cef4980ca2d410a3d727d67ecc3178c9b0800f0"
+dependencies = [
+ "enum-ordinalize-derive",
+]
+
+[[package]]
+name = "enum-ordinalize-derive"
+version = "4.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ca9601fb2d62598ee17836250842873a413586e5d7ed88b356e38ddbb0ec631"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "equivalent"
@@ -554,6 +619,18 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "futures-core"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
+
+[[package]]
+name = "futures-sink"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c39754e157331b013978ec91992bde1ac089843443c49cbc7f46150b0fad0893"
 
 [[package]]
 name = "generic-array"
@@ -895,6 +972,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "micromath"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1209,6 +1292,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-project-lite"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1315,6 +1404,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatui-comfy-toaster"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "ratatui",
+ "tachyonfx",
+ "textwrap",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "ratatui-core"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1344,6 +1445,16 @@ dependencies = [
  "crossterm",
  "instability",
  "ratatui-core",
+]
+
+[[package]]
+name = "ratatui-explorer"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1034d08c806b090cf2eb450f60717e38d28b3a0a9fae01eee282db488d2e513b"
+dependencies = [
+ "educe",
+ "ratatui",
 ]
 
 [[package]]
@@ -1600,6 +1711,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
+name = "smawk"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7c388c1b5e93756d0c740965c41e8822f866621d41acbdf6336a6a168f8840c"
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1652,6 +1769,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tachyonfx"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c144c687e9f3628c06add1b6db585a68d3cd285a9d7213b9bca836771e337592"
+dependencies = [
+ "bon",
+ "compact_str",
+ "micromath",
+ "ratatui-core",
+ "thiserror 2.0.18",
+ "unicode-width",
 ]
 
 [[package]]
@@ -1715,6 +1846,17 @@ dependencies = [
  "wezterm-dynamic",
  "wezterm-input-types",
  "winapi",
+]
+
+[[package]]
+name = "textwrap"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
+dependencies = [
+ "smawk",
+ "unicode-linebreak",
+ "unicode-width",
 ]
 
 [[package]]
@@ -1793,6 +1935,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
+name = "tokio"
+version = "1.51.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
+dependencies = [
+ "pin-project-lite",
+ "tokio-macros",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "toml"
 version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1861,6 +2037,12 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-linebreak"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
 
 [[package]]
 name = "unicode-segmentation"
