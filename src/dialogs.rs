@@ -193,6 +193,11 @@ impl TextInput {
         Self { value, cursor }
     }
 
+    pub(crate) fn set_value(&mut self, value: impl Into<String>) {
+        self.value = value.into();
+        self.cursor = self.value.len();
+    }
+
     pub(crate) fn insert(&mut self, character: char) {
         self.value.insert(self.cursor, character);
         self.cursor += character.len_utf8();
@@ -207,23 +212,25 @@ impl TextInput {
         if self.cursor == 0 {
             return;
         }
-        self.cursor -= 1;
-        self.value.remove(self.cursor);
+        let previous = previous_char_boundary(&self.value, self.cursor);
+        self.value.drain(previous..self.cursor);
+        self.cursor = previous;
     }
 
     pub(crate) fn delete(&mut self) {
         if self.cursor >= self.value.len() {
             return;
         }
-        self.value.remove(self.cursor);
+        let next = next_char_boundary(&self.value, self.cursor);
+        self.value.drain(self.cursor..next);
     }
 
     pub(crate) fn move_left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
+        self.cursor = previous_char_boundary(&self.value, self.cursor);
     }
 
     pub(crate) fn move_right(&mut self) {
-        self.cursor = (self.cursor + 1).min(self.value.len());
+        self.cursor = next_char_boundary(&self.value, self.cursor);
     }
 
     pub(crate) fn home(&mut self) {
@@ -248,16 +255,90 @@ impl TextInput {
     }
 
     pub(crate) fn display_value(&self, focused: bool) -> String {
-        if !focused {
-            return self.value.clone();
+        self.display_value_with_width(focused, usize::MAX)
+    }
+
+    pub(crate) fn display_value_with_width(&self, focused: bool, max_width: usize) -> String {
+        if max_width == 0 {
+            return String::new();
         }
 
         let cursor = self.cursor.min(self.value.len());
-        let (left, right) = self.value.split_at(cursor);
-        if right.is_empty() {
-            format!("{}|", left)
-        } else {
-            format!("{}|{}", left, right)
+        let mut rendered: Vec<char> = self.value.chars().collect();
+        if focused {
+            let cursor_index = self.value[..cursor].chars().count();
+            rendered.insert(cursor_index, '|');
         }
+
+        if rendered.len() <= max_width {
+            return rendered.into_iter().collect();
+        }
+
+        if !focused {
+            let start = rendered.len().saturating_sub(max_width);
+            return rendered[start..].iter().collect();
+        }
+
+        let cursor_index = self.value[..cursor].chars().count();
+        let visible_cursor = cursor_index.min(rendered.len().saturating_sub(1));
+        let mut start = visible_cursor.saturating_sub(max_width.saturating_sub(1));
+        let end = (start + max_width).min(rendered.len());
+        if end - start < max_width {
+            start = end.saturating_sub(max_width);
+        }
+        rendered[start..end].iter().collect()
+    }
+
+    pub(crate) fn value(&self) -> &str {
+        &self.value
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.value.trim().is_empty()
+    }
+}
+
+fn previous_char_boundary(value: &str, index: usize) -> usize {
+    if index == 0 {
+        return 0;
+    }
+
+    let mut previous = 0;
+    for (offset, _) in value.char_indices() {
+        if offset >= index {
+            break;
+        }
+        previous = offset;
+    }
+    previous
+}
+
+fn next_char_boundary(value: &str, index: usize) -> usize {
+    if index >= value.len() {
+        return value.len();
+    }
+
+    value[index..]
+        .char_indices()
+        .nth(1)
+        .map(|(offset, _)| index + offset)
+        .unwrap_or(value.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TextInput;
+
+    #[test]
+    fn display_value_with_width_keeps_cursor_visible() {
+        let mut input = TextInput::with_value("C:/very/long/path/to/a/file.json");
+        input.home();
+        for _ in 0..20 {
+            input.move_right();
+        }
+
+        let rendered = input.display_value_with_width(true, 12);
+        assert!(rendered.contains('|'));
+        assert!(rendered.len() <= 12);
     }
 }
