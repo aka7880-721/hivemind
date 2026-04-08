@@ -7,7 +7,8 @@
 
 use std::{
     io,
-    path::Path,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -25,11 +26,16 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Flex, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, FrameExt as _, List, ListItem, ListState, Paragraph, Wrap},
 };
+use ratatui_comfy_toaster::{
+    ToastBuilder, ToastEngine, ToastEngineBuilder, ToastInteraction, ToastMouseButton,
+    ToastPosition, ToastShortcut, ToastType,
+};
+use ratatui_explorer::{FileExplorer, FileExplorerBuilder};
 
 use crate::{
     branding::{PixelLogo, choose_header_content},
@@ -46,6 +52,10 @@ use crate::{
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SUPPORT_EMAIL: &str = " dev@comfyhome.io ";
+const FORM_LABEL_WIDTH: u16 = 18;
+const BROWSE_BUTTON_WIDTH: u16 = 12;
+const BUTTON_ROW_HEIGHT: u16 = 3;
+const BUTTON_GAP_HEIGHT: u16 = 3;
 
 pub fn run() -> Result<()> {
     let mut terminal = setup_terminal()?;
@@ -110,8 +120,12 @@ struct App {
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     project_edit_dialog: Option<ProjectEditDialog>,
+    browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
     status: StatusMessage,
+    last_status_toast_id: u64,
+    transient_toaster: ToastEngine<()>,
+    sticky_toaster: ToastEngine<()>,
     logo: PixelLogo,
     should_quit: bool,
 }
@@ -120,6 +134,7 @@ impl App {
     fn new() -> Result<Self> {
         let config_store = ConfigStore::locate()?;
         let config = config_store.load()?;
+        let status = StatusMessage::info("Press N to create your first project, or Q to quit.");
         Ok(Self {
             config_store,
             config,
@@ -130,14 +145,25 @@ impl App {
             recent_changes_dialog: None,
             tag_dialog: None,
             project_edit_dialog: None,
+            browser_dialog: None,
             hit_targets: Vec::new(),
-            status: StatusMessage::info("Press N to create your first project, or Q to quit."),
+            last_status_toast_id: status.id,
+            transient_toaster: ToastEngineBuilder::new(Rect::default())
+                .default_duration(Duration::from_secs(2))
+                .build(),
+            sticky_toaster: ToastEngineBuilder::new(Rect::default())
+                .default_duration(Duration::from_secs(2))
+                .build(),
+            status,
             logo: PixelLogo::load(),
             should_quit: false,
         })
     }
 
     fn draw(&mut self, frame: &mut Frame) {
+        self.transient_toaster.tick();
+        self.sticky_toaster.tick();
+        self.sync_status_toasts();
         self.hit_targets.clear();
 
         let root = Layout::default()
@@ -171,8 +197,15 @@ impl App {
         if self.project_edit_dialog.is_some() {
             self.render_project_edit_dialog(frame, frame.area());
         }
+        if self.browser_dialog.is_some() {
+            self.render_browser_dialog(frame, frame.area());
+        }
 
         self.render_footer(frame, root[3]);
+        self.transient_toaster.set_area(frame.area());
+        self.sticky_toaster.set_area(frame.area());
+        frame.render_widget(&self.transient_toaster, frame.area());
+        frame.render_widget(&self.sticky_toaster, frame.area());
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect) {
@@ -655,56 +688,60 @@ impl App {
 
         let sections = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(4), Constraint::Min(8)])
+            .constraints([
+                Constraint::Length(4),
+                Constraint::Min(6),
+                Constraint::Length(BUTTON_GAP_HEIGHT),
+                Constraint::Length(BUTTON_ROW_HEIGHT),
+            ])
             .split(inner);
 
         let header = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
             Line::from("Edit the same core fields as New Project, then press F2 or Save."),
-            Line::from("Tab/Shift+Tab moves between fields. Left/Right changes enums. Del removes the project."),
+            Line::from("Tab/Shift+Tab moves between fields. Left/Right changes enums. Ctrl+O browses. Del removes the project."),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
-        let fields = dialog.visible_fields();
-        let button_gap_count = fields
-            .iter()
-            .filter(|field| matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove))
-            .count() as u16;
+        let fields = dialog
+            .visible_fields()
+            .into_iter()
+            .filter(|field| !matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove | ProjectEditFocus::Cancel))
+            .collect::<Vec<_>>();
         let preferred_row_height = 3;
-        let row_height = if (fields.len() as u16 * preferred_row_height) + button_gap_count <= sections[1].height {
+        let row_height = if (fields.len() as u16 * preferred_row_height) <= sections[1].height {
             preferred_row_height
         } else {
             2
         };
-        let button_gap = if row_height >= 3 { 1 } else { 0 };
-
-        let mut constraints = Vec::with_capacity(fields.len() + button_gap_count as usize);
-        for field in &fields {
-            constraints.push(Constraint::Length(row_height));
-            if button_gap > 0 && matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove) {
-                constraints.push(Constraint::Length(button_gap));
-            }
-        }
+        let constraints = vec![Constraint::Length(row_height); fields.len()];
 
         let field_rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
             .split(sections[1]);
 
-        let mut row_index = 0;
-        for field in &fields {
-            let row = field_rows[row_index];
-            row_index += 1;
-            if button_gap > 0 && matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove) {
-                row_index += 1;
-            }
-
+        for (field, row) in fields.iter().zip(field_rows.iter()) {
             let focused = *field == dialog.focus;
             let (label, action) = dialog.render_field(*field);
-            let value = dialog.display_value_for_field(*field, focused);
-            self.render_form_row(frame, row, label, value, focused, action.clone());
-            self.hit_targets.push(HitTarget::new(row, action));
+            let browse_action = project_edit_browse_action(*field);
+            let value = dialog.display_value_for_field(*field, focused, visible_field_width(row.width, browse_action.is_some()));
+            let browse_rect = self.render_form_row(frame, *row, label, value, focused, action.clone(), browse_action.clone());
+            self.hit_targets.push(HitTarget::new(*row, action));
+            if let (Some(rect), Some(action)) = (browse_rect, browse_action) {
+                self.hit_targets.push(HitTarget::new(rect, action));
+            }
         }
+
+        self.render_button_row(
+            frame,
+            sections[3],
+            &[
+                DialogButton::new("Save", dialog.focus == ProjectEditFocus::Save, HitAction::SaveProjectEdit, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Remove", dialog.focus == ProjectEditFocus::Remove, HitAction::RemoveProject, Style::default().fg(Color::White).bg(Color::Red)),
+                DialogButton::new("Cancel", dialog.focus == ProjectEditFocus::Cancel, HitAction::CancelProjectEdit, Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90))),
+            ],
+        );
     }
 
     fn render_wizard(&mut self, frame: &mut Frame, area: Rect) {
@@ -717,46 +754,55 @@ impl App {
         let inner = block.inner(chunks[0]);
         frame.render_widget(block, chunks[0]);
 
-        let fields = self.wizard.visible_fields();
-        let button_gap_count = fields
-            .iter()
-            .filter(|field| matches!(field, WizardField::Validate | WizardField::Save))
-            .count() as u16; // add extra gap after validate and save buttons for better separation
-        let preferred_row_height = 3; // use taller rows if they fit to improve button styling
-        let row_height = if (fields.len() as u16 * preferred_row_height) + button_gap_count <= inner.height {
+        let left_sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(6),
+                Constraint::Length(BUTTON_GAP_HEIGHT),
+                Constraint::Length(BUTTON_ROW_HEIGHT),
+            ])
+            .split(inner);
+
+        let fields = self
+            .wizard
+            .visible_fields()
+            .into_iter()
+            .filter(|field| !matches!(field, WizardField::Validate | WizardField::Save | WizardField::Cancel))
+            .collect::<Vec<_>>();
+        let preferred_row_height = 3;
+        let row_height = if (fields.len() as u16 * preferred_row_height) <= left_sections[0].height {
             preferred_row_height
         } else {
             2
         };
-        let button_gap = if row_height >= 3 { 1 } else { 0 }; // add a gap after action buttons only if rows are tall enough to accommodate it without looking cramped
-
-        let mut constraints = Vec::with_capacity(fields.len() + button_gap_count as usize);
-        for field in &fields {
-            constraints.push(Constraint::Length(row_height));
-            if button_gap > 0 && matches!(field, WizardField::Validate | WizardField::Save) {
-                constraints.push(Constraint::Length(button_gap));
-            }
-        }
+        let constraints = vec![Constraint::Length(row_height); fields.len()];
 
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
-            .split(inner);
+            .split(left_sections[0]);
 
-        let mut row_index = 0; // separate index to account for button gaps in the layout
-        for field in &fields {
-            let row = rows[row_index];
-            row_index += 1;
-            if button_gap > 0 && matches!(field, WizardField::Validate | WizardField::Save) {
-                row_index += 1;
-            }
-
+        for (field, row) in fields.iter().zip(rows.iter()) {
             let focused = *field == self.wizard.focus;
             let (label, action) = self.wizard.render_field(*field);
-            let value = self.wizard.display_value_for_field(*field, focused);
-            self.render_form_row(frame, row, label, value, focused, action.clone());
-            self.hit_targets.push(HitTarget::new(row, action));
+            let browse_action = wizard_browse_action(*field);
+            let value = self.wizard.display_value_for_field(*field, focused, visible_field_width(row.width, browse_action.is_some()));
+            let browse_rect = self.render_form_row(frame, *row, label, value, focused, action.clone(), browse_action.clone());
+            self.hit_targets.push(HitTarget::new(*row, action));
+            if let (Some(rect), Some(action)) = (browse_rect, browse_action) {
+                self.hit_targets.push(HitTarget::new(rect, action));
+            }
         }
+
+        self.render_button_row(
+            frame,
+            left_sections[2],
+            &[
+                DialogButton::new("Read", self.wizard.focus == WizardField::Validate, HitAction::ValidateWizard, Style::default().fg(Color::Black).bg(Color::Yellow)),
+                DialogButton::new("Save", self.wizard.focus == WizardField::Save, HitAction::SaveWizard, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Cancel", self.wizard.focus == WizardField::Cancel, HitAction::CancelWizard, Style::default().fg(Color::White).bg(Color::Red)),
+            ],
+        );
 
         let side_block = Block::default().borders(Borders::ALL).title(" Validation And Notes ");
         let side_inner = side_block.inner(chunks[1]);
@@ -791,7 +837,7 @@ impl App {
                 lines.push(Line::from(format!("Detected format: {}", format.display_name())));
             }
         } else {
-            lines.push(Line::from("Use F5 or the Validate row to read the target file."));
+            lines.push(Line::from("Use F5 or Read to inspect the target file."));
             lines.push(Line::from("The wizard checks that the configured key exists and is a string."));
         }
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), side_inner);
@@ -804,14 +850,14 @@ impl App {
         label: &'static str,
         value: String,
         focused: bool,
-        action: HitAction,
-    ) {
-        let label_width = 18;
+        _action: HitAction,
+        browse_action: Option<HitAction>,
+    ) -> Option<Rect> {
         let label_area = center_vertically(
             Rect {
                 x: area.x,
                 y: area.y,
-                width: label_width,
+                width: FORM_LABEL_WIDTH,
                 height: area.height,
             },
             1,
@@ -824,82 +870,89 @@ impl App {
             label_area,
         );
 
-        let is_action_button = matches!(
-            action,
-            HitAction::ValidateWizard
-                | HitAction::SaveWizard
-                | HitAction::CancelWizard
-                | HitAction::SaveProjectEdit
-                | HitAction::RemoveProject
-                | HitAction::CancelProjectEdit
-        );
-        let field_area = if is_action_button {
-            let button_width = (value.len() as u16 + 4).max(12);
-            Rect {
-                x: area.x + label_width,
-                y: area.y,
-                width: button_width.min(area.width.saturating_sub(label_width)),
-                height: area.height,
-            }
+        let row = if browse_action.is_some() {
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(FORM_LABEL_WIDTH),
+                    Constraint::Min(10),
+                    Constraint::Length(1),
+                    Constraint::Length(BROWSE_BUTTON_WIDTH),
+                ])
+                .split(area)
         } else {
-            Rect {
-                x: area.x + label_width,
-                y: area.y,
-                width: area.width.saturating_sub(label_width),
-                height: area.height,
-            }
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(FORM_LABEL_WIDTH), Constraint::Min(10)])
+                .split(area)
         };
-        let field_area = center_vertically(field_area, area.height.min(3)); // vertically center the field, but cap its height at 3 for better button styling
 
-        let (base_style, block) = match action {
-            HitAction::ValidateWizard => (
-                Style::default().fg(Color::Black).bg(Color::Yellow),
-                Block::default().borders(Borders::ALL).title(" action "),
-            ),
-            HitAction::SaveWizard => (
-                Style::default().fg(Color::Black).bg(Color::Green),
-                Block::default().borders(Borders::ALL).title(" action "),
-            ),
-            HitAction::SaveProjectEdit => (
-                Style::default().fg(Color::Black).bg(Color::Green),
-                Block::default().borders(Borders::ALL).title(" action "),
-            ),
-            HitAction::RemoveProject => (
-                Style::default().fg(Color::White).bg(Color::Red),
-                Block::default().borders(Borders::ALL).title(" action "),
-            ),
-            HitAction::CancelWizard => (
-                Style::default().fg(Color::Black).bg(Color::Yellow),
-                Block::default().borders(Borders::ALL).title(" action "),
-            ),
-            HitAction::CancelProjectEdit => (
-                Style::default().fg(Color::White).bg(Color::Red),
-                Block::default().borders(Borders::ALL).title(" action "),
-            ),
-            _ => (Style::default(), Block::default().borders(Borders::ALL)),
-        };
-        let style = if focused {
-            if is_action_button {
-                base_style.add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Rgb(235, 235, 235))
-            }
+        let field_index = if browse_action.is_some() { 1 } else { 1 };
+        let field_area = center_vertically(row[field_index], area.height.min(3));
+        let style = Style::default().fg(Color::Rgb(235, 235, 235));
+        let block = if focused {
+            Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan))
         } else {
-            if is_action_button {
-                base_style
-            } else {
-                Style::default().fg(Color::Rgb(235, 235, 235))
-            }
-        };
-        let block = if focused && !is_action_button {
-            block.border_style(Style::default().fg(Color::Cyan))
-        } else {
-            block
+            Block::default().borders(Borders::ALL)
         };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(value, style))).block(block),
             field_area,
         );
+
+        if browse_action.is_some() {
+            let button_area = center_vertically(row[3], area.height.min(3));
+            frame.render_widget(
+                Paragraph::new("Browse")
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(Color::Black).bg(Color::Cyan))
+                    .block(Block::default().borders(Borders::ALL)),
+                button_area,
+            );
+            return Some(button_area);
+        }
+
+        None
+    }
+
+    fn render_button_row(&mut self, frame: &mut Frame, area: Rect, buttons: &[DialogButton]) {
+        if buttons.is_empty() {
+            return;
+        }
+
+        let mut constraints = Vec::with_capacity(buttons.len() * 2 + 1);
+        constraints.push(Constraint::Fill(1));
+        for button in buttons {
+            constraints.push(Constraint::Length((button.label.len() as u16 + 6).max(14)));
+            constraints.push(Constraint::Fill(1));
+        }
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(constraints)
+            .flex(Flex::Center)
+            .split(area);
+
+        for (index, button) in buttons.iter().enumerate() {
+            let rect = center_vertically(chunks[(index * 2) + 1], area.height.min(3));
+            let style = if button.focused {
+                button.style.add_modifier(Modifier::BOLD)
+            } else {
+                button.style
+            };
+            let block = if button.focused {
+                Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan))
+            } else {
+                Block::default().borders(Borders::ALL)
+            };
+            frame.render_widget(
+                Paragraph::new(button.label)
+                    .alignment(Alignment::Center)
+                    .style(style)
+                    .block(block),
+                rect,
+            );
+            self.hit_targets.push(HitTarget::new(rect, button.action.clone()));
+        }
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
@@ -916,24 +969,49 @@ impl App {
             Screen::Settings => "Up/Down select project | E edit selected project | D dashboard | N new project | Q quit",
             Screen::Wizard => "Tab move | Left/Right change enums | F5 read target | F2 save | Esc cancel",
         };
-        let color = match self.status.kind {
-            StatusKind::Info => Color::Cyan,
-            StatusKind::Success => Color::Green,
-            StatusKind::Warning => Color::Yellow,
-            StatusKind::Error => Color::Red,
+        frame.render_widget(Paragraph::new(help), inner);
+    }
+
+    fn render_browser_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.browser_dialog else {
+            return;
         };
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+
+        let popup = centered_rect(area, 78, 72);
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", dialog.title))
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(8), Constraint::Length(2)])
             .split(inner);
-        frame.render_widget(Paragraph::new(help), chunks[0]);
-        frame.render_widget(Paragraph::new(self.status.text.clone()).style(Style::default().fg(color)), chunks[1]);
+
+        let instructions = if dialog.select_directories {
+            "Arrows navigate | Enter select directory | Esc cancel"
+        } else {
+            "Arrows navigate | Right enters directory | Enter select file | Esc cancel"
+        };
+        frame.render_widget(Paragraph::new(instructions), sections[0]);
+        frame.render_widget_ref(dialog.explorer.widget(), sections[1]);
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
             self.paste_from_clipboard();
             return Ok(());
+        }
+
+        if self.try_handle_toast_shortcut(key) {
+            return Ok(());
+        }
+
+        if self.browser_dialog.is_some() {
+            return self.handle_browser_key(key);
         }
 
         if self.project_edit_dialog.is_some() {
@@ -993,6 +1071,10 @@ impl App {
     fn handle_wizard_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
             return self.save_wizard_project();
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+            return self.open_browser_for_wizard_focus();
         }
 
         if self.wizard.focus_accepts_text() {
@@ -1079,6 +1161,10 @@ impl App {
     }
 
     fn handle_project_edit_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+            return self.open_browser_for_project_edit_focus();
+        }
+
         let focus_accepts_text = self
             .project_edit_dialog
             .as_ref()
@@ -1168,6 +1254,14 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.handle_toast_mouse(mouse) {
+            return;
+        }
+
+        if self.browser_dialog.is_some() {
+            return;
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 if self.project_edit_dialog.is_some() {
@@ -1207,6 +1301,23 @@ impl App {
             MouseEventKind::Down(MouseButton::Right) => self.paste_from_clipboard(),
             _ => {}
         }
+    }
+
+    fn handle_browser_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.browser_dialog = None;
+                self.status = StatusMessage::info("Browse cancelled.");
+            }
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_browser_selection(),
+            _ => {
+                if let Some(dialog) = &mut self.browser_dialog {
+                    let event = Event::Key(key);
+                    dialog.explorer.handle(&event)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn handle_paste(&mut self, text: String) {
@@ -1282,6 +1393,10 @@ impl App {
                 self.project_edit_dialog = None;
                 self.status = StatusMessage::info("Project edit cancelled.");
             }
+            HitAction::BrowseWizardTargetPath => return self.open_browser(BrowseTarget::WizardTargetPath),
+            HitAction::BrowseWizardRepoRoot => return self.open_browser(BrowseTarget::WizardRepoRoot),
+            HitAction::BrowseProjectTargetPath => return self.open_browser(BrowseTarget::ProjectEditTargetPath),
+            HitAction::BrowseProjectRepoRoot => return self.open_browser(BrowseTarget::ProjectEditRepoRoot),
             HitAction::CycleBumpAction(delta) => self.rotate_bump_action(delta),
             HitAction::ApplyBump => return self.apply_bump(),
             HitAction::CancelBump => {
@@ -1336,6 +1451,7 @@ impl App {
         let project_index = self.selected_project;
         let project = self.selected_project()?;
         let dialog = ProjectEditDialog::from_project(project_index, project)?;
+        self.browser_dialog = None;
         self.project_edit_dialog = Some(dialog);
         self.status = StatusMessage::info("Amend project settings, then save or remove the project.");
         Ok(())
@@ -1384,6 +1500,7 @@ impl App {
         let dialog = TagDialog::from_project(&project)?;
         self.bump_dialog = None;
         self.project_edit_dialog = None;
+        self.browser_dialog = None;
         self.tag_dialog = Some(dialog);
         self.status = StatusMessage::info("Review the proposed tag name, then press Enter to create it locally.");
         Ok(())
@@ -1446,6 +1563,7 @@ impl App {
         self.recent_changes_dialog = None;
         self.tag_dialog = None;
         self.project_edit_dialog = None;
+        self.browser_dialog = None;
         self.bump_dialog = Some(dialog);
         self.status = StatusMessage::info("Review the preview, then press Enter to apply the bump.");
         Ok(())
@@ -1485,6 +1603,7 @@ impl App {
 
     fn open_wizard(&mut self) {
         self.wizard = ProjectWizard::default();
+        self.browser_dialog = None;
         self.screen = Screen::Wizard;
         self.status = StatusMessage::info("Configure a project and read the target file before saving.");
     }
@@ -1556,6 +1675,182 @@ impl App {
         self.status = StatusMessage::success("Project saved to the user config directory.");
         Ok(())
     }
+
+    fn open_browser_for_wizard_focus(&mut self) -> Result<()> {
+        let target = match self.wizard.focus {
+            WizardField::TargetPath => BrowseTarget::WizardTargetPath,
+            WizardField::RepoRoot => BrowseTarget::WizardRepoRoot,
+            _ => return Ok(()),
+        };
+        self.open_browser(target)
+    }
+
+    fn open_browser_for_project_edit_focus(&mut self) -> Result<()> {
+        let Some(dialog) = &self.project_edit_dialog else {
+            return Ok(());
+        };
+        let target = match dialog.focus {
+            ProjectEditFocus::TargetPath => BrowseTarget::ProjectEditTargetPath,
+            ProjectEditFocus::RepoRoot => BrowseTarget::ProjectEditRepoRoot,
+            _ => return Ok(()),
+        };
+        self.open_browser(target)
+    }
+
+    fn open_browser(&mut self, target: BrowseTarget) -> Result<()> {
+        let dialog = FileBrowserDialog::new(target, self.initial_browser_path(target))?;
+        self.browser_dialog = Some(dialog);
+        self.status = StatusMessage::info("Browse to a file or directory, then press Enter to select it.");
+        Ok(())
+    }
+
+    fn initial_browser_path(&self, target: BrowseTarget) -> String {
+        match target {
+            BrowseTarget::WizardTargetPath => self.wizard.target_path.value().to_string(),
+            BrowseTarget::WizardRepoRoot => self.wizard.repo_root.value().to_string(),
+            BrowseTarget::ProjectEditTargetPath => self
+                .project_edit_dialog
+                .as_ref()
+                .map(|dialog| dialog.target_path.value().to_string())
+                .unwrap_or_default(),
+            BrowseTarget::ProjectEditRepoRoot => self
+                .project_edit_dialog
+                .as_ref()
+                .map(|dialog| dialog.repo_root.value().to_string())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn confirm_browser_selection(&mut self) -> Result<()> {
+        let Some(dialog) = &self.browser_dialog else {
+            return Ok(());
+        };
+
+        let selected = dialog.explorer.current().path.clone();
+        let target = dialog.target;
+        let select_directories = dialog.select_directories;
+
+        if select_directories && !selected.is_dir() {
+            self.status = StatusMessage::warning("Select a directory for Repo root.");
+            return Ok(());
+        }
+
+        if !select_directories && !selected.is_file() {
+            self.status = StatusMessage::warning("Select a file for Target path. Use Right to enter directories.");
+            return Ok(());
+        }
+
+        let selected = selected.display().to_string();
+        match target {
+            BrowseTarget::WizardTargetPath => self.wizard.set_target_path_from_browse(selected),
+            BrowseTarget::WizardRepoRoot => self.wizard.set_repo_root_from_browse(selected),
+            BrowseTarget::ProjectEditTargetPath => {
+                if let Some(dialog) = &mut self.project_edit_dialog {
+                    dialog.set_target_path_from_browse(selected);
+                }
+            }
+            BrowseTarget::ProjectEditRepoRoot => {
+                if let Some(dialog) = &mut self.project_edit_dialog {
+                    dialog.set_repo_root_from_browse(selected);
+                }
+            }
+        }
+
+        self.browser_dialog = None;
+        self.status = StatusMessage::success("Selection applied.");
+        Ok(())
+    }
+
+    fn try_handle_toast_shortcut(&mut self, key: KeyEvent) -> bool {
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+        {
+            let interaction = self.sticky_toaster.handle_shortcut(ToastShortcut::Dismiss);
+            return self.handle_toast_interaction(interaction);
+        }
+
+        if key.code == KeyCode::F(5) && self.screen != Screen::Wizard {
+            let interaction = self.sticky_toaster.handle_shortcut(ToastShortcut::Copy);
+            return self.handle_toast_interaction(interaction);
+        }
+
+        false
+    }
+
+    fn handle_toast_mouse(&mut self, mouse: MouseEvent) -> bool {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let interaction = self
+                    .sticky_toaster
+                    .handle_click(mouse.column, mouse.row, ToastMouseButton::Left);
+                self.handle_toast_interaction(interaction)
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                let interaction = self
+                    .sticky_toaster
+                    .handle_click(mouse.column, mouse.row, ToastMouseButton::Right);
+                self.handle_toast_interaction(interaction)
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_toast_interaction(&mut self, interaction: ToastInteraction) -> bool {
+        match interaction {
+            ToastInteraction::None => false,
+            ToastInteraction::Dismissed => true,
+            ToastInteraction::CopyRequested(text) => {
+                self.copy_text_to_clipboard(&text);
+                true
+            }
+        }
+    }
+
+    fn copy_text_to_clipboard(&mut self, text: &str) {
+        let Ok(mut clipboard) = Clipboard::new() else {
+            self.status = StatusMessage::warning("Clipboard is not available in this environment.");
+            return;
+        };
+
+        if clipboard.set_text(text.to_string()).is_ok() {
+            self.status = StatusMessage::info("Copied to clipboard.");
+        } else {
+            self.status = StatusMessage::warning("Clipboard copy failed.");
+        }
+    }
+
+    fn sync_status_toasts(&mut self) {
+        if self.status.id == self.last_status_toast_id {
+            return;
+        }
+
+        self.last_status_toast_id = self.status.id;
+        let builder = ToastBuilder::new(self.status.text.clone().into());
+        match self.status.kind {
+            StatusKind::Info => self.transient_toaster.show_toast(
+                builder
+                    .toast_type(ToastType::Info)
+                    .position(ToastPosition::TopRight),
+            ),
+            StatusKind::Success => self.transient_toaster.show_toast(
+                builder
+                    .toast_type(ToastType::Success)
+                    .position(ToastPosition::TopRight),
+            ),
+            StatusKind::Warning => self.transient_toaster.show_toast(
+                builder
+                    .toast_type(ToastType::Warning)
+                    .position(ToastPosition::TopRight),
+            ),
+            StatusKind::Error => self.sticky_toaster.show_toast(
+                builder
+                    .toast_type(ToastType::Error)
+                    .position(ToastPosition::BottomRight)
+                    .keep_on(1)
+                    .offset(-2, -1),
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1594,6 +1889,10 @@ enum HitAction {
     SaveProjectEdit,
     RemoveProject,
     CancelProjectEdit,
+    BrowseWizardTargetPath,
+    BrowseWizardRepoRoot,
+    BrowseProjectTargetPath,
+    BrowseProjectRepoRoot,
     CloseRecentChanges,
     ScrollRecentChanges(i16),
     OpenTagDialog,
@@ -1671,12 +1970,14 @@ impl ProjectEditDialog {
         let fields = self.visible_fields();
         let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
         self.focus = fields[(index + 1) % fields.len()];
+        self.ensure_focus_visible();
     }
 
     fn focus_previous(&mut self) {
         let fields = self.visible_fields();
         let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
         self.focus = fields[(index + fields.len() - 1) % fields.len()];
+        self.ensure_focus_visible();
     }
 
     fn is_save_focused(&self) -> bool {
@@ -1741,17 +2042,17 @@ impl ProjectEditDialog {
         }
     }
 
-    fn display_value_for_field(&self, field: ProjectEditFocus, focused: bool) -> String {
+    fn display_value_for_field(&self, field: ProjectEditFocus, focused: bool, max_width: usize) -> String {
         match field {
-            ProjectEditFocus::Name => self.name.display_value(focused),
+            ProjectEditFocus::Name => self.name.display_value_with_width(focused, max_width),
             ProjectEditFocus::ProjectType => format!("< {} >", self.project_type.display_name()),
-            ProjectEditFocus::BranchName => self.branch_name.display_value(focused),
+            ProjectEditFocus::BranchName => self.branch_name.display_value_with_width(focused, max_width),
             ProjectEditFocus::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
             ProjectEditFocus::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
-            ProjectEditFocus::TargetPath => self.target_path.display_value(focused),
-            ProjectEditFocus::TargetKey => self.target_key.display_value(focused),
-            ProjectEditFocus::RepoRoot => self.repo_root.display_value(focused),
-            ProjectEditFocus::RemoteUrl => self.remote_url.display_value(focused),
+            ProjectEditFocus::TargetPath => self.target_path.display_value_with_width(focused, max_width),
+            ProjectEditFocus::TargetKey => self.target_key.display_value_with_width(focused, max_width),
+            ProjectEditFocus::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
+            ProjectEditFocus::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
             ProjectEditFocus::Save => "Persist project".to_string(),
             ProjectEditFocus::Remove => "Delete project".to_string(),
             ProjectEditFocus::Cancel => "Discard changes".to_string(),
@@ -1783,6 +2084,8 @@ impl ProjectEditDialog {
             }
             _ => {}
         }
+        self.prefill_repo_root_from_target_path();
+        self.ensure_focus_visible();
     }
 
     fn handle_text_input(&mut self, key: KeyEvent) {
@@ -1799,11 +2102,17 @@ impl ProjectEditDialog {
             KeyCode::End => input.end(),
             _ => {}
         }
+        if self.focus == ProjectEditFocus::TargetPath {
+            self.prefill_repo_root_from_target_path();
+        }
     }
 
     fn insert_text(&mut self, text: &str) -> bool {
         if let Some(input) = self.active_input_mut() {
             input.insert_str(text);
+            if self.focus == ProjectEditFocus::TargetPath {
+                self.prefill_repo_root_from_target_path();
+            }
             return true;
         }
         false
@@ -1819,6 +2128,31 @@ impl ProjectEditDialog {
             ProjectEditFocus::RemoteUrl => Some(&mut self.remote_url),
             _ => None,
         }
+    }
+
+    fn ensure_focus_visible(&mut self) {
+        let fields = self.visible_fields();
+        if !fields.contains(&self.focus) {
+            self.focus = fields.first().copied().unwrap_or(ProjectEditFocus::Name);
+        }
+    }
+
+    fn prefill_repo_root_from_target_path(&mut self) {
+        if !self.repo_root.is_empty() {
+            return;
+        }
+        if let Some(repo_root) = derive_repo_root_from_target_path(self.target_path.value()) {
+            self.repo_root.set_value(repo_root);
+        }
+    }
+
+    fn set_target_path_from_browse(&mut self, path: String) {
+        self.target_path.set_value(path);
+        self.prefill_repo_root_from_target_path();
+    }
+
+    fn set_repo_root_from_browse(&mut self, path: String) {
+        self.repo_root.set_value(path);
     }
 
     fn apply(&self, project: &mut ProjectConfig) -> Result<()> {
@@ -1924,25 +2258,35 @@ enum ProjectEditFocus {
 
 #[derive(Clone)]
 struct StatusMessage {
+    id: u64,
     kind: StatusKind,
     text: String,
 }
 
 impl StatusMessage {
     fn info(text: impl Into<String>) -> Self {
-        Self { kind: StatusKind::Info, text: text.into() }
+        Self::new(StatusKind::Info, text)
     }
 
     fn success(text: impl Into<String>) -> Self {
-        Self { kind: StatusKind::Success, text: text.into() }
+        Self::new(StatusKind::Success, text)
     }
 
     fn warning(text: impl Into<String>) -> Self {
-        Self { kind: StatusKind::Warning, text: text.into() }
+        Self::new(StatusKind::Warning, text)
     }
 
     fn error(text: impl Into<String>) -> Self {
-        Self { kind: StatusKind::Error, text: text.into() }
+        Self::new(StatusKind::Error, text)
+    }
+
+    fn new(kind: StatusKind, text: impl Into<String>) -> Self {
+        static NEXT_STATUS_ID: AtomicU64 = AtomicU64::new(1);
+        Self {
+            id: NEXT_STATUS_ID.fetch_add(1, Ordering::Relaxed),
+            kind,
+            text: text.into(),
+        }
     }
 }
 
@@ -2044,12 +2388,14 @@ impl ProjectWizard {
         let fields = self.visible_fields();
         let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
         self.focus = fields[(index + 1) % fields.len()];
+        self.ensure_focus_visible();
     }
 
     fn focus_previous(&mut self) {
         let fields = self.visible_fields();
         let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
         self.focus = fields[(index + fields.len() - 1) % fields.len()];
+        self.ensure_focus_visible();
     }
 
     fn render_field(&self, field: WizardField) -> (&'static str, HitAction) {
@@ -2081,17 +2427,17 @@ impl ProjectWizard {
         }
     }
 
-    fn display_value_for_field(&self, field: WizardField, focused: bool) -> String {
+    fn display_value_for_field(&self, field: WizardField, focused: bool, max_width: usize) -> String {
         match field {
-            WizardField::Name => self.name.display_value(focused),
+            WizardField::Name => self.name.display_value_with_width(focused, max_width),
             WizardField::ProjectType => format!("< {} >", self.project_type.display_name()),
-            WizardField::BranchName => self.branch_name.display_value(focused),
+            WizardField::BranchName => self.branch_name.display_value_with_width(focused, max_width),
             WizardField::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
             WizardField::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
-            WizardField::TargetPath => self.target_path.display_value(focused),
-            WizardField::TargetKey => self.target_key.display_value(focused),
-            WizardField::RepoRoot => self.repo_root.display_value(focused),
-            WizardField::RemoteUrl => self.remote_url.display_value(focused),
+            WizardField::TargetPath => self.target_path.display_value_with_width(focused, max_width),
+            WizardField::TargetKey => self.target_key.display_value_with_width(focused, max_width),
+            WizardField::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
+            WizardField::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
             WizardField::Validate => "Validate target".to_string(),
             WizardField::Save => "Persist project".to_string(),
             WizardField::Cancel => "Discard changes".to_string(),
@@ -2106,7 +2452,6 @@ impl ProjectWizard {
                 } else {
                     self.project_type.previous()
                 };
-                self.last_probe = None;
             }
             WizardField::VersionScheme => {
                 self.version_scheme = if delta >= 0 {
@@ -2125,6 +2470,8 @@ impl ProjectWizard {
             }
             _ => {}
         }
+        self.prefill_repo_root_from_target_path();
+        self.ensure_focus_visible();
     }
 
     fn handle_text_input(&mut self, key: KeyEvent) {
@@ -2134,15 +2481,15 @@ impl ProjectWizard {
         match key.code {
             KeyCode::Char(character) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
                 input.insert(character);
-                self.last_probe = None;
+                self.after_text_edit();
             }
             KeyCode::Backspace => {
                 input.backspace();
-                self.last_probe = None;
+                self.after_text_edit();
             }
             KeyCode::Delete => {
                 input.delete();
-                self.last_probe = None;
+                self.after_text_edit();
             }
             KeyCode::Left => input.move_left(),
             KeyCode::Right => input.move_right(),
@@ -2167,10 +2514,45 @@ impl ProjectWizard {
     fn insert_text(&mut self, text: &str) -> bool {
         if let Some(input) = self.active_input_mut() {
             input.insert_str(text);
-            self.last_probe = None;
+            self.after_text_edit();
             return true;
         }
         false
+    }
+
+    fn after_text_edit(&mut self) {
+        if matches!(self.focus, WizardField::TargetPath | WizardField::TargetKey) {
+            self.last_probe = None;
+        }
+        if self.focus == WizardField::TargetPath {
+            self.prefill_repo_root_from_target_path();
+        }
+    }
+
+    fn ensure_focus_visible(&mut self) {
+        let fields = self.visible_fields();
+        if !fields.contains(&self.focus) {
+            self.focus = fields.first().copied().unwrap_or(WizardField::Name);
+        }
+    }
+
+    fn prefill_repo_root_from_target_path(&mut self) {
+        if !self.repo_root.is_empty() {
+            return;
+        }
+        if let Some(repo_root) = derive_repo_root_from_target_path(self.target_path.value()) {
+            self.repo_root.set_value(repo_root);
+        }
+    }
+
+    fn set_target_path_from_browse(&mut self, path: String) {
+        self.target_path.set_value(path);
+        self.last_probe = None;
+        self.prefill_repo_root_from_target_path();
+    }
+
+    fn set_repo_root_from_browse(&mut self, path: String) {
+        self.repo_root.set_value(path);
     }
 
     fn build_project(&self) -> Result<ProjectConfig> {
@@ -2256,4 +2638,177 @@ impl ProjectWizard {
 
 fn sanitize_pasted_text(text: &str) -> String {
     text.chars().filter(|character| *character != '\r' && *character != '\n').collect()
+}
+
+#[derive(Clone)]
+struct DialogButton {
+    label: &'static str,
+    focused: bool,
+    action: HitAction,
+    style: Style,
+}
+
+impl DialogButton {
+    fn new(label: &'static str, focused: bool, action: HitAction, style: Style) -> Self {
+        Self {
+            label,
+            focused,
+            action,
+            style,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BrowseTarget {
+    WizardTargetPath,
+    WizardRepoRoot,
+    ProjectEditTargetPath,
+    ProjectEditRepoRoot,
+}
+
+struct FileBrowserDialog {
+    title: &'static str,
+    target: BrowseTarget,
+    explorer: FileExplorer,
+    select_directories: bool,
+}
+
+impl FileBrowserDialog {
+    fn new(target: BrowseTarget, initial_path: String) -> Result<Self> {
+        let select_directories = matches!(
+            target,
+            BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot
+        );
+        let mut builder = FileExplorerBuilder::default();
+        if select_directories {
+            builder = builder.filter_map(|file| if file.is_dir { Some(file) } else { None });
+        }
+
+        let explorer = configure_file_explorer(builder, &initial_path, select_directories)?;
+        let title = if select_directories {
+            "Browse Repo Root"
+        } else {
+            "Browse Target Path"
+        };
+
+        Ok(Self {
+            title,
+            target,
+            explorer,
+            select_directories,
+        })
+    }
+}
+
+fn configure_file_explorer(
+    builder: FileExplorerBuilder,
+    initial_path: &str,
+    select_directories: bool,
+) -> Result<FileExplorer> {
+    let initial = initial_path.trim();
+    if initial.is_empty() {
+        return builder.build().map_err(anyhow::Error::from);
+    }
+
+    let path = PathBuf::from(initial);
+    if path.is_file() && !select_directories {
+        return builder.working_file(path).build().map_err(anyhow::Error::from);
+    }
+    if path.is_dir() {
+        if select_directories {
+            return builder.working_file(path).build().map_err(anyhow::Error::from);
+        }
+        return builder.working_dir(path).build().map_err(anyhow::Error::from);
+    }
+
+    if let Some(parent) = path.parent().filter(|parent| parent.is_dir()) {
+        return builder.working_dir(parent.to_path_buf()).build().map_err(anyhow::Error::from);
+    }
+
+    builder.build().map_err(anyhow::Error::from)
+}
+
+fn visible_field_width(row_width: u16, has_browse: bool) -> usize {
+    let browse_width = if has_browse {
+        BROWSE_BUTTON_WIDTH + 1
+    } else {
+        0
+    };
+    row_width
+        .saturating_sub(FORM_LABEL_WIDTH)
+        .saturating_sub(browse_width)
+        .saturating_sub(2)
+        .max(1) as usize
+}
+
+fn derive_repo_root_from_target_path(path: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Path::new(trimmed)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(|parent| parent.display().to_string())
+}
+
+fn wizard_browse_action(field: WizardField) -> Option<HitAction> {
+    match field {
+        WizardField::TargetPath => Some(HitAction::BrowseWizardTargetPath),
+        WizardField::RepoRoot => Some(HitAction::BrowseWizardRepoRoot),
+        _ => None,
+    }
+}
+
+fn project_edit_browse_action(field: ProjectEditFocus) -> Option<HitAction> {
+    match field {
+        ProjectEditFocus::TargetPath => Some(HitAction::BrowseProjectTargetPath),
+        ProjectEditFocus::RepoRoot => Some(HitAction::BrowseProjectRepoRoot),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_repo_root_uses_parent_directory() {
+        let derived = derive_repo_root_from_target_path("C:/repo/subdir/package.json");
+        assert_eq!(derived.as_deref(), Some("C:/repo/subdir"));
+    }
+
+    #[test]
+    fn editing_repo_root_does_not_invalidate_target_probe() {
+        let mut wizard = ProjectWizard::default();
+        wizard.last_probe = Some(TargetProbe {
+            kind: ProbeKind::Success,
+            message: "ok".to_string(),
+            version: Some("1.2.3".to_string()),
+            format: Some(TargetFormat::Json),
+        });
+        wizard.focus = WizardField::RepoRoot;
+
+        wizard.insert_text("C:/repo");
+
+        assert!(matches!(wizard.last_probe.as_ref().map(|probe| probe.kind), Some(ProbeKind::Success)));
+    }
+
+    #[test]
+    fn editing_target_path_invalidates_target_probe() {
+        let mut wizard = ProjectWizard::default();
+        wizard.last_probe = Some(TargetProbe {
+            kind: ProbeKind::Success,
+            message: "ok".to_string(),
+            version: Some("1.2.3".to_string()),
+            format: Some(TargetFormat::Json),
+        });
+        wizard.focus = WizardField::TargetPath;
+
+        wizard.insert_text("C:/repo/package.json");
+
+        assert!(wizard.last_probe.is_none());
+    }
 }
