@@ -128,6 +128,7 @@ pub(crate) struct TagDialog {
     pub(crate) repo_root: String,
     pub(crate) remote_spec: Option<String>,
     pub(crate) tag_name: TextInput,
+    pub(crate) annotation: String,
     pub(crate) actions: Vec<TagAction>,
     pub(crate) action_index: usize,
 }
@@ -152,6 +153,7 @@ impl TagDialog {
             repo_root,
             remote_spec,
             tag_name: TextInput::with_value(default_tag),
+            annotation: String::new(),
             actions,
             action_index: 0,
         })
