@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::versioning::VersionScheme;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -302,6 +302,10 @@ impl ConfigStore {
             .with_context(|| format!("failed to read {}", self.path.display()))?;
         let config = toml::from_str::<AppConfig>(&raw)
             .with_context(|| format!("failed to parse {}", self.path.display()))?;
+        let (config, changed) = migrate_loaded_config(config)?;
+        if changed {
+            self.save(&config)?;
+        }
         Ok(config)
     }
 
@@ -323,6 +327,47 @@ impl ConfigStore {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
+    if config.schema_version > SCHEMA_VERSION {
+        bail!("unsupported config schema version {}", config.schema_version);
+    }
+
+    let mut changed = false;
+
+    for project in &mut config.projects {
+        if project.project_type != ProjectType::Branched {
+            continue;
+        }
+
+        if project.branches.is_empty() && !project.targets.is_empty() {
+            let targets = std::mem::take(&mut project.targets);
+            project.branches.push(BranchConfig {
+                name: "core".to_string(),
+                label: "core".to_string(),
+                scope_kind: BranchScopeKind::Branch,
+                repo: None,
+                version_scheme: project.version_scheme,
+                targets,
+            });
+            changed = true;
+        }
+
+        for branch in &mut project.branches {
+            if branch.label.trim().is_empty() {
+                branch.label = branch.name.clone();
+                changed = true;
+            }
+        }
+    }
+
+    if config.schema_version != SCHEMA_VERSION {
+        config.schema_version = SCHEMA_VERSION;
+        changed = true;
+    }
+
+    Ok((config, changed))
 }
 
 #[cfg(test)]
@@ -380,5 +425,73 @@ format = "json"
         assert_eq!(branch.scope_kind, BranchScopeKind::Branch);
         assert!(branch.repo.is_none());
         assert_eq!(branch.targets.len(), 1);
+    }
+
+    #[test]
+    fn migration_upgrades_legacy_schema_and_branch_labels() {
+        let raw = r#"
+schema_version = 1
+
+[ui]
+accent_color = "cyan"
+show_mouse_hints = true
+show_tab_hints = true
+
+[[projects]]
+name = "Example"
+project_type = "branched"
+integration_mode = "git_local_only"
+unified_versioning = true
+version_scheme = "sem_ver"
+targets = []
+
+[[projects.branches]]
+name = "core"
+version_scheme = "sem_ver"
+
+[[projects.branches.targets]]
+label = "Version"
+path = "package.json"
+key_path = "version"
+format = "json"
+"#;
+
+        let parsed = toml::from_str::<AppConfig>(raw).expect("legacy config should parse");
+        let (migrated, changed) = migrate_loaded_config(parsed).expect("migration should succeed");
+
+        assert!(changed);
+        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+        assert_eq!(migrated.projects[0].branches[0].label, "core");
+    }
+
+    #[test]
+    fn migration_promotes_legacy_branched_targets_into_default_scope() {
+        let config = AppConfig {
+            schema_version: 1,
+            projects: vec![ProjectConfig {
+                name: "Example".to_string(),
+                project_type: ProjectType::Branched,
+                integration_mode: IntegrationMode::LocalOnly,
+                unified_versioning: true,
+                version_scheme: VersionScheme::SemVer,
+                targets: vec![TargetSpec {
+                    label: "Version".to_string(),
+                    path: "package.json".to_string(),
+                    key_path: "version".to_string(),
+                    format: TargetFormat::Json,
+                }],
+                branches: Vec::new(),
+                repo: None,
+            }],
+            ui: UiSettings::default(),
+        };
+
+        let (migrated, changed) = migrate_loaded_config(config).expect("migration should succeed");
+
+        assert!(changed);
+        assert!(migrated.projects[0].targets.is_empty());
+        assert_eq!(migrated.projects[0].branches.len(), 1);
+        assert_eq!(migrated.projects[0].branches[0].name, "core");
+        assert_eq!(migrated.projects[0].branches[0].targets[0].path, "package.json");
     }
 }
