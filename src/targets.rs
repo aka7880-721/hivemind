@@ -12,7 +12,7 @@ use serde_json::Value as JsonValue;
 use toml_edit::{DocumentMut, Item, Value, value};
 
 use crate::{
-    config::{ProjectConfig, ProjectType, TargetFormat},
+    config::{BranchScopeKind, ProjectConfig, ProjectType, TargetFormat, TargetSpec},
     versioning::VersionScheme,
 };
 
@@ -37,8 +37,26 @@ pub(crate) struct BumpTarget {
     pub(crate) path: String,
     pub(crate) key_path: String,
     pub(crate) format: TargetFormat,
-    pub(crate) scheme: VersionScheme,
     pub(crate) current_version: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct BumpScope {
+    pub(crate) display_name: String,
+    pub(crate) scope_kind: Option<BranchScopeKind>,
+    pub(crate) scheme: VersionScheme,
+    pub(crate) current_version: Option<String>,
+    pub(crate) targets: Vec<BumpTarget>,
+}
+
+impl BumpScope {
+    pub(crate) fn version_label(&self) -> &str {
+        self.current_version.as_deref().unwrap_or("mixed values")
+    }
+
+    pub(crate) fn has_mismatch(&self) -> bool {
+        self.current_version.is_none()
+    }
 }
 
 #[derive(Clone)]
@@ -83,43 +101,45 @@ pub(crate) fn probe_target(path: &str, key_path: &str, scheme: VersionScheme) ->
     })
 }
 
-pub(crate) fn collect_bump_targets(project: &ProjectConfig) -> Result<Vec<BumpTarget>> {
-    let mut targets = Vec::new();
-
+pub(crate) fn collect_bump_scopes(project: &ProjectConfig) -> Result<Vec<BumpScope>> {
     if project.project_type == ProjectType::AllInOne {
-        for target in &project.targets {
-            let target_value = read_target_value(&target.path, &target.key_path, target.format)?;
-            targets.push(BumpTarget {
-                label: target.label.clone(),
-                path: target.path.clone(),
-                key_path: target.key_path.clone(),
-                format: target_value.format,
-                scheme: project.version_scheme,
-                current_version: target_value.version,
-            });
-        }
-    } else {
-        for branch in &project.branches {
+        return Ok(vec![build_bump_scope(
+            project.name.clone(),
+            None,
+            project.version_scheme,
+            &project.targets,
+        )?]);
+    }
+
+    project
+        .branches
+        .iter()
+        .map(|branch| {
             let scheme = if project.unified_versioning {
                 project.version_scheme
             } else {
                 branch.version_scheme
             };
-            for target in &branch.targets {
-                let target_value = read_target_value(&target.path, &target.key_path, target.format)?;
-                targets.push(BumpTarget {
-                    label: format!("{} / {}", branch.name, target.label),
-                    path: target.path.clone(),
-                    key_path: target.key_path.clone(),
-                    format: target_value.format,
-                    scheme,
-                    current_version: target_value.version,
-                });
-            }
-        }
-    }
+            build_bump_scope(
+                branch.display_name().to_string(),
+                Some(branch.scope_kind),
+                scheme,
+                &branch.targets,
+            )
+        })
+        .collect()
+}
 
-    Ok(targets)
+pub(crate) fn shared_bump_version(scopes: &[BumpScope]) -> Option<String> {
+    let first = scopes.first()?.current_version.as_ref()?;
+    if scopes
+        .iter()
+        .all(|scope| scope.current_version.as_deref() == Some(first.as_str()))
+    {
+        Some(first.clone())
+    } else {
+        None
+    }
 }
 
 pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Result<()> {
@@ -146,6 +166,38 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
     };
 
     Ok(TargetValue { version, format })
+}
+
+fn build_bump_scope(
+    display_name: String,
+    scope_kind: Option<BranchScopeKind>,
+    scheme: VersionScheme,
+    specs: &[TargetSpec],
+) -> Result<BumpScope> {
+    let mut targets = Vec::with_capacity(specs.len());
+    for target in specs {
+        let target_value = read_target_value(&target.path, &target.key_path, target.format)?;
+        targets.push(BumpTarget {
+            label: target.label.clone(),
+            path: target.path.clone(),
+            key_path: target.key_path.clone(),
+            format: target_value.format,
+            current_version: target_value.version,
+        });
+    }
+
+    let current_version = targets
+        .first()
+        .map(|target| target.current_version.clone())
+        .filter(|current| targets.iter().all(|target| target.current_version == *current));
+
+    Ok(BumpScope {
+        display_name,
+        scope_kind,
+        scheme,
+        current_version,
+        targets,
+    })
 }
 
 fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
@@ -290,5 +342,27 @@ edition = "2024"
 "#;
         let resolved = extract_toml_value(content, "version").expect("should resolve package.version");
         assert_eq!(resolved, "0.1.0");
+    }
+
+    #[test]
+    fn shared_bump_version_rejects_scope_mismatches() {
+        let scopes = vec![
+            BumpScope {
+                display_name: "Core".to_string(),
+                scope_kind: Some(BranchScopeKind::Module),
+                scheme: VersionScheme::SemVer,
+                current_version: Some("1.2.3".to_string()),
+                targets: Vec::new(),
+            },
+            BumpScope {
+                display_name: "API".to_string(),
+                scope_kind: Some(BranchScopeKind::Service),
+                scheme: VersionScheme::SemVer,
+                current_version: Some("1.2.4".to_string()),
+                targets: Vec::new(),
+            },
+        ];
+
+        assert!(shared_bump_version(&scopes).is_none());
     }
 }

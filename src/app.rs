@@ -6,6 +6,7 @@
 // For details, see the LICENSE file in the repository root.
 
 use std::{
+    collections::HashSet,
     io,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -42,8 +43,8 @@ use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTe
 use crate::{
     branding::{PixelLogo, choose_header_content},
     config::{
-        AppConfig, BranchConfig, ConfigStore, IntegrationMode, ProjectConfig, ProjectType,
-        RepoConfig, TargetFormat, TargetSpec,
+        AppConfig, BranchConfig, BranchScopeKind, ConfigStore, IntegrationMode, ProjectConfig,
+        ProjectType, RepoConfig, TargetFormat, TargetSpec,
     },
     dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput},
     git::{ensure_gh_available, ensure_local_tag, run_gh_checked, run_git_checked},
@@ -327,7 +328,7 @@ impl App {
                 Line::from(""),
                 Line::from("Press N or click New Project to start onboarding."),
                 Line::from("This first slice stores config in your user profile."),
-                Line::from("Branched projects are scaffolded with an initial branch."),
+                Line::from("Branched projects can now manage multiple scopes in the wizard."),
                 Line::from("Target validation reads JSON or TOML and checks a key path."),
             ];
             frame.render_widget(Paragraph::new(onboarding).wrap(Wrap { trim: false }), left_inner);
@@ -420,25 +421,73 @@ impl App {
         let next_version = dialog.preview_next_version();
         let mut summary = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
-            Line::from(format!("Scheme: {}", dialog.scheme.display_name())),
-            Line::from(format!("Current version: {}", dialog.current_version)),
+            Line::from(format!(
+                "Mode: {}",
+                if dialog.unified_versioning {
+                    "Project-wide synchronized"
+                } else {
+                    "Selected scope only"
+                }
+            )),
+            Line::from(format!("Scheme: {}", dialog.active_scheme().display_name())),
+            Line::from(format!("Current version: {}", dialog.current_version_label())),
             Line::from(format!("Action: < {} >", dialog.selected_action().display_name())).style(Style::default().fg(Color::Yellow)),
         ];
+        if dialog.can_select_scope() {
+            let scope = dialog.active_scope();
+            summary.push(Line::from(format!(
+                "Selected scope: < {} ({}) >",
+                scope.display_name,
+                scope.scope_kind.map(|kind| kind.display_name()).unwrap_or("Project")
+            )));
+        }
         match next_version {
             Ok(next_version) => summary.push(Line::from(format!("Next version: {}", next_version)).style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
             Err(error) => summary.push(Line::from(format!("Next version: {}", error)).style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
         }
-        summary.push(Line::from("Left/Right changes the action. Enter applies it to every listed target."));
+        summary.push(Line::from(if dialog.can_select_scope() {
+            "Left/Right changes the action. Up/Down changes scope. Enter applies to the selected scope."
+        } else {
+            "Left/Right changes the action. Enter applies it to every listed target."
+        }));
         frame.render_widget(Paragraph::new(summary).wrap(Wrap { trim: false }), sections[0]);
 
         let target_lines = dialog
-            .targets
+            .scopes
             .iter()
-            .flat_map(|target| {
-                [
-                    Line::from(target.label.clone()).style(Style::default().add_modifier(Modifier::BOLD)),
-                    Line::from(format!("  {} -> {} [{}]", target.path, target.key_path, target.format.display_name())),
-                ]
+            .enumerate()
+            .flat_map(|(index, scope)| {
+                let marker = if dialog.can_select_scope() && index == dialog.selected_scope {
+                    ">"
+                } else {
+                    "-"
+                };
+                let header_style = if scope.has_mismatch() {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else if dialog.can_select_scope() && index == dialog.selected_scope {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                };
+                std::iter::once(
+                    Line::from(format!(
+                        "{} {} ({}) -> {}",
+                        marker,
+                        scope.display_name,
+                        scope.scope_kind.map(|kind| kind.display_name()).unwrap_or("Project"),
+                        scope.version_label()
+                    ))
+                    .style(header_style),
+                )
+                .chain(scope.targets.iter().map(|target| {
+                    Line::from(format!(
+                        "  {}: {} -> {} [{}]",
+                        target.label,
+                        target.path,
+                        target.key_path,
+                        target.format.display_name()
+                    ))
+                }))
             })
             .collect::<Vec<_>>();
         let target_block = Block::default().borders(Borders::ALL).title(" Targets ");
@@ -446,20 +495,24 @@ impl App {
         frame.render_widget(target_block, sections[1]);
         frame.render_widget(Paragraph::new(target_lines).wrap(Wrap { trim: false }), target_inner);
 
-        self.render_button_row(
-            frame,
-            sections[2],
-            &[
-                DialogButton::new(
-                    format!("< {} >", dialog.selected_action().display_name()),
-                    false,
-                    HitAction::CycleBumpAction(1),
-                    Style::default().fg(Color::Black).bg(Color::Yellow),
-                ),
-                DialogButton::new("Apply", false, HitAction::ApplyBump, Style::default().fg(Color::Black).bg(Color::Green)),
-                DialogButton::new("Cancel", false, HitAction::CancelBump, Style::default().fg(Color::White).bg(Color::Red)),
-            ],
-        );
+        let mut buttons = Vec::new();
+        if dialog.can_select_scope() {
+            buttons.push(DialogButton::new(
+                format!("Scope: < {} >", dialog.active_scope().display_name),
+                false,
+                HitAction::CycleBumpScope(1),
+                Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+            ));
+        }
+        buttons.push(DialogButton::new(
+            format!("< {} >", dialog.selected_action().display_name()),
+            false,
+            HitAction::CycleBumpAction(1),
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ));
+        buttons.push(DialogButton::new("Apply", false, HitAction::ApplyBump, Style::default().fg(Color::Black).bg(Color::Green)));
+        buttons.push(DialogButton::new("Cancel", false, HitAction::CancelBump, Style::default().fg(Color::White).bg(Color::Red)));
+        self.render_button_row(frame, sections[2], &buttons);
     }
 
     fn render_recent_changes_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -480,9 +533,18 @@ impl App {
 
         let header = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
-            Line::from(format!("Repo: {}", dialog.repo_root)),
+            Line::from(format!(
+                "Scope: {} ({})",
+                dialog.active_scope().display_name,
+                dialog.active_scope().scope_kind.map(|kind| kind.display_name()).unwrap_or("Project")
+            )),
+            Line::from(format!("Repo: {}", dialog.active_scope().repo_root)),
             Line::from(format!("View: {}", dialog.current_range().label)),
-            Line::from("Tab switches view. Left/Right moves history when History is active."),
+            Line::from(if dialog.can_select_scope() {
+                "Tab switches view. Left/Right moves history when History is active. [ and ] change scope."
+            } else {
+                "Tab switches view. Left/Right moves history when History is active."
+            }),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
@@ -527,15 +589,19 @@ impl App {
             body_inner,
         );
 
-        self.render_button_row(
-            frame,
-            sections[3],
-            &[
-                DialogButton::new("Scroll", false, HitAction::ScrollRecentChanges(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
-                DialogButton::new("Create Tag", false, HitAction::OpenTagDialog, Style::default().fg(Color::Black).bg(Color::Green)),
-                DialogButton::new("Close", false, HitAction::CloseRecentChanges, Style::default().fg(Color::White).bg(Color::Red)),
-            ],
-        );
+        let mut buttons = Vec::new();
+        if dialog.can_select_scope() {
+            buttons.push(DialogButton::new(
+                format!("Scope: < {} >", dialog.active_scope().display_name),
+                false,
+                HitAction::CycleRecentChangesScope(1),
+                Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+            ));
+        }
+        buttons.push(DialogButton::new("Scroll", false, HitAction::ScrollRecentChanges(3), Style::default().fg(Color::Black).bg(Color::Yellow)));
+        buttons.push(DialogButton::new("Create Tag", false, HitAction::OpenTagDialog, Style::default().fg(Color::Black).bg(Color::Green)));
+        buttons.push(DialogButton::new("Close", false, HitAction::CloseRecentChanges, Style::default().fg(Color::White).bg(Color::Red)));
+        self.render_button_row(frame, sections[3], &buttons);
     }
 
     fn render_tag_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -556,9 +622,18 @@ impl App {
 
         let header = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
-            Line::from(format!("Repo: {}", dialog.repo_root)),
+            Line::from(format!(
+                "Scope: {} ({})",
+                dialog.active_scope().display_name,
+                dialog.active_scope().scope_kind.map(|kind| kind.display_name()).unwrap_or("Project")
+            )),
+            Line::from(format!("Repo: {}", dialog.active_scope().repo_root)),
             Line::from(format!("Action: < {} >", dialog.selected_action().display_name())).style(Style::default().fg(Color::Yellow)),
-            Line::from("Edit the tag name, add an optional annotation, then run the selected action."),
+            Line::from(if dialog.can_select_scope() {
+                "Edit the tag name, add an optional annotation, then run the selected action. [ and ] change scope."
+            } else {
+                "Edit the tag name, add an optional annotation, then run the selected action."
+            }),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
@@ -579,7 +654,7 @@ impl App {
         );
 
         let notes = vec![
-            Line::from(format!("Suggested tag: {}", dialog.tag_name.value)),
+            Line::from(format!("Suggested tag: {}", dialog.active_scope().suggested_tag_name)),
             Line::from(if dialog.annotation.trim().is_empty() {
                 "Annotation: none"
             } else {
@@ -593,30 +668,34 @@ impl App {
         ];
         frame.render_widget(Paragraph::new(notes).wrap(Wrap { trim: false }), sections[2]);
 
-        self.render_button_row(
-            frame,
-            sections[3],
-            &[
-                DialogButton::new(
-                    format!("< {} >", dialog.selected_action().display_name()),
-                    false,
-                    HitAction::CycleTagAction(1),
-                    Style::default().fg(Color::Black).bg(Color::Yellow),
-                ),
-                DialogButton::new(
-                    if dialog.annotation.trim().is_empty() {
-                        "Annotation"
-                    } else {
-                        "Annotation Added"
-                    },
-                    false,
-                    HitAction::OpenTagAnnotation,
-                    Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
-                ),
-                DialogButton::new("Run", false, HitAction::CreateTag, Style::default().fg(Color::Black).bg(Color::Green)),
-                DialogButton::new("Cancel", false, HitAction::CancelTagDialog, Style::default().fg(Color::White).bg(Color::Red)),
-            ],
-        );
+        let mut buttons = Vec::new();
+        if dialog.can_select_scope() {
+            buttons.push(DialogButton::new(
+                format!("Scope: < {} >", dialog.active_scope().display_name),
+                false,
+                HitAction::CycleTagScope(1),
+                Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+            ));
+        }
+        buttons.push(DialogButton::new(
+            format!("< {} >", dialog.selected_action().display_name()),
+            false,
+            HitAction::CycleTagAction(1),
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ));
+        buttons.push(DialogButton::new(
+            if dialog.annotation.trim().is_empty() {
+                "Annotation"
+            } else {
+                "Annotation Added"
+            },
+            false,
+            HitAction::OpenTagAnnotation,
+            Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+        ));
+        buttons.push(DialogButton::new("Run", false, HitAction::CreateTag, Style::default().fg(Color::Black).bg(Color::Green)));
+        buttons.push(DialogButton::new("Cancel", false, HitAction::CancelTagDialog, Style::default().fg(Color::White).bg(Color::Red)));
+        self.render_button_row(frame, sections[3], &buttons);
     }
 
     fn render_settings(&mut self, frame: &mut Frame, area: Rect) {
@@ -745,7 +824,7 @@ impl App {
     }
 
     fn render_project_edit_dialog(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(dialog) = &self.project_edit_dialog else {
+        let Some(_) = &self.project_edit_dialog else {
             return;
         };
 
@@ -765,50 +844,59 @@ impl App {
             ])
             .split(inner);
 
+        let (project_name, field_rows_data, show_above, show_below, save_focused, remove_focused, cancel_focused) = {
+            let dialog = self.project_edit_dialog.as_mut().expect("dialog checked above");
+            let (fields, row_height, top, bottom) = dialog.refresh_body_window(sections[1].height);
+            let constraints = vec![Constraint::Length(row_height); fields.len()];
+            let field_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(constraints)
+                .split(sections[1]);
+            let rows = fields
+                .iter()
+                .zip(field_rows.iter())
+                .map(|(field, row)| {
+                    let focused = *field == dialog.focus;
+                    let (label, action) = dialog.render_field(*field);
+                    let browse_action = project_edit_browse_action(*field);
+                    let value = dialog.display_value_for_field(*field, focused, visible_field_width(row.width, browse_action.is_some()));
+                    (*row, label, action, browse_action, focused, value)
+                })
+                .collect::<Vec<_>>();
+            (
+                dialog.project_name.clone(),
+                rows,
+                top,
+                bottom,
+                dialog.focus == ProjectEditFocus::Save,
+                dialog.focus == ProjectEditFocus::Remove,
+                dialog.focus == ProjectEditFocus::Cancel,
+            )
+        };
+
         let header = vec![
-            Line::from(format!("Project: {}", dialog.project_name)).bold(),
+            Line::from(format!("Project: {}", project_name)).bold(),
             Line::from("Edit the same core fields as New Project, then press F2 or Save."),
-            Line::from("Tab/Shift+Tab moves between fields. Left/Right changes enums. Ctrl+O browses. Del removes the project."),
+            Line::from("Tab/Shift+Tab moves between fields. Left/Right changes enums. Enter applies scope action rows. Ctrl+O browses. PgUp/PgDn or wheel scrolls. Del removes the project."),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
-        let fields = dialog
-            .visible_fields()
-            .into_iter()
-            .filter(|field| !matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove | ProjectEditFocus::Cancel))
-            .collect::<Vec<_>>();
-        let preferred_row_height = 3;
-        let row_height = if (fields.len() as u16 * preferred_row_height) <= sections[1].height {
-            preferred_row_height
-        } else {
-            2
-        };
-        let constraints = vec![Constraint::Length(row_height); fields.len()];
-
-        let field_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(sections[1]);
-
-        for (field, row) in fields.iter().zip(field_rows.iter()) {
-            let focused = *field == dialog.focus;
-            let (label, action) = dialog.render_field(*field);
-            let browse_action = project_edit_browse_action(*field);
-            let value = dialog.display_value_for_field(*field, focused, visible_field_width(row.width, browse_action.is_some()));
-            let browse_rect = self.render_form_row(frame, *row, label, value, focused, action.clone(), browse_action.clone());
-            self.hit_targets.push(HitTarget::new(*row, action));
+        for (row, label, action, browse_action, focused, value) in field_rows_data {
+            let browse_rect = self.render_form_row(frame, row, label, value, focused, action.clone(), browse_action.clone());
+            self.hit_targets.push(HitTarget::new(row, action));
             if let (Some(rect), Some(action)) = (browse_rect, browse_action) {
                 self.hit_targets.push(HitTarget::new(rect, action));
             }
         }
+        render_vertical_overflow_indicators(frame, sections[1], show_above, show_below);
 
         self.render_button_row(
             frame,
             sections[3],
             &[
-                DialogButton::new("Save", dialog.focus == ProjectEditFocus::Save, HitAction::SaveProjectEdit, Style::default().fg(Color::Black).bg(Color::Green)),
-                DialogButton::new("Remove", dialog.focus == ProjectEditFocus::Remove, HitAction::RemoveProject, Style::default().fg(Color::White).bg(Color::Red)),
-                DialogButton::new("Cancel", dialog.focus == ProjectEditFocus::Cancel, HitAction::CancelProjectEdit, Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90))),
+                DialogButton::new("Save", save_focused, HitAction::SaveProjectEdit, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Remove", remove_focused, HitAction::RemoveProject, Style::default().fg(Color::White).bg(Color::Red)),
+                DialogButton::new("Cancel", cancel_focused, HitAction::CancelProjectEdit, Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90))),
             ],
         );
     }
@@ -832,18 +920,7 @@ impl App {
             ])
             .split(inner);
 
-        let fields = self
-            .wizard
-            .visible_fields()
-            .into_iter()
-            .filter(|field| !matches!(field, WizardField::Validate | WizardField::Save | WizardField::Cancel))
-            .collect::<Vec<_>>();
-        let preferred_row_height = 3;
-        let row_height = if (fields.len() as u16 * preferred_row_height) <= left_sections[0].height {
-            preferred_row_height
-        } else {
-            2
-        };
+        let (fields, row_height, show_above, show_below) = self.wizard.refresh_body_window(left_sections[0].height);
         let constraints = vec![Constraint::Length(row_height); fields.len()];
 
         let rows = Layout::default()
@@ -862,6 +939,7 @@ impl App {
                 self.hit_targets.push(HitTarget::new(rect, action));
             }
         }
+        render_vertical_overflow_indicators(frame, left_sections[0], show_above, show_below);
 
         self.render_button_row(
             frame,
@@ -886,12 +964,32 @@ impl App {
             Line::from(format!("Example: {}", self.wizard.version_scheme.example())),
             Line::from(format!("Rule: {}", self.wizard.version_scheme.description())),
             Line::raw(""),
-            Line::from("Current slice scaffolds branched projects with one initial branch."),
-            Line::from("Later slices will add branch management, bump preview, and git flows."),
+            Line::from(if self.wizard.project_type == ProjectType::Branched {
+                format!("Scopes: {} configured. Left/Right changes the selected scope.", self.wizard.scopes.len())
+            } else {
+                "All-in-one projects manage one target directly.".to_string()
+            }),
+            Line::from("Use the scope action rows to add, remove, or reorder branched entries."),
             Line::raw(""),
         ];
 
-        if let Some(probe) = &self.wizard.last_probe {
+        let active_probe = if self.wizard.project_type == ProjectType::Branched {
+            self.wizard.current_scope().and_then(|scope| scope.last_probe.as_ref())
+        } else {
+            self.wizard.last_probe.as_ref()
+        };
+
+        if self.wizard.project_type == ProjectType::Branched {
+            let validated = self
+                .wizard
+                .scopes
+                .iter()
+                .filter(|scope| matches!(scope.last_probe.as_ref().map(|probe| probe.kind), Some(ProbeKind::Success)))
+                .count();
+            lines.push(Line::from(format!("Validated scopes: {}/{}", validated, self.wizard.scopes.len())));
+        }
+
+        if let Some(probe) = active_probe {
             let color = match probe.kind {
                 ProbeKind::Success => Color::Green,
                 ProbeKind::Warning => Color::Yellow,
@@ -906,8 +1004,8 @@ impl App {
                 lines.push(Line::from(format!("Detected format: {}", format.display_name())));
             }
         } else {
-            lines.push(Line::from("Use F5 or Read to inspect the target file."));
-            lines.push(Line::from("The wizard checks that the configured key exists and is a string."));
+            lines.push(Line::from("Use F5 or Read to inspect the selected target file."));
+            lines.push(Line::from("Save requires every branched scope to be read successfully."));
         }
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), side_inner);
     }
@@ -1103,21 +1201,21 @@ impl App {
         let help = if self.browser_dialog.is_some() {
             "Arrows navigate | Enter open folder or select file | U use folder | Mouse click or wheel | Esc cancel"
         } else if self.project_edit_dialog.is_some() {
-            "Tab move | Left/Right change enums | Ctrl+O browse | F2 save | Del remove | Esc cancel"
+            "Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F2 save | Del remove | Esc cancel"
         } else if self.tag_annotation_dialog.is_some() {
             "Type annotation | Enter newline | F2 or Ctrl+S save | Esc cancel"
         } else if self.tag_dialog.is_some() {
-            "Type tag name | A annotation | Left/Right action | Enter run | Esc cancel"
+            "Type tag name | [ ] scope | A annotation | Left/Right action | Enter run | Esc cancel"
         } else if self.recent_changes_dialog.is_some() {
-            "1/2 switch tabs | Left/Right history | Up/Down scroll | T create tag | Esc close"
+            "1/2 switch tabs | [ ] scope | Left/Right history | Up/Down scroll | T create tag | Esc close"
         } else if self.bump_dialog.is_some() {
-            "Left/Right change bump action | Enter apply | Esc cancel"
+            "Up/Down scope | Left/Right change bump action | Enter apply | Esc cancel"
         } else {
             match self.screen {
                 Screen::Dashboard => "1-4 tabs | N new project | B bump | V view changes | T create tag | Up/Down select | Q quit",
                 Screen::Settings => "1-4 tabs | Up/Down select project | E edit selected project | N new project | Q quit",
                 Screen::UiSettings => "1-4 tabs | Enter, Space, T, Left, Right toggle tab hints | N new project | Q quit",
-                Screen::Wizard => "Tab move | Left/Right change enums | Ctrl+O browse | F5 read target | F2 save | Esc cancel",
+                Screen::Wizard => "Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F5 read target | F2 save | Esc cancel",
             }
         };
         frame.render_widget(Paragraph::new(help), inner);
@@ -1292,6 +1390,8 @@ impl App {
                 }
                 KeyCode::Tab | KeyCode::Down => self.wizard.focus_next(),
                 KeyCode::BackTab | KeyCode::Up => self.wizard.focus_previous(),
+                KeyCode::PageUp => self.scroll_wizard_body(-3),
+                KeyCode::PageDown => self.scroll_wizard_body(3),
                 KeyCode::F(5) => self.validate_wizard_target(),
                 KeyCode::F(2) => return self.save_wizard_project(),
                 KeyCode::Enter => {
@@ -1309,6 +1409,8 @@ impl App {
             }
             KeyCode::Tab | KeyCode::Down => self.wizard.focus_next(),
             KeyCode::BackTab | KeyCode::Up => self.wizard.focus_previous(),
+            KeyCode::PageUp => self.scroll_wizard_body(-3),
+            KeyCode::PageDown => self.scroll_wizard_body(3),
             KeyCode::F(5) => self.validate_wizard_target(),
             KeyCode::F(2) => return self.save_wizard_project(),
             KeyCode::Enter => return self.activate_wizard_focus(),
@@ -1325,6 +1427,8 @@ impl App {
                 self.bump_dialog = None;
                 self.status = StatusMessage::info("Bump preview closed.");
             }
+            KeyCode::Up | KeyCode::BackTab => self.rotate_bump_scope(-1),
+            KeyCode::Down | KeyCode::Tab => self.rotate_bump_scope(1),
             KeyCode::Left => self.rotate_bump_action(-1),
             KeyCode::Right => self.rotate_bump_action(1),
             KeyCode::Enter | KeyCode::F(2) => self.apply_bump()?,
@@ -1363,6 +1467,16 @@ impl App {
                     dialog.switch_tab(RecentChangesTab::History);
                 }
             }
+            KeyCode::Char('[') => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.rotate_scope(-1)?;
+                }
+            }
+            KeyCode::Char(']') => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.rotate_scope(1)?;
+                }
+            }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
                     if dialog.active_tab == RecentChangesTab::History {
@@ -1390,6 +1504,8 @@ impl App {
                 self.tag_annotation_dialog = None;
                 self.status = StatusMessage::info("Tag creation cancelled.");
             }
+            KeyCode::Char('[') => self.rotate_tag_scope(-1),
+            KeyCode::Char(']') => self.rotate_tag_scope(1),
             KeyCode::Char('a') => self.open_tag_annotation_dialog()?,
             KeyCode::Left => self.rotate_tag_action(-1),
             KeyCode::Right => self.rotate_tag_action(1),
@@ -1453,6 +1569,8 @@ impl App {
                         dialog.focus_previous();
                     }
                 }
+                KeyCode::PageUp => self.scroll_project_edit_body(-3),
+                KeyCode::PageDown => self.scroll_project_edit_body(3),
                 KeyCode::F(2) => return self.save_project_edit(),
                 KeyCode::Enter => {
                     if let Some(dialog) = &mut self.project_edit_dialog {
@@ -1483,10 +1601,24 @@ impl App {
                     dialog.focus_previous();
                 }
             }
+            KeyCode::PageUp => self.scroll_project_edit_body(-3),
+            KeyCode::PageDown => self.scroll_project_edit_body(3),
             KeyCode::Enter => {
                 if let Some(dialog) = &self.project_edit_dialog {
                     if dialog.is_save_focused() {
                         return self.save_project_edit();
+                    }
+                    if dialog.focus == ProjectEditFocus::AddScope {
+                        return self.apply_project_edit_scope_action(ScopeAction::Add);
+                    }
+                    if dialog.focus == ProjectEditFocus::RemoveScope {
+                        return self.apply_project_edit_scope_action(ScopeAction::Remove);
+                    }
+                    if dialog.focus == ProjectEditFocus::MoveScopeUp {
+                        return self.apply_project_edit_scope_action(ScopeAction::MoveUp);
+                    }
+                    if dialog.focus == ProjectEditFocus::MoveScopeDown {
+                        return self.apply_project_edit_scope_action(ScopeAction::MoveDown);
                     }
                     if dialog.is_remove_focused() {
                         return self.remove_project();
@@ -1541,22 +1673,28 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 if self.project_edit_dialog.is_some() {
+                    self.scroll_project_edit_body(-1);
                 } else if self.tag_dialog.is_some() {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(-2);
                 } else if self.bump_dialog.is_some() {
                     self.rotate_bump_action(-1);
+                } else if self.screen == Screen::Wizard {
+                    self.scroll_wizard_body(-1);
                 } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
                     self.move_project_selection(-1);
                 }
             }
             MouseEventKind::ScrollDown => {
                 if self.project_edit_dialog.is_some() {
+                    self.scroll_project_edit_body(1);
                 } else if self.tag_dialog.is_some() {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(2);
                 } else if self.bump_dialog.is_some() {
                     self.rotate_bump_action(1);
+                } else if self.screen == Screen::Wizard {
+                    self.scroll_wizard_body(1);
                 } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
                     self.move_project_selection(1);
                 }
@@ -1675,6 +1813,7 @@ impl App {
                     dialog.focus = field;
                 }
             }
+            HitAction::ProjectEditScopeAction(action) => return self.apply_project_edit_scope_action(action),
             HitAction::SaveProjectEdit => return self.save_project_edit(),
             HitAction::RemoveProject => return self.remove_project(),
             HitAction::CancelProjectEdit => {
@@ -1692,6 +1831,12 @@ impl App {
                     dialog.switch_tab(tab);
                 }
             }
+            HitAction::CycleRecentChangesScope(delta) => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.rotate_scope(delta)?;
+                }
+            }
+            HitAction::CycleBumpScope(delta) => self.rotate_bump_scope(delta),
             HitAction::CycleBumpAction(delta) => self.rotate_bump_action(delta),
             HitAction::ApplyBump => return self.apply_bump(),
             HitAction::CancelBump => {
@@ -1705,6 +1850,7 @@ impl App {
             HitAction::ScrollRecentChanges(delta) => self.scroll_recent_changes(delta),
             HitAction::OpenTagDialog => return self.open_tag_dialog(),
             HitAction::OpenTagAnnotation => return self.open_tag_annotation_dialog(),
+            HitAction::CycleTagScope(delta) => self.rotate_tag_scope(delta),
             HitAction::CycleTagAction(delta) => self.rotate_tag_action(delta),
             HitAction::CreateTag => return self.create_local_tag(),
             HitAction::SaveTagAnnotation => return self.save_tag_annotation(),
@@ -1718,6 +1864,7 @@ impl App {
                 self.status = StatusMessage::info("Tag creation cancelled.");
             }
             HitAction::WizardField(field) => self.wizard.focus = field,
+            HitAction::WizardScopeAction(action) => return self.apply_wizard_scope_action(action),
             HitAction::ValidateWizard => self.validate_wizard_target(),
             HitAction::SaveWizard => return self.save_wizard_project(),
             HitAction::CancelWizard => {
@@ -1736,6 +1883,18 @@ impl App {
         self.project_edit_dialog = None;
         self.recent_changes_dialog = Some(dialog);
         self.status = StatusMessage::info("Showing git changes for the selected project.");
+        Ok(())
+    }
+
+    fn open_tag_dialog_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        let dialog = TagDialog::from_project(&project, preferred_scope)?;
+        self.bump_dialog = None;
+        self.project_edit_dialog = None;
+        self.browser_dialog = None;
+        self.tag_annotation_dialog = None;
+        self.tag_dialog = Some(dialog);
+        self.status = StatusMessage::info("Review the proposed tag name, add an optional annotation, then run the tag action.");
         Ok(())
     }
 
@@ -1758,6 +1917,16 @@ impl App {
             let next = (dialog.explorer.selected_idx() as isize + delta).clamp(0, len - 1) as usize;
             dialog.explorer.set_selected_idx(next);
         }
+    }
+
+    fn scroll_project_edit_body(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.project_edit_dialog {
+            dialog.scroll_body(delta);
+        }
+    }
+
+    fn scroll_wizard_body(&mut self, delta: isize) {
+        self.wizard.scroll_body(delta);
     }
 
     fn select_browser_index(&mut self, index: usize) {
@@ -1827,15 +1996,17 @@ impl App {
     }
 
     fn open_tag_dialog(&mut self) -> Result<()> {
-        let project = self.selected_project()?.clone();
-        let dialog = TagDialog::from_project(&project)?;
-        self.bump_dialog = None;
-        self.project_edit_dialog = None;
-        self.browser_dialog = None;
-        self.tag_annotation_dialog = None;
-        self.tag_dialog = Some(dialog);
-        self.status = StatusMessage::info("Review the proposed tag name, add an optional annotation, then run the tag action.");
-        Ok(())
+        let preferred_scope = self
+            .recent_changes_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.can_select_scope().then_some(dialog.selected_scope));
+        self.open_tag_dialog_with_scope(preferred_scope)
+    }
+
+    fn rotate_tag_scope(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.tag_dialog {
+            dialog.rotate_scope(delta);
+        }
     }
 
     fn rotate_tag_action(&mut self, delta: isize) {
@@ -1854,10 +2025,11 @@ impl App {
             bail!("tag name cannot be empty");
         }
 
-        let repo_root = dialog.repo_root.clone();
+        let active_scope = dialog.active_scope().clone();
+        let repo_root = active_scope.repo_root.clone();
         let project_name = dialog.project_name.clone();
         let action = dialog.selected_action();
-        let remote_spec = dialog.remote_spec.clone();
+        let remote_spec = active_scope.remote_spec.clone();
         let annotation = dialog.annotation.trim().to_string();
         let tag_name = tag_name.to_string();
         let created = ensure_local_tag(
@@ -1878,11 +2050,16 @@ impl App {
 
         self.tag_dialog = None;
         self.tag_annotation_dialog = None;
+        let scope_notice = if active_scope.scope_kind.is_some() {
+            format!(" for {}", active_scope.display_name)
+        } else {
+            String::new()
+        };
         let summary = match action {
-            TagAction::CreateLocal if created => format!("Created local tag '{}' in {}.", tag_name, project_name),
-            TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}.", tag_name, project_name),
-            TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}.", tag_name, project_name),
-            TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}.", tag_name, project_name),
+            TagAction::CreateLocal if created => format!("Created local tag '{}' in {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}{}.", tag_name, project_name, scope_notice),
         };
         self.status = StatusMessage::success(if annotation.is_empty() {
             summary
@@ -1934,7 +2111,7 @@ impl App {
         self.project_edit_dialog = None;
         self.browser_dialog = None;
         self.bump_dialog = Some(dialog);
-        self.status = StatusMessage::info("Review the preview, then press Enter to apply the bump.");
+        self.status = StatusMessage::info("Review the preview, then press Enter to apply the bump for the active target set.");
         Ok(())
     }
 
@@ -1944,27 +2121,45 @@ impl App {
         }
     }
 
+    fn rotate_bump_scope(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.bump_dialog {
+            dialog.rotate_scope(delta);
+        }
+    }
+
     fn apply_bump(&mut self) -> Result<()> {
         let Some(dialog) = &self.bump_dialog else {
             return Ok(());
         };
 
         let next_version = dialog.preview_next_version().map_err(anyhow::Error::msg)?;
-        for target in &dialog.targets {
+        let targets = dialog.active_targets();
+        for target in &targets {
             write_target_version(target, &next_version)?;
         }
 
-        let target_count = dialog.targets.len();
+        let target_count = targets.len();
+        let scope_notice = if dialog.unified_versioning {
+            String::new()
+        } else {
+            format!(" in scope '{}'", dialog.active_scope().display_name)
+        };
+        let preferred_scope = if dialog.unified_versioning {
+            None
+        } else {
+            Some(dialog.selected_scope)
+        };
         self.bump_dialog = None;
         let repo_backed = self.selected_project()?.integration_mode.requires_repo();
         self.status = StatusMessage::success(format!(
-            "Updated {} target{} to {}.",
+            "Updated {} target{}{} to {}.",
             target_count,
             if target_count == 1 { "" } else { "s" },
+            scope_notice,
             next_version
         ));
         if repo_backed {
-            self.open_tag_dialog()?;
+            self.open_tag_dialog_with_scope(preferred_scope)?;
             self.status = StatusMessage::info("Version bump applied. Review the suggested tag action next.");
         }
         Ok(())
@@ -1974,11 +2169,15 @@ impl App {
         self.wizard = ProjectWizard::default();
         self.browser_dialog = None;
         self.screen = Screen::Wizard;
-        self.status = StatusMessage::info("Configure a project and read the target file before saving.");
+        self.status = StatusMessage::info("Configure a project and read each target file before saving.");
     }
 
     fn activate_wizard_focus(&mut self) -> Result<()> {
         match self.wizard.focus {
+            WizardField::AddScope => self.apply_wizard_scope_action(ScopeAction::Add),
+            WizardField::RemoveScope => self.apply_wizard_scope_action(ScopeAction::Remove),
+            WizardField::MoveScopeUp => self.apply_wizard_scope_action(ScopeAction::MoveUp),
+            WizardField::MoveScopeDown => self.apply_wizard_scope_action(ScopeAction::MoveDown),
             WizardField::Validate => {
                 self.validate_wizard_target();
                 Ok(())
@@ -1996,6 +2195,55 @@ impl App {
         }
     }
 
+    fn apply_wizard_scope_action(&mut self, action: ScopeAction) -> Result<()> {
+        match action {
+            ScopeAction::Add => {
+                self.wizard.add_scope();
+                self.status = StatusMessage::info("Added a new branched scope draft.");
+            }
+            ScopeAction::Remove => {
+                self.wizard.remove_selected_scope()?;
+                self.status = StatusMessage::info("Removed the selected branched scope.");
+            }
+            ScopeAction::MoveUp => {
+                self.wizard.move_selected_scope(-1);
+                self.status = StatusMessage::info("Moved the selected scope earlier.");
+            }
+            ScopeAction::MoveDown => {
+                self.wizard.move_selected_scope(1);
+                self.status = StatusMessage::info("Moved the selected scope later.");
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_project_edit_scope_action(&mut self, action: ScopeAction) -> Result<()> {
+        let Some(dialog) = &mut self.project_edit_dialog else {
+            return Ok(());
+        };
+
+        match action {
+            ScopeAction::Add => {
+                dialog.add_scope();
+                self.status = StatusMessage::info("Added a new branched scope draft.");
+            }
+            ScopeAction::Remove => {
+                dialog.remove_selected_scope()?;
+                self.status = StatusMessage::info("Removed the selected branched scope.");
+            }
+            ScopeAction::MoveUp => {
+                dialog.move_selected_scope(-1);
+                self.status = StatusMessage::info("Moved the selected scope earlier.");
+            }
+            ScopeAction::MoveDown => {
+                dialog.move_selected_scope(1);
+                self.status = StatusMessage::info("Moved the selected scope later.");
+            }
+        }
+
+        Ok(())
+    }
+
     fn move_project_selection(&mut self, delta: isize) {
         if self.config.projects.is_empty() {
             return;
@@ -2006,11 +2254,19 @@ impl App {
     }
 
     fn validate_wizard_target(&mut self) {
-        match probe_target(
-            self.wizard.target_path.value.trim(),
-            self.wizard.target_key.value.trim(),
-            self.wizard.version_scheme,
-        ) {
+        let (target_path, target_key) = if self.wizard.project_type == ProjectType::Branched {
+            self.wizard
+                .current_scope()
+                .map(|scope| (scope.target_path.value().trim().to_string(), scope.target_key.value().trim().to_string()))
+                .unwrap_or_default()
+        } else {
+            (
+                self.wizard.target_path.value.trim().to_string(),
+                self.wizard.target_key.value.trim().to_string(),
+            )
+        };
+
+        match probe_target(&target_path, &target_key, self.wizard.version_scheme) {
             Ok(probe) => {
                 self.status = match probe.kind {
                     ProbeKind::Success => {
@@ -2021,16 +2277,29 @@ impl App {
                     }
                     ProbeKind::Error => StatusMessage::error("Target validation failed."),
                 };
-                self.wizard.last_probe = Some(probe);
+                if self.wizard.project_type == ProjectType::Branched {
+                    if let Some(scope) = self.wizard.current_scope_mut() {
+                        scope.last_probe = Some(probe);
+                    }
+                } else {
+                    self.wizard.last_probe = Some(probe);
+                }
             }
             Err(error) => {
                 self.status = StatusMessage::error(error.to_string());
-                self.wizard.last_probe = Some(TargetProbe {
+                let probe = TargetProbe {
                     kind: ProbeKind::Error,
                     message: error.to_string(),
                     version: None,
                     format: None,
-                });
+                };
+                if self.wizard.project_type == ProjectType::Branched {
+                    if let Some(scope) = self.wizard.current_scope_mut() {
+                        scope.last_probe = Some(probe);
+                    }
+                } else {
+                    self.wizard.last_probe = Some(probe);
+                }
             }
         }
     }
@@ -2326,6 +2595,7 @@ enum HitAction {
     SelectProject(usize),
     OpenProjectEdit,
     EditProjectField(ProjectEditFocus),
+    ProjectEditScopeAction(ScopeAction),
     SaveProjectEdit,
     RemoveProject,
     CancelProjectEdit,
@@ -2336,12 +2606,15 @@ enum HitAction {
     BrowseProjectRepoRoot,
     BrowserSelect(usize),
     SelectRecentChangesTab(RecentChangesTab),
+    CycleRecentChangesScope(isize),
     CloseRecentChanges,
     ScrollRecentChanges(i16),
     OpenTagDialog,
     OpenTagAnnotation,
+    CycleTagScope(isize),
     CycleTagAction(isize),
     CycleBumpAction(isize),
+    CycleBumpScope(isize),
     ApplyBump,
     CancelBump,
     CreateTag,
@@ -2349,9 +2622,144 @@ enum HitAction {
     CancelTagAnnotation,
     CancelTagDialog,
     WizardField(WizardField),
+    WizardScopeAction(ScopeAction),
     ValidateWizard,
     SaveWizard,
     CancelWizard,
+}
+
+#[derive(Clone, Copy)]
+enum ScopeAction {
+    Add,
+    Remove,
+    MoveUp,
+    MoveDown,
+}
+
+#[derive(Clone)]
+struct ScopeDraft {
+    name: TextInput,
+    label: String,
+    label_follows_name: bool,
+    target_label: String,
+    target_path: TextInput,
+    target_key: TextInput,
+    scope_kind: BranchScopeKind,
+    repo: Option<RepoConfig>,
+    format: TargetFormat,
+    last_probe: Option<TargetProbe>,
+}
+
+impl ScopeDraft {
+    fn new(name: impl Into<String>) -> Self {
+        let name = name.into();
+        Self {
+            name: TextInput::with_value(name.clone()),
+            label: name.clone(),
+            label_follows_name: true,
+            target_label: "Version".to_string(),
+            target_path: TextInput::with_value(""),
+            target_key: TextInput::with_value("version"),
+            scope_kind: BranchScopeKind::Branch,
+            repo: None,
+            format: TargetFormat::Auto,
+            last_probe: None,
+        }
+    }
+
+    fn from_target(name: impl Into<String>, target: &TargetSpec) -> Self {
+        let mut scope = Self::new(name);
+        scope.target_label = target.label.clone();
+        scope.target_path = TextInput::with_value(target.path.clone());
+        scope.target_key = TextInput::with_value(target.key_path.clone());
+        scope.format = target.format;
+        scope
+    }
+
+    fn from_branch(branch: &BranchConfig) -> Result<Self> {
+        let target = branch
+            .targets
+            .first()
+            .ok_or_else(|| anyhow!("branched project does not contain any editable targets yet"))?;
+        let label = if branch.label.trim().is_empty() {
+            branch.name.clone()
+        } else {
+            branch.label.clone()
+        };
+        Ok(Self {
+            name: TextInput::with_value(branch.name.clone()),
+            label,
+            label_follows_name: branch.label.trim().is_empty() || branch.label == branch.name,
+            target_label: target.label.clone(),
+            target_path: TextInput::with_value(target.path.clone()),
+            target_key: TextInput::with_value(target.key_path.clone()),
+            scope_kind: branch.scope_kind,
+            repo: branch.repo.clone(),
+            format: target.format,
+            last_probe: None,
+        })
+    }
+
+    fn display_name(&self) -> String {
+        let name = self.name.value.trim();
+        if name.is_empty() {
+            "(unnamed scope)".to_string()
+        } else if self.label_follows_name || self.label.trim().is_empty() || self.label == name {
+            name.to_string()
+        } else {
+            format!("{} [{}]", self.label, name)
+        }
+    }
+
+    fn sync_label_if_needed(&mut self) {
+        if self.label_follows_name {
+            self.label = self.name.value.trim().to_string();
+        }
+    }
+
+    fn build_branch(&self, version_scheme: VersionScheme, require_probe: bool) -> Result<BranchConfig> {
+        let name = self.name.value.trim();
+        if name.is_empty() {
+            bail!("scope name cannot be empty");
+        }
+
+        let target_path = self.target_path.value.trim();
+        if target_path.is_empty() {
+            bail!("scope '{}' target path cannot be empty", name);
+        }
+
+        let target_key = self.target_key.value.trim();
+        if target_key.is_empty() {
+            bail!("scope '{}' target key cannot be empty", name);
+        }
+
+        let format = if require_probe {
+            match &self.last_probe {
+                Some(probe) if matches!(probe.kind, ProbeKind::Success) => probe.format.unwrap_or(self.format),
+                Some(_) | None => bail!("scope '{}' must be read successfully before saving", name),
+            }
+        } else {
+            self.last_probe.as_ref().and_then(|probe| probe.format).unwrap_or(self.format)
+        };
+
+        Ok(BranchConfig {
+            name: name.to_string(),
+            label: if self.label_follows_name || self.label.trim().is_empty() {
+                name.to_string()
+            } else {
+                self.label.clone()
+            },
+            scope_kind: self.scope_kind,
+            repo: self.repo.clone(),
+            version_scheme,
+            targets: vec![TargetSpec {
+                label: self.target_label.clone(),
+                path: target_path.to_string(),
+                key_path: target_key.to_string(),
+                format,
+            }],
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -2359,9 +2767,12 @@ struct ProjectEditDialog {
     project_index: usize,
     project_name: String,
     name: TextInput,
-    branch_name: TextInput,
     target_path: TextInput,
     target_key: TextInput,
+    scopes: Vec<ScopeDraft>,
+    selected_scope: usize,
+    field_scroll: usize,
+    viewport_rows: usize,
     repo_root: TextInput,
     remote_url: TextInput,
     project_type: ProjectType,
@@ -2379,14 +2790,14 @@ impl ProjectEditDialog {
         }
         .ok_or_else(|| anyhow!("selected project does not contain any editable targets yet"))?;
 
-        let branch_name = if project.project_type == ProjectType::Branched {
+        let scopes = if project.project_type == ProjectType::Branched {
             project
                 .branches
-                .first()
-                .map(|branch| branch.name.clone())
-                .ok_or_else(|| anyhow!("branched project does not contain any branches"))?
+                .iter()
+                .map(ScopeDraft::from_branch)
+                .collect::<Result<Vec<_>>>()?
         } else {
-            String::new()
+            vec![ScopeDraft::from_target("core", primary_target)]
         };
 
         let repo_root = project.repo.as_ref().map(|repo| repo.local_root.clone()).unwrap_or_default();
@@ -2400,9 +2811,12 @@ impl ProjectEditDialog {
             project_index,
             project_name: project.name.clone(),
             name: TextInput::with_value(project.name.clone()),
-            branch_name: TextInput::with_value(branch_name),
             target_path: TextInput::with_value(primary_target.path.clone()),
             target_key: TextInput::with_value(primary_target.key_path.clone()),
+            scopes,
+            selected_scope: 0,
+            field_scroll: 0,
+            viewport_rows: 1,
             repo_root: TextInput::with_value(repo_root),
             remote_url: TextInput::with_value(remote_url),
             project_type: project.project_type,
@@ -2442,7 +2856,7 @@ impl ProjectEditDialog {
         matches!(
             self.focus,
             ProjectEditFocus::Name
-                | ProjectEditFocus::BranchName
+                | ProjectEditFocus::ScopeName
                 | ProjectEditFocus::TargetPath
                 | ProjectEditFocus::TargetKey
                 | ProjectEditFocus::RepoRoot
@@ -2453,7 +2867,11 @@ impl ProjectEditDialog {
     fn visible_fields(&self) -> Vec<ProjectEditFocus> {
         let mut fields = vec![ProjectEditFocus::Name, ProjectEditFocus::ProjectType];
         if self.project_type == ProjectType::Branched {
-            fields.push(ProjectEditFocus::BranchName);
+            fields.extend([
+                ProjectEditFocus::ScopeSelection,
+                ProjectEditFocus::ScopeName,
+                ProjectEditFocus::ScopeKind,
+            ]);
         }
         fields.extend([
             ProjectEditFocus::VersionScheme,
@@ -2461,6 +2879,14 @@ impl ProjectEditDialog {
             ProjectEditFocus::TargetPath,
             ProjectEditFocus::TargetKey,
         ]);
+        if self.project_type == ProjectType::Branched {
+            fields.extend([
+                ProjectEditFocus::AddScope,
+                ProjectEditFocus::RemoveScope,
+                ProjectEditFocus::MoveScopeUp,
+                ProjectEditFocus::MoveScopeDown,
+            ]);
+        }
         if self.integration_mode.requires_repo() {
             fields.push(ProjectEditFocus::RepoRoot);
         }
@@ -2471,15 +2897,28 @@ impl ProjectEditDialog {
         fields
     }
 
+    fn body_fields(&self) -> Vec<ProjectEditFocus> {
+        self.visible_fields()
+            .into_iter()
+            .filter(|field| !matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove | ProjectEditFocus::Cancel))
+            .collect()
+    }
+
     fn render_field(&self, field: ProjectEditFocus) -> (&'static str, HitAction) {
         match field {
             ProjectEditFocus::Name => ("Project name", HitAction::EditProjectField(field)),
             ProjectEditFocus::ProjectType => ("Project type", HitAction::EditProjectField(field)),
-            ProjectEditFocus::BranchName => ("Initial branch", HitAction::EditProjectField(field)),
+            ProjectEditFocus::ScopeSelection => ("Scope", HitAction::EditProjectField(field)),
+            ProjectEditFocus::ScopeName => ("Scope name", HitAction::EditProjectField(field)),
+            ProjectEditFocus::ScopeKind => ("Scope kind", HitAction::EditProjectField(field)),
             ProjectEditFocus::VersionScheme => ("Version scheme", HitAction::EditProjectField(field)),
             ProjectEditFocus::IntegrationMode => ("Integration", HitAction::EditProjectField(field)),
             ProjectEditFocus::TargetPath => ("Target path", HitAction::EditProjectField(field)),
             ProjectEditFocus::TargetKey => ("Target key", HitAction::EditProjectField(field)),
+            ProjectEditFocus::AddScope => ("Add scope", HitAction::ProjectEditScopeAction(ScopeAction::Add)),
+            ProjectEditFocus::RemoveScope => ("Remove scope", HitAction::ProjectEditScopeAction(ScopeAction::Remove)),
+            ProjectEditFocus::MoveScopeUp => ("Move scope up", HitAction::ProjectEditScopeAction(ScopeAction::MoveUp)),
+            ProjectEditFocus::MoveScopeDown => ("Move scope down", HitAction::ProjectEditScopeAction(ScopeAction::MoveDown)),
             ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
             ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
             ProjectEditFocus::Save => ("Save", HitAction::SaveProjectEdit),
@@ -2492,11 +2931,39 @@ impl ProjectEditDialog {
         match field {
             ProjectEditFocus::Name => self.name.display_value_with_width(focused, max_width),
             ProjectEditFocus::ProjectType => format!("< {} >", self.project_type.display_name()),
-            ProjectEditFocus::BranchName => self.branch_name.display_value_with_width(focused, max_width),
+            ProjectEditFocus::ScopeSelection => self.selected_scope_summary(),
+            ProjectEditFocus::ScopeName => self
+                .current_scope()
+                .map(|scope| scope.name.display_value_with_width(focused, max_width))
+                .unwrap_or_else(|| "(no scope)".to_string()),
+            ProjectEditFocus::ScopeKind => self
+                .current_scope()
+                .map(|scope| format!("< {} >", scope.scope_kind.display_name()))
+                .unwrap_or_else(|| "< Branch >".to_string()),
             ProjectEditFocus::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
             ProjectEditFocus::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
-            ProjectEditFocus::TargetPath => self.target_path.display_value_with_width(focused, max_width),
-            ProjectEditFocus::TargetKey => self.target_key.display_value_with_width(focused, max_width),
+            ProjectEditFocus::TargetPath => {
+                if self.project_type == ProjectType::Branched {
+                    self.current_scope()
+                        .map(|scope| scope.target_path.display_value_with_width(focused, max_width))
+                        .unwrap_or_default()
+                } else {
+                    self.target_path.display_value_with_width(focused, max_width)
+                }
+            }
+            ProjectEditFocus::TargetKey => {
+                if self.project_type == ProjectType::Branched {
+                    self.current_scope()
+                        .map(|scope| scope.target_key.display_value_with_width(focused, max_width))
+                        .unwrap_or_default()
+                } else {
+                    self.target_key.display_value_with_width(focused, max_width)
+                }
+            }
+            ProjectEditFocus::AddScope => "Create a new scope draft".to_string(),
+            ProjectEditFocus::RemoveScope => "Drop the selected scope".to_string(),
+            ProjectEditFocus::MoveScopeUp => "Move the selected scope earlier".to_string(),
+            ProjectEditFocus::MoveScopeDown => "Move the selected scope later".to_string(),
             ProjectEditFocus::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
             ProjectEditFocus::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
             ProjectEditFocus::Save => "Persist project".to_string(),
@@ -2513,6 +2980,17 @@ impl ProjectEditDialog {
                 } else {
                     self.project_type.previous()
                 };
+                if self.project_type == ProjectType::Branched {
+                    self.seed_scope_from_primary_target();
+                } else {
+                    self.copy_selected_scope_to_primary_target();
+                }
+            }
+            ProjectEditFocus::ScopeSelection => self.move_scope_selection(delta),
+            ProjectEditFocus::ScopeKind => {
+                if let Some(scope) = self.current_scope_mut() {
+                    scope.scope_kind = rotate_scope_kind(scope.scope_kind, delta);
+                }
             }
             ProjectEditFocus::VersionScheme => {
                 self.version_scheme = if delta >= 0 {
@@ -2548,6 +3026,11 @@ impl ProjectEditDialog {
             KeyCode::End => input.end(),
             _ => {}
         }
+        if self.focus == ProjectEditFocus::ScopeName {
+            if let Some(scope) = self.current_scope_mut() {
+                scope.sync_label_if_needed();
+            }
+        }
         if self.focus == ProjectEditFocus::TargetPath {
             self.prefill_repo_root_from_target_path();
         }
@@ -2567,9 +3050,21 @@ impl ProjectEditDialog {
     fn active_input_mut(&mut self) -> Option<&mut TextInput> {
         match self.focus {
             ProjectEditFocus::Name => Some(&mut self.name),
-            ProjectEditFocus::BranchName => Some(&mut self.branch_name),
-            ProjectEditFocus::TargetPath => Some(&mut self.target_path),
-            ProjectEditFocus::TargetKey => Some(&mut self.target_key),
+            ProjectEditFocus::ScopeName => self.current_scope_mut().map(|scope| &mut scope.name),
+            ProjectEditFocus::TargetPath => {
+                if self.project_type == ProjectType::Branched {
+                    self.current_scope_mut().map(|scope| &mut scope.target_path)
+                } else {
+                    Some(&mut self.target_path)
+                }
+            }
+            ProjectEditFocus::TargetKey => {
+                if self.project_type == ProjectType::Branched {
+                    self.current_scope_mut().map(|scope| &mut scope.target_key)
+                } else {
+                    Some(&mut self.target_key)
+                }
+            }
             ProjectEditFocus::RepoRoot => Some(&mut self.repo_root),
             ProjectEditFocus::RemoteUrl => Some(&mut self.remote_url),
             _ => None,
@@ -2581,19 +3076,69 @@ impl ProjectEditDialog {
         if !fields.contains(&self.focus) {
             self.focus = fields.first().copied().unwrap_or(ProjectEditFocus::Name);
         }
+        let body_fields = self.body_fields();
+        self.sync_body_scroll(&body_fields);
+    }
+
+    fn refresh_body_window(&mut self, viewport_height: u16) -> (Vec<ProjectEditFocus>, u16, bool, bool) {
+        let body_fields = self.body_fields();
+        let row_height = dialog_form_row_height(viewport_height);
+        self.viewport_rows = dialog_visible_rows(viewport_height, row_height);
+        self.sync_body_scroll(&body_fields);
+        let start = self.field_scroll.min(body_fields.len().saturating_sub(self.viewport_rows));
+        let end = (start + self.viewport_rows).min(body_fields.len());
+        (
+            body_fields[start..end].to_vec(),
+            row_height,
+            start > 0,
+            end < body_fields.len(),
+        )
+    }
+
+    fn scroll_body(&mut self, delta: isize) {
+        let body_fields = self.body_fields();
+        if body_fields.is_empty() {
+            self.field_scroll = 0;
+            return;
+        }
+
+        let max_scroll = body_fields.len().saturating_sub(self.viewport_rows.max(1));
+        let next = (self.field_scroll as isize + delta).clamp(0, max_scroll as isize) as usize;
+        self.field_scroll = next;
+    }
+
+    fn sync_body_scroll(&mut self, body_fields: &[ProjectEditFocus]) {
+        let visible_rows = self.viewport_rows.max(1);
+        clamp_dialog_scroll(
+            &mut self.field_scroll,
+            body_fields.len(),
+            visible_rows,
+            body_fields.iter().position(|field| *field == self.focus),
+        );
     }
 
     fn prefill_repo_root_from_target_path(&mut self) {
         if !self.repo_root.is_empty() {
             return;
         }
-        if let Some(repo_root) = derive_repo_root_from_target_path(self.target_path.value()) {
+        let target_path = if self.project_type == ProjectType::Branched {
+            self.current_scope().map(|scope| scope.target_path.value()).unwrap_or("")
+        } else {
+            self.target_path.value()
+        };
+        if let Some(repo_root) = derive_repo_root_from_target_path(target_path) {
             self.repo_root.set_value(repo_root);
         }
     }
 
     fn set_target_path_from_browse(&mut self, path: String) {
-        self.target_path.set_value(path);
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                scope.target_path.set_value(path);
+            }
+        } else {
+            self.target_path.set_value(path);
+        }
         self.prefill_repo_root_from_target_path();
     }
 
@@ -2605,21 +3150,6 @@ impl ProjectEditDialog {
         let project_name = self.name.value.trim();
         if project_name.is_empty() {
             bail!("project name cannot be empty");
-        }
-
-        let target_path = self.target_path.value.trim();
-        if target_path.is_empty() {
-            bail!("target path cannot be empty");
-        }
-
-        let target_key = self.target_key.value.trim();
-        if target_key.is_empty() {
-            bail!("target key cannot be empty");
-        }
-
-        let branch_name = self.branch_name.value.trim();
-        if self.project_type == ProjectType::Branched && branch_name.is_empty() {
-            bail!("initial branch cannot be empty");
         }
 
         let existing_target = if project.project_type == ProjectType::AllInOne {
@@ -2636,23 +3166,28 @@ impl ProjectEditDialog {
         project.unified_versioning = true;
         project.version_scheme = self.version_scheme;
 
-        let target = TargetSpec {
-            label: existing_target.label,
-            path: target_path.to_string(),
-            key_path: target_key.to_string(),
-            format: existing_target.format,
-        };
-
         if self.project_type == ProjectType::AllInOne {
+            let target_path = self.target_path.value.trim();
+            if target_path.is_empty() {
+                bail!("target path cannot be empty");
+            }
+
+            let target_key = self.target_key.value.trim();
+            if target_key.is_empty() {
+                bail!("target key cannot be empty");
+            }
+
+            let target = TargetSpec {
+                label: existing_target.label,
+                path: target_path.to_string(),
+                key_path: target_key.to_string(),
+                format: existing_target.format,
+            };
             project.targets = vec![target];
             project.branches.clear();
         } else {
             project.targets.clear();
-            project.branches = vec![BranchConfig {
-                name: branch_name.to_string(),
-                version_scheme: self.version_scheme,
-                targets: vec![target],
-            }];
+            project.branches = self.build_branches(false)?;
         }
 
         if self.integration_mode.requires_repo() {
@@ -2684,17 +3219,145 @@ impl ProjectEditDialog {
 
         Ok(())
     }
+
+    fn current_scope(&self) -> Option<&ScopeDraft> {
+        self.scopes.get(self.selected_scope)
+    }
+
+    fn current_scope_mut(&mut self) -> Option<&mut ScopeDraft> {
+        self.scopes.get_mut(self.selected_scope)
+    }
+
+    fn selected_scope_summary(&self) -> String {
+        let total = self.scopes.len();
+        if total == 0 {
+            "< no scopes >".to_string()
+        } else {
+            let summary = self
+                .current_scope()
+                .map(|scope| scope.display_name())
+                .unwrap_or_else(|| "(unknown)".to_string());
+            format!("< {}/{}: {} >", self.selected_scope + 1, total, summary)
+        }
+    }
+
+    fn move_scope_selection(&mut self, delta: i32) {
+        if self.scopes.is_empty() {
+            return;
+        }
+        let len = self.scopes.len() as i32;
+        let next = (self.selected_scope as i32 + delta).rem_euclid(len) as usize;
+        self.selected_scope = next;
+    }
+
+    fn next_scope_name(&self) -> String {
+        let mut index = self.scopes.len() + 1;
+        loop {
+            let candidate = format!("scope-{}", index);
+            if self
+                .scopes
+                .iter()
+                .all(|scope| !scope.name.value.trim().eq_ignore_ascii_case(&candidate))
+            {
+                return candidate;
+            }
+            index += 1;
+        }
+    }
+
+    fn add_scope(&mut self) {
+        let scope = ScopeDraft::new(self.next_scope_name());
+        self.scopes.push(scope);
+        self.selected_scope = self.scopes.len().saturating_sub(1);
+        self.focus = ProjectEditFocus::ScopeName;
+    }
+
+    fn remove_selected_scope(&mut self) -> Result<()> {
+        if self.scopes.len() <= 1 {
+            bail!("branched projects need at least one scope");
+        }
+        self.scopes.remove(self.selected_scope);
+        self.selected_scope = self.selected_scope.min(self.scopes.len().saturating_sub(1));
+        self.focus = ProjectEditFocus::ScopeSelection;
+        Ok(())
+    }
+
+    fn move_selected_scope(&mut self, delta: isize) {
+        if self.scopes.len() < 2 {
+            return;
+        }
+        let len = self.scopes.len() as isize;
+        let next = (self.selected_scope as isize + delta).clamp(0, len - 1) as usize;
+        if next != self.selected_scope {
+            self.scopes.swap(self.selected_scope, next);
+            self.selected_scope = next;
+        }
+    }
+
+    fn seed_scope_from_primary_target(&mut self) {
+        if self.scopes.is_empty() {
+            self.scopes.push(ScopeDraft::new("core"));
+            self.selected_scope = 0;
+        }
+        let target_path = self.target_path.value.trim().to_string();
+        let target_key = self.target_key.value.trim().to_string();
+        if let Some(scope) = self.current_scope_mut() {
+            if scope.target_path.value.trim().is_empty() && !target_path.is_empty() {
+                scope.target_path.set_value(target_path);
+            }
+            if scope.target_key.value.trim().is_empty() && !target_key.is_empty() {
+                scope.target_key.set_value(target_key);
+            }
+        }
+    }
+
+    fn copy_selected_scope_to_primary_target(&mut self) {
+        let selected = self.current_scope().map(|scope| {
+            (
+                scope.target_path.value().to_string(),
+                scope.target_key.value().to_string(),
+            )
+        });
+        if let Some((target_path, target_key)) = selected {
+            self.target_path.set_value(target_path);
+            self.target_key.set_value(target_key);
+        }
+    }
+
+    fn build_branches(&self, require_probe: bool) -> Result<Vec<BranchConfig>> {
+        if self.scopes.is_empty() {
+            bail!("branched projects need at least one scope");
+        }
+
+        let mut names = HashSet::new();
+        let mut branches = Vec::with_capacity(self.scopes.len());
+        for scope in &self.scopes {
+            let branch = scope.build_branch(self.version_scheme, require_probe)?;
+            let key = branch.name.trim().to_ascii_lowercase();
+            if !names.insert(key) {
+                bail!("scope names must be unique");
+            }
+            branches.push(branch);
+        }
+        Ok(branches)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProjectEditFocus {
     Name,
     ProjectType,
-    BranchName,
+    ScopeSelection,
+    ScopeName,
+    ScopeKind,
     VersionScheme,
     IntegrationMode,
     TargetPath,
     TargetKey,
+    AddScope,
+    RemoveScope,
+    MoveScopeUp,
+    MoveScopeDown,
     RepoRoot,
     RemoteUrl,
     Save,
@@ -2748,11 +3411,17 @@ enum StatusKind {
 enum WizardField {
     Name,
     ProjectType,
-    BranchName,
+    ScopeSelection,
+    ScopeName,
+    ScopeKind,
     VersionScheme,
     IntegrationMode,
     TargetPath,
     TargetKey,
+    AddScope,
+    RemoveScope,
+    MoveScopeUp,
+    MoveScopeDown,
     RepoRoot,
     RemoteUrl,
     Validate,
@@ -2763,9 +3432,12 @@ enum WizardField {
 #[derive(Clone)]
 struct ProjectWizard {
     name: TextInput,
-    branch_name: TextInput,
     target_path: TextInput,
     target_key: TextInput,
+    scopes: Vec<ScopeDraft>,
+    selected_scope: usize,
+    field_scroll: usize,
+    viewport_rows: usize,
     repo_root: TextInput,
     remote_url: TextInput,
     project_type: ProjectType,
@@ -2779,9 +3451,12 @@ impl Default for ProjectWizard {
     fn default() -> Self {
         Self {
             name: TextInput::with_value(""),
-            branch_name: TextInput::with_value("core"),
             target_path: TextInput::with_value(""),
             target_key: TextInput::with_value("version"),
+            scopes: vec![ScopeDraft::new("core")],
+            selected_scope: 0,
+            field_scroll: 0,
+            viewport_rows: 1,
             repo_root: TextInput::with_value(""),
             remote_url: TextInput::with_value(""),
             project_type: ProjectType::AllInOne,
@@ -2798,7 +3473,7 @@ impl ProjectWizard {
         matches!(
             self.focus,
             WizardField::Name
-                | WizardField::BranchName
+                | WizardField::ScopeName
                 | WizardField::TargetPath
                 | WizardField::TargetKey
                 | WizardField::RepoRoot
@@ -2812,7 +3487,11 @@ impl ProjectWizard {
             WizardField::ProjectType,
         ];
         if self.project_type == ProjectType::Branched {
-            fields.push(WizardField::BranchName);
+            fields.extend([
+                WizardField::ScopeSelection,
+                WizardField::ScopeName,
+                WizardField::ScopeKind,
+            ]);
         }
         fields.extend([
             WizardField::VersionScheme,
@@ -2820,6 +3499,14 @@ impl ProjectWizard {
             WizardField::TargetPath,
             WizardField::TargetKey,
         ]);
+        if self.project_type == ProjectType::Branched {
+            fields.extend([
+                WizardField::AddScope,
+                WizardField::RemoveScope,
+                WizardField::MoveScopeUp,
+                WizardField::MoveScopeDown,
+            ]);
+        }
         if self.integration_mode.requires_repo() {
             fields.push(WizardField::RepoRoot);
         }
@@ -2828,6 +3515,13 @@ impl ProjectWizard {
         }
         fields.extend([WizardField::Validate, WizardField::Save, WizardField::Cancel]);
         fields
+    }
+
+    fn body_fields(&self) -> Vec<WizardField> {
+        self.visible_fields()
+            .into_iter()
+            .filter(|field| !matches!(field, WizardField::Validate | WizardField::Save | WizardField::Cancel))
+            .collect()
     }
 
     fn focus_next(&mut self) {
@@ -2851,10 +3545,9 @@ impl ProjectWizard {
                 "Project type",
                 HitAction::WizardField(field),
             ),
-            WizardField::BranchName => (
-                "Initial branch",
-                HitAction::WizardField(field),
-            ),
+            WizardField::ScopeSelection => ("Scope", HitAction::WizardField(field)),
+            WizardField::ScopeName => ("Scope name", HitAction::WizardField(field)),
+            WizardField::ScopeKind => ("Scope kind", HitAction::WizardField(field)),
             WizardField::VersionScheme => (
                 "Version scheme",
                 HitAction::WizardField(field),
@@ -2865,6 +3558,10 @@ impl ProjectWizard {
             ),
             WizardField::TargetPath => ("Target path", HitAction::WizardField(field)),
             WizardField::TargetKey => ("Target key", HitAction::WizardField(field)),
+            WizardField::AddScope => ("Add scope", HitAction::WizardScopeAction(ScopeAction::Add)),
+            WizardField::RemoveScope => ("Remove scope", HitAction::WizardScopeAction(ScopeAction::Remove)),
+            WizardField::MoveScopeUp => ("Move scope up", HitAction::WizardScopeAction(ScopeAction::MoveUp)),
+            WizardField::MoveScopeDown => ("Move scope down", HitAction::WizardScopeAction(ScopeAction::MoveDown)),
             WizardField::RepoRoot => ("Repo root", HitAction::WizardField(field)),
             WizardField::RemoteUrl => ("Remote URL", HitAction::WizardField(field)),
             WizardField::Validate => ("Read", HitAction::ValidateWizard),
@@ -2877,11 +3574,39 @@ impl ProjectWizard {
         match field {
             WizardField::Name => self.name.display_value_with_width(focused, max_width),
             WizardField::ProjectType => format!("< {} >", self.project_type.display_name()),
-            WizardField::BranchName => self.branch_name.display_value_with_width(focused, max_width),
+            WizardField::ScopeSelection => self.selected_scope_summary(),
+            WizardField::ScopeName => self
+                .current_scope()
+                .map(|scope| scope.name.display_value_with_width(focused, max_width))
+                .unwrap_or_else(|| "(no scope)".to_string()),
+            WizardField::ScopeKind => self
+                .current_scope()
+                .map(|scope| format!("< {} >", scope.scope_kind.display_name()))
+                .unwrap_or_else(|| "< Branch >".to_string()),
             WizardField::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
             WizardField::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
-            WizardField::TargetPath => self.target_path.display_value_with_width(focused, max_width),
-            WizardField::TargetKey => self.target_key.display_value_with_width(focused, max_width),
+            WizardField::TargetPath => {
+                if self.project_type == ProjectType::Branched {
+                    self.current_scope()
+                        .map(|scope| scope.target_path.display_value_with_width(focused, max_width))
+                        .unwrap_or_default()
+                } else {
+                    self.target_path.display_value_with_width(focused, max_width)
+                }
+            }
+            WizardField::TargetKey => {
+                if self.project_type == ProjectType::Branched {
+                    self.current_scope()
+                        .map(|scope| scope.target_key.display_value_with_width(focused, max_width))
+                        .unwrap_or_default()
+                } else {
+                    self.target_key.display_value_with_width(focused, max_width)
+                }
+            }
+            WizardField::AddScope => "Create a new scope draft".to_string(),
+            WizardField::RemoveScope => "Drop the selected scope".to_string(),
+            WizardField::MoveScopeUp => "Move the selected scope earlier".to_string(),
+            WizardField::MoveScopeDown => "Move the selected scope later".to_string(),
             WizardField::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
             WizardField::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
             WizardField::Validate => "Validate target".to_string(),
@@ -2898,6 +3623,17 @@ impl ProjectWizard {
                 } else {
                     self.project_type.previous()
                 };
+                if self.project_type == ProjectType::Branched {
+                    self.seed_scope_from_primary_target();
+                } else {
+                    self.copy_selected_scope_to_primary_target();
+                }
+            }
+            WizardField::ScopeSelection => self.move_scope_selection(delta),
+            WizardField::ScopeKind => {
+                if let Some(scope) = self.current_scope_mut() {
+                    scope.scope_kind = rotate_scope_kind(scope.scope_kind, delta);
+                }
             }
             WizardField::VersionScheme => {
                 self.version_scheme = if delta >= 0 {
@@ -2905,7 +3641,7 @@ impl ProjectWizard {
                 } else {
                     self.version_scheme.previous()
                 };
-                self.last_probe = None;
+                self.clear_validation_results();
             }
             WizardField::IntegrationMode => {
                 self.integration_mode = if delta >= 0 {
@@ -2948,9 +3684,21 @@ impl ProjectWizard {
     fn active_input_mut(&mut self) -> Option<&mut TextInput> {
         match self.focus {
             WizardField::Name => Some(&mut self.name),
-            WizardField::BranchName => Some(&mut self.branch_name),
-            WizardField::TargetPath => Some(&mut self.target_path),
-            WizardField::TargetKey => Some(&mut self.target_key),
+            WizardField::ScopeName => self.current_scope_mut().map(|scope| &mut scope.name),
+            WizardField::TargetPath => {
+                if self.project_type == ProjectType::Branched {
+                    self.current_scope_mut().map(|scope| &mut scope.target_path)
+                } else {
+                    Some(&mut self.target_path)
+                }
+            }
+            WizardField::TargetKey => {
+                if self.project_type == ProjectType::Branched {
+                    self.current_scope_mut().map(|scope| &mut scope.target_key)
+                } else {
+                    Some(&mut self.target_key)
+                }
+            }
             WizardField::RepoRoot => Some(&mut self.repo_root),
             WizardField::RemoteUrl => Some(&mut self.remote_url),
             _ => None,
@@ -2968,7 +3716,18 @@ impl ProjectWizard {
 
     fn after_text_edit(&mut self) {
         if matches!(self.focus, WizardField::TargetPath | WizardField::TargetKey) {
-            self.last_probe = None;
+            if self.project_type == ProjectType::Branched {
+                if let Some(scope) = self.current_scope_mut() {
+                    scope.last_probe = None;
+                }
+            } else {
+                self.last_probe = None;
+            }
+        }
+        if self.focus == WizardField::ScopeName {
+            if let Some(scope) = self.current_scope_mut() {
+                scope.sync_label_if_needed();
+            }
         }
         if self.focus == WizardField::TargetPath {
             self.prefill_repo_root_from_target_path();
@@ -2980,20 +3739,71 @@ impl ProjectWizard {
         if !fields.contains(&self.focus) {
             self.focus = fields.first().copied().unwrap_or(WizardField::Name);
         }
+        let body_fields = self.body_fields();
+        self.sync_body_scroll(&body_fields);
+    }
+
+    fn refresh_body_window(&mut self, viewport_height: u16) -> (Vec<WizardField>, u16, bool, bool) {
+        let body_fields = self.body_fields();
+        let row_height = dialog_form_row_height(viewport_height);
+        self.viewport_rows = dialog_visible_rows(viewport_height, row_height);
+        self.sync_body_scroll(&body_fields);
+        let start = self.field_scroll.min(body_fields.len().saturating_sub(self.viewport_rows));
+        let end = (start + self.viewport_rows).min(body_fields.len());
+        (
+            body_fields[start..end].to_vec(),
+            row_height,
+            start > 0,
+            end < body_fields.len(),
+        )
+    }
+
+    fn scroll_body(&mut self, delta: isize) {
+        let body_fields = self.body_fields();
+        if body_fields.is_empty() {
+            self.field_scroll = 0;
+            return;
+        }
+
+        let max_scroll = body_fields.len().saturating_sub(self.viewport_rows.max(1));
+        let next = (self.field_scroll as isize + delta).clamp(0, max_scroll as isize) as usize;
+        self.field_scroll = next;
+    }
+
+    fn sync_body_scroll(&mut self, body_fields: &[WizardField]) {
+        let visible_rows = self.viewport_rows.max(1);
+        clamp_dialog_scroll(
+            &mut self.field_scroll,
+            body_fields.len(),
+            visible_rows,
+            body_fields.iter().position(|field| *field == self.focus),
+        );
     }
 
     fn prefill_repo_root_from_target_path(&mut self) {
         if !self.repo_root.is_empty() {
             return;
         }
-        if let Some(repo_root) = derive_repo_root_from_target_path(self.target_path.value()) {
+        let target_path = if self.project_type == ProjectType::Branched {
+            self.current_scope().map(|scope| scope.target_path.value()).unwrap_or("")
+        } else {
+            self.target_path.value()
+        };
+        if let Some(repo_root) = derive_repo_root_from_target_path(target_path) {
             self.repo_root.set_value(repo_root);
         }
     }
 
     fn set_target_path_from_browse(&mut self, path: String) {
-        self.target_path.set_value(path);
-        self.last_probe = None;
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                scope.target_path.set_value(path);
+                scope.last_probe = None;
+            }
+        } else {
+            self.target_path.set_value(path);
+            self.last_probe = None;
+        }
         self.prefill_repo_root_from_target_path();
     }
 
@@ -3005,24 +3815,6 @@ impl ProjectWizard {
         if self.name.value.trim().is_empty() {
             bail!("project name is required");
         }
-        if self.target_path.value.trim().is_empty() {
-            bail!("target path is required");
-        }
-        if self.target_key.value.trim().is_empty() {
-            bail!("target key is required");
-        }
-        match &self.last_probe {
-            Some(probe) if matches!(probe.kind, ProbeKind::Success) => {}
-            Some(_) => bail!("read the target successfully before saving"),
-            None => bail!("validate the target before saving"),
-        }
-
-        let target = TargetSpec {
-            label: "Version".to_string(),
-            path: self.target_path.value.trim().to_string(),
-            key_path: self.target_key.value.trim().to_string(),
-            format: self.last_probe.as_ref().and_then(|probe| probe.format).unwrap_or(TargetFormat::Auto),
-        };
 
         let repo = if self.integration_mode.requires_repo() {
             let root = self.repo_root.value.trim();
@@ -3047,6 +3839,24 @@ impl ProjectWizard {
         };
 
         let project = if self.project_type == ProjectType::AllInOne {
+            if self.target_path.value.trim().is_empty() {
+                bail!("target path is required");
+            }
+            if self.target_key.value.trim().is_empty() {
+                bail!("target key is required");
+            }
+            match &self.last_probe {
+                Some(probe) if matches!(probe.kind, ProbeKind::Success) => {}
+                Some(_) => bail!("read the target successfully before saving"),
+                None => bail!("validate the target before saving"),
+            }
+
+            let target = TargetSpec {
+                label: "Version".to_string(),
+                path: self.target_path.value.trim().to_string(),
+                key_path: self.target_key.value.trim().to_string(),
+                format: self.last_probe.as_ref().and_then(|probe| probe.format).unwrap_or(TargetFormat::Auto),
+            };
             ProjectConfig {
                 name: self.name.value.trim().to_string(),
                 project_type: ProjectType::AllInOne,
@@ -3058,10 +3868,6 @@ impl ProjectWizard {
                 repo,
             }
         } else {
-            let branch_name = self.branch_name.value.trim();
-            if branch_name.is_empty() {
-                bail!("initial branch name is required");
-            }
             ProjectConfig {
                 name: self.name.value.trim().to_string(),
                 project_type: ProjectType::Branched,
@@ -3069,16 +3875,144 @@ impl ProjectWizard {
                 unified_versioning: true,
                 version_scheme: self.version_scheme,
                 targets: Vec::new(),
-                branches: vec![BranchConfig {
-                    name: branch_name.to_string(),
-                    version_scheme: self.version_scheme,
-                    targets: vec![target],
-                }],
+                branches: self.build_branches(true)?,
                 repo,
             }
         };
 
         Ok(project)
+    }
+
+    fn current_scope(&self) -> Option<&ScopeDraft> {
+        self.scopes.get(self.selected_scope)
+    }
+
+    fn current_scope_mut(&mut self) -> Option<&mut ScopeDraft> {
+        self.scopes.get_mut(self.selected_scope)
+    }
+
+    fn selected_scope_summary(&self) -> String {
+        let total = self.scopes.len();
+        if total == 0 {
+            "< no scopes >".to_string()
+        } else {
+            let summary = self
+                .current_scope()
+                .map(|scope| scope.display_name())
+                .unwrap_or_else(|| "(unknown)".to_string());
+            format!("< {}/{}: {} >", self.selected_scope + 1, total, summary)
+        }
+    }
+
+    fn move_scope_selection(&mut self, delta: i32) {
+        if self.scopes.is_empty() {
+            return;
+        }
+        let len = self.scopes.len() as i32;
+        let next = (self.selected_scope as i32 + delta).rem_euclid(len) as usize;
+        self.selected_scope = next;
+    }
+
+    fn next_scope_name(&self) -> String {
+        let mut index = self.scopes.len() + 1;
+        loop {
+            let candidate = format!("scope-{}", index);
+            if self
+                .scopes
+                .iter()
+                .all(|scope| !scope.name.value.trim().eq_ignore_ascii_case(&candidate))
+            {
+                return candidate;
+            }
+            index += 1;
+        }
+    }
+
+    fn add_scope(&mut self) {
+        self.scopes.push(ScopeDraft::new(self.next_scope_name()));
+        self.selected_scope = self.scopes.len().saturating_sub(1);
+        self.focus = WizardField::ScopeName;
+    }
+
+    fn remove_selected_scope(&mut self) -> Result<()> {
+        if self.scopes.len() <= 1 {
+            bail!("branched projects need at least one scope");
+        }
+        self.scopes.remove(self.selected_scope);
+        self.selected_scope = self.selected_scope.min(self.scopes.len().saturating_sub(1));
+        self.focus = WizardField::ScopeSelection;
+        Ok(())
+    }
+
+    fn move_selected_scope(&mut self, delta: isize) {
+        if self.scopes.len() < 2 {
+            return;
+        }
+        let len = self.scopes.len() as isize;
+        let next = (self.selected_scope as isize + delta).clamp(0, len - 1) as usize;
+        if next != self.selected_scope {
+            self.scopes.swap(self.selected_scope, next);
+            self.selected_scope = next;
+        }
+    }
+
+    fn clear_validation_results(&mut self) {
+        self.last_probe = None;
+        for scope in &mut self.scopes {
+            scope.last_probe = None;
+        }
+    }
+
+    fn seed_scope_from_primary_target(&mut self) {
+        if self.scopes.is_empty() {
+            self.scopes.push(ScopeDraft::new("core"));
+            self.selected_scope = 0;
+        }
+        let target_path = self.target_path.value.trim().to_string();
+        let target_key = self.target_key.value.trim().to_string();
+        let target_format = self.last_probe.as_ref().and_then(|probe| probe.format).unwrap_or(TargetFormat::Auto);
+        if let Some(scope) = self.current_scope_mut() {
+            if scope.target_path.value.trim().is_empty() && !target_path.is_empty() {
+                scope.target_path.set_value(target_path);
+                scope.format = target_format;
+            }
+            if scope.target_key.value.trim().is_empty() && !target_key.is_empty() {
+                scope.target_key.set_value(target_key);
+            }
+        }
+    }
+
+    fn copy_selected_scope_to_primary_target(&mut self) {
+        let selected = self.current_scope().map(|scope| {
+            (
+                scope.target_path.value().to_string(),
+                scope.target_key.value().to_string(),
+                scope.last_probe.clone(),
+            )
+        });
+        if let Some((target_path, target_key, probe)) = selected {
+            self.target_path.set_value(target_path);
+            self.target_key.set_value(target_key);
+            self.last_probe = probe;
+        }
+    }
+
+    fn build_branches(&self, require_probe: bool) -> Result<Vec<BranchConfig>> {
+        if self.scopes.is_empty() {
+            bail!("branched projects need at least one scope");
+        }
+
+        let mut names = HashSet::new();
+        let mut branches = Vec::with_capacity(self.scopes.len());
+        for scope in &self.scopes {
+            let branch = scope.build_branch(self.version_scheme, require_probe)?;
+            let key = branch.name.trim().to_ascii_lowercase();
+            if !names.insert(key) {
+                bail!("scope names must be unique");
+            }
+            branches.push(branch);
+        }
+        Ok(branches)
     }
 }
 
@@ -3393,6 +4327,87 @@ fn annotation_visible_segment(line: &str, cursor_col: usize, width: usize) -> (S
     (visible, cursor_col.saturating_sub(start))
 }
 
+fn dialog_form_row_height(viewport_height: u16) -> u16 {
+    if viewport_height >= 8 {
+        3
+    } else if viewport_height >= 4 {
+        2
+    } else {
+        1
+    }
+}
+
+fn dialog_visible_rows(viewport_height: u16, row_height: u16) -> usize {
+    (viewport_height / row_height.max(1)).max(1) as usize
+}
+
+fn clamp_dialog_scroll(scroll_offset: &mut usize, total_rows: usize, visible_rows: usize, focus_index: Option<usize>) {
+    let visible_rows = visible_rows.max(1);
+    let max_scroll = total_rows.saturating_sub(visible_rows);
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    if let Some(focus_index) = focus_index {
+        if focus_index < *scroll_offset {
+            *scroll_offset = focus_index;
+        } else if focus_index >= *scroll_offset + visible_rows {
+            *scroll_offset = focus_index + 1 - visible_rows;
+        }
+    }
+}
+
+fn render_vertical_overflow_indicators(frame: &mut Frame, area: Rect, show_above: bool, show_below: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let indicator_width = area.width.min(5);
+    if show_above {
+        let top_rect = Rect {
+            x: area.x + area.width.saturating_sub(indicator_width),
+            y: area.y,
+            width: indicator_width,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new("↑↑↑")
+                .alignment(Alignment::Right)
+                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            top_rect,
+        );
+    }
+
+    if show_below {
+        let bottom_rect = Rect {
+            x: area.x + area.width.saturating_sub(indicator_width),
+            y: area.y + area.height.saturating_sub(1),
+            width: indicator_width,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new("↓↓↓")
+                .alignment(Alignment::Right)
+                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            bottom_rect,
+        );
+    }
+}
+
+fn rotate_scope_kind(scope_kind: BranchScopeKind, delta: i32) -> BranchScopeKind {
+    if delta >= 0 {
+        match scope_kind {
+            BranchScopeKind::Branch => BranchScopeKind::Module,
+            BranchScopeKind::Module => BranchScopeKind::Service,
+            BranchScopeKind::Service => BranchScopeKind::Branch,
+        }
+    } else {
+        match scope_kind {
+            BranchScopeKind::Branch => BranchScopeKind::Service,
+            BranchScopeKind::Module => BranchScopeKind::Branch,
+            BranchScopeKind::Service => BranchScopeKind::Module,
+        }
+    }
+}
+
 fn wizard_browse_action(field: WizardField) -> Option<HitAction> {
     match field {
         WizardField::TargetPath => Some(HitAction::BrowseWizardTargetPath),
@@ -3493,5 +4508,101 @@ mod tests {
         wizard.insert_text("C:/repo/package.json");
 
         assert!(wizard.last_probe.is_none());
+    }
+
+    #[test]
+    fn branched_wizard_builds_multiple_scopes() {
+        let mut wizard = ProjectWizard::default();
+        wizard.project_type = ProjectType::Branched;
+        wizard.name.set_value("demo-service");
+
+        {
+            let scope = wizard.current_scope_mut().expect("default scope");
+            scope.name.set_value("core");
+            scope.target_path.set_value("C:/repo/core/Cargo.toml");
+            scope.target_key.set_value("package.version");
+            scope.last_probe = Some(TargetProbe {
+                kind: ProbeKind::Success,
+                message: "ok".to_string(),
+                version: Some("1.2.3".to_string()),
+                format: Some(TargetFormat::Toml),
+            });
+        }
+
+        wizard.add_scope();
+        {
+            let scope = wizard.current_scope_mut().expect("second scope");
+            scope.name.set_value("api");
+            scope.target_path.set_value("C:/repo/api/package.json");
+            scope.target_key.set_value("version");
+            scope.scope_kind = BranchScopeKind::Service;
+            scope.last_probe = Some(TargetProbe {
+                kind: ProbeKind::Success,
+                message: "ok".to_string(),
+                version: Some("1.2.3".to_string()),
+                format: Some(TargetFormat::Json),
+            });
+        }
+
+        let project = wizard.build_project().expect("branched project should build");
+
+        assert_eq!(project.project_type, ProjectType::Branched);
+        assert_eq!(project.branches.len(), 2);
+        assert_eq!(project.branches[0].name, "core");
+        assert_eq!(project.branches[1].name, "api");
+        assert_eq!(project.branches[1].scope_kind, BranchScopeKind::Service);
+        assert_eq!(project.branches[1].targets[0].format, TargetFormat::Json);
+    }
+
+    #[test]
+    fn branched_wizard_rejects_duplicate_scope_names() {
+        let mut wizard = ProjectWizard::default();
+        wizard.project_type = ProjectType::Branched;
+        wizard.name.set_value("demo-service");
+
+        {
+            let scope = wizard.current_scope_mut().expect("default scope");
+            scope.name.set_value("core");
+            scope.target_path.set_value("C:/repo/core/Cargo.toml");
+            scope.target_key.set_value("package.version");
+            scope.last_probe = Some(TargetProbe {
+                kind: ProbeKind::Success,
+                message: "ok".to_string(),
+                version: Some("1.2.3".to_string()),
+                format: Some(TargetFormat::Toml),
+            });
+        }
+
+        wizard.add_scope();
+        {
+            let scope = wizard.current_scope_mut().expect("second scope");
+            scope.name.set_value("core");
+            scope.target_path.set_value("C:/repo/api/package.json");
+            scope.target_key.set_value("version");
+            scope.last_probe = Some(TargetProbe {
+                kind: ProbeKind::Success,
+                message: "ok".to_string(),
+                version: Some("1.2.3".to_string()),
+                format: Some(TargetFormat::Json),
+            });
+        }
+
+        let error = wizard.build_project().expect_err("duplicate scope names should fail");
+        assert!(error.to_string().contains("unique"));
+    }
+
+    #[test]
+    fn wizard_body_window_keeps_focused_field_visible_when_viewport_is_short() {
+        let mut wizard = ProjectWizard::default();
+        wizard.project_type = ProjectType::Branched;
+        wizard.integration_mode = IntegrationMode::GitHubEnabled;
+        wizard.focus = WizardField::RemoteUrl;
+
+        let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
+
+        assert_eq!(row_height, 2);
+        assert!(visible_fields.contains(&WizardField::RemoteUrl));
+        assert!(show_above);
+        assert!(!show_below);
     }
 }
