@@ -824,7 +824,7 @@ impl App {
     }
 
     fn render_project_edit_dialog(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(dialog) = &self.project_edit_dialog else {
+        let Some(_) = &self.project_edit_dialog else {
             return;
         };
 
@@ -844,50 +844,59 @@ impl App {
             ])
             .split(inner);
 
+        let (project_name, field_rows_data, show_above, show_below, save_focused, remove_focused, cancel_focused) = {
+            let dialog = self.project_edit_dialog.as_mut().expect("dialog checked above");
+            let (fields, row_height, top, bottom) = dialog.refresh_body_window(sections[1].height);
+            let constraints = vec![Constraint::Length(row_height); fields.len()];
+            let field_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(constraints)
+                .split(sections[1]);
+            let rows = fields
+                .iter()
+                .zip(field_rows.iter())
+                .map(|(field, row)| {
+                    let focused = *field == dialog.focus;
+                    let (label, action) = dialog.render_field(*field);
+                    let browse_action = project_edit_browse_action(*field);
+                    let value = dialog.display_value_for_field(*field, focused, visible_field_width(row.width, browse_action.is_some()));
+                    (*row, label, action, browse_action, focused, value)
+                })
+                .collect::<Vec<_>>();
+            (
+                dialog.project_name.clone(),
+                rows,
+                top,
+                bottom,
+                dialog.focus == ProjectEditFocus::Save,
+                dialog.focus == ProjectEditFocus::Remove,
+                dialog.focus == ProjectEditFocus::Cancel,
+            )
+        };
+
         let header = vec![
-            Line::from(format!("Project: {}", dialog.project_name)).bold(),
+            Line::from(format!("Project: {}", project_name)).bold(),
             Line::from("Edit the same core fields as New Project, then press F2 or Save."),
-            Line::from("Tab/Shift+Tab moves between fields. Left/Right changes enums. Enter applies scope action rows. Ctrl+O browses. Del removes the project."),
+            Line::from("Tab/Shift+Tab moves between fields. Left/Right changes enums. Enter applies scope action rows. Ctrl+O browses. PgUp/PgDn or wheel scrolls. Del removes the project."),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
-        let fields = dialog
-            .visible_fields()
-            .into_iter()
-            .filter(|field| !matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove | ProjectEditFocus::Cancel))
-            .collect::<Vec<_>>();
-        let preferred_row_height = 3;
-        let row_height = if (fields.len() as u16 * preferred_row_height) <= sections[1].height {
-            preferred_row_height
-        } else {
-            2
-        };
-        let constraints = vec![Constraint::Length(row_height); fields.len()];
-
-        let field_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(sections[1]);
-
-        for (field, row) in fields.iter().zip(field_rows.iter()) {
-            let focused = *field == dialog.focus;
-            let (label, action) = dialog.render_field(*field);
-            let browse_action = project_edit_browse_action(*field);
-            let value = dialog.display_value_for_field(*field, focused, visible_field_width(row.width, browse_action.is_some()));
-            let browse_rect = self.render_form_row(frame, *row, label, value, focused, action.clone(), browse_action.clone());
-            self.hit_targets.push(HitTarget::new(*row, action));
+        for (row, label, action, browse_action, focused, value) in field_rows_data {
+            let browse_rect = self.render_form_row(frame, row, label, value, focused, action.clone(), browse_action.clone());
+            self.hit_targets.push(HitTarget::new(row, action));
             if let (Some(rect), Some(action)) = (browse_rect, browse_action) {
                 self.hit_targets.push(HitTarget::new(rect, action));
             }
         }
+        render_vertical_overflow_indicators(frame, sections[1], show_above, show_below);
 
         self.render_button_row(
             frame,
             sections[3],
             &[
-                DialogButton::new("Save", dialog.focus == ProjectEditFocus::Save, HitAction::SaveProjectEdit, Style::default().fg(Color::Black).bg(Color::Green)),
-                DialogButton::new("Remove", dialog.focus == ProjectEditFocus::Remove, HitAction::RemoveProject, Style::default().fg(Color::White).bg(Color::Red)),
-                DialogButton::new("Cancel", dialog.focus == ProjectEditFocus::Cancel, HitAction::CancelProjectEdit, Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90))),
+                DialogButton::new("Save", save_focused, HitAction::SaveProjectEdit, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Remove", remove_focused, HitAction::RemoveProject, Style::default().fg(Color::White).bg(Color::Red)),
+                DialogButton::new("Cancel", cancel_focused, HitAction::CancelProjectEdit, Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90))),
             ],
         );
     }
@@ -911,18 +920,7 @@ impl App {
             ])
             .split(inner);
 
-        let fields = self
-            .wizard
-            .visible_fields()
-            .into_iter()
-            .filter(|field| !matches!(field, WizardField::Validate | WizardField::Save | WizardField::Cancel))
-            .collect::<Vec<_>>();
-        let preferred_row_height = 3;
-        let row_height = if (fields.len() as u16 * preferred_row_height) <= left_sections[0].height {
-            preferred_row_height
-        } else {
-            2
-        };
+        let (fields, row_height, show_above, show_below) = self.wizard.refresh_body_window(left_sections[0].height);
         let constraints = vec![Constraint::Length(row_height); fields.len()];
 
         let rows = Layout::default()
@@ -941,6 +939,7 @@ impl App {
                 self.hit_targets.push(HitTarget::new(rect, action));
             }
         }
+        render_vertical_overflow_indicators(frame, left_sections[0], show_above, show_below);
 
         self.render_button_row(
             frame,
@@ -1202,21 +1201,21 @@ impl App {
         let help = if self.browser_dialog.is_some() {
             "Arrows navigate | Enter open folder or select file | U use folder | Mouse click or wheel | Esc cancel"
         } else if self.project_edit_dialog.is_some() {
-            "Tab move | Left/Right change enums | Ctrl+O browse | F2 save | Del remove | Esc cancel"
+            "Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F2 save | Del remove | Esc cancel"
         } else if self.tag_annotation_dialog.is_some() {
             "Type annotation | Enter newline | F2 or Ctrl+S save | Esc cancel"
         } else if self.tag_dialog.is_some() {
-            "Type tag name | A annotation | Left/Right action | Enter run | Esc cancel"
+            "Type tag name | [ ] scope | A annotation | Left/Right action | Enter run | Esc cancel"
         } else if self.recent_changes_dialog.is_some() {
-            "1/2 switch tabs | Left/Right history | Up/Down scroll | T create tag | Esc close"
+            "1/2 switch tabs | [ ] scope | Left/Right history | Up/Down scroll | T create tag | Esc close"
         } else if self.bump_dialog.is_some() {
-            "Left/Right change bump action | Enter apply | Esc cancel"
+            "Up/Down scope | Left/Right change bump action | Enter apply | Esc cancel"
         } else {
             match self.screen {
                 Screen::Dashboard => "1-4 tabs | N new project | B bump | V view changes | T create tag | Up/Down select | Q quit",
                 Screen::Settings => "1-4 tabs | Up/Down select project | E edit selected project | N new project | Q quit",
                 Screen::UiSettings => "1-4 tabs | Enter, Space, T, Left, Right toggle tab hints | N new project | Q quit",
-                Screen::Wizard => "Tab move | Left/Right change enums | Ctrl+O browse | F5 read target | F2 save | Esc cancel",
+                Screen::Wizard => "Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F5 read target | F2 save | Esc cancel",
             }
         };
         frame.render_widget(Paragraph::new(help), inner);
@@ -1391,6 +1390,8 @@ impl App {
                 }
                 KeyCode::Tab | KeyCode::Down => self.wizard.focus_next(),
                 KeyCode::BackTab | KeyCode::Up => self.wizard.focus_previous(),
+                KeyCode::PageUp => self.scroll_wizard_body(-3),
+                KeyCode::PageDown => self.scroll_wizard_body(3),
                 KeyCode::F(5) => self.validate_wizard_target(),
                 KeyCode::F(2) => return self.save_wizard_project(),
                 KeyCode::Enter => {
@@ -1408,6 +1409,8 @@ impl App {
             }
             KeyCode::Tab | KeyCode::Down => self.wizard.focus_next(),
             KeyCode::BackTab | KeyCode::Up => self.wizard.focus_previous(),
+            KeyCode::PageUp => self.scroll_wizard_body(-3),
+            KeyCode::PageDown => self.scroll_wizard_body(3),
             KeyCode::F(5) => self.validate_wizard_target(),
             KeyCode::F(2) => return self.save_wizard_project(),
             KeyCode::Enter => return self.activate_wizard_focus(),
@@ -1566,6 +1569,8 @@ impl App {
                         dialog.focus_previous();
                     }
                 }
+                KeyCode::PageUp => self.scroll_project_edit_body(-3),
+                KeyCode::PageDown => self.scroll_project_edit_body(3),
                 KeyCode::F(2) => return self.save_project_edit(),
                 KeyCode::Enter => {
                     if let Some(dialog) = &mut self.project_edit_dialog {
@@ -1596,6 +1601,8 @@ impl App {
                     dialog.focus_previous();
                 }
             }
+            KeyCode::PageUp => self.scroll_project_edit_body(-3),
+            KeyCode::PageDown => self.scroll_project_edit_body(3),
             KeyCode::Enter => {
                 if let Some(dialog) = &self.project_edit_dialog {
                     if dialog.is_save_focused() {
@@ -1666,22 +1673,28 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 if self.project_edit_dialog.is_some() {
+                    self.scroll_project_edit_body(-1);
                 } else if self.tag_dialog.is_some() {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(-2);
                 } else if self.bump_dialog.is_some() {
                     self.rotate_bump_action(-1);
+                } else if self.screen == Screen::Wizard {
+                    self.scroll_wizard_body(-1);
                 } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
                     self.move_project_selection(-1);
                 }
             }
             MouseEventKind::ScrollDown => {
                 if self.project_edit_dialog.is_some() {
+                    self.scroll_project_edit_body(1);
                 } else if self.tag_dialog.is_some() {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(2);
                 } else if self.bump_dialog.is_some() {
                     self.rotate_bump_action(1);
+                } else if self.screen == Screen::Wizard {
+                    self.scroll_wizard_body(1);
                 } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
                     self.move_project_selection(1);
                 }
@@ -1904,6 +1917,16 @@ impl App {
             let next = (dialog.explorer.selected_idx() as isize + delta).clamp(0, len - 1) as usize;
             dialog.explorer.set_selected_idx(next);
         }
+    }
+
+    fn scroll_project_edit_body(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.project_edit_dialog {
+            dialog.scroll_body(delta);
+        }
+    }
+
+    fn scroll_wizard_body(&mut self, delta: isize) {
+        self.wizard.scroll_body(delta);
     }
 
     fn select_browser_index(&mut self, index: usize) {
@@ -2748,6 +2771,8 @@ struct ProjectEditDialog {
     target_key: TextInput,
     scopes: Vec<ScopeDraft>,
     selected_scope: usize,
+    field_scroll: usize,
+    viewport_rows: usize,
     repo_root: TextInput,
     remote_url: TextInput,
     project_type: ProjectType,
@@ -2790,6 +2815,8 @@ impl ProjectEditDialog {
             target_key: TextInput::with_value(primary_target.key_path.clone()),
             scopes,
             selected_scope: 0,
+            field_scroll: 0,
+            viewport_rows: 1,
             repo_root: TextInput::with_value(repo_root),
             remote_url: TextInput::with_value(remote_url),
             project_type: project.project_type,
@@ -2868,6 +2895,13 @@ impl ProjectEditDialog {
         }
         fields.extend([ProjectEditFocus::Save, ProjectEditFocus::Remove, ProjectEditFocus::Cancel]);
         fields
+    }
+
+    fn body_fields(&self) -> Vec<ProjectEditFocus> {
+        self.visible_fields()
+            .into_iter()
+            .filter(|field| !matches!(field, ProjectEditFocus::Save | ProjectEditFocus::Remove | ProjectEditFocus::Cancel))
+            .collect()
     }
 
     fn render_field(&self, field: ProjectEditFocus) -> (&'static str, HitAction) {
@@ -3042,6 +3076,45 @@ impl ProjectEditDialog {
         if !fields.contains(&self.focus) {
             self.focus = fields.first().copied().unwrap_or(ProjectEditFocus::Name);
         }
+        let body_fields = self.body_fields();
+        self.sync_body_scroll(&body_fields);
+    }
+
+    fn refresh_body_window(&mut self, viewport_height: u16) -> (Vec<ProjectEditFocus>, u16, bool, bool) {
+        let body_fields = self.body_fields();
+        let row_height = dialog_form_row_height(viewport_height);
+        self.viewport_rows = dialog_visible_rows(viewport_height, row_height);
+        self.sync_body_scroll(&body_fields);
+        let start = self.field_scroll.min(body_fields.len().saturating_sub(self.viewport_rows));
+        let end = (start + self.viewport_rows).min(body_fields.len());
+        (
+            body_fields[start..end].to_vec(),
+            row_height,
+            start > 0,
+            end < body_fields.len(),
+        )
+    }
+
+    fn scroll_body(&mut self, delta: isize) {
+        let body_fields = self.body_fields();
+        if body_fields.is_empty() {
+            self.field_scroll = 0;
+            return;
+        }
+
+        let max_scroll = body_fields.len().saturating_sub(self.viewport_rows.max(1));
+        let next = (self.field_scroll as isize + delta).clamp(0, max_scroll as isize) as usize;
+        self.field_scroll = next;
+    }
+
+    fn sync_body_scroll(&mut self, body_fields: &[ProjectEditFocus]) {
+        let visible_rows = self.viewport_rows.max(1);
+        clamp_dialog_scroll(
+            &mut self.field_scroll,
+            body_fields.len(),
+            visible_rows,
+            body_fields.iter().position(|field| *field == self.focus),
+        );
     }
 
     fn prefill_repo_root_from_target_path(&mut self) {
@@ -3363,6 +3436,8 @@ struct ProjectWizard {
     target_key: TextInput,
     scopes: Vec<ScopeDraft>,
     selected_scope: usize,
+    field_scroll: usize,
+    viewport_rows: usize,
     repo_root: TextInput,
     remote_url: TextInput,
     project_type: ProjectType,
@@ -3380,6 +3455,8 @@ impl Default for ProjectWizard {
             target_key: TextInput::with_value("version"),
             scopes: vec![ScopeDraft::new("core")],
             selected_scope: 0,
+            field_scroll: 0,
+            viewport_rows: 1,
             repo_root: TextInput::with_value(""),
             remote_url: TextInput::with_value(""),
             project_type: ProjectType::AllInOne,
@@ -3438,6 +3515,13 @@ impl ProjectWizard {
         }
         fields.extend([WizardField::Validate, WizardField::Save, WizardField::Cancel]);
         fields
+    }
+
+    fn body_fields(&self) -> Vec<WizardField> {
+        self.visible_fields()
+            .into_iter()
+            .filter(|field| !matches!(field, WizardField::Validate | WizardField::Save | WizardField::Cancel))
+            .collect()
     }
 
     fn focus_next(&mut self) {
@@ -3655,6 +3739,45 @@ impl ProjectWizard {
         if !fields.contains(&self.focus) {
             self.focus = fields.first().copied().unwrap_or(WizardField::Name);
         }
+        let body_fields = self.body_fields();
+        self.sync_body_scroll(&body_fields);
+    }
+
+    fn refresh_body_window(&mut self, viewport_height: u16) -> (Vec<WizardField>, u16, bool, bool) {
+        let body_fields = self.body_fields();
+        let row_height = dialog_form_row_height(viewport_height);
+        self.viewport_rows = dialog_visible_rows(viewport_height, row_height);
+        self.sync_body_scroll(&body_fields);
+        let start = self.field_scroll.min(body_fields.len().saturating_sub(self.viewport_rows));
+        let end = (start + self.viewport_rows).min(body_fields.len());
+        (
+            body_fields[start..end].to_vec(),
+            row_height,
+            start > 0,
+            end < body_fields.len(),
+        )
+    }
+
+    fn scroll_body(&mut self, delta: isize) {
+        let body_fields = self.body_fields();
+        if body_fields.is_empty() {
+            self.field_scroll = 0;
+            return;
+        }
+
+        let max_scroll = body_fields.len().saturating_sub(self.viewport_rows.max(1));
+        let next = (self.field_scroll as isize + delta).clamp(0, max_scroll as isize) as usize;
+        self.field_scroll = next;
+    }
+
+    fn sync_body_scroll(&mut self, body_fields: &[WizardField]) {
+        let visible_rows = self.viewport_rows.max(1);
+        clamp_dialog_scroll(
+            &mut self.field_scroll,
+            body_fields.len(),
+            visible_rows,
+            body_fields.iter().position(|field| *field == self.focus),
+        );
     }
 
     fn prefill_repo_root_from_target_path(&mut self) {
@@ -4204,6 +4327,71 @@ fn annotation_visible_segment(line: &str, cursor_col: usize, width: usize) -> (S
     (visible, cursor_col.saturating_sub(start))
 }
 
+fn dialog_form_row_height(viewport_height: u16) -> u16 {
+    if viewport_height >= 8 {
+        3
+    } else if viewport_height >= 4 {
+        2
+    } else {
+        1
+    }
+}
+
+fn dialog_visible_rows(viewport_height: u16, row_height: u16) -> usize {
+    (viewport_height / row_height.max(1)).max(1) as usize
+}
+
+fn clamp_dialog_scroll(scroll_offset: &mut usize, total_rows: usize, visible_rows: usize, focus_index: Option<usize>) {
+    let visible_rows = visible_rows.max(1);
+    let max_scroll = total_rows.saturating_sub(visible_rows);
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    if let Some(focus_index) = focus_index {
+        if focus_index < *scroll_offset {
+            *scroll_offset = focus_index;
+        } else if focus_index >= *scroll_offset + visible_rows {
+            *scroll_offset = focus_index + 1 - visible_rows;
+        }
+    }
+}
+
+fn render_vertical_overflow_indicators(frame: &mut Frame, area: Rect, show_above: bool, show_below: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let indicator_width = area.width.min(5);
+    if show_above {
+        let top_rect = Rect {
+            x: area.x + area.width.saturating_sub(indicator_width),
+            y: area.y,
+            width: indicator_width,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new("↑↑↑")
+                .alignment(Alignment::Right)
+                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            top_rect,
+        );
+    }
+
+    if show_below {
+        let bottom_rect = Rect {
+            x: area.x + area.width.saturating_sub(indicator_width),
+            y: area.y + area.height.saturating_sub(1),
+            width: indicator_width,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new("↓↓↓")
+                .alignment(Alignment::Right)
+                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            bottom_rect,
+        );
+    }
+}
+
 fn rotate_scope_kind(scope_kind: BranchScopeKind, delta: i32) -> BranchScopeKind {
     if delta >= 0 {
         match scope_kind {
@@ -4401,5 +4589,20 @@ mod tests {
 
         let error = wizard.build_project().expect_err("duplicate scope names should fail");
         assert!(error.to_string().contains("unique"));
+    }
+
+    #[test]
+    fn wizard_body_window_keeps_focused_field_visible_when_viewport_is_short() {
+        let mut wizard = ProjectWizard::default();
+        wizard.project_type = ProjectType::Branched;
+        wizard.integration_mode = IntegrationMode::GitHubEnabled;
+        wizard.focus = WizardField::RemoteUrl;
+
+        let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
+
+        assert_eq!(row_height, 2);
+        assert!(visible_fields.contains(&WizardField::RemoteUrl));
+        assert!(show_above);
+        assert!(!show_below);
     }
 }
