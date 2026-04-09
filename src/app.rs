@@ -533,9 +533,18 @@ impl App {
 
         let header = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
-            Line::from(format!("Repo: {}", dialog.repo_root)),
+            Line::from(format!(
+                "Scope: {} ({})",
+                dialog.active_scope().display_name,
+                dialog.active_scope().scope_kind.map(|kind| kind.display_name()).unwrap_or("Project")
+            )),
+            Line::from(format!("Repo: {}", dialog.active_scope().repo_root)),
             Line::from(format!("View: {}", dialog.current_range().label)),
-            Line::from("Tab switches view. Left/Right moves history when History is active."),
+            Line::from(if dialog.can_select_scope() {
+                "Tab switches view. Left/Right moves history when History is active. [ and ] change scope."
+            } else {
+                "Tab switches view. Left/Right moves history when History is active."
+            }),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
@@ -580,15 +589,19 @@ impl App {
             body_inner,
         );
 
-        self.render_button_row(
-            frame,
-            sections[3],
-            &[
-                DialogButton::new("Scroll", false, HitAction::ScrollRecentChanges(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
-                DialogButton::new("Create Tag", false, HitAction::OpenTagDialog, Style::default().fg(Color::Black).bg(Color::Green)),
-                DialogButton::new("Close", false, HitAction::CloseRecentChanges, Style::default().fg(Color::White).bg(Color::Red)),
-            ],
-        );
+        let mut buttons = Vec::new();
+        if dialog.can_select_scope() {
+            buttons.push(DialogButton::new(
+                format!("Scope: < {} >", dialog.active_scope().display_name),
+                false,
+                HitAction::CycleRecentChangesScope(1),
+                Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+            ));
+        }
+        buttons.push(DialogButton::new("Scroll", false, HitAction::ScrollRecentChanges(3), Style::default().fg(Color::Black).bg(Color::Yellow)));
+        buttons.push(DialogButton::new("Create Tag", false, HitAction::OpenTagDialog, Style::default().fg(Color::Black).bg(Color::Green)));
+        buttons.push(DialogButton::new("Close", false, HitAction::CloseRecentChanges, Style::default().fg(Color::White).bg(Color::Red)));
+        self.render_button_row(frame, sections[3], &buttons);
     }
 
     fn render_tag_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -609,9 +622,18 @@ impl App {
 
         let header = vec![
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
-            Line::from(format!("Repo: {}", dialog.repo_root)),
+            Line::from(format!(
+                "Scope: {} ({})",
+                dialog.active_scope().display_name,
+                dialog.active_scope().scope_kind.map(|kind| kind.display_name()).unwrap_or("Project")
+            )),
+            Line::from(format!("Repo: {}", dialog.active_scope().repo_root)),
             Line::from(format!("Action: < {} >", dialog.selected_action().display_name())).style(Style::default().fg(Color::Yellow)),
-            Line::from("Edit the tag name, add an optional annotation, then run the selected action."),
+            Line::from(if dialog.can_select_scope() {
+                "Edit the tag name, add an optional annotation, then run the selected action. [ and ] change scope."
+            } else {
+                "Edit the tag name, add an optional annotation, then run the selected action."
+            }),
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
@@ -632,7 +654,7 @@ impl App {
         );
 
         let notes = vec![
-            Line::from(format!("Suggested tag: {}", dialog.tag_name.value)),
+            Line::from(format!("Suggested tag: {}", dialog.active_scope().suggested_tag_name)),
             Line::from(if dialog.annotation.trim().is_empty() {
                 "Annotation: none"
             } else {
@@ -646,30 +668,34 @@ impl App {
         ];
         frame.render_widget(Paragraph::new(notes).wrap(Wrap { trim: false }), sections[2]);
 
-        self.render_button_row(
-            frame,
-            sections[3],
-            &[
-                DialogButton::new(
-                    format!("< {} >", dialog.selected_action().display_name()),
-                    false,
-                    HitAction::CycleTagAction(1),
-                    Style::default().fg(Color::Black).bg(Color::Yellow),
-                ),
-                DialogButton::new(
-                    if dialog.annotation.trim().is_empty() {
-                        "Annotation"
-                    } else {
-                        "Annotation Added"
-                    },
-                    false,
-                    HitAction::OpenTagAnnotation,
-                    Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
-                ),
-                DialogButton::new("Run", false, HitAction::CreateTag, Style::default().fg(Color::Black).bg(Color::Green)),
-                DialogButton::new("Cancel", false, HitAction::CancelTagDialog, Style::default().fg(Color::White).bg(Color::Red)),
-            ],
-        );
+        let mut buttons = Vec::new();
+        if dialog.can_select_scope() {
+            buttons.push(DialogButton::new(
+                format!("Scope: < {} >", dialog.active_scope().display_name),
+                false,
+                HitAction::CycleTagScope(1),
+                Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+            ));
+        }
+        buttons.push(DialogButton::new(
+            format!("< {} >", dialog.selected_action().display_name()),
+            false,
+            HitAction::CycleTagAction(1),
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ));
+        buttons.push(DialogButton::new(
+            if dialog.annotation.trim().is_empty() {
+                "Annotation"
+            } else {
+                "Annotation Added"
+            },
+            false,
+            HitAction::OpenTagAnnotation,
+            Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+        ));
+        buttons.push(DialogButton::new("Run", false, HitAction::CreateTag, Style::default().fg(Color::Black).bg(Color::Green)));
+        buttons.push(DialogButton::new("Cancel", false, HitAction::CancelTagDialog, Style::default().fg(Color::White).bg(Color::Red)));
+        self.render_button_row(frame, sections[3], &buttons);
     }
 
     fn render_settings(&mut self, frame: &mut Frame, area: Rect) {
@@ -1438,6 +1464,16 @@ impl App {
                     dialog.switch_tab(RecentChangesTab::History);
                 }
             }
+            KeyCode::Char('[') => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.rotate_scope(-1)?;
+                }
+            }
+            KeyCode::Char(']') => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.rotate_scope(1)?;
+                }
+            }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
                     if dialog.active_tab == RecentChangesTab::History {
@@ -1465,6 +1501,8 @@ impl App {
                 self.tag_annotation_dialog = None;
                 self.status = StatusMessage::info("Tag creation cancelled.");
             }
+            KeyCode::Char('[') => self.rotate_tag_scope(-1),
+            KeyCode::Char(']') => self.rotate_tag_scope(1),
             KeyCode::Char('a') => self.open_tag_annotation_dialog()?,
             KeyCode::Left => self.rotate_tag_action(-1),
             KeyCode::Right => self.rotate_tag_action(1),
@@ -1780,6 +1818,11 @@ impl App {
                     dialog.switch_tab(tab);
                 }
             }
+            HitAction::CycleRecentChangesScope(delta) => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.rotate_scope(delta)?;
+                }
+            }
             HitAction::CycleBumpScope(delta) => self.rotate_bump_scope(delta),
             HitAction::CycleBumpAction(delta) => self.rotate_bump_action(delta),
             HitAction::ApplyBump => return self.apply_bump(),
@@ -1794,6 +1837,7 @@ impl App {
             HitAction::ScrollRecentChanges(delta) => self.scroll_recent_changes(delta),
             HitAction::OpenTagDialog => return self.open_tag_dialog(),
             HitAction::OpenTagAnnotation => return self.open_tag_annotation_dialog(),
+            HitAction::CycleTagScope(delta) => self.rotate_tag_scope(delta),
             HitAction::CycleTagAction(delta) => self.rotate_tag_action(delta),
             HitAction::CreateTag => return self.create_local_tag(),
             HitAction::SaveTagAnnotation => return self.save_tag_annotation(),
@@ -1826,6 +1870,18 @@ impl App {
         self.project_edit_dialog = None;
         self.recent_changes_dialog = Some(dialog);
         self.status = StatusMessage::info("Showing git changes for the selected project.");
+        Ok(())
+    }
+
+    fn open_tag_dialog_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        let dialog = TagDialog::from_project(&project, preferred_scope)?;
+        self.bump_dialog = None;
+        self.project_edit_dialog = None;
+        self.browser_dialog = None;
+        self.tag_annotation_dialog = None;
+        self.tag_dialog = Some(dialog);
+        self.status = StatusMessage::info("Review the proposed tag name, add an optional annotation, then run the tag action.");
         Ok(())
     }
 
@@ -1917,15 +1973,17 @@ impl App {
     }
 
     fn open_tag_dialog(&mut self) -> Result<()> {
-        let project = self.selected_project()?.clone();
-        let dialog = TagDialog::from_project(&project)?;
-        self.bump_dialog = None;
-        self.project_edit_dialog = None;
-        self.browser_dialog = None;
-        self.tag_annotation_dialog = None;
-        self.tag_dialog = Some(dialog);
-        self.status = StatusMessage::info("Review the proposed tag name, add an optional annotation, then run the tag action.");
-        Ok(())
+        let preferred_scope = self
+            .recent_changes_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.can_select_scope().then_some(dialog.selected_scope));
+        self.open_tag_dialog_with_scope(preferred_scope)
+    }
+
+    fn rotate_tag_scope(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.tag_dialog {
+            dialog.rotate_scope(delta);
+        }
     }
 
     fn rotate_tag_action(&mut self, delta: isize) {
@@ -1944,10 +2002,11 @@ impl App {
             bail!("tag name cannot be empty");
         }
 
-        let repo_root = dialog.repo_root.clone();
+        let active_scope = dialog.active_scope().clone();
+        let repo_root = active_scope.repo_root.clone();
         let project_name = dialog.project_name.clone();
         let action = dialog.selected_action();
-        let remote_spec = dialog.remote_spec.clone();
+        let remote_spec = active_scope.remote_spec.clone();
         let annotation = dialog.annotation.trim().to_string();
         let tag_name = tag_name.to_string();
         let created = ensure_local_tag(
@@ -1968,11 +2027,16 @@ impl App {
 
         self.tag_dialog = None;
         self.tag_annotation_dialog = None;
+        let scope_notice = if active_scope.scope_kind.is_some() {
+            format!(" for {}", active_scope.display_name)
+        } else {
+            String::new()
+        };
         let summary = match action {
-            TagAction::CreateLocal if created => format!("Created local tag '{}' in {}.", tag_name, project_name),
-            TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}.", tag_name, project_name),
-            TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}.", tag_name, project_name),
-            TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}.", tag_name, project_name),
+            TagAction::CreateLocal if created => format!("Created local tag '{}' in {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}{}.", tag_name, project_name, scope_notice),
         };
         self.status = StatusMessage::success(if annotation.is_empty() {
             summary
@@ -2057,6 +2121,11 @@ impl App {
         } else {
             format!(" in scope '{}'", dialog.active_scope().display_name)
         };
+        let preferred_scope = if dialog.unified_versioning {
+            None
+        } else {
+            Some(dialog.selected_scope)
+        };
         self.bump_dialog = None;
         let repo_backed = self.selected_project()?.integration_mode.requires_repo();
         self.status = StatusMessage::success(format!(
@@ -2067,7 +2136,7 @@ impl App {
             next_version
         ));
         if repo_backed {
-            self.open_tag_dialog()?;
+            self.open_tag_dialog_with_scope(preferred_scope)?;
             self.status = StatusMessage::info("Version bump applied. Review the suggested tag action next.");
         }
         Ok(())
@@ -2514,10 +2583,12 @@ enum HitAction {
     BrowseProjectRepoRoot,
     BrowserSelect(usize),
     SelectRecentChangesTab(RecentChangesTab),
+    CycleRecentChangesScope(isize),
     CloseRecentChanges,
     ScrollRecentChanges(i16),
     OpenTagDialog,
     OpenTagAnnotation,
+    CycleTagScope(isize),
     CycleTagAction(isize),
     CycleBumpAction(isize),
     CycleBumpScope(isize),
