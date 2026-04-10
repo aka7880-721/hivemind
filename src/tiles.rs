@@ -63,11 +63,11 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 
 	let rows = [
 		border_top_semver(right_width),
-		format!("║{:^5}│{:^right_width$}║", "ver.", tile.name, right_width = right_width),
+		format!("║{:^5}│{:^right_width$}║", " ver.", tile.name, right_width = right_width),
 		format!("║{}│{}║", dot_fill(SEMVER_LEFT_WIDTH), dot_fill(right_width)),
-		format!("║{:^5}│{}║", parts[0], format_activity_detail(" tag..→HEAD", &tile.commits_since_tag_label, 8, right_width)),
-		format!("║{:^5}│{}║", "·", format_activity_detail(" last bump", &tile.last_bump_label, 9, right_width)),
-		format!("║{:^5}│{}║", parts[1], format_activity_detail(" last commit", &tile.last_commit_label, 7, right_width)),
+		format!("║{:^5}│{}║", parts[0], format_activity_detail("   tag..→HEAD", &tile.commits_since_tag_label, 8, right_width)),
+		format!("║{:^5}│{}║", "·", format_activity_detail("   last bump", &tile.last_bump_label, 9, right_width)),
+		format!("║{:^5}│{}║", parts[1], format_activity_detail("   last commit", &tile.last_commit_label, 7, right_width)),
 		format!("║{:^5}├{}╢", "·", "─".repeat(right_width)),
 		format!("║{:^5}│{}║", parts[2], button_line),
 		border_bottom_semver(right_width),
