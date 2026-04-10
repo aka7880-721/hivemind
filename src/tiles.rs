@@ -1,9 +1,9 @@
 use ratatui::{
 	Frame,
-	layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
-	style::{Color, Modifier, Style},
+	layout::{Alignment, Rect},
+	style::{Color, Style},
 	text::{Line, Span},
-	widgets::{Block, Borders, Paragraph, Wrap},
+	widgets::Paragraph,
 };
 
 use crate::versioning::VersionScheme;
@@ -11,6 +11,8 @@ use crate::versioning::VersionScheme;
 pub(crate) const TILE_WIDTH: u16 = 34;
 pub(crate) const SEMVER_TILE_HEIGHT: u16 = 9;
 pub(crate) const CALVER_TILE_HEIGHT: u16 = 9;
+const SEMVER_LEFT_WIDTH: usize = 5;
+const CALVER_ACTION_WIDTH: usize = 6;
 
 pub(crate) struct OverviewTileData {
 	pub(crate) name: String,
@@ -43,11 +45,7 @@ pub(crate) fn tile_height(scheme: VersionScheme) -> u16 {
 	}
 }
 
-pub(crate) fn render_overview_tile(
-	frame: &mut Frame,
-	area: Rect,
-	tile: &OverviewTileData,
-) -> OverviewTileHotspots {
+pub(crate) fn render_overview_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) -> OverviewTileHotspots {
 	if tile.scheme == VersionScheme::SemVer {
 		render_semver_tile(frame, area, tile)
 	} else {
@@ -56,191 +54,132 @@ pub(crate) fn render_overview_tile(
 }
 
 fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) -> OverviewTileHotspots {
-	let border_style = if tile.selected {
-		Style::default().fg(Color::Cyan)
-	} else {
-		Style::default().fg(Color::DarkGray)
-	};
-	let block = Block::default().borders(Borders::ALL).border_style(border_style);
-	let inner = block.inner(area);
-	frame.render_widget(block, area);
-
-	let columns = Layout::default()
-		.direction(Direction::Horizontal)
-		.constraints([Constraint::Length(5), Constraint::Min(12)])
-		.split(inner);
-	let left_column = columns[0];
-	let right_column = columns[1];
-	frame.render_widget(Block::default().borders(Borders::RIGHT).border_style(border_style), left_column);
-
-	let left_rows = Layout::default()
-		.direction(Direction::Vertical)
-		.constraints([Constraint::Length(1); 7])
-		.split(left_column);
-	let right_rows = Layout::default()
-		.direction(Direction::Vertical)
-		.constraints([Constraint::Length(1); 7])
-		.split(right_column);
-
-	frame.render_widget(Paragraph::new("ver.").alignment(Alignment::Center), left_rows[0]);
-	frame.render_widget(Paragraph::new(tile.name.as_str()).alignment(Alignment::Center), right_rows[0]);
-	frame.render_widget(
-		Paragraph::new(dot_fill(left_rows[1].width)).alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
-		left_rows[1],
-	);
-	frame.render_widget(
-		Paragraph::new(dot_fill(right_rows[1].width)).alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
-		right_rows[1],
-	);
-
+	let border_style = border_style(tile.selected);
+	let content_width = area.width.saturating_sub(2) as usize;
+	let right_width = content_width.saturating_sub(SEMVER_LEFT_WIDTH + 1);
 	let parts = split_semver(&tile.preview_version);
-	for (row, value) in [left_rows[2], left_rows[4], left_rows[6]].iter().zip(parts.iter()) {
-		frame.render_widget(
-			Paragraph::new(Line::from(Span::styled(
-				value.clone(),
-				Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-			)))
-			.alignment(Alignment::Center),
-			*row,
-		);
-	}
-	frame.render_widget(
-		Paragraph::new("  ·  ").alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
-		left_rows[3],
-	);
-	frame.render_widget(
-		Paragraph::new("  ·  ").alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
-		left_rows[5],
-	);
+	let button_positions = space_evenly_positions(right_width, &[4, 4, 3]);
+	let button_line = build_button_line(right_width, &button_positions, &["view", "bump", "tag"]);
 
-	let details = [
-		format_activity_detail(" tag..→HEAD", &tile.commits_since_tag_label, 8),
-		format_activity_detail(" last bump", &tile.last_bump_label, 9),
-		format_activity_detail(" last commit", &tile.last_commit_label, 7),
+	let rows = [
+		border_top_semver(right_width),
+		format!("║{:^5}│{:^right_width$}║", "ver.", tile.name, right_width = right_width),
+		format!("║{}│{}║", dot_fill(SEMVER_LEFT_WIDTH), dot_fill(right_width)),
+		format!("║{:^5}│{}║", parts[0], format_activity_detail("tag..→HEAD", &tile.commits_since_tag_label, 8, right_width)),
+		format!("║{:^5}│{}║", "·", format_activity_detail("last bump", &tile.last_bump_label, 9, right_width)),
+		format!("║{:^5}│{}║", parts[1], format_activity_detail("last commit", &tile.last_commit_label, 7, right_width)),
+		format!("║{:^5}├{}╢", "·", "─".repeat(right_width)),
+		format!("║{:^5}│{}║", parts[2], button_line),
+		border_bottom_semver(right_width),
 	];
-	for (row, detail) in [right_rows[2], right_rows[3], right_rows[4]].iter().zip(details.iter()) {
-		frame.render_widget(Paragraph::new(detail.as_str()).wrap(Wrap { trim: false }), *row);
-	}
+	render_rows(frame, area, &rows, border_style);
 
-	let action_block = Block::default().borders(Borders::TOP).border_style(border_style);
-	let action_inner = action_block.inner(right_rows[6]);
-	frame.render_widget(action_block, right_rows[6]);
-	let button_row = Layout::default()
-		.direction(Direction::Horizontal)
-		.constraints([Constraint::Length(6), Constraint::Length(6), Constraint::Length(6)])
-		.flex(Flex::SpaceEvenly)
-		.split(action_inner);
-
-	let view_rect = button_row[0];
-	let bump_rect = button_row[1];
-	let tag_rect = button_row[2];
-	render_tile_button(frame, view_rect, "view", Color::Rgb(70, 110, 150));
-	render_tile_button(frame, bump_rect, "bump", Color::Rgb(120, 170, 80));
-	render_tile_button(frame, tag_rect, "tag", Color::Rgb(170, 140, 70));
-
+	let right_x = area.x + 1 + SEMVER_LEFT_WIDTH as u16 + 1;
+	let inner_y = area.y + 1;
 	OverviewTileHotspots {
 		tile_rect: area,
-		title_rect: right_rows[0],
-		major_rect: Some(left_rows[2]),
-		minor_rect: Some(left_rows[4]),
-		patch_rect: Some(left_rows[6]),
+		title_rect: Rect::new(right_x, inner_y, right_width as u16, 1),
+		major_rect: Some(Rect::new(area.x + 1, inner_y + 2, SEMVER_LEFT_WIDTH as u16, 1)),
+		minor_rect: Some(Rect::new(area.x + 1, inner_y + 4, SEMVER_LEFT_WIDTH as u16, 1)),
+		patch_rect: Some(Rect::new(area.x + 1, inner_y + 6, SEMVER_LEFT_WIDTH as u16, 1)),
 		version_rect: None,
-		view_rect,
-		bump_rect,
-		tag_rect,
+		view_rect: Rect::new(right_x + button_positions[0] as u16, inner_y + 6, 4, 1),
+		bump_rect: Rect::new(right_x + button_positions[1] as u16, inner_y + 6, 4, 1),
+		tag_rect: Rect::new(right_x + button_positions[2] as u16, inner_y + 6, 3, 1),
 	}
 }
 
 fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) -> OverviewTileHotspots {
-	let border_style = if tile.selected {
-		Style::default().fg(Color::Cyan)
-	} else {
-		Style::default().fg(Color::DarkGray)
-	};
-	let block = Block::default().borders(Borders::ALL).border_style(border_style);
-	let inner = block.inner(area);
-	frame.render_widget(block, area);
+	let border_style = border_style(tile.selected);
+	let content_width = area.width.saturating_sub(2) as usize;
+	let detail_width = content_width.saturating_sub(CALVER_ACTION_WIDTH + 1);
 
-	let rows = Layout::default()
-		.direction(Direction::Vertical)
-		.constraints([Constraint::Length(1); 7])
-		.split(inner);
-	frame.render_widget(Paragraph::new(tile.name.as_str()).alignment(Alignment::Center), rows[0]);
-	frame.render_widget(
-		Paragraph::new(dot_fill(rows[1].width)).alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
-		rows[1],
-	);
-
-	let middle = Layout::default()
-		.direction(Direction::Horizontal)
-		.constraints([Constraint::Min(12), Constraint::Length(7)])
-		.split(Rect {
-			x: inner.x,
-			y: rows[2].y,
-			width: inner.width,
-			height: 3,
-		});
-	let detail_rows = Layout::default()
-		.direction(Direction::Vertical)
-		.constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-		.split(middle[0]);
-	let action_rows = Layout::default()
-		.direction(Direction::Vertical)
-		.constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-		.split(middle[1]);
-	frame.render_widget(Block::default().borders(Borders::LEFT).border_style(border_style), middle[1]);
-
-	let details = [
-		format_activity_detail("tag..→HEAD", &tile.commits_since_tag_label, 8),
-		format_activity_detail("last bump", &tile.last_bump_label, 9),
-		format_activity_detail("last commit", &tile.last_commit_label, 7),
+	let rows = [
+		format!("╔{}╗", "═".repeat(content_width)),
+		format!("║{:^content_width$}║", tile.name, content_width = content_width),
+		format!("║{}║", dot_fill(content_width)),
+		format!("║{}│{:^action_width$}║", format_activity_detail("tag..→HEAD", &tile.commits_since_tag_label, 8, detail_width), "bump", action_width = CALVER_ACTION_WIDTH),
+		format!("║{}│{:^action_width$}║", format_activity_detail("last bump", &tile.last_bump_label, 9, detail_width), "view", action_width = CALVER_ACTION_WIDTH),
+		format!("║{}│{:^action_width$}║", format_activity_detail("last commit", &tile.last_commit_label, 7, detail_width), "tag", action_width = CALVER_ACTION_WIDTH),
+		format!("╟{}┴{}╢", "─".repeat(detail_width), "─".repeat(CALVER_ACTION_WIDTH)),
+		format!("║{:^content_width$}║", spaced_version(&tile.preview_version), content_width = content_width),
+		format!("╚{}╝", "═".repeat(content_width)),
 	];
-	for (row, detail) in detail_rows.iter().zip(details.iter()) {
-		frame.render_widget(Paragraph::new(detail.as_str()), *row);
-	}
+	render_rows(frame, area, &rows, border_style);
 
-	render_tile_button(frame, action_rows[0], "bump", Color::Rgb(120, 170, 80));
-	render_tile_button(frame, action_rows[1], "view", Color::Rgb(70, 110, 150));
-	render_tile_button(frame, action_rows[2], "tag", Color::Rgb(170, 140, 70));
-
-	let version_block = Block::default().borders(Borders::TOP).border_style(border_style);
-	let version_inner = version_block.inner(rows[6]);
-	frame.render_widget(version_block, rows[6]);
-	frame.render_widget(
-		Paragraph::new(spaced_version(&tile.preview_version))
-			.alignment(Alignment::Center)
-			.style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-		version_inner,
-	);
-
+	let action_x = area.x + 1 + detail_width as u16 + 1;
+	let inner_y = area.y + 1;
 	OverviewTileHotspots {
 		tile_rect: area,
-		title_rect: rows[0],
+		title_rect: Rect::new(area.x + 1, inner_y, content_width as u16, 1),
 		major_rect: None,
 		minor_rect: None,
 		patch_rect: None,
-		version_rect: Some(version_inner),
-		view_rect: action_rows[1],
-		bump_rect: action_rows[0],
-		tag_rect: action_rows[2],
+		version_rect: Some(Rect::new(area.x + 1, inner_y + 6, content_width as u16, 1)),
+		view_rect: Rect::new(action_x, inner_y + 3, CALVER_ACTION_WIDTH as u16, 1),
+		bump_rect: Rect::new(action_x, inner_y + 2, CALVER_ACTION_WIDTH as u16, 1),
+		tag_rect: Rect::new(action_x, inner_y + 4, CALVER_ACTION_WIDTH as u16, 1),
 	}
 }
 
-fn render_tile_button(frame: &mut Frame, area: Rect, label: &str, bg: Color) {
-	frame.render_widget(
-		Paragraph::new(format!(" {} ", label))
-			.alignment(Alignment::Center)
-			.style(Style::default().fg(Color::Black).bg(bg)),
-		area,
-	);
+fn render_rows(frame: &mut Frame, area: Rect, rows: &[String], border_style: Style) {
+	for (index, row) in rows.iter().enumerate() {
+		if index as u16 >= area.height {
+			break;
+		}
+		let row_rect = Rect::new(area.x, area.y + index as u16, area.width, 1);
+		frame.render_widget(Paragraph::new(styled_row(row, border_style)).alignment(Alignment::Left), row_rect);
+	}
 }
 
-fn format_activity_detail(label: &str, value: &str, width: usize) -> String {
-	format!("{}: {:>width$}", label, value, width = width)
+fn styled_row(row: &str, border_style: Style) -> Line<'static> {
+	let border_chars = ['╔', '╗', '╚', '╝', '║', '═', '│', '╤', '╧', '╟', '╢', '├', '┴', '─'];
+	let spans = row
+		.chars()
+		.map(|character| {
+			let style = if border_chars.contains(&character) || character == '·' {
+				border_style
+			} else {
+				Style::default().fg(Color::White)
+			};
+			Span::styled(character.to_string(), style)
+		})
+		.collect::<Vec<_>>();
+	Line::from(spans)
 }
 
-fn dot_fill(width: u16) -> String {
-	"·".repeat(width as usize)
+fn border_style(selected: bool) -> Style {
+	if selected {
+		Style::default().fg(Color::Cyan)
+	} else {
+		Style::default().fg(Color::DarkGray)
+	}
+}
+
+fn border_top_semver(right_width: usize) -> String {
+	format!("╔{}╤{}╗", "═".repeat(SEMVER_LEFT_WIDTH), "═".repeat(right_width))
+}
+
+fn border_bottom_semver(right_width: usize) -> String {
+	format!("╚{}╧{}╝", "═".repeat(SEMVER_LEFT_WIDTH), "═".repeat(right_width))
+}
+
+fn format_activity_detail(label: &str, value: &str, value_width: usize, total_width: usize) -> String {
+	let raw = format!("{}: {:>value_width$}", label, value, value_width = value_width);
+	fit_to_width(&raw, total_width)
+}
+
+fn fit_to_width(value: &str, width: usize) -> String {
+	let rendered = value.chars().take(width).collect::<String>();
+	if rendered.len() >= width {
+		rendered
+	} else {
+		format!("{rendered:<width$}")
+	}
+}
+
+fn dot_fill(width: usize) -> String {
+	"·".repeat(width)
 }
 
 fn split_semver(version: &str) -> [String; 3] {
@@ -254,6 +193,40 @@ fn split_semver(version: &str) -> [String; 3] {
 
 fn spaced_version(version: &str) -> String {
 	version.split('.').collect::<Vec<_>>().join(" . ")
+}
+
+fn space_evenly_positions(width: usize, item_widths: &[usize]) -> Vec<usize> {
+	let total = item_widths.iter().sum::<usize>();
+	let gaps = item_widths.len().saturating_add(1);
+	let free = width.saturating_sub(total);
+	let base_gap = free / gaps.max(1);
+	let remainder = free % gaps.max(1);
+
+	let mut current = base_gap;
+	let mut positions = Vec::with_capacity(item_widths.len());
+	for (index, item_width) in item_widths.iter().enumerate() {
+		if index < remainder {
+			current += 1;
+		}
+		positions.push(current);
+		current += item_width + base_gap;
+		if index + 1 < remainder {
+			current += 1;
+		}
+	}
+	positions
+}
+
+fn build_button_line(width: usize, positions: &[usize], labels: &[&str]) -> String {
+	let mut cells = vec![' '; width];
+	for (position, label) in positions.iter().zip(labels.iter()) {
+		for (offset, character) in label.chars().enumerate() {
+			if let Some(cell) = cells.get_mut(position + offset) {
+				*cell = character;
+			}
+		}
+	}
+	cells.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -272,6 +245,11 @@ mod tests {
 
 	#[test]
 	fn format_activity_detail_right_aligns_value() {
-		assert_eq!(format_activity_detail("last bump", "5d ago", 9), "last bump:    5d ago");
+		assert_eq!(format_activity_detail("last bump", "5d ago", 9, 20), "last bump:    5d ago");
+	}
+
+	#[test]
+	fn button_positions_are_spread_evenly() {
+		assert_eq!(space_evenly_positions(24, &[4, 4, 3]), vec![4, 11, 18]);
 	}
 }
