@@ -119,6 +119,27 @@ impl RecentChangesDialog {
         Ok(())
     }
 
+    pub(crate) fn select_scope(&mut self, scope_index: usize) -> Result<()> {
+        if self.scopes.is_empty() {
+            self.selected_scope = 0;
+            return Ok(());
+        }
+
+        let next_scope = scope_index.min(self.scopes.len().saturating_sub(1));
+        if next_scope == self.selected_scope {
+            return Ok(());
+        }
+
+        self.selected_scope = next_scope;
+        let (recent_range, history_ranges) = load_change_ranges(&self.active_scope().repo_root)?;
+        self.recent_range = recent_range;
+        self.history_ranges = history_ranges;
+        self.active_tab = RecentChangesTab::Recent;
+        self.history_index = 0;
+        self.scroll = 0;
+        Ok(())
+    }
+
     pub(crate) fn current_range(&self) -> &ChangeRange {
         match self.active_tab {
             RecentChangesTab::Recent => &self.recent_range,
