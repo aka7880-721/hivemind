@@ -115,6 +115,32 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
         .collect()
 }
 
+pub(crate) fn collect_all_branch_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<GitScopeContext>> {
+    if project.project_type == ProjectType::AllInOne || project.branches.len() <= 1 {
+        return collect_git_scope_contexts(project);
+    }
+
+    project
+        .branches
+        .iter()
+        .enumerate()
+        .map(|(index, branch)| {
+            let repo = branch
+                .repo
+                .as_ref()
+                .or(project.repo.as_ref())
+                .ok_or_else(|| anyhow!("branch '{}' does not have a git repository configured", branch.display_name()))?;
+            Ok(GitScopeContext {
+                display_name: branch.display_name().to_string(),
+                scope_kind: Some(branch.scope_kind),
+                repo_root: repo.local_root.clone(),
+                remote_spec: repo.remote_url.clone(),
+                suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
+            })
+        })
+        .collect()
+}
+
 fn slugify(value: &str) -> String {
     value
         .chars()
@@ -331,6 +357,59 @@ mod tests {
         assert_eq!(scopes[1].repo_root, "C:/repo/project");
         assert_eq!(scopes[1].remote_spec.as_deref(), Some("origin-project"));
         assert_eq!(scopes[1].suggested_tag_name, "api");
+    }
+
+    #[test]
+    fn collect_all_branch_git_scope_contexts_keeps_scopes_for_unified_projects() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            targets: Vec::new(),
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/repo/core".to_string(),
+                        remote_url: None,
+                    }),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "core/Cargo.toml".to_string(),
+                        key_path: "package.version".to_string(),
+                        format: TargetFormat::Toml,
+                    }],
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    label: "API".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/repo/api".to_string(),
+                        remote_url: None,
+                    }),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "api/package.json".to_string(),
+                        key_path: "version".to_string(),
+                        format: TargetFormat::Json,
+                    }],
+                },
+            ],
+            repo: None,
+        };
+
+        let scopes = collect_all_branch_git_scope_contexts(&project).expect("all branch scopes should resolve");
+
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].display_name, "Core");
+        assert_eq!(scopes[1].display_name, "API");
     }
 
     #[test]
