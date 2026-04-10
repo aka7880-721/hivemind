@@ -48,7 +48,7 @@ use crate::{
     },
     dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput},
     git::{
-        collect_git_scope_contexts, ensure_gh_available, ensure_local_tag,
+        collect_all_branch_git_scope_contexts, collect_git_scope_contexts, ensure_gh_available, ensure_local_tag,
         load_repo_activity_summary, run_gh_checked, run_git_checked,
     },
     overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
@@ -138,6 +138,9 @@ struct App {
     overview_tile_project: Option<usize>,
     overview_scope_order: Vec<usize>,
     overview_pending_versions: Vec<String>,
+    overview_tile_scroll: usize,
+    overview_tile_viewport: Option<Rect>,
+    overview_recent_viewport: Option<Rect>,
     overview_tile_rects: Vec<(Rect, usize)>,
     overview_drag_scope: Option<usize>,
     wizard: ProjectWizard,
@@ -173,6 +176,9 @@ impl App {
             overview_tile_project: None,
             overview_scope_order: Vec::new(),
             overview_pending_versions: Vec::new(),
+            overview_tile_scroll: 0,
+            overview_tile_viewport: None,
+            overview_recent_viewport: None,
             overview_tile_rects: Vec::new(),
             overview_drag_scope: None,
             wizard: ProjectWizard::default(),
@@ -201,6 +207,8 @@ impl App {
         self.sticky_toaster.tick();
         self.sync_status_toasts();
         self.hit_targets.clear();
+        self.overview_tile_viewport = None;
+        self.overview_recent_viewport = None;
         self.overview_tile_rects.clear();
 
         let root = Layout::default()
@@ -247,7 +255,10 @@ impl App {
         let transient_area = self.transient_toaster.toast_area();
         let sticky_area = if self.transient_toaster.has_toast() {
             Rect {
-                height: frame.area().height.saturating_sub(transient_area.height.saturating_add(1)),
+                height: transient_area
+                    .y
+                    .saturating_sub(frame.area().y)
+                    .saturating_sub(1),
                 ..frame.area()
             }
         } else {
@@ -396,18 +407,18 @@ impl App {
             }
         }
 
-        let right_block = Block::default().borders(Borders::ALL).title(" Overview Page ");
-        let right_inner = right_block.inner(chunks[1]);
-        frame.render_widget(right_block, chunks[1]);
-
         let right_sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(8)])
-            .split(right_inner);
+            .split(chunks[1]);
         render_overview_tabs(frame, right_sections[0], self.overview_tab);
         for (tab, rect) in overview_tab_rects(right_sections[0]) {
             self.hit_targets.push(HitTarget::new(rect, HitAction::SelectOverviewTab(tab)));
         }
+
+        let overview_body = Block::default().borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM);
+        let overview_inner = overview_body.inner(right_sections[1]);
+        frame.render_widget(overview_body, right_sections[1]);
 
         if self.overview_tab == OverviewTab::ProjectDetail {
             let lines = if let Some(project) = self.config.projects.get(self.selected_project) {
@@ -438,9 +449,9 @@ impl App {
                     Line::from("- Hybrid YYYY.PATCH → e.g. 2024.2"),
                 ]
             };
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), right_sections[1]);
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), overview_inner);
         } else {
-            self.render_dashboard_overview(frame, right_sections[1]);
+            self.render_dashboard_overview(frame, overview_inner);
         }
     }
 
@@ -2172,6 +2183,7 @@ impl App {
             .iter()
             .map(|scope| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string()))
             .collect();
+        self.overview_tile_scroll = 0;
     }
 
     fn reorder_dashboard_tile_scope(&mut self, from_scope: usize, to_scope: usize) {
@@ -2187,6 +2199,33 @@ impl App {
 
         let moved = self.overview_scope_order.remove(from_index);
         self.overview_scope_order.insert(to_index, moved);
+    }
+
+    fn scroll_dashboard_tiles(&mut self, delta: isize) -> Result<()> {
+        let viewport = match self.overview_tile_viewport {
+            Some(viewport) => viewport,
+            None => return Ok(()),
+        };
+        let project = self.selected_project()?.clone();
+        let scopes = collect_bump_scopes(&project)?;
+        if scopes.is_empty() {
+            self.overview_tile_scroll = 0;
+            return Ok(());
+        }
+
+        let columns = dashboard_tile_columns(viewport.width).max(1);
+        let row_height = scopes
+            .iter()
+            .map(|scope| tile_height(scope.scheme))
+            .max()
+            .unwrap_or(7)
+            .saturating_add(1);
+        let visible_rows = ((viewport.height.saturating_add(1)) / row_height.max(1)).max(1) as usize;
+        let total_rows = self.overview_scope_order.len().div_ceil(columns);
+        let max_scroll = total_rows.saturating_sub(visible_rows);
+        self.overview_tile_scroll = (self.overview_tile_scroll as isize + delta)
+            .clamp(0, max_scroll as isize) as usize;
+        Ok(())
     }
 
     fn render_dashboard_tiles(&mut self, frame: &mut Frame, area: Rect, project: &ProjectConfig, scopes: &[BumpScope]) {
