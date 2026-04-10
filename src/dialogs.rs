@@ -161,6 +161,7 @@ impl RecentChangesDialog {
 #[derive(Clone)]
 pub(crate) struct TagDialog {
     pub(crate) project_name: String,
+    pub(crate) integration_mode: IntegrationMode,
     pub(crate) scopes: Vec<GitScopeContext>,
     pub(crate) selected_scope: usize,
     pub(crate) tag_name: TextInput,
@@ -170,27 +171,27 @@ pub(crate) struct TagDialog {
 }
 
 impl TagDialog {
-    pub(crate) fn from_project(project: &ProjectConfig, preferred_scope: Option<usize>) -> Result<Self> {
+    pub(crate) fn from_project(
+        project: &ProjectConfig,
+        preferred_scope: Option<usize>,
+        preferred_action: Option<TagAction>,
+    ) -> Result<Self> {
         let scopes = collect_git_scope_contexts(project)?;
         let selected_scope = preferred_scope.unwrap_or(0).min(scopes.len().saturating_sub(1));
         ensure_git_repo(&scopes[selected_scope].repo_root)?;
-        let actions = match project.integration_mode {
-            IntegrationMode::LocalOnly => bail!("local-only projects do not support git tags"),
-            IntegrationMode::GitLocalOnly => vec![TagAction::CreateLocal],
-            IntegrationMode::GitHubEnabled => vec![
-                TagAction::CreateLocal,
-                TagAction::CreateAndPush,
-                TagAction::CreatePushAndRelease,
-            ],
-        };
+        let actions = available_tag_actions(project.integration_mode, scopes[selected_scope].remote_spec.is_some())?;
+        let action_index = preferred_action
+            .and_then(|action| actions.iter().position(|candidate| *candidate == action))
+            .unwrap_or(0);
         Ok(Self {
             project_name: project.name.clone(),
+            integration_mode: project.integration_mode,
             tag_name: TextInput::with_value(scopes[selected_scope].suggested_tag_name.clone()),
             scopes,
             selected_scope,
             annotation: String::new(),
             actions,
-            action_index: 0,
+            action_index,
         })
     }
 
@@ -208,9 +209,17 @@ impl TagDialog {
             return;
         }
 
+        let current_action = self.selected_action();
         let len = self.scopes.len() as isize;
         self.selected_scope = (self.selected_scope as isize + delta).rem_euclid(len) as usize;
         self.tag_name.set_value(self.active_scope().suggested_tag_name.clone());
+        self.actions = available_tag_actions(self.integration_mode, self.active_scope().remote_spec.is_some())
+            .unwrap_or_else(|_| vec![TagAction::CreateLocal]);
+        self.action_index = self
+            .actions
+            .iter()
+            .position(|action| *action == current_action)
+            .unwrap_or(0);
     }
 
     pub(crate) fn selected_action(&self) -> TagAction {
@@ -227,7 +236,7 @@ impl TagDialog {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TagAction {
     CreateLocal,
     CreateAndPush,
@@ -241,6 +250,26 @@ impl TagAction {
             TagAction::CreateAndPush => "Tag + Push",
             TagAction::CreatePushAndRelease => "Tag + Push + Release",
         }
+    }
+}
+
+fn available_tag_actions(integration_mode: IntegrationMode, has_remote: bool) -> Result<Vec<TagAction>> {
+    match integration_mode {
+        IntegrationMode::LocalOnly => bail!("local-only projects do not support git tags"),
+        IntegrationMode::GitLocalOnly => Ok(if has_remote {
+            vec![TagAction::CreateLocal, TagAction::CreateAndPush]
+        } else {
+            vec![TagAction::CreateLocal]
+        }),
+        IntegrationMode::GitHubEnabled => Ok(if has_remote {
+            vec![
+                TagAction::CreateLocal,
+                TagAction::CreateAndPush,
+                TagAction::CreatePushAndRelease,
+            ]
+        } else {
+            vec![TagAction::CreateLocal]
+        }),
     }
 }
 
@@ -501,9 +530,9 @@ fn next_char_boundary(value: &str, index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{BumpDialog, TextInput};
+    use super::{BumpDialog, TagAction, TextInput, available_tag_actions};
     use crate::{
-        config::{BranchScopeKind, TargetFormat},
+        config::{BranchScopeKind, IntegrationMode, TargetFormat},
         targets::{BumpScope, BumpTarget},
         versioning::VersionScheme,
     };
@@ -598,5 +627,21 @@ mod tests {
 
         let error = dialog.preview_next_version().expect_err("mixed unified versions should fail preview");
         assert!(error.to_string().contains("share the same version value"));
+    }
+
+    #[test]
+    fn git_local_tag_actions_include_push_when_remote_exists() {
+        let actions = available_tag_actions(IntegrationMode::GitLocalOnly, true)
+            .expect("git-local projects with a remote should support push");
+
+        assert_eq!(actions, vec![TagAction::CreateLocal, TagAction::CreateAndPush]);
+    }
+
+    #[test]
+    fn github_tag_actions_fall_back_to_local_when_remote_is_missing() {
+        let actions = available_tag_actions(IntegrationMode::GitHubEnabled, false)
+            .expect("action selection should still succeed");
+
+        assert_eq!(actions, vec![TagAction::CreateLocal]);
     }
 }
