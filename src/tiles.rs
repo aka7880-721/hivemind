@@ -13,7 +13,9 @@ pub(crate) const SEMVER_TILE_HEIGHT: u16 = 9;
 pub(crate) const CALVER_TILE_HEIGHT: u16 = 9;
 const SEMVER_LEFT_WIDTH: usize = 5;
 const CALVER_ACTION_WIDTH: usize = 6;
-const TILE_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::LightCyan);
+const VIEW_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::LightMagenta);
+const BUMP_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Green);
+const TAG_BUTTON_STYLE: Style = Style::new().fg(Color::White).bg(Color::Yellow);
 
 pub(crate) struct OverviewTileData {
 	pub(crate) name: String,
@@ -59,7 +61,8 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	let content_width = area.width.saturating_sub(2) as usize;
 	let right_width = content_width.saturating_sub(SEMVER_LEFT_WIDTH + 1);
 	let parts = split_semver(&tile.preview_version);
-	let button_positions = space_evenly_positions(right_width, &[4, 4, 3]);
+	let button_slots = space_evenly_positions(right_width, &[6, 6, 5]);
+	let button_positions = [button_slots[0] + 1, button_slots[1] + 1, button_slots[2] + 1];
 	let button_line = build_button_line(right_width, &button_positions, &["view", "bump", "tag"]);
 
 	let rows = [
@@ -80,9 +83,9 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		&rows[7],
 		border_style,
 		&[
-			StyledRange::new(7 + button_positions[0], 4, TILE_BUTTON_STYLE),
-			StyledRange::new(7 + button_positions[1], 4, TILE_BUTTON_STYLE),
-			StyledRange::new(7 + button_positions[2], 3, TILE_BUTTON_STYLE),
+			StyledRange::new(7 + button_slots[0], 6, VIEW_BUTTON_STYLE),
+			StyledRange::new(7 + button_slots[1], 6, BUMP_BUTTON_STYLE),
+			StyledRange::new(7 + button_slots[2], 5, TAG_BUTTON_STYLE),
 		],
 	);
 
@@ -95,9 +98,9 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		minor_rect: Some(Rect::new(area.x + 1, inner_y + 4, SEMVER_LEFT_WIDTH as u16, 1)),
 		patch_rect: Some(Rect::new(area.x + 1, inner_y + 6, SEMVER_LEFT_WIDTH as u16, 1)),
 		version_rect: None,
-		view_rect: Rect::new(right_x + button_positions[0] as u16, inner_y + 6, 4, 1),
-		bump_rect: Rect::new(right_x + button_positions[1] as u16, inner_y + 6, 4, 1),
-		tag_rect: Rect::new(right_x + button_positions[2] as u16, inner_y + 6, 3, 1),
+		view_rect: Rect::new(right_x + button_slots[0] as u16, inner_y + 6, 6, 1),
+		bump_rect: Rect::new(right_x + button_slots[1] as u16, inner_y + 6, 6, 1),
+		tag_rect: Rect::new(right_x + button_slots[2] as u16, inner_y + 6, 5, 1),
 	}
 }
 
@@ -119,13 +122,18 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	];
 	render_rows(frame, area, &rows, border_style);
 	for (row_offset, label) in [(3_u16, "bump"), (4, "view"), (5, "tag")].into_iter() {
-		let action_start = 1 + detail_width + 1 + centered_label_start(CALVER_ACTION_WIDTH, label.chars().count());
+		let action_start = 1 + detail_width + 1;
+		let action_style = match label {
+			"view" => VIEW_BUTTON_STYLE,
+			"bump" => BUMP_BUTTON_STYLE,
+			_ => TAG_BUTTON_STYLE,
+		};
 		render_highlighted_row(
 			frame,
 			Rect::new(area.x, area.y + row_offset, area.width, 1),
 			&rows[row_offset as usize],
 			border_style,
-			&[StyledRange::new(action_start, label.chars().count(), TILE_BUTTON_STYLE)],
+			&[StyledRange::new(action_start, CALVER_ACTION_WIDTH, action_style)],
 		);
 	}
 
@@ -256,10 +264,6 @@ fn space_evenly_positions(width: usize, item_widths: &[usize]) -> Vec<usize> {
 		.collect()
 }
 
-fn centered_label_start(width: usize, label_width: usize) -> usize {
-	width.saturating_sub(label_width) / 2
-}
-
 #[derive(Clone, Copy)]
 struct StyledRange {
 	start: usize,
@@ -310,6 +314,6 @@ mod tests {
 
 	#[test]
 	fn button_positions_are_spread_evenly() {
-		assert_eq!(space_evenly_positions(26, &[4, 4, 3]), vec![2, 11, 20]);
+		assert_eq!(space_evenly_positions(26, &[6, 6, 5]), vec![1, 10, 19]);
 	}
 }
