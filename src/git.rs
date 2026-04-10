@@ -8,6 +8,7 @@
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::{Local, TimeZone};
 
 use crate::{
     config::{BranchScopeKind, ProjectConfig, ProjectType},
@@ -27,6 +28,13 @@ pub(crate) struct GitScopeContext {
     pub(crate) repo_root: String,
     pub(crate) remote_spec: Option<String>,
     pub(crate) suggested_tag_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RepoActivitySummary {
+    pub(crate) commits_since_tag_label: String,
+    pub(crate) last_bump_label: String,
+    pub(crate) last_commit_label: String,
 }
 
 pub(crate) fn project_repo_root(project: &ProjectConfig) -> Result<String> {
@@ -207,6 +215,60 @@ pub(crate) fn split_output_lines(output: &str) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn load_repo_activity_summary(repo_root: &str) -> Result<RepoActivitySummary> {
+    ensure_git_repo(repo_root)?;
+
+    let describe = run_git(repo_root, &["describe", "--tags", "--abbrev=0"])?;
+    let (commits_since_tag_label, last_bump_label) = if describe.success {
+        let tag = describe.stdout.trim().to_string();
+        let count = run_git_checked(repo_root, &["rev-list", "--count", &format!("{}..HEAD", tag)])?
+            .trim()
+            .to_string();
+        let tag_timestamp = run_git_checked(repo_root, &["log", "-1", "--format=%ct", &tag])?;
+        (
+            format!("{}c ahd", count),
+            format_relative_git_timestamp(tag_timestamp.trim()).unwrap_or_else(|| "n/a".to_string()),
+        )
+    } else {
+        (
+            "no tags".to_string(),
+            "n/a".to_string(),
+        )
+    };
+
+    let last_commit_timestamp = run_git_checked(repo_root, &["log", "-1", "--format=%ct", "HEAD"])?;
+    let last_commit_label = format_relative_git_timestamp(last_commit_timestamp.trim())
+        .unwrap_or_else(|| "n/a".to_string());
+
+    Ok(RepoActivitySummary {
+        commits_since_tag_label,
+        last_bump_label,
+        last_commit_label,
+    })
+}
+
+fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
+    let seconds = timestamp.parse::<i64>().ok()?;
+    let then = Local.timestamp_opt(seconds, 0).single()?;
+    let now = Local::now();
+    let delta = now.signed_duration_since(then);
+    let minutes = delta.num_minutes().max(0);
+
+    let label = if minutes < 60 {
+        format!("{}m ago", minutes.max(1))
+    } else if minutes < 60 * 24 {
+        format!("{}h ago", (minutes / 60).max(1))
+    } else if minutes < 60 * 24 * 7 {
+        format!("{}d ago", (minutes / (60 * 24)).max(1))
+    } else if minutes < 60 * 24 * 365 {
+        format!("{}w ago", (minutes / (60 * 24 * 7)).max(1))
+    } else {
+        format!("{}y ago", (minutes / (60 * 24 * 365)).max(1))
+    };
+
+    Some(label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +331,15 @@ mod tests {
         assert_eq!(scopes[1].repo_root, "C:/repo/project");
         assert_eq!(scopes[1].remote_spec.as_deref(), Some("origin-project"));
         assert_eq!(scopes[1].suggested_tag_name, "api");
+    }
+
+    #[test]
+    fn relative_git_timestamps_are_compacted() {
+        let now = Local::now().timestamp();
+        let two_days_ago = (now - 60 * 60 * 24 * 2).to_string();
+
+        let formatted = format_relative_git_timestamp(&two_days_ago).expect("timestamp should format");
+
+        assert_eq!(formatted, "2d ago");
     }
 }
