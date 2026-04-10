@@ -220,7 +220,16 @@ impl App {
 
         self.render_footer(frame, root[3]);
         self.transient_toaster.set_area(frame.area());
-        self.sticky_toaster.set_area(frame.area());
+        let transient_area = self.transient_toaster.toast_area();
+        let sticky_area = if self.transient_toaster.has_toast() {
+            Rect {
+                height: frame.area().height.saturating_sub(transient_area.height.saturating_add(1)),
+                ..frame.area()
+            }
+        } else {
+            frame.area()
+        };
+        self.sticky_toaster.set_area(sticky_area);
         frame.render_widget(&self.transient_toaster, frame.area());
         frame.render_widget(&self.sticky_toaster, frame.area());
     }
@@ -541,7 +550,7 @@ impl App {
             Line::from(format!("Repo: {}", dialog.active_scope().repo_root)),
             Line::from(format!("View: {}", dialog.current_range().label)),
             Line::from(if dialog.can_select_scope() {
-                "Tab switches view. Left/Right moves history when History is active. [ and ] change scope."
+                "Tab switches view. Left/Right changes scope. [ and ] also change scope. History still uses the selected scope."
             } else {
                 "Tab switches view. Left/Right moves history when History is active."
             }),
@@ -858,9 +867,9 @@ impl App {
                 .map(|(field, row)| {
                     let focused = *field == dialog.focus;
                     let (label, action) = dialog.render_field(*field);
-                    let browse_action = project_edit_browse_action(*field);
-                    let value = dialog.display_value_for_field(*field, focused, visible_field_width(row.width, browse_action.is_some()));
-                    (*row, label, action, browse_action, focused, value)
+                    let side_button = project_edit_form_row_button(*field);
+                    let value = dialog.display_value_for_field(*field, focused, visible_field_width(row.width, side_button.is_some()));
+                    (*row, label, action, side_button, focused, value)
                 })
                 .collect::<Vec<_>>();
             (
@@ -881,11 +890,11 @@ impl App {
         ];
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
-        for (row, label, action, browse_action, focused, value) in field_rows_data {
-            let browse_rect = self.render_form_row(frame, row, label, value, focused, action.clone(), browse_action.clone());
+        for (row, label, action, side_button, focused, value) in field_rows_data {
+            let button_rect = self.render_form_row(frame, row, label, value, focused, action.clone(), side_button.clone());
             self.hit_targets.push(HitTarget::new(row, action));
-            if let (Some(rect), Some(action)) = (browse_rect, browse_action) {
-                self.hit_targets.push(HitTarget::new(rect, action));
+            if let (Some(rect), Some(button)) = (button_rect, side_button) {
+                self.hit_targets.push(HitTarget::new(rect, button.action));
             }
         }
         render_vertical_overflow_indicators(frame, sections[1], show_above, show_below);
@@ -931,12 +940,12 @@ impl App {
         for (field, row) in fields.iter().zip(rows.iter()) {
             let focused = *field == self.wizard.focus;
             let (label, action) = self.wizard.render_field(*field);
-            let browse_action = wizard_browse_action(*field);
-            let value = self.wizard.display_value_for_field(*field, focused, visible_field_width(row.width, browse_action.is_some()));
-            let browse_rect = self.render_form_row(frame, *row, label, value, focused, action.clone(), browse_action.clone());
+            let side_button = wizard_form_row_button(*field);
+            let value = self.wizard.display_value_for_field(*field, focused, visible_field_width(row.width, side_button.is_some()));
+            let button_rect = self.render_form_row(frame, *row, label, value, focused, action.clone(), side_button.clone());
             self.hit_targets.push(HitTarget::new(*row, action));
-            if let (Some(rect), Some(action)) = (browse_rect, browse_action) {
-                self.hit_targets.push(HitTarget::new(rect, action));
+            if let (Some(rect), Some(button)) = (button_rect, side_button) {
+                self.hit_targets.push(HitTarget::new(rect, button.action));
             }
         }
         render_vertical_overflow_indicators(frame, left_sections[0], show_above, show_below);
@@ -1018,7 +1027,7 @@ impl App {
         value: String,
         focused: bool,
         _action: HitAction,
-        browse_action: Option<HitAction>,
+        side_button: Option<FormRowButton>,
     ) -> Option<Rect> {
         let label_area = center_vertically(
             Rect {
@@ -1037,7 +1046,7 @@ impl App {
             label_area,
         );
 
-        let row = if browse_action.is_some() {
+        let row = if side_button.is_some() {
             Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
@@ -1054,7 +1063,7 @@ impl App {
                 .split(area)
         };
 
-        let field_index = if browse_action.is_some() { 1 } else { 1 };
+        let field_index = 1;
         let field_area = center_vertically(row[field_index], area.height.min(3));
         let style = Style::default().fg(Color::Rgb(235, 235, 235));
         let block = if focused {
@@ -1067,10 +1076,10 @@ impl App {
             field_area,
         );
 
-        if browse_action.is_some() {
+        if let Some(button) = side_button {
             let button_area = center_vertically(row[3], area.height.min(3));
             frame.render_widget(
-                Paragraph::new("Browse")
+                Paragraph::new(button.label)
                     .alignment(Alignment::Center)
                     .style(Style::default().fg(Color::Black).bg(Color::Cyan))
                     .block(Block::default().borders(Borders::ALL)),
@@ -1479,14 +1488,18 @@ impl App {
             }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    if dialog.active_tab == RecentChangesTab::History {
+                    if dialog.can_select_scope() {
+                        dialog.rotate_scope(-1)?;
+                    } else if dialog.active_tab == RecentChangesTab::History {
                         dialog.navigate_history(1);
                     }
                 }
             }
             KeyCode::Right => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    if dialog.active_tab == RecentChangesTab::History {
+                    if dialog.can_select_scope() {
+                        dialog.rotate_scope(1)?;
+                    } else if dialog.active_tab == RecentChangesTab::History {
                         dialog.navigate_history(-1);
                     }
                 }
@@ -1619,6 +1632,13 @@ impl App {
                     }
                     if dialog.focus == ProjectEditFocus::MoveScopeDown {
                         return self.apply_project_edit_scope_action(ScopeAction::MoveDown);
+                    }
+                    if dialog.focus == ProjectEditFocus::TargetKey {
+                        if let Some(dialog) = &mut self.project_edit_dialog {
+                            dialog.enable_custom_target_key();
+                        }
+                        self.status = StatusMessage::info("Custom target key input enabled.");
+                        return Ok(());
                     }
                     if dialog.is_remove_focused() {
                         return self.remove_project();
@@ -1825,6 +1845,16 @@ impl App {
             HitAction::BrowseWizardRepoRoot => return self.open_browser(BrowseTarget::WizardRepoRoot),
             HitAction::BrowseProjectTargetPath => return self.open_browser(BrowseTarget::ProjectEditTargetPath),
             HitAction::BrowseProjectRepoRoot => return self.open_browser(BrowseTarget::ProjectEditRepoRoot),
+            HitAction::EnableWizardCustomTargetKey => {
+                self.wizard.enable_custom_target_key();
+                self.status = StatusMessage::info("Custom target key input enabled.");
+            }
+            HitAction::EnableProjectCustomTargetKey => {
+                if let Some(dialog) = &mut self.project_edit_dialog {
+                    dialog.enable_custom_target_key();
+                    self.status = StatusMessage::info("Custom target key input enabled.");
+                }
+            }
             HitAction::BrowserSelect(index) => self.select_browser_index(index),
             HitAction::SelectRecentChangesTab(tab) => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
@@ -1886,9 +1916,9 @@ impl App {
         Ok(())
     }
 
-    fn open_tag_dialog_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
+    fn open_tag_dialog_with_scope(&mut self, preferred_scope: Option<usize>, preferred_action: Option<TagAction>) -> Result<()> {
         let project = self.selected_project()?.clone();
-        let dialog = TagDialog::from_project(&project, preferred_scope)?;
+        let dialog = TagDialog::from_project(&project, preferred_scope, preferred_action)?;
         self.bump_dialog = None;
         self.project_edit_dialog = None;
         self.browser_dialog = None;
@@ -2000,7 +2030,7 @@ impl App {
             .recent_changes_dialog
             .as_ref()
             .and_then(|dialog| dialog.can_select_scope().then_some(dialog.selected_scope));
-        self.open_tag_dialog_with_scope(preferred_scope)
+        self.open_tag_dialog_with_scope(preferred_scope, None)
     }
 
     fn rotate_tag_scope(&mut self, delta: isize) {
@@ -2159,8 +2189,8 @@ impl App {
             next_version
         ));
         if repo_backed {
-            self.open_tag_dialog_with_scope(preferred_scope)?;
-            self.status = StatusMessage::info("Version bump applied. Review the suggested tag action next.");
+            self.open_tag_dialog_with_scope(preferred_scope, Some(TagAction::CreateAndPush))?;
+            self.status = StatusMessage::info("Version bump applied. Review the suggested tag-and-push action next.");
         }
         Ok(())
     }
@@ -2178,6 +2208,11 @@ impl App {
             WizardField::RemoveScope => self.apply_wizard_scope_action(ScopeAction::Remove),
             WizardField::MoveScopeUp => self.apply_wizard_scope_action(ScopeAction::MoveUp),
             WizardField::MoveScopeDown => self.apply_wizard_scope_action(ScopeAction::MoveDown),
+            WizardField::TargetKey => {
+                self.wizard.enable_custom_target_key();
+                self.status = StatusMessage::info("Custom target key input enabled.");
+                Ok(())
+            }
             WizardField::Validate => {
                 self.validate_wizard_target();
                 Ok(())
@@ -2604,6 +2639,8 @@ enum HitAction {
     BrowseWizardRepoRoot,
     BrowseProjectTargetPath,
     BrowseProjectRepoRoot,
+    EnableWizardCustomTargetKey,
+    EnableProjectCustomTargetKey,
     BrowserSelect(usize),
     SelectRecentChangesTab(RecentChangesTab),
     CycleRecentChangesScope(isize),
@@ -2644,6 +2681,7 @@ struct ScopeDraft {
     target_label: String,
     target_path: TextInput,
     target_key: TextInput,
+    target_key_custom: bool,
     scope_kind: BranchScopeKind,
     repo: Option<RepoConfig>,
     format: TargetFormat,
@@ -2660,6 +2698,7 @@ impl ScopeDraft {
             target_label: "Version".to_string(),
             target_path: TextInput::with_value(""),
             target_key: TextInput::with_value("version"),
+            target_key_custom: false,
             scope_kind: BranchScopeKind::Branch,
             repo: None,
             format: TargetFormat::Auto,
@@ -2672,6 +2711,7 @@ impl ScopeDraft {
         scope.target_label = target.label.clone();
         scope.target_path = TextInput::with_value(target.path.clone());
         scope.target_key = TextInput::with_value(target.key_path.clone());
+        scope.target_key_custom = target_key_is_custom(&target.path, &target.key_path);
         scope.format = target.format;
         scope
     }
@@ -2693,6 +2733,7 @@ impl ScopeDraft {
             target_label: target.label.clone(),
             target_path: TextInput::with_value(target.path.clone()),
             target_key: TextInput::with_value(target.key_path.clone()),
+            target_key_custom: target_key_is_custom(&target.path, &target.key_path),
             scope_kind: branch.scope_kind,
             repo: branch.repo.clone(),
             format: target.format,
@@ -2769,6 +2810,7 @@ struct ProjectEditDialog {
     name: TextInput,
     target_path: TextInput,
     target_key: TextInput,
+    target_key_custom: bool,
     scopes: Vec<ScopeDraft>,
     selected_scope: usize,
     field_scroll: usize,
@@ -2813,6 +2855,7 @@ impl ProjectEditDialog {
             name: TextInput::with_value(project.name.clone()),
             target_path: TextInput::with_value(primary_target.path.clone()),
             target_key: TextInput::with_value(primary_target.key_path.clone()),
+            target_key_custom: target_key_is_custom(&primary_target.path, &primary_target.key_path),
             scopes,
             selected_scope: 0,
             field_scroll: 0,
@@ -2858,10 +2901,9 @@ impl ProjectEditDialog {
             ProjectEditFocus::Name
                 | ProjectEditFocus::ScopeName
                 | ProjectEditFocus::TargetPath
-                | ProjectEditFocus::TargetKey
                 | ProjectEditFocus::RepoRoot
                 | ProjectEditFocus::RemoteUrl
-        )
+        ) || (self.focus == ProjectEditFocus::TargetKey && self.target_key_accepts_text())
     }
 
     fn visible_fields(&self) -> Vec<ProjectEditFocus> {
@@ -2939,7 +2981,7 @@ impl ProjectEditDialog {
             ProjectEditFocus::ScopeKind => self
                 .current_scope()
                 .map(|scope| format!("< {} >", scope.scope_kind.display_name()))
-                .unwrap_or_else(|| "< Branch >".to_string()),
+                .unwrap_or_else(|| format!("< {} >", BranchScopeKind::Branch.display_name())),
             ProjectEditFocus::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
             ProjectEditFocus::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
             ProjectEditFocus::TargetPath => {
@@ -2954,10 +2996,20 @@ impl ProjectEditDialog {
             ProjectEditFocus::TargetKey => {
                 if self.project_type == ProjectType::Branched {
                     self.current_scope()
-                        .map(|scope| scope.target_key.display_value_with_width(focused, max_width))
+                        .map(|scope| {
+                            if scope.target_key_custom {
+                                scope.target_key.display_value_with_width(focused, max_width)
+                            } else {
+                                format!("< {} >", scope.target_key.value())
+                            }
+                        })
                         .unwrap_or_default()
                 } else {
-                    self.target_key.display_value_with_width(focused, max_width)
+                    if self.target_key_custom {
+                        self.target_key.display_value_with_width(focused, max_width)
+                    } else {
+                        format!("< {} >", self.target_key.value())
+                    }
                 }
             }
             ProjectEditFocus::AddScope => "Create a new scope draft".to_string(),
@@ -2992,6 +3044,7 @@ impl ProjectEditDialog {
                     scope.scope_kind = rotate_scope_kind(scope.scope_kind, delta);
                 }
             }
+            ProjectEditFocus::TargetKey => self.rotate_target_key_preset(delta),
             ProjectEditFocus::VersionScheme => {
                 self.version_scheme = if delta >= 0 {
                     self.version_scheme.next()
@@ -3032,6 +3085,7 @@ impl ProjectEditDialog {
             }
         }
         if self.focus == ProjectEditFocus::TargetPath {
+            self.sync_target_key_preset_with_path();
             self.prefill_repo_root_from_target_path();
         }
     }
@@ -3059,10 +3113,12 @@ impl ProjectEditDialog {
                 }
             }
             ProjectEditFocus::TargetKey => {
-                if self.project_type == ProjectType::Branched {
+                if self.project_type == ProjectType::Branched && self.current_scope().is_some_and(|scope| scope.target_key_custom) {
                     self.current_scope_mut().map(|scope| &mut scope.target_key)
-                } else {
+                } else if self.project_type != ProjectType::Branched && self.target_key_custom {
                     Some(&mut self.target_key)
+                } else {
+                    None
                 }
             }
             ProjectEditFocus::RepoRoot => Some(&mut self.repo_root),
@@ -3135,11 +3191,62 @@ impl ProjectEditDialog {
         if self.project_type == ProjectType::Branched {
             if let Some(scope) = self.current_scope_mut() {
                 scope.target_path.set_value(path);
+                if !scope.target_key_custom {
+                    scope.target_key.set_value(default_target_key_for_path(scope.target_path.value()));
+                }
             }
         } else {
             self.target_path.set_value(path);
+            if !self.target_key_custom {
+                self.target_key.set_value(default_target_key_for_path(self.target_path.value()));
+            }
         }
         self.prefill_repo_root_from_target_path();
+    }
+
+    fn target_key_accepts_text(&self) -> bool {
+        if self.project_type == ProjectType::Branched {
+            self.current_scope().is_some_and(|scope| scope.target_key_custom)
+        } else {
+            self.target_key_custom
+        }
+    }
+
+    fn enable_custom_target_key(&mut self) {
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                scope.target_key_custom = true;
+            }
+        } else {
+            self.target_key_custom = true;
+        }
+        self.focus = ProjectEditFocus::TargetKey;
+    }
+
+    fn rotate_target_key_preset(&mut self, delta: i32) {
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                let next = cycle_target_key_preset(scope.target_path.value(), scope.target_key.value(), delta);
+                scope.target_key.set_value(next);
+                scope.target_key_custom = false;
+            }
+        } else {
+            let next = cycle_target_key_preset(self.target_path.value(), self.target_key.value(), delta);
+            self.target_key.set_value(next);
+            self.target_key_custom = false;
+        }
+    }
+
+    fn sync_target_key_preset_with_path(&mut self) {
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                if !scope.target_key_custom {
+                    scope.target_key.set_value(default_target_key_for_path(scope.target_path.value()));
+                }
+            }
+        } else if !self.target_key_custom {
+            self.target_key.set_value(default_target_key_for_path(self.target_path.value()));
+        }
     }
 
     fn set_repo_root_from_browse(&mut self, path: String) {
@@ -3301,12 +3408,14 @@ impl ProjectEditDialog {
         }
         let target_path = self.target_path.value.trim().to_string();
         let target_key = self.target_key.value.trim().to_string();
+        let target_key_custom = self.target_key_custom;
         if let Some(scope) = self.current_scope_mut() {
             if scope.target_path.value.trim().is_empty() && !target_path.is_empty() {
                 scope.target_path.set_value(target_path);
             }
             if scope.target_key.value.trim().is_empty() && !target_key.is_empty() {
                 scope.target_key.set_value(target_key);
+                scope.target_key_custom = target_key_custom;
             }
         }
     }
@@ -3316,11 +3425,13 @@ impl ProjectEditDialog {
             (
                 scope.target_path.value().to_string(),
                 scope.target_key.value().to_string(),
+                scope.target_key_custom,
             )
         });
-        if let Some((target_path, target_key)) = selected {
+        if let Some((target_path, target_key, target_key_custom)) = selected {
             self.target_path.set_value(target_path);
             self.target_key.set_value(target_key);
+            self.target_key_custom = target_key_custom;
         }
     }
 
@@ -3434,6 +3545,7 @@ struct ProjectWizard {
     name: TextInput,
     target_path: TextInput,
     target_key: TextInput,
+    target_key_custom: bool,
     scopes: Vec<ScopeDraft>,
     selected_scope: usize,
     field_scroll: usize,
@@ -3453,6 +3565,7 @@ impl Default for ProjectWizard {
             name: TextInput::with_value(""),
             target_path: TextInput::with_value(""),
             target_key: TextInput::with_value("version"),
+            target_key_custom: false,
             scopes: vec![ScopeDraft::new("core")],
             selected_scope: 0,
             field_scroll: 0,
@@ -3475,10 +3588,9 @@ impl ProjectWizard {
             WizardField::Name
                 | WizardField::ScopeName
                 | WizardField::TargetPath
-                | WizardField::TargetKey
                 | WizardField::RepoRoot
                 | WizardField::RemoteUrl
-        )
+        ) || (self.focus == WizardField::TargetKey && self.target_key_accepts_text())
     }
 
     fn visible_fields(&self) -> Vec<WizardField> {
@@ -3582,7 +3694,7 @@ impl ProjectWizard {
             WizardField::ScopeKind => self
                 .current_scope()
                 .map(|scope| format!("< {} >", scope.scope_kind.display_name()))
-                .unwrap_or_else(|| "< Branch >".to_string()),
+                .unwrap_or_else(|| format!("< {} >", BranchScopeKind::Branch.display_name())),
             WizardField::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
             WizardField::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
             WizardField::TargetPath => {
@@ -3597,10 +3709,20 @@ impl ProjectWizard {
             WizardField::TargetKey => {
                 if self.project_type == ProjectType::Branched {
                     self.current_scope()
-                        .map(|scope| scope.target_key.display_value_with_width(focused, max_width))
+                        .map(|scope| {
+                            if scope.target_key_custom {
+                                scope.target_key.display_value_with_width(focused, max_width)
+                            } else {
+                                format!("< {} >", scope.target_key.value())
+                            }
+                        })
                         .unwrap_or_default()
                 } else {
-                    self.target_key.display_value_with_width(focused, max_width)
+                    if self.target_key_custom {
+                        self.target_key.display_value_with_width(focused, max_width)
+                    } else {
+                        format!("< {} >", self.target_key.value())
+                    }
                 }
             }
             WizardField::AddScope => "Create a new scope draft".to_string(),
@@ -3635,6 +3757,7 @@ impl ProjectWizard {
                     scope.scope_kind = rotate_scope_kind(scope.scope_kind, delta);
                 }
             }
+            WizardField::TargetKey => self.rotate_target_key_preset(delta),
             WizardField::VersionScheme => {
                 self.version_scheme = if delta >= 0 {
                     self.version_scheme.next()
@@ -3693,10 +3816,12 @@ impl ProjectWizard {
                 }
             }
             WizardField::TargetKey => {
-                if self.project_type == ProjectType::Branched {
+                if self.project_type == ProjectType::Branched && self.current_scope().is_some_and(|scope| scope.target_key_custom) {
                     self.current_scope_mut().map(|scope| &mut scope.target_key)
-                } else {
+                } else if self.project_type != ProjectType::Branched && self.target_key_custom {
                     Some(&mut self.target_key)
+                } else {
+                    None
                 }
             }
             WizardField::RepoRoot => Some(&mut self.repo_root),
@@ -3730,6 +3855,7 @@ impl ProjectWizard {
             }
         }
         if self.focus == WizardField::TargetPath {
+            self.sync_target_key_preset_with_path();
             self.prefill_repo_root_from_target_path();
         }
     }
@@ -3798,13 +3924,64 @@ impl ProjectWizard {
         if self.project_type == ProjectType::Branched {
             if let Some(scope) = self.current_scope_mut() {
                 scope.target_path.set_value(path);
+                if !scope.target_key_custom {
+                    scope.target_key.set_value(default_target_key_for_path(scope.target_path.value()));
+                }
                 scope.last_probe = None;
             }
         } else {
             self.target_path.set_value(path);
+            if !self.target_key_custom {
+                self.target_key.set_value(default_target_key_for_path(self.target_path.value()));
+            }
             self.last_probe = None;
         }
         self.prefill_repo_root_from_target_path();
+    }
+
+    fn target_key_accepts_text(&self) -> bool {
+        if self.project_type == ProjectType::Branched {
+            self.current_scope().is_some_and(|scope| scope.target_key_custom)
+        } else {
+            self.target_key_custom
+        }
+    }
+
+    fn enable_custom_target_key(&mut self) {
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                scope.target_key_custom = true;
+            }
+        } else {
+            self.target_key_custom = true;
+        }
+        self.focus = WizardField::TargetKey;
+    }
+
+    fn rotate_target_key_preset(&mut self, delta: i32) {
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                let next = cycle_target_key_preset(scope.target_path.value(), scope.target_key.value(), delta);
+                scope.target_key.set_value(next);
+                scope.target_key_custom = false;
+            }
+        } else {
+            let next = cycle_target_key_preset(self.target_path.value(), self.target_key.value(), delta);
+            self.target_key.set_value(next);
+            self.target_key_custom = false;
+        }
+    }
+
+    fn sync_target_key_preset_with_path(&mut self) {
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                if !scope.target_key_custom {
+                    scope.target_key.set_value(default_target_key_for_path(scope.target_path.value()));
+                }
+            }
+        } else if !self.target_key_custom {
+            self.target_key.set_value(default_target_key_for_path(self.target_path.value()));
+        }
     }
 
     fn set_repo_root_from_browse(&mut self, path: String) {
@@ -3970,6 +4147,7 @@ impl ProjectWizard {
         }
         let target_path = self.target_path.value.trim().to_string();
         let target_key = self.target_key.value.trim().to_string();
+        let target_key_custom = self.target_key_custom;
         let target_format = self.last_probe.as_ref().and_then(|probe| probe.format).unwrap_or(TargetFormat::Auto);
         if let Some(scope) = self.current_scope_mut() {
             if scope.target_path.value.trim().is_empty() && !target_path.is_empty() {
@@ -3978,6 +4156,7 @@ impl ProjectWizard {
             }
             if scope.target_key.value.trim().is_empty() && !target_key.is_empty() {
                 scope.target_key.set_value(target_key);
+                scope.target_key_custom = target_key_custom;
             }
         }
     }
@@ -3987,12 +4166,14 @@ impl ProjectWizard {
             (
                 scope.target_path.value().to_string(),
                 scope.target_key.value().to_string(),
+                scope.target_key_custom,
                 scope.last_probe.clone(),
             )
         });
-        if let Some((target_path, target_key, probe)) = selected {
+        if let Some((target_path, target_key, target_key_custom, probe)) = selected {
             self.target_path.set_value(target_path);
             self.target_key.set_value(target_key);
+            self.target_key_custom = target_key_custom;
             self.last_probe = probe;
         }
     }
@@ -4036,6 +4217,18 @@ impl DialogButton {
             action,
             style,
         }
+    }
+}
+
+#[derive(Clone)]
+struct FormRowButton {
+    label: &'static str,
+    action: HitAction,
+}
+
+impl FormRowButton {
+    fn new(label: &'static str, action: HitAction) -> Self {
+        Self { label, action }
     }
 }
 
@@ -4408,18 +4601,49 @@ fn rotate_scope_kind(scope_kind: BranchScopeKind, delta: i32) -> BranchScopeKind
     }
 }
 
-fn wizard_browse_action(field: WizardField) -> Option<HitAction> {
+fn target_key_presets(path: &str) -> [&'static str; 3] {
+    if path.trim().to_ascii_lowercase().ends_with(".toml") {
+        ["package.version", "workspace.package.version", "version"]
+    } else {
+        ["version", "package.version", "workspace.package.version"]
+    }
+}
+
+fn default_target_key_for_path(path: &str) -> &'static str {
+    target_key_presets(path)[0]
+}
+
+fn target_key_is_custom(path: &str, value: &str) -> bool {
+    !target_key_presets(path)
+        .into_iter()
+        .any(|preset| preset == value.trim())
+}
+
+fn cycle_target_key_preset(path: &str, current: &str, delta: i32) -> String {
+    let presets = target_key_presets(path);
+    let current_index = presets
+        .iter()
+        .position(|preset| *preset == current.trim())
+        .unwrap_or(0) as i32;
+    let next_index = (current_index + if delta >= 0 { 1 } else { -1 })
+        .rem_euclid(presets.len() as i32) as usize;
+    presets[next_index].to_string()
+}
+
+fn wizard_form_row_button(field: WizardField) -> Option<FormRowButton> {
     match field {
-        WizardField::TargetPath => Some(HitAction::BrowseWizardTargetPath),
-        WizardField::RepoRoot => Some(HitAction::BrowseWizardRepoRoot),
+        WizardField::TargetPath => Some(FormRowButton::new("Browse", HitAction::BrowseWizardTargetPath)),
+        WizardField::TargetKey => Some(FormRowButton::new("Custom", HitAction::EnableWizardCustomTargetKey)),
+        WizardField::RepoRoot => Some(FormRowButton::new("Browse", HitAction::BrowseWizardRepoRoot)),
         _ => None,
     }
 }
 
-fn project_edit_browse_action(field: ProjectEditFocus) -> Option<HitAction> {
+fn project_edit_form_row_button(field: ProjectEditFocus) -> Option<FormRowButton> {
     match field {
-        ProjectEditFocus::TargetPath => Some(HitAction::BrowseProjectTargetPath),
-        ProjectEditFocus::RepoRoot => Some(HitAction::BrowseProjectRepoRoot),
+        ProjectEditFocus::TargetPath => Some(FormRowButton::new("Browse", HitAction::BrowseProjectTargetPath)),
+        ProjectEditFocus::TargetKey => Some(FormRowButton::new("Custom", HitAction::EnableProjectCustomTargetKey)),
+        ProjectEditFocus::RepoRoot => Some(FormRowButton::new("Browse", HitAction::BrowseProjectRepoRoot)),
         _ => None,
     }
 }
@@ -4604,5 +4828,29 @@ mod tests {
         assert!(visible_fields.contains(&WizardField::RemoteUrl));
         assert!(show_above);
         assert!(!show_below);
+    }
+
+    #[test]
+    fn target_key_switches_to_toml_default_when_target_path_changes() {
+        let mut wizard = ProjectWizard::default();
+        wizard.focus = WizardField::TargetPath;
+
+        wizard.insert_text("C:/repo/Cargo.toml");
+
+        assert_eq!(wizard.target_key.value(), "package.version");
+        assert!(!wizard.target_key_custom);
+    }
+
+    #[test]
+    fn custom_target_key_mode_enables_text_entry() {
+        let mut wizard = ProjectWizard::default();
+        wizard.focus = WizardField::TargetKey;
+
+        assert!(!wizard.focus_accepts_text());
+
+        wizard.enable_custom_target_key();
+
+        assert!(wizard.target_key_custom);
+        assert!(wizard.focus_accepts_text());
     }
 }
