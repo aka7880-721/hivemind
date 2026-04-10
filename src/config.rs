@@ -240,7 +240,7 @@ pub enum BranchScopeKind {
 impl BranchScopeKind {
     pub fn display_name(self) -> &'static str {
         match self {
-            BranchScopeKind::Branch => "Branch",
+            BranchScopeKind::Branch => "Core",
             BranchScopeKind::Module => "Module",
             BranchScopeKind::Service => "Service",
         }
