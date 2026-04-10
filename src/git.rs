@@ -5,13 +5,13 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Local, TimeZone};
 
 use crate::{
-    config::{BranchScopeKind, ProjectConfig, ProjectType},
+    config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
     targets::{collect_bump_scopes, shared_bump_version},
 };
 
@@ -28,6 +28,17 @@ pub(crate) struct GitScopeContext {
     pub(crate) repo_root: String,
     pub(crate) remote_spec: Option<String>,
     pub(crate) suggested_tag_name: String,
+    pub(crate) path_filters: Vec<String>,
+}
+
+impl GitScopeContext {
+    pub(crate) fn git_pathspecs(&self) -> Vec<String> {
+        let repo_root = Path::new(&self.repo_root);
+        self.path_filters
+            .iter()
+            .filter_map(|path| normalize_pathspec(repo_root, path))
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,6 +102,7 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             repo_root,
             remote_spec,
             suggested_tag_name: suggested_tag_name(project),
+            path_filters: project_scope_target_paths(project),
         }]);
     }
 
@@ -110,6 +122,7 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                 repo_root: repo.local_root.clone(),
                 remote_spec: repo.remote_url.clone(),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
+                path_filters: collect_target_paths(&branch.targets),
             })
         })
         .collect()
@@ -136,9 +149,38 @@ pub(crate) fn collect_all_branch_git_scope_contexts(project: &ProjectConfig) -> 
                 repo_root: repo.local_root.clone(),
                 remote_spec: repo.remote_url.clone(),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
+                path_filters: collect_target_paths(&branch.targets),
             })
         })
         .collect()
+}
+
+fn project_scope_target_paths(project: &ProjectConfig) -> Vec<String> {
+    if project.project_type == ProjectType::AllInOne {
+        collect_target_paths(&project.targets)
+    } else {
+        project
+            .branches
+            .iter()
+            .flat_map(|branch| collect_target_paths(&branch.targets))
+            .collect()
+    }
+}
+
+fn collect_target_paths(specs: &[TargetSpec]) -> Vec<String> {
+    specs.iter().map(|target| target.path.clone()).collect()
+}
+
+fn normalize_pathspec(repo_root: &Path, path: &str) -> Option<String> {
+    let candidate = Path::new(path);
+    let relative = if candidate.is_absolute() {
+        candidate.strip_prefix(repo_root).ok()?
+    } else {
+        candidate
+    };
+
+    let rendered = relative.to_string_lossy().replace('\\', "/");
+    (!rendered.is_empty()).then_some(rendered)
 }
 
 fn slugify(value: &str) -> String {
@@ -354,9 +396,11 @@ mod tests {
         assert_eq!(scopes.len(), 2);
         assert_eq!(scopes[0].repo_root, "C:/repo/core");
         assert_eq!(scopes[0].remote_spec.as_deref(), Some("origin-core"));
+        assert_eq!(scopes[0].path_filters, vec!["missing-core.toml"]);
         assert_eq!(scopes[1].repo_root, "C:/repo/project");
         assert_eq!(scopes[1].remote_spec.as_deref(), Some("origin-project"));
         assert_eq!(scopes[1].suggested_tag_name, "api");
+        assert_eq!(scopes[1].path_filters, vec!["missing-api.json"]);
     }
 
     #[test]
@@ -410,6 +454,22 @@ mod tests {
         assert_eq!(scopes.len(), 2);
         assert_eq!(scopes[0].display_name, "Core");
         assert_eq!(scopes[1].display_name, "API");
+        assert_eq!(scopes[0].path_filters, vec!["core/Cargo.toml"]);
+        assert_eq!(scopes[1].path_filters, vec!["api/package.json"]);
+    }
+
+    #[test]
+    fn git_pathspecs_normalize_inside_repo_paths() {
+        let scope = GitScopeContext {
+            display_name: "Core".to_string(),
+            scope_kind: Some(BranchScopeKind::Module),
+            repo_root: "C:/repo".to_string(),
+            remote_spec: None,
+            suggested_tag_name: "core-v1.2.3".to_string(),
+            path_filters: vec!["C:/repo/core/package.json".to_string(), "core\\Cargo.toml".to_string()],
+        };
+
+        assert_eq!(scope.git_pathspecs(), vec!["core/package.json", "core/Cargo.toml"]);
     }
 
     #[test]
