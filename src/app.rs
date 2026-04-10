@@ -49,7 +49,7 @@ use crate::{
     dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput},
     git::{
         collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
-        load_scope_activity_summary, run_gh_checked, run_git, run_git_checked,
+        load_scope_activity_summary, run_gh_checked, run_git, run_git_checked, split_output_lines,
     },
     overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
     targets::{BumpScope, BumpTarget, ProbeKind, TargetProbe, collect_bump_scopes, probe_target, write_target_version},
@@ -146,6 +146,7 @@ struct App {
     wizard: ProjectWizard,
     bump_dialog: Option<BumpDialog>,
     overview_bump_workflow_dialog: Option<OverviewBumpWorkflowDialog>,
+    overview_bump_warning_dialog: Option<OverviewBumpWarningDialog>,
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
@@ -185,6 +186,7 @@ impl App {
             wizard: ProjectWizard::default(),
             bump_dialog: None,
             overview_bump_workflow_dialog: None,
+            overview_bump_warning_dialog: None,
             recent_changes_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
@@ -238,6 +240,9 @@ impl App {
         }
         if self.overview_bump_workflow_dialog.is_some() {
             self.render_overview_bump_workflow_dialog(frame, frame.area());
+        }
+        if self.overview_bump_warning_dialog.is_some() {
+            self.render_overview_bump_warning_dialog(frame, frame.area());
         }
         if self.recent_changes_dialog.is_some() {
             self.render_recent_changes_dialog(frame, frame.area());
@@ -333,25 +338,51 @@ impl App {
 
     fn render_nav(&mut self, frame: &mut Frame, area: Rect) {
         let labels = self.main_tab_labels();
-        let label_refs = labels.iter().map(String::as_str).collect::<Vec<_>>();
-        let tabs = TabNav::new(&label_refs, self.current_main_tab_index())
-            .highlight_style(Style::default().fg(Color::Cyan))
-            .border_style(Style::default().fg(Color::DarkGray))
-            .style(Style::default().fg(Color::White))
-            .indicator(None);
-        frame.render_widget(tabs, area);
-
         let widths = labels
             .iter()
-            .map(|label| Constraint::Length(label.chars().count() as u16 + 6))
+            .map(|label| (label.chars().count() as u16 + 6).max(14))
             .collect::<Vec<_>>();
-        let layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(widths)
-            .split(area);
-        for (index, rect) in layout.iter().enumerate() {
-            self.hit_targets.push(HitTarget::new(*rect, HitAction::Switch(main_screen_from_index(index))));
+
+        let active_index = self.current_main_tab_index();
+        let left_rect = Rect {
+            x: area.x,
+            y: area.y,
+            width: widths[0].min(area.width),
+            height: area.height,
+        };
+        self.render_main_nav_button(frame, left_rect, &labels[0], active_index == 0);
+        self.hit_targets.push(HitTarget::new(left_rect, HitAction::Switch(main_screen_from_index(0))));
+
+        let right_total_width = widths.iter().skip(1).copied().sum::<u16>();
+        let mut current_x = area.x + area.width.saturating_sub(right_total_width);
+        for index in 1..labels.len() {
+            let rect = Rect {
+                x: current_x,
+                y: area.y,
+                width: widths[index].min(area.x + area.width - current_x),
+                height: area.height,
+            };
+            self.render_main_nav_button(frame, rect, &labels[index], active_index == index);
+            self.hit_targets.push(HitTarget::new(rect, HitAction::Switch(main_screen_from_index(index))));
+            current_x = current_x.saturating_add(widths[index]);
         }
+    }
+
+    fn render_main_nav_button(&self, frame: &mut Frame, area: Rect, label: &str, selected: bool) {
+        let block = Block::default().borders(Borders::ALL).border_style(if selected {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        });
+        let style = if selected {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        frame.render_widget(
+            Paragraph::new(label).alignment(Alignment::Center).style(style).block(block),
+            area,
+        );
     }
 
     fn render_dashboard(&mut self, frame: &mut Frame, area: Rect) {
@@ -724,6 +755,69 @@ impl App {
             &[
                 DialogButton::new("Run", false, HitAction::ConfirmOverviewBumpWorkflow, Style::default().fg(Color::Black).bg(Color::Green)),
                 DialogButton::new("Cancel", false, HitAction::CancelOverviewBumpWorkflow, Style::default().fg(Color::White).bg(Color::Red)),
+            ],
+        );
+    }
+
+    fn render_overview_bump_warning_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.overview_bump_warning_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 82, 54);
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Staged Files Warning ")
+            .border_style(Style::default().fg(Color::Yellow));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(4), Constraint::Min(10), Constraint::Length(BUTTON_ROW_HEIGHT)])
+            .split(inner);
+
+        let header = vec![
+            Line::from("Previously staged files will be included in the bump commit.")
+                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Line::from("Choose whether to continue, unstage the unrelated files, or cancel this bump."),
+            Line::from(format!("Action: {}", dialog.workflow.display_name())),
+        ];
+        frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
+
+        let mut lines = Vec::new();
+        for repo in &dialog.repos {
+            lines.push(Line::from(format!("Repo: {}", repo.repo_root)).style(Style::default().add_modifier(Modifier::BOLD)));
+            for path in &repo.extra_paths {
+                lines.push(Line::from(format!("  - {}", path)));
+            }
+            lines.push(Line::raw(""));
+        }
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sections[1]);
+
+        self.render_button_row(
+            frame,
+            sections[2],
+            &[
+                DialogButton::new(
+                    "Continue",
+                    dialog.selected == 0,
+                    HitAction::SelectOverviewBumpWarningChoice(0),
+                    Style::default().fg(Color::Black).bg(Color::Yellow),
+                ),
+                DialogButton::new(
+                    "Unstage Extras",
+                    dialog.selected == 1,
+                    HitAction::SelectOverviewBumpWarningChoice(1),
+                    Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+                ),
+                DialogButton::new(
+                    "Cancel",
+                    dialog.selected == 2,
+                    HitAction::SelectOverviewBumpWarningChoice(2),
+                    Style::default().fg(Color::White).bg(Color::Red),
+                ),
             ],
         );
     }
@@ -1433,6 +1527,8 @@ impl App {
             "Up/Down scope | Left/Right change bump action | Enter apply | Esc cancel"
         } else if self.overview_bump_workflow_dialog.is_some() {
             "1-3 or Up/Down choose action | Enter run | Esc cancel"
+        } else if self.overview_bump_warning_dialog.is_some() {
+            "1-3 or Up/Down choose warning action | Enter confirm | Esc cancel"
         } else {
             match self.screen {
                 Screen::Dashboard => "1-4 tabs | N new project | B bump | V view changes | T create tag | Up/Down select | Q quit",
@@ -1535,6 +1631,10 @@ impl App {
 
         if self.recent_changes_dialog.is_some() {
             return self.handle_recent_changes_key(key);
+        }
+
+        if self.overview_bump_warning_dialog.is_some() {
+            return self.handle_overview_bump_warning_key(key);
         }
 
         if self.overview_bump_workflow_dialog.is_some() {
@@ -1685,6 +1785,20 @@ impl App {
             KeyCode::Char('2') => self.select_overview_bump_workflow(1),
             KeyCode::Char('3') => self.select_overview_bump_workflow(2),
             KeyCode::Enter | KeyCode::F(2) => return self.confirm_overview_bump_workflow(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_overview_bump_warning_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_overview_bump_warning(),
+            KeyCode::Up | KeyCode::BackTab => self.rotate_overview_bump_warning(-1),
+            KeyCode::Down | KeyCode::Tab => self.rotate_overview_bump_warning(1),
+            KeyCode::Char('1') => self.select_overview_bump_warning(0),
+            KeyCode::Char('2') => self.select_overview_bump_warning(1),
+            KeyCode::Char('3') => self.select_overview_bump_warning(2),
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_overview_bump_warning(),
             _ => {}
         }
         Ok(())
@@ -2180,6 +2294,7 @@ impl App {
             HitAction::SelectOverviewBumpWorkflow(index) => self.select_overview_bump_workflow(index),
             HitAction::ConfirmOverviewBumpWorkflow => return self.confirm_overview_bump_workflow(),
             HitAction::CancelOverviewBumpWorkflow => self.cancel_overview_bump_workflow(),
+            HitAction::SelectOverviewBumpWarningChoice(index) => self.select_overview_bump_warning(index),
             HitAction::AdjustOverviewVersion(scope_index, control, delta) => {
                 return self.adjust_overview_pending_version(scope_index, control, delta)
             }
@@ -2612,6 +2727,24 @@ impl App {
         self.status = StatusMessage::info("Tile bump action cancelled.");
     }
 
+    fn select_overview_bump_warning(&mut self, index: usize) {
+        if let Some(dialog) = &mut self.overview_bump_warning_dialog {
+            dialog.select(index);
+        }
+    }
+
+    fn rotate_overview_bump_warning(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.overview_bump_warning_dialog {
+            dialog.rotate(delta);
+        }
+    }
+
+    fn cancel_overview_bump_warning(&mut self) {
+        self.overview_bump_warning_dialog = None;
+        self.overview_bump_workflow_dialog = None;
+        self.status = StatusMessage::info("Tile bump action cancelled.");
+    }
+
     fn adjust_overview_pending_version(
         &mut self,
         scope_index: usize,
@@ -2690,9 +2823,59 @@ impl App {
             return Ok(());
         };
 
+        if dialog.selected_workflow() != OverviewBumpWorkflow::JustBump {
+            let warnings = self.collect_overview_bump_warnings(dialog.scope_index)?;
+            if !warnings.is_empty() {
+                self.overview_bump_warning_dialog = Some(OverviewBumpWarningDialog::new(
+                    dialog.scope_index,
+                    dialog.selected_workflow(),
+                    warnings,
+                ));
+                self.status = StatusMessage::warning("Previously staged files were found. Review them before committing the bump.");
+                return Ok(());
+            }
+        }
+
         self.execute_overview_bump_workflow(dialog.scope_index, dialog.selected_workflow())?;
         self.overview_bump_workflow_dialog = None;
         Ok(())
+    }
+
+    fn confirm_overview_bump_warning(&mut self) -> Result<()> {
+        let Some(dialog) = self.overview_bump_warning_dialog.clone() else {
+            return Ok(());
+        };
+
+        match dialog.selected_choice() {
+            OverviewBumpWarningChoice::Continue => {
+                self.execute_overview_bump_workflow(dialog.scope_index, dialog.workflow)?;
+                self.overview_bump_warning_dialog = None;
+                self.overview_bump_workflow_dialog = None;
+            }
+            OverviewBumpWarningChoice::UnstageExtras => {
+                for repo in &dialog.repos {
+                    unstage_paths(&repo.repo_root, &repo.extra_paths)?;
+                }
+                self.execute_overview_bump_workflow(dialog.scope_index, dialog.workflow)?;
+                self.overview_bump_warning_dialog = None;
+                self.overview_bump_workflow_dialog = None;
+            }
+            OverviewBumpWarningChoice::Cancel => self.cancel_overview_bump_warning(),
+        }
+        Ok(())
+    }
+
+    fn collect_overview_bump_warnings(&self, scope_index: usize) -> Result<Vec<UnexpectedStagedRepo>> {
+        let project = self.selected_project()?.clone();
+        let scopes = collect_bump_scopes(&project)?;
+        let affected_scope_indexes = if project.unified_versioning {
+            (0..scopes.len()).collect::<Vec<_>>()
+        } else {
+            vec![scope_index]
+        };
+        let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+        let repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
+        collect_unexpected_staged_paths(&repo_operations)
     }
 
     fn execute_overview_bump_workflow(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) -> Result<()> {
@@ -3486,6 +3669,7 @@ enum HitAction {
     SelectOverviewBumpWorkflow(usize),
     ConfirmOverviewBumpWorkflow,
     CancelOverviewBumpWorkflow,
+    SelectOverviewBumpWarningChoice(usize),
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
     ApplyOverviewVersionAndTag(usize),
     OpenProjectEdit,
@@ -3588,6 +3772,48 @@ impl OverviewBumpWorkflowDialog {
     }
 }
 
+#[derive(Clone)]
+struct OverviewBumpWarningDialog {
+    scope_index: usize,
+    workflow: OverviewBumpWorkflow,
+    repos: Vec<UnexpectedStagedRepo>,
+    selected: usize,
+}
+
+impl OverviewBumpWarningDialog {
+    fn new(scope_index: usize, workflow: OverviewBumpWorkflow, repos: Vec<UnexpectedStagedRepo>) -> Self {
+        Self {
+            scope_index,
+            workflow,
+            repos,
+            selected: 1,
+        }
+    }
+
+    fn select(&mut self, index: usize) {
+        self.selected = index.min(2);
+    }
+
+    fn rotate(&mut self, delta: isize) {
+        self.selected = (self.selected as isize + delta).rem_euclid(3) as usize;
+    }
+
+    fn selected_choice(&self) -> OverviewBumpWarningChoice {
+        match self.selected {
+            0 => OverviewBumpWarningChoice::Continue,
+            1 => OverviewBumpWarningChoice::UnstageExtras,
+            _ => OverviewBumpWarningChoice::Cancel,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OverviewBumpWarningChoice {
+    Continue,
+    UnstageExtras,
+    Cancel,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OverviewBumpWorkflow {
     JustBump,
@@ -3632,6 +3858,12 @@ struct RepoBumpOperation {
     repo_root: String,
     remote_spec: Option<String>,
     stage_paths: Vec<String>,
+}
+
+#[derive(Clone)]
+struct UnexpectedStagedRepo {
+    repo_root: String,
+    extra_paths: Vec<String>,
 }
 
 fn collect_repo_bump_operations(
@@ -3711,13 +3943,52 @@ fn has_staged_changes(repo_root: &str) -> Result<bool> {
     Ok(!run_git(repo_root, &["diff", "--cached", "--quiet", "--exit-code"])?.success)
 }
 
+fn staged_paths(repo_root: &str) -> Result<Vec<String>> {
+    Ok(split_output_lines(&run_git_checked(repo_root, &["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?))
+}
+
+fn collect_unexpected_staged_paths(operations: &[RepoBumpOperation]) -> Result<Vec<UnexpectedStagedRepo>> {
+    let mut warnings = Vec::new();
+
+    for operation in operations {
+        let expected = operation
+            .stage_paths
+            .iter()
+            .map(|path| comparable_git_path(path))
+            .collect::<HashSet<_>>();
+        let extra_paths = staged_paths(&operation.repo_root)?
+            .into_iter()
+            .filter(|path| !expected.contains(&comparable_git_path(path)))
+            .collect::<Vec<_>>();
+        if !extra_paths.is_empty() {
+            warnings.push(UnexpectedStagedRepo {
+                repo_root: operation.repo_root.clone(),
+                extra_paths,
+            });
+        }
+    }
+
+    Ok(warnings)
+}
+
+fn unstage_paths(repo_root: &str, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut args = vec!["restore".to_string(), "--staged".to_string(), "--".to_string()];
+    args.extend(paths.iter().cloned());
+    run_git_checked_owned(repo_root, args)?;
+    Ok(())
+}
+
 fn collect_stage_paths_for_targets(repo_root: &str, targets: &[BumpTarget]) -> Vec<String> {
     let mut paths = Vec::new();
 
     for target in targets {
         push_stage_path(&mut paths, repo_root, &target.path);
         if target.format == TargetFormat::Toml {
-            let target_path = Path::new(&target.path);
+            let target_path = resolve_repo_path(repo_root, &target.path);
             let is_cargo_manifest = target_path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -3751,6 +4022,19 @@ fn normalize_repo_stage_path(repo_root: &str, path: &str) -> String {
     } else {
         path.replace('\\', "/")
     }
+}
+
+fn resolve_repo_path(repo_root: &str, path: &str) -> PathBuf {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        Path::new(repo_root).join(candidate)
+    }
+}
+
+fn comparable_git_path(path: &str) -> String {
+    path.replace('\\', "/").to_ascii_lowercase()
 }
 
 fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
@@ -6007,6 +6291,36 @@ mod tests {
 
         assert_eq!(wizard.target_key.value(), "package.version");
         assert!(!wizard.target_key_custom);
+    }
+
+    #[test]
+    fn cargo_lock_is_staged_for_relative_cargo_manifest_targets() {
+        let unique = format!(
+            "cvb-stage-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let repo_root = std::env::temp_dir().join(unique);
+        let crate_dir = repo_root.join("core");
+        std::fs::create_dir_all(&crate_dir).expect("crate dir");
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\nname='demo'\nversion='1.2.3'\n").expect("manifest");
+        std::fs::write(crate_dir.join("Cargo.lock"), "# lock\n").expect("lockfile");
+
+        let targets = vec![BumpTarget {
+            label: "Version".to_string(),
+            path: "core/Cargo.toml".to_string(),
+            key_path: "package.version".to_string(),
+            format: TargetFormat::Toml,
+            current_version: "1.2.3".to_string(),
+        }];
+
+        let staged = collect_stage_paths_for_targets(&repo_root.display().to_string(), &targets);
+
+        assert_eq!(staged, vec!["core/Cargo.toml".to_string(), "core/Cargo.lock".to_string()]);
+
+        let _ = std::fs::remove_dir_all(repo_root);
     }
 
     #[test]
