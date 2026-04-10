@@ -229,7 +229,30 @@ fn project_scope_target_paths(project: &ProjectConfig) -> Vec<String> {
 }
 
 fn collect_target_paths(specs: &[TargetSpec]) -> Vec<String> {
-    specs.iter().map(|target| target.path.clone()).collect()
+    let mut paths = Vec::new();
+    for target in specs {
+        let Some(filter) = activity_filter_for_target(&target.path) else {
+            continue;
+        };
+        if !paths.iter().any(|existing| existing == &filter) {
+            paths.push(filter);
+        }
+    }
+    paths
+}
+
+fn activity_filter_for_target(path: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let parent = Path::new(trimmed).parent()?;
+    if parent.as_os_str().is_empty() || parent == Path::new(".") {
+        None
+    } else {
+        Some(parent.display().to_string())
+    }
 }
 
 fn normalize_pathspec(repo_root: &Path, path: &str) -> Option<String> {
@@ -463,11 +486,11 @@ mod tests {
         assert_eq!(scopes.len(), 2);
         assert_eq!(scopes[0].repo_root, "C:/repo/core");
         assert_eq!(scopes[0].remote_spec.as_deref(), Some("origin-core"));
-        assert_eq!(scopes[0].path_filters, vec!["missing-core.toml"]);
+        assert!(scopes[0].path_filters.is_empty());
         assert_eq!(scopes[1].repo_root, "C:/repo/project");
         assert_eq!(scopes[1].remote_spec.as_deref(), Some("origin-project"));
         assert_eq!(scopes[1].suggested_tag_name, "api");
-        assert_eq!(scopes[1].path_filters, vec!["missing-api.json"]);
+        assert!(scopes[1].path_filters.is_empty());
     }
 
     #[test]
@@ -521,8 +544,8 @@ mod tests {
         assert_eq!(scopes.len(), 2);
         assert_eq!(scopes[0].display_name, "Core");
         assert_eq!(scopes[1].display_name, "API");
-        assert_eq!(scopes[0].path_filters, vec!["core/Cargo.toml"]);
-        assert_eq!(scopes[1].path_filters, vec!["api/package.json"]);
+        assert_eq!(scopes[0].path_filters, vec!["core"]);
+        assert_eq!(scopes[1].path_filters, vec!["api"]);
     }
 
     #[test]
@@ -533,10 +556,10 @@ mod tests {
             repo_root: "C:/repo".to_string(),
             remote_spec: None,
             suggested_tag_name: "core-v1.2.3".to_string(),
-            path_filters: vec!["C:/repo/core/package.json".to_string(), "core\\Cargo.toml".to_string()],
+            path_filters: vec!["C:/repo/core".to_string(), "core\\nested".to_string()],
         };
 
-        assert_eq!(scope.git_pathspecs(), vec!["core/package.json", "core/Cargo.toml"]);
+        assert_eq!(scope.git_pathspecs(), vec!["core", "core/nested"]);
     }
 
     #[test]
