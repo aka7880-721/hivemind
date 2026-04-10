@@ -68,13 +68,7 @@ pub struct ProjectConfig {
 impl ProjectConfig {
     pub fn summary(&self) -> String {
         match self.project_type {
-            ProjectType::AllInOne => format!(
-                "{} | {} | {} target{}",
-                self.project_type.display_name(),
-                self.version_scheme.display_name(),
-                self.targets.len(),
-                if self.targets.len() == 1 { "" } else { "s" }
-            ),
+            ProjectType::AllInOne => format!("{} | {}", self.project_type.display_name(), self.version_scheme.display_name()),
             ProjectType::Branched => format!(
                 "{} | {} scope{} | {}",
                 self.project_type.display_name(),
@@ -102,7 +96,6 @@ impl ProjectConfig {
                 lines.push(format!("Target: {} -> {} [{}]", target.path, target.key_path, target.format.display_name()));
             }
         } else {
-            lines.push(format!("Unified versioning: {}", if self.unified_versioning { "yes" } else { "no" }));
             for branch in &self.branches {
                 lines.push(format!(
                     "{}: {} ({})",
