@@ -9,6 +9,7 @@ use std::{
     collections::HashSet,
     io,
     path::{Path, PathBuf},
+    process::Command,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
@@ -344,45 +345,76 @@ impl App {
             .collect::<Vec<_>>();
 
         let active_index = self.current_main_tab_index();
-        let left_rect = Rect {
-            x: area.x,
+        let left_width = widths[0].min(area.width);
+        let right_width = widths
+            .iter()
+            .skip(1)
+            .copied()
+            .sum::<u16>()
+            .min(area.width.saturating_sub(left_width));
+        let left_rect = Rect { x: area.x, y: area.y, width: left_width, height: area.height };
+        let right_rect = Rect {
+            x: area.x + area.width.saturating_sub(right_width),
             y: area.y,
-            width: widths[0].min(area.width),
+            width: right_width,
             height: area.height,
         };
-        self.render_main_nav_button(frame, left_rect, &labels[0], active_index == 0);
+
+        self.render_main_nav_tabs(frame, left_rect, &labels[..1], if active_index == 0 { Some(0) } else { None });
         self.hit_targets.push(HitTarget::new(left_rect, HitAction::Switch(main_screen_from_index(0))));
 
-        let right_total_width = widths.iter().skip(1).copied().sum::<u16>();
-        let mut current_x = area.x + area.width.saturating_sub(right_total_width);
-        for index in 1..labels.len() {
-            let rect = Rect {
-                x: current_x,
-                y: area.y,
-                width: widths[index].min(area.x + area.width - current_x),
-                height: area.height,
-            };
-            self.render_main_nav_button(frame, rect, &labels[index], active_index == index);
-            self.hit_targets.push(HitTarget::new(rect, HitAction::Switch(main_screen_from_index(index))));
-            current_x = current_x.saturating_add(widths[index]);
+        if right_rect.width > 0 {
+            self.render_main_nav_tabs(
+                frame,
+                right_rect,
+                &labels[1..],
+                if active_index > 0 { Some(active_index - 1) } else { None },
+            );
+            let constraints = widths
+                .iter()
+                .skip(1)
+                .copied()
+                .map(Constraint::Length)
+                .collect::<Vec<_>>();
+            for (offset, rect) in Layout::default().direction(Direction::Horizontal).constraints(constraints).split(right_rect).iter().enumerate() {
+                self.hit_targets.push(HitTarget::new(*rect, HitAction::Switch(main_screen_from_index(offset + 1))));
+            }
         }
     }
 
-    fn render_main_nav_button(&self, frame: &mut Frame, area: Rect, label: &str, selected: bool) {
-        let block = Block::default().borders(Borders::ALL).border_style(if selected {
-            Style::default().fg(Color::Cyan)
+    fn render_main_nav_tabs(&self, frame: &mut Frame, area: Rect, labels: &[String], active_index: Option<usize>) {
+        if area.width == 0 || labels.is_empty() {
+            return;
+        }
+
+        let tab_labels = labels.iter().map(String::as_str).collect::<Vec<_>>();
+        let tabs = TabNav::new(&tab_labels, active_index.unwrap_or(0))
+            .highlight_style(if active_index.is_some() {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            })
+            .border_style(if active_index.is_some() {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            })
+            .style(Style::default().fg(Color::White))
+            .indicator(None);
+        frame.render_widget(tabs, area);
+    }
+
+    fn scope_repo_roots(&self, project: &ProjectConfig, scope_count: usize) -> Vec<Option<String>> {
+        if project.integration_mode.requires_repo() {
+            match collect_all_branch_git_scope_contexts(project) {
+                Ok(contexts) => (0..scope_count)
+                    .map(|index| contexts.get(index).map(|context| context.repo_root.clone()))
+                    .collect(),
+                Err(_) => vec![None; scope_count],
+            }
         } else {
-            Style::default().fg(Color::DarkGray)
-        });
-        let style = if selected {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        frame.render_widget(
-            Paragraph::new(label).alignment(Alignment::Center).style(style).block(block),
-            area,
-        );
+            vec![None; scope_count]
+        }
     }
 
     fn render_dashboard(&mut self, frame: &mut Frame, area: Rect) {
@@ -2776,6 +2808,7 @@ impl App {
     fn apply_overview_pending_version(&mut self, scope_index: usize, open_tag_after: bool) -> Result<()> {
         let project = self.selected_project()?.clone();
         let scopes = collect_bump_scopes(&project)?;
+        let scope_repo_roots = self.scope_repo_roots(&project, scopes.len());
         self.ensure_dashboard_tile_state(&scopes);
         let affected_scope_indexes = if project.unified_versioning {
             (0..scopes.len()).collect::<Vec<_>>()
@@ -2793,6 +2826,7 @@ impl App {
             if let Some(scope) = scopes.get(*index) {
                 for target in &scope.targets {
                     write_target_version(target, &next_version)?;
+                    refresh_target_artifacts(target, scope_repo_roots.get(*index).and_then(|root| root.as_deref()))?;
                 }
                 if let Some(pending) = self.overview_pending_versions.get_mut(*index) {
                     *pending = next_version.clone();
@@ -2881,6 +2915,7 @@ impl App {
     fn execute_overview_bump_workflow(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) -> Result<()> {
         let project = self.selected_project()?.clone();
         let scopes = collect_bump_scopes(&project)?;
+        let scope_repo_roots = self.scope_repo_roots(&project, scopes.len());
         self.ensure_dashboard_tile_state(&scopes);
         let affected_scope_indexes = if project.unified_versioning {
             (0..scopes.len()).collect::<Vec<_>>()
@@ -2898,6 +2933,7 @@ impl App {
             if let Some(scope) = scopes.get(*index) {
                 for target in &scope.targets {
                     write_target_version(target, &next_version)?;
+                    refresh_target_artifacts(target, scope_repo_roots.get(*index).and_then(|root| root.as_deref()))?;
                 }
                 if let Some(pending) = self.overview_pending_versions.get_mut(*index) {
                     *pending = next_version.clone();
@@ -3186,6 +3222,7 @@ impl App {
         let targets = dialog.active_targets();
         for target in &targets {
             write_target_version(target, &next_version)?;
+            refresh_target_artifacts(target, None)?;
         }
 
         let target_count = targets.len();
@@ -4005,6 +4042,41 @@ fn collect_stage_paths_for_targets(repo_root: &str, targets: &[BumpTarget]) -> V
     paths
 }
 
+fn refresh_target_artifacts(target: &BumpTarget, repo_root: Option<&str>) -> Result<()> {
+    if target.format != TargetFormat::Toml {
+        return Ok(());
+    }
+
+    let target_path = resolve_target_path(repo_root, &target.path);
+    let is_cargo_manifest = target_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("Cargo.toml"));
+    if !is_cargo_manifest {
+        return Ok(());
+    }
+
+    let lock_path = target_path.with_file_name("Cargo.lock");
+    if !lock_path.is_file() {
+        return Ok(());
+    }
+
+    let output = Command::new("cargo")
+        .arg("generate-lockfile")
+        .arg("--manifest-path")
+        .arg(&target_path)
+        .output()
+        .with_context(|| format!("failed to refresh {} after updating {}", lock_path.display(), target.path))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        bail!("failed to refresh {} after updating {}: {}", lock_path.display(), target.path, detail);
+    }
+
+    Ok(())
+}
+
 fn push_stage_path(paths: &mut Vec<String>, repo_root: &str, path: &str) {
     let candidate = normalize_repo_stage_path(repo_root, path);
     if !candidate.is_empty() && !paths.iter().any(|existing| existing == &candidate) {
@@ -4030,6 +4102,17 @@ fn resolve_repo_path(repo_root: &str, path: &str) -> PathBuf {
         candidate.to_path_buf()
     } else {
         Path::new(repo_root).join(candidate)
+    }
+}
+
+fn resolve_target_path(repo_root: Option<&str>, path: &str) -> PathBuf {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else if let Some(repo_root) = repo_root {
+        Path::new(repo_root).join(candidate)
+    } else {
+        candidate.to_path_buf()
     }
 }
 
