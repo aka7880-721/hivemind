@@ -10,7 +10,10 @@ mod branding;
 mod config;
 mod dialogs;
 mod git;
+#[path = "overview-pg.rs"]
+mod overview_pg;
 mod targets;
+mod tiles;
 mod ui;
 mod versioning;
 
