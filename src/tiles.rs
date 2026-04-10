@@ -13,6 +13,7 @@ pub(crate) const SEMVER_TILE_HEIGHT: u16 = 9;
 pub(crate) const CALVER_TILE_HEIGHT: u16 = 9;
 const SEMVER_LEFT_WIDTH: usize = 5;
 const CALVER_ACTION_WIDTH: usize = 6;
+const TILE_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::LightCyan);
 
 pub(crate) struct OverviewTileData {
 	pub(crate) name: String,
@@ -73,6 +74,17 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		border_bottom_semver(right_width),
 	];
 	render_rows(frame, area, &rows, border_style);
+	render_highlighted_row(
+		frame,
+		Rect::new(area.x, area.y + 7, area.width, 1),
+		&rows[7],
+		border_style,
+		&[
+			StyledRange::new(7 + button_positions[0], 4, TILE_BUTTON_STYLE),
+			StyledRange::new(7 + button_positions[1], 4, TILE_BUTTON_STYLE),
+			StyledRange::new(7 + button_positions[2], 3, TILE_BUTTON_STYLE),
+		],
+	);
 
 	let right_x = area.x + 1 + SEMVER_LEFT_WIDTH as u16 + 1;
 	let inner_y = area.y + 1;
@@ -106,6 +118,16 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		format!("╚{}╝", "═".repeat(content_width)),
 	];
 	render_rows(frame, area, &rows, border_style);
+	for (row_offset, label) in [(3_u16, "bump"), (4, "view"), (5, "tag")].into_iter() {
+		let action_start = 1 + detail_width + 1 + centered_label_start(CALVER_ACTION_WIDTH, label.chars().count());
+		render_highlighted_row(
+			frame,
+			Rect::new(area.x, area.y + row_offset, area.width, 1),
+			&rows[row_offset as usize],
+			border_style,
+			&[StyledRange::new(action_start, label.chars().count(), TILE_BUTTON_STYLE)],
+		);
+	}
 
 	let action_x = area.x + 1 + detail_width as u16 + 1;
 	let inner_y = area.y + 1;
@@ -127,21 +149,42 @@ fn render_rows(frame: &mut Frame, area: Rect, rows: &[String], border_style: Sty
 		if index as u16 >= area.height {
 			break;
 		}
+		if index == 7 {
+			continue;
+		}
 		let row_rect = Rect::new(area.x, area.y + index as u16, area.width, 1);
 		frame.render_widget(Paragraph::new(styled_row(row, border_style)).alignment(Alignment::Left), row_rect);
 	}
 }
 
+fn render_highlighted_row(frame: &mut Frame, area: Rect, row: &str, border_style: Style, highlights: &[StyledRange]) {
+	frame.render_widget(
+		Paragraph::new(styled_row_with_highlights(row, border_style, highlights)).alignment(Alignment::Left),
+		area,
+	);
+}
+
 fn styled_row(row: &str, border_style: Style) -> Line<'static> {
+	styled_row_with_highlights(row, border_style, &[])
+}
+
+fn styled_row_with_highlights(row: &str, border_style: Style, highlights: &[StyledRange]) -> Line<'static> {
 	let border_chars = ['╔', '╗', '╚', '╝', '║', '═', '│', '╤', '╧', '╟', '╢', '├', '┴', '─'];
 	let spans = row
 		.chars()
-		.map(|character| {
-			let style = if border_chars.contains(&character) || character == '·' {
-				border_style
-			} else {
-				Style::default().fg(Color::White)
-			};
+		.enumerate()
+		.map(|(index, character)| {
+			let style = highlights
+				.iter()
+				.find(|highlight| highlight.contains(index))
+				.map(|highlight| highlight.style)
+				.unwrap_or_else(|| {
+					if border_chars.contains(&character) || character == '·' {
+						border_style
+					} else {
+						Style::default().fg(Color::White)
+					}
+				});
 			Span::styled(character.to_string(), style)
 		})
 		.collect::<Vec<_>>();
@@ -152,7 +195,7 @@ fn border_style(selected: bool) -> Style {
 	if selected {
 		Style::default().fg(Color::Cyan)
 	} else {
-		Style::default().fg(Color::DarkGray)
+		Style::default().fg(Color::LightCyan)
 	}
 }
 
@@ -196,25 +239,42 @@ fn spaced_version(version: &str) -> String {
 }
 
 fn space_evenly_positions(width: usize, item_widths: &[usize]) -> Vec<usize> {
-	let total = item_widths.iter().sum::<usize>();
-	let gaps = item_widths.len().saturating_add(1);
-	let free = width.saturating_sub(total);
-	let base_gap = free / gaps.max(1);
-	let remainder = free % gaps.max(1);
-
-	let mut current = base_gap;
-	let mut positions = Vec::with_capacity(item_widths.len());
-	for (index, item_width) in item_widths.iter().enumerate() {
-		if index < remainder {
-			current += 1;
-		}
-		positions.push(current);
-		current += item_width + base_gap;
-		if index + 1 < remainder {
-			current += 1;
-		}
+	let count = item_widths.len();
+	if count == 0 {
+		return Vec::new();
 	}
-	positions
+
+	item_widths
+		.iter()
+		.enumerate()
+		.map(|(index, item_width)| {
+			let center = ((2 * index + 1) * width) / (2 * count);
+			center
+				.saturating_sub(item_width / 2)
+				.min(width.saturating_sub(*item_width))
+		})
+		.collect()
+}
+
+fn centered_label_start(width: usize, label_width: usize) -> usize {
+	width.saturating_sub(label_width) / 2
+}
+
+#[derive(Clone, Copy)]
+struct StyledRange {
+	start: usize,
+	len: usize,
+	style: Style,
+}
+
+impl StyledRange {
+	fn new(start: usize, len: usize, style: Style) -> Self {
+		Self { start, len, style }
+	}
+
+	fn contains(&self, index: usize) -> bool {
+		index >= self.start && index < self.start + self.len
+	}
 }
 
 fn build_button_line(width: usize, positions: &[usize], labels: &[&str]) -> String {
@@ -250,6 +310,6 @@ mod tests {
 
 	#[test]
 	fn button_positions_are_spread_evenly() {
-		assert_eq!(space_evenly_positions(24, &[4, 4, 3]), vec![4, 11, 18]);
+		assert_eq!(space_evenly_positions(26, &[4, 4, 3]), vec![2, 11, 20]);
 	}
 }
