@@ -1,6 +1,6 @@
 [package]
 name = "comfy-version-bumper"
-version = "0.3.0"
+version = "0.3.3"
 edition = "2024"
 rust-version = "1.94"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -27,3 +27,4 @@ toml = "1"
 toml_edit = "0.25"
 tui-textarea = "0.7"
 tui-tabs = "0.1.1"
+tui-overlay = "0.1.2"

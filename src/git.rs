@@ -5,12 +5,13 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::{Local, TimeZone};
 
 use crate::{
-    config::{BranchScopeKind, ProjectConfig, ProjectType},
+    config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
     targets::{collect_bump_scopes, shared_bump_version},
 };
 
@@ -27,6 +28,24 @@ pub(crate) struct GitScopeContext {
     pub(crate) repo_root: String,
     pub(crate) remote_spec: Option<String>,
     pub(crate) suggested_tag_name: String,
+    pub(crate) path_filters: Vec<String>,
+}
+
+impl GitScopeContext {
+    pub(crate) fn git_pathspecs(&self) -> Vec<String> {
+        let repo_root = Path::new(&self.repo_root);
+        self.path_filters
+            .iter()
+            .filter_map(|path| normalize_pathspec(repo_root, path))
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RepoActivitySummary {
+    pub(crate) commits_since_tag_label: String,
+    pub(crate) last_bump_label: String,
+    pub(crate) last_commit_label: String,
 }
 
 pub(crate) fn project_repo_root(project: &ProjectConfig) -> Result<String> {
@@ -83,6 +102,7 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             repo_root,
             remote_spec,
             suggested_tag_name: suggested_tag_name(project),
+            path_filters: project_scope_target_paths(project),
         }]);
     }
 
@@ -102,9 +122,65 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                 repo_root: repo.local_root.clone(),
                 remote_spec: repo.remote_url.clone(),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
+                path_filters: collect_target_paths(&branch.targets),
             })
         })
         .collect()
+}
+
+pub(crate) fn collect_all_branch_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<GitScopeContext>> {
+    if project.project_type == ProjectType::AllInOne || project.branches.len() <= 1 {
+        return collect_git_scope_contexts(project);
+    }
+
+    project
+        .branches
+        .iter()
+        .enumerate()
+        .map(|(index, branch)| {
+            let repo = branch
+                .repo
+                .as_ref()
+                .or(project.repo.as_ref())
+                .ok_or_else(|| anyhow!("branch '{}' does not have a git repository configured", branch.display_name()))?;
+            Ok(GitScopeContext {
+                display_name: branch.display_name().to_string(),
+                scope_kind: Some(branch.scope_kind),
+                repo_root: repo.local_root.clone(),
+                remote_spec: repo.remote_url.clone(),
+                suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
+                path_filters: collect_target_paths(&branch.targets),
+            })
+        })
+        .collect()
+}
+
+fn project_scope_target_paths(project: &ProjectConfig) -> Vec<String> {
+    if project.project_type == ProjectType::AllInOne {
+        collect_target_paths(&project.targets)
+    } else {
+        project
+            .branches
+            .iter()
+            .flat_map(|branch| collect_target_paths(&branch.targets))
+            .collect()
+    }
+}
+
+fn collect_target_paths(specs: &[TargetSpec]) -> Vec<String> {
+    specs.iter().map(|target| target.path.clone()).collect()
+}
+
+fn normalize_pathspec(repo_root: &Path, path: &str) -> Option<String> {
+    let candidate = Path::new(path);
+    let relative = if candidate.is_absolute() {
+        candidate.strip_prefix(repo_root).ok()?
+    } else {
+        candidate
+    };
+
+    let rendered = relative.to_string_lossy().replace('\\', "/");
+    (!rendered.is_empty()).then_some(rendered)
 }
 
 fn slugify(value: &str) -> String {
@@ -207,6 +283,60 @@ pub(crate) fn split_output_lines(output: &str) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn load_repo_activity_summary(repo_root: &str) -> Result<RepoActivitySummary> {
+    ensure_git_repo(repo_root)?;
+
+    let describe = run_git(repo_root, &["describe", "--tags", "--abbrev=0"])?;
+    let (commits_since_tag_label, last_bump_label) = if describe.success {
+        let tag = describe.stdout.trim().to_string();
+        let count = run_git_checked(repo_root, &["rev-list", "--count", &format!("{}..HEAD", tag)])?
+            .trim()
+            .to_string();
+        let tag_timestamp = run_git_checked(repo_root, &["log", "-1", "--format=%ct", &tag])?;
+        (
+            format!("{}c ahd", count),
+            format_relative_git_timestamp(tag_timestamp.trim()).unwrap_or_else(|| "n/a".to_string()),
+        )
+    } else {
+        (
+            "no tags".to_string(),
+            "n/a".to_string(),
+        )
+    };
+
+    let last_commit_timestamp = run_git_checked(repo_root, &["log", "-1", "--format=%ct", "HEAD"])?;
+    let last_commit_label = format_relative_git_timestamp(last_commit_timestamp.trim())
+        .unwrap_or_else(|| "n/a".to_string());
+
+    Ok(RepoActivitySummary {
+        commits_since_tag_label,
+        last_bump_label,
+        last_commit_label,
+    })
+}
+
+fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
+    let seconds = timestamp.parse::<i64>().ok()?;
+    let then = Local.timestamp_opt(seconds, 0).single()?;
+    let now = Local::now();
+    let delta = now.signed_duration_since(then);
+    let minutes = delta.num_minutes().max(0);
+
+    let label = if minutes < 60 {
+        format!("{}m ago", minutes.max(1))
+    } else if minutes < 60 * 24 {
+        format!("{}h ago", (minutes / 60).max(1))
+    } else if minutes < 60 * 24 * 7 {
+        format!("{}d ago", (minutes / (60 * 24)).max(1))
+    } else if minutes < 60 * 24 * 365 {
+        format!("{}w ago", (minutes / (60 * 24 * 7)).max(1))
+    } else {
+        format!("{}y ago", (minutes / (60 * 24 * 365)).max(1))
+    };
+
+    Some(label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,8 +396,89 @@ mod tests {
         assert_eq!(scopes.len(), 2);
         assert_eq!(scopes[0].repo_root, "C:/repo/core");
         assert_eq!(scopes[0].remote_spec.as_deref(), Some("origin-core"));
+        assert_eq!(scopes[0].path_filters, vec!["missing-core.toml"]);
         assert_eq!(scopes[1].repo_root, "C:/repo/project");
         assert_eq!(scopes[1].remote_spec.as_deref(), Some("origin-project"));
         assert_eq!(scopes[1].suggested_tag_name, "api");
+        assert_eq!(scopes[1].path_filters, vec!["missing-api.json"]);
+    }
+
+    #[test]
+    fn collect_all_branch_git_scope_contexts_keeps_scopes_for_unified_projects() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            targets: Vec::new(),
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/repo/core".to_string(),
+                        remote_url: None,
+                    }),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "core/Cargo.toml".to_string(),
+                        key_path: "package.version".to_string(),
+                        format: TargetFormat::Toml,
+                    }],
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    label: "API".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/repo/api".to_string(),
+                        remote_url: None,
+                    }),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "api/package.json".to_string(),
+                        key_path: "version".to_string(),
+                        format: TargetFormat::Json,
+                    }],
+                },
+            ],
+            repo: None,
+        };
+
+        let scopes = collect_all_branch_git_scope_contexts(&project).expect("all branch scopes should resolve");
+
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].display_name, "Core");
+        assert_eq!(scopes[1].display_name, "API");
+        assert_eq!(scopes[0].path_filters, vec!["core/Cargo.toml"]);
+        assert_eq!(scopes[1].path_filters, vec!["api/package.json"]);
+    }
+
+    #[test]
+    fn git_pathspecs_normalize_inside_repo_paths() {
+        let scope = GitScopeContext {
+            display_name: "Core".to_string(),
+            scope_kind: Some(BranchScopeKind::Module),
+            repo_root: "C:/repo".to_string(),
+            remote_spec: None,
+            suggested_tag_name: "core-v1.2.3".to_string(),
+            path_filters: vec!["C:/repo/core/package.json".to_string(), "core\\Cargo.toml".to_string()],
+        };
+
+        assert_eq!(scope.git_pathspecs(), vec!["core/package.json", "core/Cargo.toml"]);
+    }
+
+    #[test]
+    fn relative_git_timestamps_are_compacted() {
+        let now = Local::now().timestamp();
+        let two_days_ago = (now - 60 * 60 * 24 * 2).to_string();
+
+        let formatted = format_relative_git_timestamp(&two_days_ago).expect("timestamp should format");
+
+        assert_eq!(formatted, "2d ago");
     }
 }

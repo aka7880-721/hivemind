@@ -12,7 +12,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::{
     config::{IntegrationMode, ProjectConfig},
     git::{
-        GitScopeContext, collect_git_scope_contexts, ensure_git_repo, run_git, run_git_checked,
+        GitScopeContext, collect_all_branch_git_scope_contexts, collect_git_scope_contexts,
+        ensure_git_repo, run_git, run_git_checked,
         split_output_lines,
     },
     targets::{BumpScope, BumpTarget, collect_bump_scopes, shared_bump_version},
@@ -43,18 +44,27 @@ pub(crate) enum RecentChangesTab {
     History,
 }
 
-fn load_change_ranges(repo_root: &str) -> Result<(ChangeRange, Vec<ChangeRange>)> {
+fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<ChangeRange>)> {
+    let repo_root = &scope.repo_root;
+    let pathspecs = scope.git_pathspecs();
+
     ensure_git_repo(repo_root)?;
 
     let describe = run_git(repo_root, &["describe", "--tags", "--abbrev=0"])?;
     let recent_range = if describe.success {
         let tag = describe.stdout.trim().to_string();
         let range = format!("{}..HEAD", tag);
-        let output = run_git_checked(repo_root, &["log", "--oneline", "--graph", &range])?;
+        let output = run_git_checked_owned(
+            repo_root,
+            build_log_args(["log", "--oneline", "--graph", range.as_str()], &pathspecs),
+        )?;
         let lines = split_output_lines(&output);
         ChangeRange { label: range, lines }
     } else {
-        let output = run_git_checked(repo_root, &["log", "--oneline", "--graph", "-n", "60"])?;
+        let output = run_git_checked_owned(
+            repo_root,
+            build_log_args(["log", "--oneline", "--graph", "-n", "60"], &pathspecs),
+        )?;
         ChangeRange {
             label: "no tags found; showing the latest 60 commits".to_string(),
             lines: split_output_lines(&output),
@@ -67,7 +77,10 @@ fn load_change_ranges(repo_root: &str) -> Result<(ChangeRange, Vec<ChangeRange>)
         let newer = &window[0];
         let older = &window[1];
         let range = format!("{}..{}", older, newer);
-        let output = run_git_checked(repo_root, &["log", "--oneline", "--graph", &range])?;
+        let output = run_git_checked_owned(
+            repo_root,
+            build_log_args(["log", "--oneline", "--graph", range.as_str()], &pathspecs),
+        )?;
         history_ranges.push(ChangeRange {
             label: range,
             lines: split_output_lines(&output),
@@ -77,10 +90,24 @@ fn load_change_ranges(repo_root: &str) -> Result<(ChangeRange, Vec<ChangeRange>)
     Ok((recent_range, history_ranges))
 }
 
+fn build_log_args<const N: usize>(base: [&str; N], pathspecs: &[String]) -> Vec<String> {
+    let mut args = base.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
+    if !pathspecs.is_empty() {
+        args.push("--".to_string());
+        args.extend(pathspecs.iter().cloned());
+    }
+    args
+}
+
+fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_checked(repo_root, &arg_refs)
+}
+
 impl RecentChangesDialog {
     pub(crate) fn from_project(project: &ProjectConfig) -> Result<Self> {
-        let scopes = collect_git_scope_contexts(project)?;
-        let (recent_range, history_ranges) = load_change_ranges(&scopes[0].repo_root)?;
+        let scopes = collect_all_branch_git_scope_contexts(project)?;
+        let (recent_range, history_ranges) = load_change_ranges(&scopes[0])?;
 
         Ok(Self {
             project_name: project.name.clone(),
@@ -110,7 +137,28 @@ impl RecentChangesDialog {
 
         let len = self.scopes.len() as isize;
         self.selected_scope = (self.selected_scope as isize + delta).rem_euclid(len) as usize;
-        let (recent_range, history_ranges) = load_change_ranges(&self.active_scope().repo_root)?;
+        let (recent_range, history_ranges) = load_change_ranges(self.active_scope())?;
+        self.recent_range = recent_range;
+        self.history_ranges = history_ranges;
+        self.active_tab = RecentChangesTab::Recent;
+        self.history_index = 0;
+        self.scroll = 0;
+        Ok(())
+    }
+
+    pub(crate) fn select_scope(&mut self, scope_index: usize) -> Result<()> {
+        if self.scopes.is_empty() {
+            self.selected_scope = 0;
+            return Ok(());
+        }
+
+        let next_scope = scope_index.min(self.scopes.len().saturating_sub(1));
+        if next_scope == self.selected_scope {
+            return Ok(());
+        }
+
+        self.selected_scope = next_scope;
+        let (recent_range, history_ranges) = load_change_ranges(self.active_scope())?;
         self.recent_range = recent_range;
         self.history_ranges = history_ranges;
         self.active_tab = RecentChangesTab::Recent;
@@ -161,6 +209,7 @@ impl RecentChangesDialog {
 #[derive(Clone)]
 pub(crate) struct TagDialog {
     pub(crate) project_name: String,
+    pub(crate) integration_mode: IntegrationMode,
     pub(crate) scopes: Vec<GitScopeContext>,
     pub(crate) selected_scope: usize,
     pub(crate) tag_name: TextInput,
@@ -170,27 +219,27 @@ pub(crate) struct TagDialog {
 }
 
 impl TagDialog {
-    pub(crate) fn from_project(project: &ProjectConfig, preferred_scope: Option<usize>) -> Result<Self> {
+    pub(crate) fn from_project(
+        project: &ProjectConfig,
+        preferred_scope: Option<usize>,
+        preferred_action: Option<TagAction>,
+    ) -> Result<Self> {
         let scopes = collect_git_scope_contexts(project)?;
         let selected_scope = preferred_scope.unwrap_or(0).min(scopes.len().saturating_sub(1));
         ensure_git_repo(&scopes[selected_scope].repo_root)?;
-        let actions = match project.integration_mode {
-            IntegrationMode::LocalOnly => bail!("local-only projects do not support git tags"),
-            IntegrationMode::GitLocalOnly => vec![TagAction::CreateLocal],
-            IntegrationMode::GitHubEnabled => vec![
-                TagAction::CreateLocal,
-                TagAction::CreateAndPush,
-                TagAction::CreatePushAndRelease,
-            ],
-        };
+        let actions = available_tag_actions(project.integration_mode, scopes[selected_scope].remote_spec.is_some())?;
+        let action_index = preferred_action
+            .and_then(|action| actions.iter().position(|candidate| *candidate == action))
+            .unwrap_or(0);
         Ok(Self {
             project_name: project.name.clone(),
+            integration_mode: project.integration_mode,
             tag_name: TextInput::with_value(scopes[selected_scope].suggested_tag_name.clone()),
             scopes,
             selected_scope,
             annotation: String::new(),
             actions,
-            action_index: 0,
+            action_index,
         })
     }
 
@@ -208,9 +257,17 @@ impl TagDialog {
             return;
         }
 
+        let current_action = self.selected_action();
         let len = self.scopes.len() as isize;
         self.selected_scope = (self.selected_scope as isize + delta).rem_euclid(len) as usize;
         self.tag_name.set_value(self.active_scope().suggested_tag_name.clone());
+        self.actions = available_tag_actions(self.integration_mode, self.active_scope().remote_spec.is_some())
+            .unwrap_or_else(|_| vec![TagAction::CreateLocal]);
+        self.action_index = self
+            .actions
+            .iter()
+            .position(|action| *action == current_action)
+            .unwrap_or(0);
     }
 
     pub(crate) fn selected_action(&self) -> TagAction {
@@ -227,7 +284,7 @@ impl TagDialog {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TagAction {
     CreateLocal,
     CreateAndPush,
@@ -241,6 +298,26 @@ impl TagAction {
             TagAction::CreateAndPush => "Tag + Push",
             TagAction::CreatePushAndRelease => "Tag + Push + Release",
         }
+    }
+}
+
+fn available_tag_actions(integration_mode: IntegrationMode, has_remote: bool) -> Result<Vec<TagAction>> {
+    match integration_mode {
+        IntegrationMode::LocalOnly => bail!("local-only projects do not support git tags"),
+        IntegrationMode::GitLocalOnly => Ok(if has_remote {
+            vec![TagAction::CreateLocal, TagAction::CreateAndPush]
+        } else {
+            vec![TagAction::CreateLocal]
+        }),
+        IntegrationMode::GitHubEnabled => Ok(if has_remote {
+            vec![
+                TagAction::CreateLocal,
+                TagAction::CreateAndPush,
+                TagAction::CreatePushAndRelease,
+            ]
+        } else {
+            vec![TagAction::CreateLocal]
+        }),
     }
 }
 
@@ -501,9 +578,9 @@ fn next_char_boundary(value: &str, index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{BumpDialog, TextInput};
+    use super::{BumpDialog, TagAction, TextInput, available_tag_actions};
     use crate::{
-        config::{BranchScopeKind, TargetFormat},
+        config::{BranchScopeKind, IntegrationMode, TargetFormat},
         targets::{BumpScope, BumpTarget},
         versioning::VersionScheme,
     };
@@ -598,5 +675,42 @@ mod tests {
 
         let error = dialog.preview_next_version().expect_err("mixed unified versions should fail preview");
         assert!(error.to_string().contains("share the same version value"));
+    }
+
+    #[test]
+    fn git_local_tag_actions_include_push_when_remote_exists() {
+        let actions = available_tag_actions(IntegrationMode::GitLocalOnly, true)
+            .expect("git-local projects with a remote should support push");
+
+        assert_eq!(actions, vec![TagAction::CreateLocal, TagAction::CreateAndPush]);
+    }
+
+    #[test]
+    fn github_tag_actions_fall_back_to_local_when_remote_is_missing() {
+        let actions = available_tag_actions(IntegrationMode::GitHubEnabled, false)
+            .expect("action selection should still succeed");
+
+        assert_eq!(actions, vec![TagAction::CreateLocal]);
+    }
+
+    #[test]
+    fn build_log_args_append_scope_pathspecs() {
+        let args = super::build_log_args(
+            ["log", "--oneline", "--graph", "v1.0.0..HEAD"],
+            &["core/package.json".to_string(), "core/Cargo.toml".to_string()],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "log",
+                "--oneline",
+                "--graph",
+                "v1.0.0..HEAD",
+                "--",
+                "core/package.json",
+                "core/Cargo.toml",
+            ]
+        );
     }
 }
