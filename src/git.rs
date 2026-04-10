@@ -62,6 +62,38 @@ fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
     run_git_checked(repo_root, &arg_refs)
 }
 
+fn derive_repo_root_from_targets(specs: &[TargetSpec]) -> Option<String> {
+    specs.iter()
+        .find_map(|target| {
+            let trimmed = target.path.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+
+            Path::new(trimmed)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(|parent| parent.display().to_string())
+        })
+}
+
+fn resolve_scope_repo_root(
+    project_repo: Option<&crate::config::RepoConfig>,
+    branch_repo: Option<&crate::config::RepoConfig>,
+    targets: &[TargetSpec],
+) -> Result<String> {
+    if let Some(repo) = branch_repo {
+        return Ok(repo.local_root.clone());
+    }
+    if let Some(repo_root) = derive_repo_root_from_targets(targets) {
+        return Ok(repo_root);
+    }
+    if let Some(repo) = project_repo {
+        return Ok(repo.local_root.clone());
+    }
+    bail!("scope does not have a git repository configured and no repo root could be derived from its target paths")
+}
+
 pub(crate) fn project_repo_root(project: &ProjectConfig) -> Result<String> {
     let repo = project
         .repo
@@ -107,9 +139,30 @@ pub(crate) fn suggested_tag_name_for_scope(project: &ProjectConfig, scope_index:
 }
 
 pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<GitScopeContext>> {
-    if project.project_type == ProjectType::AllInOne || project.unified_versioning || project.branches.len() <= 1 {
+    if project.project_type == ProjectType::AllInOne {
         let repo_root = project_repo_root(project)?;
         let remote_spec = project.repo.as_ref().and_then(|repo| repo.remote_url.clone());
+        return Ok(vec![GitScopeContext {
+            display_name: project.name.clone(),
+            scope_kind: None,
+            repo_root,
+            remote_spec,
+            suggested_tag_name: suggested_tag_name(project),
+            path_filters: project_scope_target_paths(project),
+        }]);
+    }
+
+    if project.unified_versioning || project.branches.len() <= 1 {
+        let branch = project
+            .branches
+            .first()
+            .ok_or_else(|| anyhow!("branched project does not contain any scopes"))?;
+        let repo_root = resolve_scope_repo_root(project.repo.as_ref(), branch.repo.as_ref(), &branch.targets)?;
+        let remote_spec = branch
+            .repo
+            .as_ref()
+            .or(project.repo.as_ref())
+            .and_then(|repo| repo.remote_url.clone());
         return Ok(vec![GitScopeContext {
             display_name: project.name.clone(),
             scope_kind: None,
@@ -125,16 +178,13 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
         .iter()
         .enumerate()
         .map(|(index, branch)| {
-            let repo = branch
-                .repo
-                .as_ref()
-                .or(project.repo.as_ref())
-                .ok_or_else(|| anyhow!("branch '{}' does not have a git repository configured", branch.display_name()))?;
+            let repo_root = resolve_scope_repo_root(project.repo.as_ref(), branch.repo.as_ref(), &branch.targets)?;
+            let repo = branch.repo.as_ref().or(project.repo.as_ref());
             Ok(GitScopeContext {
                 display_name: branch.display_name().to_string(),
                 scope_kind: Some(branch.scope_kind),
-                repo_root: repo.local_root.clone(),
-                remote_spec: repo.remote_url.clone(),
+                repo_root,
+                remote_spec: repo.and_then(|repo| repo.remote_url.clone()),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
                 path_filters: collect_target_paths(&branch.targets),
             })
@@ -152,16 +202,13 @@ pub(crate) fn collect_all_branch_git_scope_contexts(project: &ProjectConfig) -> 
         .iter()
         .enumerate()
         .map(|(index, branch)| {
-            let repo = branch
-                .repo
-                .as_ref()
-                .or(project.repo.as_ref())
-                .ok_or_else(|| anyhow!("branch '{}' does not have a git repository configured", branch.display_name()))?;
+            let repo_root = resolve_scope_repo_root(project.repo.as_ref(), branch.repo.as_ref(), &branch.targets)?;
+            let repo = branch.repo.as_ref().or(project.repo.as_ref());
             Ok(GitScopeContext {
                 display_name: branch.display_name().to_string(),
                 scope_kind: Some(branch.scope_kind),
-                repo_root: repo.local_root.clone(),
-                remote_spec: repo.remote_url.clone(),
+                repo_root,
+                remote_spec: repo.and_then(|repo| repo.remote_url.clone()),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
                 path_filters: collect_target_paths(&branch.targets),
             })
@@ -490,6 +537,39 @@ mod tests {
         };
 
         assert_eq!(scope.git_pathspecs(), vec!["core/package.json", "core/Cargo.toml"]);
+    }
+
+    #[test]
+    fn collect_scope_context_derives_repo_root_from_target_path() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            targets: Vec::new(),
+            branches: vec![BranchConfig {
+                name: "core".to_string(),
+                label: "Core".to_string(),
+                scope_kind: BranchScopeKind::Branch,
+                repo: None,
+                version_scheme: VersionScheme::SemVer,
+                targets: vec![TargetSpec {
+                    label: "Version".to_string(),
+                    path: "C:/repo/core/Cargo.toml".to_string(),
+                    key_path: "package.version".to_string(),
+                    format: TargetFormat::Toml,
+                }],
+            }],
+            repo: Some(RepoConfig {
+                local_root: "C:/repo".to_string(),
+                remote_url: Some("origin".to_string()),
+            }),
+        };
+
+        let scopes = collect_all_branch_git_scope_contexts(&project).expect("scope contexts");
+
+        assert_eq!(scopes[0].repo_root, "C:/repo/core");
     }
 
     #[test]
