@@ -48,7 +48,7 @@ use crate::{
     },
     dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput},
     git::{
-        collect_all_branch_git_scope_contexts, collect_git_scope_contexts, ensure_gh_available, ensure_local_tag,
+        collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
         load_repo_activity_summary, run_gh_checked, run_git_checked,
     },
     overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
@@ -486,16 +486,17 @@ impl App {
         };
         self.ensure_dashboard_tile_state(&scopes);
 
-        let tile_columns = dashboard_tile_columns(area.width);
-        let tile_rows = (self.overview_scope_order.len().max(1) + tile_columns - 1) / tile_columns;
+        let tile_columns = dashboard_tile_columns(area.width).max(1);
+        let tile_rows = self.overview_scope_order.len().max(1).div_ceil(tile_columns);
         let max_tile_height = scopes
             .iter()
             .map(|scope| tile_height(scope.scheme))
             .max()
             .unwrap_or(7);
-        let desired_tile_height = tile_rows as u16 * max_tile_height + tile_rows.saturating_sub(1) as u16;
-        let tile_height_budget = area.height.saturating_sub(10).max(max_tile_height.min(area.height));
-        let tile_section_height = desired_tile_height.min(tile_height_budget);
+        let row_height = max_tile_height.saturating_add(1);
+        let desired_tile_height = tile_rows as u16 * row_height - 1;
+        let tile_height_budget = area.height.saturating_sub(9).max(max_tile_height.min(area.height));
+        let tile_section_height = desired_tile_height.min(tile_height_budget).max(max_tile_height.min(area.height));
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(tile_section_height), Constraint::Length(1), Constraint::Min(8)])
@@ -505,6 +506,7 @@ impl App {
 
         let recent_block = Block::default().borders(Borders::ALL).title(" Recent Changes ");
         let recent_inner = recent_block.inner(sections[2]);
+        self.overview_recent_viewport = Some(recent_inner);
         frame.render_widget(recent_block, sections[2]);
 
         let recent_lines = if let Some(dialog) = &self.overview_recent_changes {
@@ -1854,11 +1856,26 @@ impl App {
                     self.rotate_bump_action(-1);
                 } else if self.screen == Screen::Wizard {
                     self.scroll_wizard_body(-1);
-                } else if self.screen == Screen::Dashboard
-                    && self.overview_tab == OverviewTab::Overview
-                    && mouse.column >= 38
-                {
-                    if let Some(dialog) = &mut self.overview_recent_changes {
+                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
+                    if self
+                        .overview_recent_viewport
+                        .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
+                        .unwrap_or(false)
+                    {
+                        if let Some(dialog) = &mut self.overview_recent_changes {
+                            dialog.scroll = dialog.scroll.saturating_sub(2);
+                        } else {
+                            self.move_project_selection(-1);
+                        }
+                    } else if self
+                        .overview_tile_viewport
+                        .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
+                        .unwrap_or(false)
+                    {
+                        if let Err(error) = self.scroll_dashboard_tiles(-1) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    } else if let Some(dialog) = &mut self.overview_recent_changes {
                         dialog.scroll = dialog.scroll.saturating_sub(2);
                     } else {
                         self.move_project_selection(-1);
@@ -1877,11 +1894,26 @@ impl App {
                     self.rotate_bump_action(1);
                 } else if self.screen == Screen::Wizard {
                     self.scroll_wizard_body(1);
-                } else if self.screen == Screen::Dashboard
-                    && self.overview_tab == OverviewTab::Overview
-                    && mouse.column >= 38
-                {
-                    if let Some(dialog) = &mut self.overview_recent_changes {
+                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
+                    if self
+                        .overview_recent_viewport
+                        .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
+                        .unwrap_or(false)
+                    {
+                        if let Some(dialog) = &mut self.overview_recent_changes {
+                            dialog.scroll = dialog.scroll.saturating_add(2);
+                        } else {
+                            self.move_project_selection(1);
+                        }
+                    } else if self
+                        .overview_tile_viewport
+                        .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
+                        .unwrap_or(false)
+                    {
+                        if let Err(error) = self.scroll_dashboard_tiles(1) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    } else if let Some(dialog) = &mut self.overview_recent_changes {
                         dialog.scroll = dialog.scroll.saturating_add(2);
                     } else {
                         self.move_project_selection(1);
@@ -2229,18 +2261,26 @@ impl App {
     }
 
     fn render_dashboard_tiles(&mut self, frame: &mut Frame, area: Rect, project: &ProjectConfig, scopes: &[BumpScope]) {
-        let tile_block = Block::default().borders(Borders::ALL).title(" Tiles ");
-        let tile_inner = tile_block.inner(area);
-        frame.render_widget(tile_block, area);
+        self.overview_tile_viewport = Some(area);
 
-        if scopes.is_empty() || tile_inner.width == 0 || tile_inner.height == 0 {
+        if scopes.is_empty() || area.width == 0 || area.height == 0 {
             return;
         }
 
-        let git_contexts = collect_git_scope_contexts(project).ok();
-        let columns = dashboard_tile_columns(tile_inner.width).max(1);
+        let git_contexts = collect_all_branch_git_scope_contexts(project).ok();
+        let columns = dashboard_tile_columns(area.width).max(1);
         let horizontal_gap = 1;
         let vertical_gap = 1;
+        let row_height = scopes
+            .iter()
+            .map(|scope| tile_height(scope.scheme))
+            .max()
+            .unwrap_or(7)
+            .saturating_add(vertical_gap);
+        let visible_rows = ((area.height.saturating_add(vertical_gap)) / row_height.max(1)).max(1) as usize;
+        let total_rows = self.overview_scope_order.len().div_ceil(columns);
+        let max_scroll = total_rows.saturating_sub(visible_rows);
+        self.overview_tile_scroll = self.overview_tile_scroll.min(max_scroll);
 
         for (position, scope_index) in self.overview_scope_order.iter().copied().enumerate() {
             let Some(scope) = scopes.get(scope_index) else {
@@ -2249,13 +2289,18 @@ impl App {
 
             let column = position % columns;
             let row = position / columns;
+            if row < self.overview_tile_scroll || row >= self.overview_tile_scroll + visible_rows {
+                continue;
+            }
+
+            let visible_row = row - self.overview_tile_scroll;
             let tile_rect = Rect {
-                x: tile_inner.x + column as u16 * (TILE_WIDTH + horizontal_gap),
-                y: tile_inner.y + row as u16 * (tile_height(scope.scheme) + vertical_gap),
-                width: TILE_WIDTH.min(tile_inner.width.saturating_sub(column as u16 * (TILE_WIDTH + horizontal_gap))),
+                x: area.x + column as u16 * (TILE_WIDTH + horizontal_gap),
+                y: area.y + visible_row as u16 * row_height,
+                width: TILE_WIDTH.min(area.width.saturating_sub(column as u16 * (TILE_WIDTH + horizontal_gap))),
                 height: tile_height(scope.scheme),
             };
-            if tile_rect.width < 12 || tile_rect.height < 4 || tile_rect.y + tile_rect.height > tile_inner.y + tile_inner.height {
+            if tile_rect.width < 12 || tile_rect.height < 4 || tile_rect.y + tile_rect.height > area.y + area.height {
                 continue;
             }
 
@@ -2326,6 +2371,32 @@ impl App {
                     HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Whole, -1),
                 ));
             }
+        }
+
+        if self.overview_tile_scroll > 0 && area.height > 0 {
+            let indicator = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new("more scopes above").alignment(Alignment::Right).style(Style::default().fg(Color::DarkGray)),
+                indicator,
+            );
+        }
+
+        if self.overview_tile_scroll < max_scroll && area.height > 0 {
+            let indicator = Rect {
+                x: area.x,
+                y: area.y + area.height.saturating_sub(1),
+                width: area.width,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new("more scopes below").alignment(Alignment::Right).style(Style::default().fg(Color::DarkGray)),
+                indicator,
+            );
         }
     }
 
@@ -5170,6 +5241,10 @@ fn project_edit_form_row_button(field: ProjectEditFocus) -> Option<FormRowButton
 
 fn dashboard_tile_columns(width: u16) -> usize {
     ((width + 1) / (TILE_WIDTH + 1)).max(1) as usize
+}
+
+fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+    column >= rect.x && column < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
 fn adjust_pending_version_value(
