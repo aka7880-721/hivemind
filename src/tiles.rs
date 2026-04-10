@@ -1,6 +1,6 @@
 use ratatui::{
 	Frame,
-	layout::{Alignment, Constraint, Direction, Layout, Rect},
+	layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
 	style::{Color, Modifier, Style},
 	text::{Line, Span},
 	widgets::{Block, Borders, Paragraph, Wrap},
@@ -9,8 +9,8 @@ use ratatui::{
 use crate::{config::BranchScopeKind, versioning::VersionScheme};
 
 pub(crate) const TILE_WIDTH: u16 = 32;
-pub(crate) const SEMVER_TILE_HEIGHT: u16 = 8;
-pub(crate) const CALVER_TILE_HEIGHT: u16 = 7;
+pub(crate) const SEMVER_TILE_HEIGHT: u16 = 9;
+pub(crate) const CALVER_TILE_HEIGHT: u16 = 9;
 
 pub(crate) struct OverviewTileData {
 	pub(crate) name: String,
@@ -71,8 +71,7 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		.constraints([
 			Constraint::Length(2),
 			Constraint::Length(3),
-			Constraint::Length(1),
-			Constraint::Length(1),
+			Constraint::Length(2),
 		])
 		.split(inner);
 	let body = Layout::default()
@@ -88,10 +87,14 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		.direction(Direction::Vertical)
 		.constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
 		.split(body[1]);
+	let action_block = Block::default().borders(Borders::TOP).border_style(border_style);
+	let action_inner = action_block.inner(sections[2]);
+	frame.render_widget(action_block, sections[2]);
 	let button_row = Layout::default()
 		.direction(Direction::Horizontal)
-		.constraints([Constraint::Fill(1), Constraint::Length(8), Constraint::Length(8), Constraint::Length(8), Constraint::Fill(1)])
-		.split(sections[3]);
+		.constraints([Constraint::Length(6), Constraint::Length(6), Constraint::Length(6)])
+		.flex(Flex::SpaceEvenly)
+		.split(action_inner);
 
 	let title_lines = vec![
 		Line::from(tile.name.clone()).alignment(Alignment::Center),
@@ -111,9 +114,9 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	}
 
 	let details = [
-		format!("tag..→HEAD: {}", tile.commits_since_tag_label),
-		format!("last bump: {}", tile.last_bump_label),
-		format!("last commit: {}", tile.last_commit_label),
+		format!("tag..→HEAD: {:>8}", tile.commits_since_tag_label),
+		format!("last bump: {:>9}", tile.last_bump_label),
+		format!("last commit: {:>7}", tile.last_commit_label),
 	];
 	for (row, detail) in detail_rows.iter().zip(details.iter()) {
 		frame.render_widget(
@@ -157,7 +160,7 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		.constraints([
 			Constraint::Length(2),
 			Constraint::Length(3),
-			Constraint::Length(1),
+			Constraint::Length(2),
 		])
 		.split(inner);
 	let middle = Layout::default()
@@ -172,6 +175,9 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		.direction(Direction::Vertical)
 		.constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
 		.split(middle[1]);
+	let version_block = Block::default().borders(Borders::TOP).border_style(border_style);
+	let version_inner = version_block.inner(sections[2]);
+	frame.render_widget(version_block, sections[2]);
 
 	frame.render_widget(
 		Paragraph::new(vec![
@@ -183,9 +189,9 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	);
 
 	let details = [
-		format!("tag..→HEAD: {}", tile.commits_since_tag_label),
-		format!("last bump: {}", tile.last_bump_label),
-		format!("last commit: {}", tile.last_commit_label),
+		format!("tag..→HEAD: {:>8}", tile.commits_since_tag_label),
+		format!("last bump: {:>9}", tile.last_bump_label),
+		format!("last commit: {:>7}", tile.last_commit_label),
 	];
 	for (row, detail) in detail_rows.iter().zip(details.iter()) {
 		frame.render_widget(Paragraph::new(detail.as_str()), *row);
@@ -195,7 +201,7 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	render_tile_button(frame, action_rows[1], "view", Color::Rgb(70, 110, 150));
 	render_tile_button(frame, action_rows[2], "tag", Color::Rgb(170, 140, 70));
 
-	let version_rect = sections[2];
+	let version_rect = version_inner;
 	frame.render_widget(
 		Paragraph::new(spaced_version(&tile.preview_version))
 			.alignment(Alignment::Center)
