@@ -103,13 +103,18 @@ fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
 
 impl RecentChangesDialog {
     pub(crate) fn from_project(project: &ProjectConfig) -> Result<Self> {
+        Self::from_project_with_scope(project, 0)
+    }
+
+    pub(crate) fn from_project_with_scope(project: &ProjectConfig, preferred_scope: usize) -> Result<Self> {
         let scopes = collect_all_branch_git_scope_contexts(project)?;
-        let (recent_range, history_ranges) = load_change_ranges(&scopes[0])?;
+        let selected_scope = preferred_scope.min(scopes.len().saturating_sub(1));
+        let (recent_range, history_ranges) = load_change_ranges(&scopes[selected_scope])?;
 
         Ok(Self {
             project_name: project.name.clone(),
             scopes,
-            selected_scope: 0,
+            selected_scope,
             recent_range,
             history_ranges,
             active_tab: RecentChangesTab::Recent,
@@ -126,6 +131,10 @@ impl RecentChangesDialog {
         &self.scopes[self.selected_scope.min(self.scopes.len().saturating_sub(1))]
     }
 
+    pub(crate) fn refresh_current_scope(&mut self) -> Result<()> {
+        self.reload_selected_scope(false)
+    }
+
     pub(crate) fn rotate_scope(&mut self, delta: isize) -> Result<()> {
         if !self.can_select_scope() {
             self.selected_scope = 0;
@@ -134,13 +143,7 @@ impl RecentChangesDialog {
 
         let len = self.scopes.len() as isize;
         self.selected_scope = (self.selected_scope as isize + delta).rem_euclid(len) as usize;
-        let (recent_range, history_ranges) = load_change_ranges(self.active_scope())?;
-        self.recent_range = recent_range;
-        self.history_ranges = history_ranges;
-        self.active_tab = RecentChangesTab::Recent;
-        self.history_index = 0;
-        self.scroll = 0;
-        Ok(())
+        self.reload_selected_scope(true)
     }
 
     pub(crate) fn select_scope(&mut self, scope_index: usize) -> Result<()> {
@@ -155,11 +158,25 @@ impl RecentChangesDialog {
         }
 
         self.selected_scope = next_scope;
+        self.reload_selected_scope(true)
+    }
+
+    fn reload_selected_scope(&mut self, reset_navigation: bool) -> Result<()> {
+        let previous_tab = self.active_tab;
+        let previous_history_label = self.history_ranges.get(self.history_index).map(|range| range.label.clone());
         let (recent_range, history_ranges) = load_change_ranges(self.active_scope())?;
         self.recent_range = recent_range;
         self.history_ranges = history_ranges;
-        self.active_tab = RecentChangesTab::Recent;
-        self.history_index = 0;
+        if reset_navigation {
+            self.active_tab = RecentChangesTab::Recent;
+            self.history_index = 0;
+        } else {
+            self.active_tab = previous_tab;
+            self.history_index = previous_history_label
+                .as_ref()
+                .and_then(|label| self.history_ranges.iter().position(|range| &range.label == label))
+                .unwrap_or_else(|| self.history_index.min(self.history_ranges.len().saturating_sub(1)));
+        }
         self.scroll = 0;
         Ok(())
     }
