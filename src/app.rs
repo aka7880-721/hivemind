@@ -49,7 +49,7 @@ use crate::{
     dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput},
     git::{
         collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
-        load_repo_activity_summary, run_gh_checked, run_git_checked,
+        load_scope_activity_summary, RepoActivitySummary, run_gh_checked, run_git_checked,
     },
     overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
     targets::{BumpScope, ProbeKind, TargetProbe, collect_bump_scopes, probe_target, write_target_version},
@@ -136,8 +136,10 @@ struct App {
     overview_recent_project: Option<usize>,
     overview_recent_error: Option<String>,
     overview_tile_project: Option<usize>,
+    overview_activity_project: Option<usize>,
     overview_scope_order: Vec<usize>,
     overview_pending_versions: Vec<String>,
+    overview_activity_summaries: Vec<Option<RepoActivitySummary>>,
     overview_tile_scroll: usize,
     overview_tile_viewport: Option<Rect>,
     overview_recent_viewport: Option<Rect>,
@@ -174,8 +176,10 @@ impl App {
             overview_recent_project: None,
             overview_recent_error: None,
             overview_tile_project: None,
+            overview_activity_project: None,
             overview_scope_order: Vec::new(),
             overview_pending_versions: Vec::new(),
+            overview_activity_summaries: Vec::new(),
             overview_tile_scroll: 0,
             overview_tile_viewport: None,
             overview_recent_viewport: None,
@@ -1493,12 +1497,12 @@ impl App {
             KeyCode::Right => self.overview_tab = OverviewTab::ProjectDetail,
             KeyCode::PageUp => {
                 if let Some(dialog) = &mut self.overview_recent_changes {
-                    dialog.scroll = dialog.scroll.saturating_sub(6);
+                    dialog.scroll_by(-6);
                 }
             }
             KeyCode::PageDown => {
                 if let Some(dialog) = &mut self.overview_recent_changes {
-                    dialog.scroll = dialog.scroll.saturating_add(6);
+                    dialog.scroll_by(6);
                 }
             }
             _ => {}
@@ -1636,7 +1640,7 @@ impl App {
             }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    if dialog.can_select_scope() {
+                    if dialog.active_tab == RecentChangesTab::Recent && dialog.can_select_scope() {
                         dialog.rotate_scope(-1)?;
                     } else if dialog.active_tab == RecentChangesTab::History {
                         dialog.navigate_history(1);
@@ -1645,7 +1649,7 @@ impl App {
             }
             KeyCode::Right => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    if dialog.can_select_scope() {
+                    if dialog.active_tab == RecentChangesTab::Recent && dialog.can_select_scope() {
                         dialog.rotate_scope(1)?;
                     } else if dialog.active_tab == RecentChangesTab::History {
                         dialog.navigate_history(-1);
@@ -1856,7 +1860,7 @@ impl App {
                         .unwrap_or(false)
                     {
                         if let Some(dialog) = &mut self.overview_recent_changes {
-                            dialog.scroll = dialog.scroll.saturating_sub(2);
+                            dialog.scroll_by(-2);
                         } else {
                             self.move_project_selection(-1);
                         }
@@ -1869,7 +1873,7 @@ impl App {
                             self.status = StatusMessage::error(error.to_string());
                         }
                     } else if let Some(dialog) = &mut self.overview_recent_changes {
-                        dialog.scroll = dialog.scroll.saturating_sub(2);
+                        dialog.scroll_by(-2);
                     } else {
                         self.move_project_selection(-1);
                     }
@@ -1894,7 +1898,7 @@ impl App {
                         .unwrap_or(false)
                     {
                         if let Some(dialog) = &mut self.overview_recent_changes {
-                            dialog.scroll = dialog.scroll.saturating_add(2);
+                            dialog.scroll_by(2);
                         } else {
                             self.move_project_selection(1);
                         }
@@ -1907,7 +1911,7 @@ impl App {
                             self.status = StatusMessage::error(error.to_string());
                         }
                     } else if let Some(dialog) = &mut self.overview_recent_changes {
-                        dialog.scroll = dialog.scroll.saturating_add(2);
+                        dialog.scroll_by(2);
                     } else {
                         self.move_project_selection(1);
                     }
@@ -2208,7 +2212,36 @@ impl App {
             .iter()
             .map(|scope| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string()))
             .collect();
+        self.overview_activity_summaries.clear();
         self.overview_tile_scroll = 0;
+    }
+
+    fn ensure_dashboard_tile_activity(&mut self, project: &ProjectConfig, scopes: &[BumpScope]) {
+        if self.overview_activity_project == Some(self.selected_project)
+            && self.overview_activity_summaries.len() == scopes.len()
+        {
+            return;
+        }
+
+        self.overview_activity_project = Some(self.selected_project);
+        let contexts = collect_all_branch_git_scope_contexts(project).ok();
+        self.overview_activity_summaries = scopes
+            .iter()
+            .enumerate()
+            .map(|(scope_index, _)| {
+                contexts
+                    .as_ref()
+                    .and_then(|entries| entries.get(scope_index))
+                    .and_then(|context| load_scope_activity_summary(context).ok())
+            })
+            .collect();
+    }
+
+    fn invalidate_overview_cache(&mut self) {
+        self.overview_recent_project = None;
+        self.overview_tile_project = None;
+        self.overview_activity_project = None;
+        self.overview_activity_summaries.clear();
     }
 
     fn reorder_dashboard_tile_scope(&mut self, from_scope: usize, to_scope: usize) {
@@ -2260,7 +2293,7 @@ impl App {
             return;
         }
 
-        let git_contexts = collect_all_branch_git_scope_contexts(project).ok();
+        self.ensure_dashboard_tile_activity(project, scopes);
         let columns = dashboard_tile_columns(area.width).max(1);
         let vertical_gap = 1;
         let row_height = scopes
@@ -2318,10 +2351,7 @@ impl App {
                     continue;
                 }
 
-                let activity = git_contexts
-                    .as_ref()
-                    .and_then(|contexts| contexts.get(scope_index))
-                    .and_then(|context| load_repo_activity_summary(&context.repo_root).ok());
+                let activity = self.overview_activity_summaries.get(scope_index).and_then(|summary| summary.as_ref());
                 let selected = self
                     .overview_recent_changes
                     .as_ref()
@@ -2329,7 +2359,6 @@ impl App {
                     .unwrap_or(scope_index == 0);
                 let tile = OverviewTileData {
                     name: scope.display_name.clone(),
-                    scope_kind: scope.scope_kind,
                     scheme: scope.scheme,
                     preview_version: self
                         .overview_pending_versions
@@ -2478,7 +2507,7 @@ impl App {
             }
         }
 
-        self.overview_recent_project = None;
+        self.invalidate_overview_cache();
         self.ensure_dashboard_recent_changes();
 
         if open_tag_after {
@@ -2510,11 +2539,7 @@ impl App {
 
     fn scroll_recent_changes(&mut self, delta: i16) {
         if let Some(dialog) = &mut self.recent_changes_dialog {
-            if delta.is_negative() {
-                dialog.scroll = dialog.scroll.saturating_sub(delta.unsigned_abs());
-            } else {
-                dialog.scroll = dialog.scroll.saturating_add(delta as u16);
-            }
+            dialog.scroll_by(delta);
         }
     }
 
@@ -2579,6 +2604,7 @@ impl App {
             .ok_or_else(|| anyhow!("selected project no longer exists"))?;
         dialog.apply(project)?;
         self.config_store.save(&self.config)?;
+        self.invalidate_overview_cache();
         self.project_edit_dialog = None;
         self.status = StatusMessage::success("Project settings updated.");
         Ok(())
@@ -2601,6 +2627,7 @@ impl App {
         } else {
             self.selected_project = dialog.project_index.min(self.config.projects.len().saturating_sub(1));
         }
+        self.invalidate_overview_cache();
         self.status = StatusMessage::success(format!("Removed project '{}'.", removed.name));
         Ok(())
     }
@@ -2924,6 +2951,7 @@ impl App {
         self.config.projects.push(project);
         self.config_store.save(&self.config)?;
         self.selected_project = self.config.projects.len().saturating_sub(1);
+        self.invalidate_overview_cache();
         self.screen = Screen::Dashboard;
         self.status = StatusMessage::success("Project saved to the user config directory.");
         Ok(())
