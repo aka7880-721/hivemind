@@ -77,10 +77,7 @@ fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<Chang
         let newer = &window[0];
         let older = &window[1];
         let range = format!("{}..{}", older, newer);
-        let output = run_git_checked_owned(
-            repo_root,
-            build_log_args(["log", "--oneline", "--graph", range.as_str()], &pathspecs),
-        )?;
+        let output = run_git_checked(repo_root, &["log", "--oneline", "--graph", range.as_str()])?;
         history_ranges.push(ChangeRange {
             label: range,
             lines: split_output_lines(&output),
@@ -202,6 +199,15 @@ impl RecentChangesDialog {
         if next != self.history_index {
             self.history_index = next;
             self.scroll = 0;
+        }
+    }
+
+    pub(crate) fn scroll_by(&mut self, delta: i16) {
+        let max_scroll = self.current_range().lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        if delta.is_negative() {
+            self.scroll = self.scroll.saturating_sub(delta.unsigned_abs());
+        } else {
+            self.scroll = self.scroll.saturating_add(delta as u16).min(max_scroll);
         }
     }
 }
