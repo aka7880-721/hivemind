@@ -48,6 +48,20 @@ pub(crate) struct RepoActivitySummary {
     pub(crate) last_commit_label: String,
 }
 
+fn build_git_args(base: &[&str], pathspecs: &[String]) -> Vec<String> {
+    let mut args = base.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
+    if !pathspecs.is_empty() {
+        args.push("--".to_string());
+        args.extend(pathspecs.iter().cloned());
+    }
+    args
+}
+
+fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_checked(repo_root, &arg_refs)
+}
+
 pub(crate) fn project_repo_root(project: &ProjectConfig) -> Result<String> {
     let repo = project
         .repo
@@ -283,28 +297,34 @@ pub(crate) fn split_output_lines(output: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn load_repo_activity_summary(repo_root: &str) -> Result<RepoActivitySummary> {
+pub(crate) fn load_scope_activity_summary(scope: &GitScopeContext) -> Result<RepoActivitySummary> {
+    let repo_root = &scope.repo_root;
+    let pathspecs = scope.git_pathspecs();
     ensure_git_repo(repo_root)?;
 
     let describe = run_git(repo_root, &["describe", "--tags", "--abbrev=0"])?;
     let (commits_since_tag_label, last_bump_label) = if describe.success {
         let tag = describe.stdout.trim().to_string();
-        let count = run_git_checked(repo_root, &["rev-list", "--count", &format!("{}..HEAD", tag)])?
-            .trim()
-            .to_string();
+        let range = format!("{}..HEAD", tag);
+        let count = run_git_checked_owned(
+            repo_root,
+            build_git_args(&["rev-list", "--count", range.as_str()], &pathspecs),
+        )?
+        .trim()
+        .to_string();
         let tag_timestamp = run_git_checked(repo_root, &["log", "-1", "--format=%ct", &tag])?;
         (
             format!("{}c ahd", count),
             format_relative_git_timestamp(tag_timestamp.trim()).unwrap_or_else(|| "n/a".to_string()),
         )
     } else {
-        (
-            "no tags".to_string(),
-            "n/a".to_string(),
-        )
+        ("no tags".to_string(), "n/a".to_string())
     };
 
-    let last_commit_timestamp = run_git_checked(repo_root, &["log", "-1", "--format=%ct", "HEAD"])?;
+    let last_commit_timestamp = run_git_checked_owned(
+        repo_root,
+        build_git_args(&["log", "-1", "--format=%ct", "HEAD"], &pathspecs),
+    )?;
     let last_commit_label = format_relative_git_timestamp(last_commit_timestamp.trim())
         .unwrap_or_else(|| "n/a".to_string());
 
