@@ -44,18 +44,27 @@ pub(crate) enum RecentChangesTab {
     History,
 }
 
-fn load_change_ranges(repo_root: &str) -> Result<(ChangeRange, Vec<ChangeRange>)> {
+fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<ChangeRange>)> {
+    let repo_root = &scope.repo_root;
+    let pathspecs = scope.git_pathspecs();
+
     ensure_git_repo(repo_root)?;
 
     let describe = run_git(repo_root, &["describe", "--tags", "--abbrev=0"])?;
     let recent_range = if describe.success {
         let tag = describe.stdout.trim().to_string();
         let range = format!("{}..HEAD", tag);
-        let output = run_git_checked(repo_root, &["log", "--oneline", "--graph", &range])?;
+        let output = run_git_checked_owned(
+            repo_root,
+            build_log_args(["log", "--oneline", "--graph", range.as_str()], &pathspecs),
+        )?;
         let lines = split_output_lines(&output);
         ChangeRange { label: range, lines }
     } else {
-        let output = run_git_checked(repo_root, &["log", "--oneline", "--graph", "-n", "60"])?;
+        let output = run_git_checked_owned(
+            repo_root,
+            build_log_args(["log", "--oneline", "--graph", "-n", "60"], &pathspecs),
+        )?;
         ChangeRange {
             label: "no tags found; showing the latest 60 commits".to_string(),
             lines: split_output_lines(&output),
@@ -68,7 +77,10 @@ fn load_change_ranges(repo_root: &str) -> Result<(ChangeRange, Vec<ChangeRange>)
         let newer = &window[0];
         let older = &window[1];
         let range = format!("{}..{}", older, newer);
-        let output = run_git_checked(repo_root, &["log", "--oneline", "--graph", &range])?;
+        let output = run_git_checked_owned(
+            repo_root,
+            build_log_args(["log", "--oneline", "--graph", range.as_str()], &pathspecs),
+        )?;
         history_ranges.push(ChangeRange {
             label: range,
             lines: split_output_lines(&output),
@@ -78,10 +90,24 @@ fn load_change_ranges(repo_root: &str) -> Result<(ChangeRange, Vec<ChangeRange>)
     Ok((recent_range, history_ranges))
 }
 
+fn build_log_args<const N: usize>(base: [&str; N], pathspecs: &[String]) -> Vec<String> {
+    let mut args = base.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
+    if !pathspecs.is_empty() {
+        args.push("--".to_string());
+        args.extend(pathspecs.iter().cloned());
+    }
+    args
+}
+
+fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_checked(repo_root, &arg_refs)
+}
+
 impl RecentChangesDialog {
     pub(crate) fn from_project(project: &ProjectConfig) -> Result<Self> {
         let scopes = collect_all_branch_git_scope_contexts(project)?;
-        let (recent_range, history_ranges) = load_change_ranges(&scopes[0].repo_root)?;
+        let (recent_range, history_ranges) = load_change_ranges(&scopes[0])?;
 
         Ok(Self {
             project_name: project.name.clone(),
@@ -111,7 +137,7 @@ impl RecentChangesDialog {
 
         let len = self.scopes.len() as isize;
         self.selected_scope = (self.selected_scope as isize + delta).rem_euclid(len) as usize;
-        let (recent_range, history_ranges) = load_change_ranges(&self.active_scope().repo_root)?;
+        let (recent_range, history_ranges) = load_change_ranges(self.active_scope())?;
         self.recent_range = recent_range;
         self.history_ranges = history_ranges;
         self.active_tab = RecentChangesTab::Recent;
@@ -132,7 +158,7 @@ impl RecentChangesDialog {
         }
 
         self.selected_scope = next_scope;
-        let (recent_range, history_ranges) = load_change_ranges(&self.active_scope().repo_root)?;
+        let (recent_range, history_ranges) = load_change_ranges(self.active_scope())?;
         self.recent_range = recent_range;
         self.history_ranges = history_ranges;
         self.active_tab = RecentChangesTab::Recent;
@@ -665,5 +691,26 @@ mod tests {
             .expect("action selection should still succeed");
 
         assert_eq!(actions, vec![TagAction::CreateLocal]);
+    }
+
+    #[test]
+    fn build_log_args_append_scope_pathspecs() {
+        let args = super::build_log_args(
+            ["log", "--oneline", "--graph", "v1.0.0..HEAD"],
+            &["core/package.json".to_string(), "core/Cargo.toml".to_string()],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "log",
+                "--oneline",
+                "--graph",
+                "v1.0.0..HEAD",
+                "--",
+                "core/package.json",
+                "core/Cargo.toml",
+            ]
+        );
     }
 }
