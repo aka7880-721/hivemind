@@ -49,10 +49,10 @@ use crate::{
     dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput},
     git::{
         collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
-        load_scope_activity_summary, run_gh_checked, run_git_checked,
+        load_scope_activity_summary, run_gh_checked, run_git, run_git_checked,
     },
     overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
-    targets::{BumpScope, ProbeKind, TargetProbe, collect_bump_scopes, probe_target, write_target_version},
+    targets::{BumpScope, BumpTarget, ProbeKind, TargetProbe, collect_bump_scopes, probe_target, write_target_version},
     tiles::{OverviewTileData, render_overview_tile, tile_height, TILE_WIDTH},
     ui::{center_vertically, centered_rect},
     versioning::VersionScheme,
@@ -145,6 +145,7 @@ struct App {
     overview_drag_scope: Option<usize>,
     wizard: ProjectWizard,
     bump_dialog: Option<BumpDialog>,
+    overview_bump_workflow_dialog: Option<OverviewBumpWorkflowDialog>,
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
@@ -183,6 +184,7 @@ impl App {
             overview_drag_scope: None,
             wizard: ProjectWizard::default(),
             bump_dialog: None,
+            overview_bump_workflow_dialog: None,
             recent_changes_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
@@ -233,6 +235,9 @@ impl App {
 
         if self.bump_dialog.is_some() {
             self.render_bump_dialog(frame, frame.area());
+        }
+        if self.overview_bump_workflow_dialog.is_some() {
+            self.render_overview_bump_workflow_dialog(frame, frame.area());
         }
         if self.recent_changes_dialog.is_some() {
             self.render_recent_changes_dialog(frame, frame.area());
@@ -658,6 +663,69 @@ impl App {
         buttons.push(DialogButton::new("Apply", false, HitAction::ApplyBump, Style::default().fg(Color::Black).bg(Color::Green)));
         buttons.push(DialogButton::new("Cancel", false, HitAction::CancelBump, Style::default().fg(Color::White).bg(Color::Red)));
         self.render_button_row(frame, sections[2], &buttons);
+    }
+
+    fn render_overview_bump_workflow_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.overview_bump_workflow_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 78, 46);
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Bump Action ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(5), Constraint::Min(9), Constraint::Length(BUTTON_ROW_HEIGHT)])
+            .split(inner);
+
+        let header = vec![
+            Line::from(format!("Project: {}", dialog.project_name)).bold(),
+            Line::from(format!("Scope: {}", dialog.scope_label)),
+            Line::from(format!("Next version: {}", dialog.next_version)).style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Line::from("What would you like to do?"),
+        ];
+        frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
+
+        let option_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(3); dialog.options.len()])
+            .split(sections[1]);
+
+        for (index, (option, row)) in dialog.options.iter().zip(option_rows.iter()).enumerate() {
+            let selected = index == dialog.selected;
+            let row_block = Block::default().borders(Borders::ALL).border_style(if selected {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            });
+            let row_inner = row_block.inner(*row);
+            frame.render_widget(row_block, *row);
+            let lines = vec![
+                Line::from(format!("{}. {}", index + 1, option.display_name())).style(if selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                }),
+                Line::from(option.description()),
+            ];
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), row_inner);
+            self.hit_targets.push(HitTarget::new(*row, HitAction::SelectOverviewBumpWorkflow(index)));
+        }
+
+        self.render_button_row(
+            frame,
+            sections[2],
+            &[
+                DialogButton::new("Run", false, HitAction::ConfirmOverviewBumpWorkflow, Style::default().fg(Color::Black).bg(Color::Green)),
+                DialogButton::new("Cancel", false, HitAction::CancelOverviewBumpWorkflow, Style::default().fg(Color::White).bg(Color::Red)),
+            ],
+        );
     }
 
     fn render_recent_changes_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -1106,6 +1174,14 @@ impl App {
             Line::from(format!("Project type: {}", self.wizard.project_type.display_name())),
             Line::from(format!("Integration: {}", self.wizard.integration_mode.display_name())),
             Line::from(format!("Version scheme: {}", self.wizard.version_scheme.display_name())),
+            Line::from(if self.wizard.project_type == ProjectType::Branched {
+                format!(
+                    "Unified versioning: {}",
+                    if self.wizard.unified_versioning { "on" } else { "off" }
+                )
+            } else {
+                "Unified versioning: always on for all-in-one projects".to_string()
+            }),
             Line::from(format!("Example: {}", self.wizard.version_scheme.example())),
             Line::from(format!("Rule: {}", self.wizard.version_scheme.description())),
             Line::raw(""),
@@ -1355,6 +1431,8 @@ impl App {
             "1/2 switch tabs | [ ] scope | Left/Right history | Up/Down scroll | T create tag | Esc close"
         } else if self.bump_dialog.is_some() {
             "Up/Down scope | Left/Right change bump action | Enter apply | Esc cancel"
+        } else if self.overview_bump_workflow_dialog.is_some() {
+            "1-3 or Up/Down choose action | Enter run | Esc cancel"
         } else {
             match self.screen {
                 Screen::Dashboard => "1-4 tabs | N new project | B bump | V view changes | T create tag | Up/Down select | Q quit",
@@ -1457,6 +1535,10 @@ impl App {
 
         if self.recent_changes_dialog.is_some() {
             return self.handle_recent_changes_key(key);
+        }
+
+        if self.overview_bump_workflow_dialog.is_some() {
+            return self.handle_overview_bump_workflow_key(key);
         }
 
         if self.bump_dialog.is_some() {
@@ -1589,6 +1671,20 @@ impl App {
             KeyCode::Left => self.rotate_bump_action(-1),
             KeyCode::Right => self.rotate_bump_action(1),
             KeyCode::Enter | KeyCode::F(2) => self.apply_bump()?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_overview_bump_workflow_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_overview_bump_workflow(),
+            KeyCode::Up | KeyCode::BackTab => self.rotate_overview_bump_workflow(-1),
+            KeyCode::Down | KeyCode::Tab => self.rotate_overview_bump_workflow(1),
+            KeyCode::Char('1') => self.select_overview_bump_workflow(0),
+            KeyCode::Char('2') => self.select_overview_bump_workflow(1),
+            KeyCode::Char('3') => self.select_overview_bump_workflow(2),
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_overview_bump_workflow(),
             _ => {}
         }
         Ok(())
@@ -1842,6 +1938,7 @@ impl App {
             MouseEventKind::ScrollUp => {
                 if self.project_edit_dialog.is_some() {
                     self.scroll_project_edit_body(-1);
+                } else if self.overview_bump_workflow_dialog.is_some() {
                 } else if self.tag_dialog.is_some() {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(-2);
@@ -1880,6 +1977,7 @@ impl App {
             MouseEventKind::ScrollDown => {
                 if self.project_edit_dialog.is_some() {
                     self.scroll_project_edit_body(1);
+                } else if self.overview_bump_workflow_dialog.is_some() {
                 } else if self.tag_dialog.is_some() {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(2);
@@ -1916,7 +2014,10 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
+                if self.overview_bump_workflow_dialog.is_none()
+                    && self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::Overview
+                {
                     self.overview_drag_scope = self.overview_tile_rects.iter().rev().find_map(|(rect, scope)| {
                         if mouse.column >= rect.x
                             && mouse.column < rect.x + rect.width
@@ -2074,11 +2175,13 @@ impl App {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
             }
             HitAction::SelectOverviewScope(scope_index) => return self.select_dashboard_overview_scope(scope_index),
+            HitAction::OpenOverviewRecentChanges(scope_index) => return self.open_recent_changes_with_scope(Some(scope_index)),
+            HitAction::BeginOverviewBump(scope_index) => return self.begin_overview_bump(scope_index),
+            HitAction::SelectOverviewBumpWorkflow(index) => self.select_overview_bump_workflow(index),
+            HitAction::ConfirmOverviewBumpWorkflow => return self.confirm_overview_bump_workflow(),
+            HitAction::CancelOverviewBumpWorkflow => self.cancel_overview_bump_workflow(),
             HitAction::AdjustOverviewVersion(scope_index, control, delta) => {
                 return self.adjust_overview_pending_version(scope_index, control, delta)
-            }
-            HitAction::ApplyOverviewVersion(scope_index) => {
-                return self.apply_overview_pending_version(scope_index, false)
             }
             HitAction::ApplyOverviewVersionAndTag(scope_index) => {
                 return self.apply_overview_pending_version(scope_index, true)
@@ -2162,8 +2265,12 @@ impl App {
     }
 
     fn open_recent_changes(&mut self) -> Result<()> {
+        self.open_recent_changes_with_scope(None)
+    }
+
+    fn open_recent_changes_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
         let project = self.selected_project()?.clone();
-        let dialog = RecentChangesDialog::from_project(&project)?;
+        let dialog = RecentChangesDialog::from_project_with_scope(&project, preferred_scope.unwrap_or(0))?;
         self.bump_dialog = None;
         self.tag_dialog = None;
         self.project_edit_dialog = None;
@@ -2173,24 +2280,38 @@ impl App {
     }
 
     fn ensure_dashboard_recent_changes(&mut self) {
-        if self.overview_recent_project == Some(self.selected_project) {
-            return;
-        }
-
-        self.overview_recent_project = Some(self.selected_project);
-        self.overview_recent_changes = None;
-        self.overview_recent_error = None;
-
         let Some(project) = self.config.projects.get(self.selected_project) else {
+            self.overview_recent_project = None;
+            self.overview_recent_changes = None;
+            self.overview_recent_error = None;
             return;
         };
+
+        let project_changed = self.overview_recent_project != Some(self.selected_project);
+        self.overview_recent_project = Some(self.selected_project);
         if !project.integration_mode.requires_repo() {
+            self.overview_recent_changes = None;
+            self.overview_recent_error = None;
             return;
         }
 
-        match RecentChangesDialog::from_project(project) {
-            Ok(dialog) => self.overview_recent_changes = Some(dialog),
-            Err(error) => self.overview_recent_error = Some(error.to_string()),
+        if project_changed || self.overview_recent_changes.is_none() {
+            self.overview_recent_changes = None;
+            self.overview_recent_error = None;
+            match RecentChangesDialog::from_project(project) {
+                Ok(dialog) => self.overview_recent_changes = Some(dialog),
+                Err(error) => self.overview_recent_error = Some(error.to_string()),
+            }
+            return;
+        }
+
+        if let Some(dialog) = &mut self.overview_recent_changes {
+            if let Err(error) = dialog.refresh_current_scope() {
+                self.overview_recent_changes = None;
+                self.overview_recent_error = Some(error.to_string());
+            } else {
+                self.overview_recent_error = None;
+            }
         }
     }
 
@@ -2358,8 +2479,8 @@ impl App {
                 self.overview_tile_rects.push((hotspots.tile_rect, scope_index));
 
                 self.hit_targets.push(HitTarget::new(hotspots.title_rect, HitAction::SelectOverviewScope(scope_index)));
-                self.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::SelectOverviewScope(scope_index)));
-                self.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::ApplyOverviewVersion(scope_index)));
+                self.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::OpenOverviewRecentChanges(scope_index)));
+                self.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::BeginOverviewBump(scope_index)));
                 self.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::ApplyOverviewVersionAndTag(scope_index)));
                 if let Some(rect) = hotspots.major_rect {
                     self.hit_targets.push(HitTarget::with_right_action(
@@ -2425,6 +2546,70 @@ impl App {
             dialog.select_scope(scope_index)?;
         }
         Ok(())
+    }
+
+    fn begin_overview_bump(&mut self, scope_index: usize) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        if !project.integration_mode.requires_repo() {
+            return self.apply_overview_pending_version(scope_index, false);
+        }
+
+        let scopes = collect_bump_scopes(&project)?;
+        self.ensure_dashboard_tile_state(&scopes);
+        let next_version = self
+            .overview_pending_versions
+            .get(scope_index)
+            .cloned()
+            .or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
+            .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
+        let scope_label = if project.unified_versioning {
+            "All configured scopes".to_string()
+        } else {
+            scopes
+                .get(scope_index)
+                .map(|scope| scope.display_name.clone())
+                .unwrap_or_else(|| project.name.clone())
+        };
+        let options = match project.integration_mode {
+            IntegrationMode::LocalOnly => vec![OverviewBumpWorkflow::JustBump],
+            IntegrationMode::GitLocalOnly => vec![
+                OverviewBumpWorkflow::JustBump,
+                OverviewBumpWorkflow::Commit,
+                OverviewBumpWorkflow::CommitAndTag,
+            ],
+            IntegrationMode::GitHubEnabled => vec![
+                OverviewBumpWorkflow::JustBump,
+                OverviewBumpWorkflow::CommitAndPush,
+                OverviewBumpWorkflow::CommitPushAndTag,
+            ],
+        };
+
+        self.overview_bump_workflow_dialog = Some(OverviewBumpWorkflowDialog::new(
+            project.name,
+            scope_label,
+            next_version,
+            scope_index,
+            options,
+        ));
+        self.status = StatusMessage::info("Choose how the tile bump should be applied.");
+        Ok(())
+    }
+
+    fn select_overview_bump_workflow(&mut self, index: usize) {
+        if let Some(dialog) = &mut self.overview_bump_workflow_dialog {
+            dialog.select(index);
+        }
+    }
+
+    fn rotate_overview_bump_workflow(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.overview_bump_workflow_dialog {
+            dialog.rotate(delta);
+        }
+    }
+
+    fn cancel_overview_bump_workflow(&mut self) {
+        self.overview_bump_workflow_dialog = None;
+        self.status = StatusMessage::info("Tile bump action cancelled.");
     }
 
     fn adjust_overview_pending_version(
@@ -2497,6 +2682,76 @@ impl App {
             self.status = StatusMessage::success(format!("Updated version to {} from the overview tile.", next_version));
         }
 
+        Ok(())
+    }
+
+    fn confirm_overview_bump_workflow(&mut self) -> Result<()> {
+        let Some(dialog) = self.overview_bump_workflow_dialog.clone() else {
+            return Ok(());
+        };
+
+        self.execute_overview_bump_workflow(dialog.scope_index, dialog.selected_workflow())?;
+        self.overview_bump_workflow_dialog = None;
+        Ok(())
+    }
+
+    fn execute_overview_bump_workflow(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        let scopes = collect_bump_scopes(&project)?;
+        self.ensure_dashboard_tile_state(&scopes);
+        let affected_scope_indexes = if project.unified_versioning {
+            (0..scopes.len()).collect::<Vec<_>>()
+        } else {
+            vec![scope_index]
+        };
+        let next_version = self
+            .overview_pending_versions
+            .get(scope_index)
+            .cloned()
+            .or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
+            .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
+
+        for index in &affected_scope_indexes {
+            if let Some(scope) = scopes.get(*index) {
+                for target in &scope.targets {
+                    write_target_version(target, &next_version)?;
+                }
+                if let Some(pending) = self.overview_pending_versions.get_mut(*index) {
+                    *pending = next_version.clone();
+                }
+            }
+        }
+
+        if workflow != OverviewBumpWorkflow::JustBump {
+            let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+            let repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
+            apply_repo_bump_workflow(&repo_operations, &next_version, workflow)?;
+        }
+
+        self.invalidate_overview_cache();
+        self.ensure_dashboard_recent_changes();
+
+        let target_count = affected_scope_indexes
+            .iter()
+            .filter_map(|index| scopes.get(*index))
+            .map(|scope| scope.targets.len())
+            .sum::<usize>();
+        let scope_notice = if project.unified_versioning {
+            String::new()
+        } else {
+            scopes
+                .get(scope_index)
+                .map(|scope| format!(" in scope '{}'", scope.display_name))
+                .unwrap_or_default()
+        };
+        self.status = StatusMessage::success(format!(
+            "Updated {} target{}{} to {} via {}.",
+            target_count,
+            if target_count == 1 { "" } else { "s" },
+            scope_notice,
+            next_version,
+            workflow.display_name()
+        ));
         Ok(())
     }
 
@@ -3226,8 +3481,12 @@ enum HitAction {
     SelectOverviewTab(OverviewTab),
     SelectProject(usize),
     SelectOverviewScope(usize),
+    OpenOverviewRecentChanges(usize),
+    BeginOverviewBump(usize),
+    SelectOverviewBumpWorkflow(usize),
+    ConfirmOverviewBumpWorkflow,
+    CancelOverviewBumpWorkflow,
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
-    ApplyOverviewVersion(usize),
     ApplyOverviewVersionAndTag(usize),
     OpenProjectEdit,
     EditProjectField(ProjectEditFocus),
@@ -3280,6 +3539,223 @@ enum OverviewVersionControl {
     Minor,
     Patch,
     Whole,
+}
+
+#[derive(Clone)]
+struct OverviewBumpWorkflowDialog {
+    project_name: String,
+    scope_label: String,
+    next_version: String,
+    scope_index: usize,
+    options: Vec<OverviewBumpWorkflow>,
+    selected: usize,
+}
+
+impl OverviewBumpWorkflowDialog {
+    fn new(
+        project_name: String,
+        scope_label: String,
+        next_version: String,
+        scope_index: usize,
+        options: Vec<OverviewBumpWorkflow>,
+    ) -> Self {
+        Self {
+            project_name,
+            scope_label,
+            next_version,
+            scope_index,
+            options,
+            selected: 0,
+        }
+    }
+
+    fn selected_workflow(&self) -> OverviewBumpWorkflow {
+        self.options[self.selected.min(self.options.len().saturating_sub(1))]
+    }
+
+    fn select(&mut self, index: usize) {
+        self.selected = index.min(self.options.len().saturating_sub(1));
+    }
+
+    fn rotate(&mut self, delta: isize) {
+        if self.options.is_empty() {
+            self.selected = 0;
+            return;
+        }
+
+        let len = self.options.len() as isize;
+        self.selected = (self.selected as isize + delta).rem_euclid(len) as usize;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OverviewBumpWorkflow {
+    JustBump,
+    Commit,
+    CommitAndTag,
+    CommitAndPush,
+    CommitPushAndTag,
+}
+
+impl OverviewBumpWorkflow {
+    fn display_name(self) -> &'static str {
+        match self {
+            OverviewBumpWorkflow::JustBump => "Just bump",
+            OverviewBumpWorkflow::Commit => "Bump & Commit",
+            OverviewBumpWorkflow::CommitAndTag => "Bump & Commit & Tag",
+            OverviewBumpWorkflow::CommitAndPush => "Bump & Commit & Push",
+            OverviewBumpWorkflow::CommitPushAndTag => "Bump & Commit & Push & Tag",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            OverviewBumpWorkflow::JustBump => "Writes the updated version files only.",
+            OverviewBumpWorkflow::Commit => "Stages the version files and commits them with the standard bump message.",
+            OverviewBumpWorkflow::CommitAndTag => "Stages and commits the version files, then creates a tag named after the new version.",
+            OverviewBumpWorkflow::CommitAndPush => "Stages and commits the version files, then pushes the bump commit to the configured remote.",
+            OverviewBumpWorkflow::CommitPushAndTag => "Stages and commits the version files, pushes the bump commit, then pushes a tag named after the new version.",
+        }
+    }
+
+    fn requires_push(self) -> bool {
+        matches!(self, OverviewBumpWorkflow::CommitAndPush | OverviewBumpWorkflow::CommitPushAndTag)
+    }
+
+    fn requires_tag(self) -> bool {
+        matches!(self, OverviewBumpWorkflow::CommitAndTag | OverviewBumpWorkflow::CommitPushAndTag)
+    }
+}
+
+#[derive(Clone)]
+struct RepoBumpOperation {
+    repo_root: String,
+    remote_spec: Option<String>,
+    stage_paths: Vec<String>,
+}
+
+fn collect_repo_bump_operations(
+    _project: &ProjectConfig,
+    scopes: &[BumpScope],
+    git_contexts: &[crate::git::GitScopeContext],
+    affected_scope_indexes: &[usize],
+) -> Result<Vec<RepoBumpOperation>> {
+    let mut operations = Vec::<RepoBumpOperation>::new();
+
+    for scope_index in affected_scope_indexes {
+        let scope = scopes
+            .get(*scope_index)
+            .ok_or_else(|| anyhow!("the selected scope does not exist"))?;
+        let context = git_contexts
+            .get(*scope_index)
+            .or_else(|| git_contexts.first())
+            .ok_or_else(|| anyhow!("git scope metadata is unavailable for the selected bump targets"))?;
+        let stage_paths = collect_stage_paths_for_targets(&context.repo_root, &scope.targets);
+
+        if let Some(existing) = operations.iter_mut().find(|operation| operation.repo_root == context.repo_root) {
+            for path in stage_paths {
+                if !existing.stage_paths.iter().any(|candidate| candidate == &path) {
+                    existing.stage_paths.push(path);
+                }
+            }
+        } else {
+            operations.push(RepoBumpOperation {
+                repo_root: context.repo_root.clone(),
+                remote_spec: context.remote_spec.clone(),
+                stage_paths,
+            });
+        }
+    }
+
+    Ok(operations)
+}
+
+fn apply_repo_bump_workflow(
+    operations: &[RepoBumpOperation],
+    next_version: &str,
+    workflow: OverviewBumpWorkflow,
+) -> Result<()> {
+    let commit_message = format!("bump: CVB version bump to {}", next_version);
+
+    for operation in operations {
+        if !operation.stage_paths.is_empty() {
+            let mut add_args = vec!["add".to_string(), "--".to_string()];
+            add_args.extend(operation.stage_paths.iter().cloned());
+            run_git_checked_owned(&operation.repo_root, add_args)?;
+        }
+
+        if has_staged_changes(&operation.repo_root)? {
+            run_git_checked(&operation.repo_root, &["commit", "-m", &commit_message])?;
+        }
+
+        if workflow.requires_tag() {
+            ensure_local_tag(&operation.repo_root, next_version, None)?;
+        }
+
+        if workflow.requires_push() {
+            let remote_spec = operation
+                .remote_spec
+                .as_deref()
+                .ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+            run_git_checked(&operation.repo_root, &["push", remote_spec])?;
+            if workflow.requires_tag() {
+                run_git_checked(&operation.repo_root, &["push", remote_spec, next_version])?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn has_staged_changes(repo_root: &str) -> Result<bool> {
+    Ok(!run_git(repo_root, &["diff", "--cached", "--quiet", "--exit-code"])?.success)
+}
+
+fn collect_stage_paths_for_targets(repo_root: &str, targets: &[BumpTarget]) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    for target in targets {
+        push_stage_path(&mut paths, repo_root, &target.path);
+        if target.format == TargetFormat::Toml {
+            let target_path = Path::new(&target.path);
+            let is_cargo_manifest = target_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Cargo.toml"));
+            if is_cargo_manifest {
+                let lock_path = target_path.with_file_name("Cargo.lock");
+                if lock_path.is_file() {
+                    push_stage_path(&mut paths, repo_root, &lock_path.display().to_string());
+                }
+            }
+        }
+    }
+
+    paths
+}
+
+fn push_stage_path(paths: &mut Vec<String>, repo_root: &str, path: &str) {
+    let candidate = normalize_repo_stage_path(repo_root, path);
+    if !candidate.is_empty() && !paths.iter().any(|existing| existing == &candidate) {
+        paths.push(candidate);
+    }
+}
+
+fn normalize_repo_stage_path(repo_root: &str, path: &str) -> String {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        candidate
+            .strip_prefix(repo_root)
+            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| path.replace('\\', "/"))
+    } else {
+        path.replace('\\', "/")
+    }
+}
+
+fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_checked(repo_root, &arg_refs)
 }
 
 #[derive(Clone)]
@@ -3427,6 +3903,7 @@ struct ProjectEditDialog {
     repo_root: TextInput,
     remote_url: TextInput,
     project_type: ProjectType,
+    unified_versioning: bool,
     integration_mode: IntegrationMode,
     version_scheme: VersionScheme,
     focus: ProjectEditFocus,
@@ -3472,6 +3949,7 @@ impl ProjectEditDialog {
             repo_root: TextInput::with_value(repo_root),
             remote_url: TextInput::with_value(remote_url),
             project_type: project.project_type,
+            unified_versioning: project.unified_versioning,
             integration_mode: project.integration_mode,
             version_scheme: project.version_scheme,
             focus: ProjectEditFocus::Name,
@@ -3522,6 +4000,7 @@ impl ProjectEditDialog {
                 ProjectEditFocus::ScopeSelection,
                 ProjectEditFocus::ScopeName,
                 ProjectEditFocus::ScopeKind,
+                ProjectEditFocus::UnifiedVersioning,
             ]);
         }
         fields.extend([
@@ -3563,6 +4042,7 @@ impl ProjectEditDialog {
             ProjectEditFocus::ScopeName => ("Scope name", HitAction::EditProjectField(field)),
             ProjectEditFocus::ScopeKind => ("Scope kind", HitAction::EditProjectField(field)),
             ProjectEditFocus::VersionScheme => ("Version scheme", HitAction::EditProjectField(field)),
+            ProjectEditFocus::UnifiedVersioning => ("Unified versioning", HitAction::EditProjectField(field)),
             ProjectEditFocus::IntegrationMode => ("Integration", HitAction::EditProjectField(field)),
             ProjectEditFocus::TargetPath => ("Target path", HitAction::EditProjectField(field)),
             ProjectEditFocus::TargetKey => ("Target key", HitAction::EditProjectField(field)),
@@ -3592,6 +4072,13 @@ impl ProjectEditDialog {
                 .map(|scope| format!("< {} >", scope.scope_kind.display_name()))
                 .unwrap_or_else(|| format!("< {} >", BranchScopeKind::Branch.display_name())),
             ProjectEditFocus::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
+            ProjectEditFocus::UnifiedVersioning => {
+                if self.project_type == ProjectType::Branched {
+                    format!("< {} >", if self.unified_versioning { "Yes" } else { "No" })
+                } else {
+                    "Always yes for all-in-one projects".to_string()
+                }
+            }
             ProjectEditFocus::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
             ProjectEditFocus::TargetPath => {
                 if self.project_type == ProjectType::Branched {
@@ -3660,6 +4147,11 @@ impl ProjectEditDialog {
                 } else {
                     self.version_scheme.previous()
                 };
+            }
+            ProjectEditFocus::UnifiedVersioning => {
+                if self.project_type == ProjectType::Branched {
+                    self.unified_versioning = !self.unified_versioning;
+                }
             }
             ProjectEditFocus::IntegrationMode => {
                 self.integration_mode = if delta >= 0 {
@@ -3879,7 +4371,7 @@ impl ProjectEditDialog {
         project.name = project_name.to_string();
         project.project_type = self.project_type;
         project.integration_mode = self.integration_mode;
-        project.unified_versioning = true;
+        project.unified_versioning = self.project_type == ProjectType::AllInOne || self.unified_versioning;
         project.version_scheme = self.version_scheme;
 
         if self.project_type == ProjectType::AllInOne {
@@ -4071,6 +4563,7 @@ enum ProjectEditFocus {
     ScopeName,
     ScopeKind,
     VersionScheme,
+    UnifiedVersioning,
     IntegrationMode,
     TargetPath,
     TargetKey,
@@ -4135,6 +4628,7 @@ enum WizardField {
     ScopeName,
     ScopeKind,
     VersionScheme,
+    UnifiedVersioning,
     IntegrationMode,
     TargetPath,
     TargetKey,
@@ -4162,6 +4656,7 @@ struct ProjectWizard {
     repo_root: TextInput,
     remote_url: TextInput,
     project_type: ProjectType,
+    unified_versioning: bool,
     integration_mode: IntegrationMode,
     version_scheme: VersionScheme,
     focus: WizardField,
@@ -4182,6 +4677,7 @@ impl Default for ProjectWizard {
             repo_root: TextInput::with_value(""),
             remote_url: TextInput::with_value(""),
             project_type: ProjectType::AllInOne,
+            unified_versioning: false,
             integration_mode: IntegrationMode::LocalOnly,
             version_scheme: VersionScheme::SemVer,
             focus: WizardField::Name,
@@ -4212,6 +4708,7 @@ impl ProjectWizard {
                 WizardField::ScopeSelection,
                 WizardField::ScopeName,
                 WizardField::ScopeKind,
+                WizardField::UnifiedVersioning,
             ]);
         }
         fields.extend([
@@ -4273,6 +4770,7 @@ impl ProjectWizard {
                 "Version scheme",
                 HitAction::WizardField(field),
             ),
+            WizardField::UnifiedVersioning => ("Unified versioning", HitAction::WizardField(field)),
             WizardField::IntegrationMode => (
                 "Integration",
                 HitAction::WizardField(field),
@@ -4305,6 +4803,13 @@ impl ProjectWizard {
                 .map(|scope| format!("< {} >", scope.scope_kind.display_name()))
                 .unwrap_or_else(|| format!("< {} >", BranchScopeKind::Branch.display_name())),
             WizardField::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
+            WizardField::UnifiedVersioning => {
+                if self.project_type == ProjectType::Branched {
+                    format!("< {} >", if self.unified_versioning { "Yes" } else { "No" })
+                } else {
+                    "Always yes for all-in-one projects".to_string()
+                }
+            }
             WizardField::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
             WizardField::TargetPath => {
                 if self.project_type == ProjectType::Branched {
@@ -4374,6 +4879,11 @@ impl ProjectWizard {
                     self.version_scheme.previous()
                 };
                 self.clear_validation_results();
+            }
+            WizardField::UnifiedVersioning => {
+                if self.project_type == ProjectType::Branched {
+                    self.unified_versioning = !self.unified_versioning;
+                }
             }
             WizardField::IntegrationMode => {
                 self.integration_mode = if delta >= 0 {
@@ -4658,7 +5168,7 @@ impl ProjectWizard {
                 name: self.name.value.trim().to_string(),
                 project_type: ProjectType::Branched,
                 integration_mode: self.integration_mode,
-                unified_versioning: true,
+                unified_versioning: self.unified_versioning,
                 version_scheme: self.version_scheme,
                 targets: Vec::new(),
                 branches: self.build_branches(true)?,
@@ -5428,6 +5938,7 @@ mod tests {
         let project = wizard.build_project().expect("branched project should build");
 
         assert_eq!(project.project_type, ProjectType::Branched);
+        assert!(!project.unified_versioning);
         assert_eq!(project.branches.len(), 2);
         assert_eq!(project.branches[0].name, "core");
         assert_eq!(project.branches[1].name, "api");
