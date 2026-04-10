@@ -125,9 +125,9 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		);
 	}
 
-	let view_rect = button_row[1];
-	let bump_rect = button_row[2];
-	let tag_rect = button_row[3];
+	let view_rect = button_row[0];
+	let bump_rect = button_row[1];
+	let tag_rect = button_row[2];
 	render_tile_button(frame, view_rect, "view", Color::Rgb(70, 110, 150));
 	render_tile_button(frame, bump_rect, "bump", Color::Rgb(120, 170, 80));
 	render_tile_button(frame, tag_rect, "tag", Color::Rgb(170, 140, 70));
