@@ -253,18 +253,11 @@ impl App {
         self.render_footer(frame, root[3]);
         self.transient_toaster.set_area(frame.area());
         let transient_area = self.transient_toaster.toast_area();
-        let sticky_area = if self.transient_toaster.has_toast() {
-            Rect {
-                height: transient_area
-                    .y
-                    .saturating_sub(frame.area().y)
-                    .saturating_sub(1),
-                ..frame.area()
-            }
+        if self.transient_toaster.has_toast() {
+            self.sticky_toaster.set_area_avoiding(frame.area(), &[transient_area]);
         } else {
-            frame.area()
-        };
-        self.sticky_toaster.set_area(sticky_area);
+            self.sticky_toaster.set_area(frame.area());
+        }
         frame.render_widget(&self.transient_toaster, frame.area());
         frame.render_widget(&self.sticky_toaster, frame.area());
     }
@@ -2269,7 +2262,6 @@ impl App {
 
         let git_contexts = collect_all_branch_git_scope_contexts(project).ok();
         let columns = dashboard_tile_columns(area.width).max(1);
-        let horizontal_gap = 1;
         let vertical_gap = 1;
         let row_height = scopes
             .iter()
@@ -2282,94 +2274,117 @@ impl App {
         let max_scroll = total_rows.saturating_sub(visible_rows);
         self.overview_tile_scroll = self.overview_tile_scroll.min(max_scroll);
 
-        for (position, scope_index) in self.overview_scope_order.iter().copied().enumerate() {
-            let Some(scope) = scopes.get(scope_index) else {
-                continue;
-            };
+        let visible_row_scopes = (self.overview_tile_scroll..(self.overview_tile_scroll + visible_rows).min(total_rows))
+            .map(|row| {
+                let start = row * columns;
+                let end = (start + columns).min(self.overview_scope_order.len());
+                self.overview_scope_order[start..end].to_vec()
+            })
+            .filter(|row| !row.is_empty())
+            .collect::<Vec<_>>();
 
-            let column = position % columns;
-            let row = position / columns;
-            if row < self.overview_tile_scroll || row >= self.overview_tile_scroll + visible_rows {
-                continue;
-            }
+        let row_constraints = visible_row_scopes
+            .iter()
+            .map(|row| {
+                let row_tile_height = row
+                    .iter()
+                    .filter_map(|scope_index| scopes.get(*scope_index))
+                    .map(|scope| tile_height(scope.scheme))
+                    .max()
+                    .unwrap_or(7);
+                Constraint::Length(row_tile_height)
+            })
+            .collect::<Vec<_>>();
+        let row_areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(row_constraints)
+            .flex(Flex::SpaceEvenly)
+            .split(area);
 
-            let visible_row = row - self.overview_tile_scroll;
-            let tile_rect = Rect {
-                x: area.x + column as u16 * (TILE_WIDTH + horizontal_gap),
-                y: area.y + visible_row as u16 * row_height,
-                width: TILE_WIDTH.min(area.width.saturating_sub(column as u16 * (TILE_WIDTH + horizontal_gap))),
-                height: tile_height(scope.scheme),
-            };
-            if tile_rect.width < 12 || tile_rect.height < 4 || tile_rect.y + tile_rect.height > area.y + area.height {
-                continue;
-            }
+        for (row_area, row_scopes) in row_areas.iter().zip(visible_row_scopes.iter()) {
+            let column_areas = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Length(TILE_WIDTH.min(area.width)); row_scopes.len()])
+                .flex(Flex::SpaceEvenly)
+                .split(*row_area);
 
-            let activity = git_contexts
-                .as_ref()
-                .and_then(|contexts| contexts.get(scope_index))
-                .and_then(|context| load_repo_activity_summary(&context.repo_root).ok());
-            let selected = self
-                .overview_recent_changes
-                .as_ref()
-                .map(|dialog| dialog.selected_scope == scope_index)
-                .unwrap_or(scope_index == 0);
-            let tile = OverviewTileData {
-                name: scope.display_name.clone(),
-                scope_kind: scope.scope_kind,
-                scheme: scope.scheme,
-                preview_version: self
-                    .overview_pending_versions
-                    .get(scope_index)
-                    .cloned()
-                    .unwrap_or_else(|| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string())),
-                commits_since_tag_label: activity
+            for (cell_area, scope_index) in column_areas.iter().zip(row_scopes.iter().copied()) {
+                let Some(scope) = scopes.get(scope_index) else {
+                    continue;
+                };
+
+                let tile_rect = center_vertically(*cell_area, tile_height(scope.scheme));
+                if tile_rect.width < 12 || tile_rect.height < 4 {
+                    continue;
+                }
+
+                let activity = git_contexts
                     .as_ref()
-                    .map(|summary| summary.commits_since_tag_label.clone())
-                    .unwrap_or_else(|| "n/a".to_string()),
-                last_bump_label: activity
+                    .and_then(|contexts| contexts.get(scope_index))
+                    .and_then(|context| load_repo_activity_summary(&context.repo_root).ok());
+                let selected = self
+                    .overview_recent_changes
                     .as_ref()
-                    .map(|summary| summary.last_bump_label.clone())
-                    .unwrap_or_else(|| "n/a".to_string()),
-                last_commit_label: activity
-                    .as_ref()
-                    .map(|summary| summary.last_commit_label.clone())
-                    .unwrap_or_else(|| "n/a".to_string()),
-                selected,
-            };
-            let hotspots = render_overview_tile(frame, tile_rect, &tile);
-            self.overview_tile_rects.push((hotspots.tile_rect, scope_index));
+                    .map(|dialog| dialog.selected_scope == scope_index)
+                    .unwrap_or(scope_index == 0);
+                let tile = OverviewTileData {
+                    name: scope.display_name.clone(),
+                    scope_kind: scope.scope_kind,
+                    scheme: scope.scheme,
+                    preview_version: self
+                        .overview_pending_versions
+                        .get(scope_index)
+                        .cloned()
+                        .unwrap_or_else(|| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string())),
+                    commits_since_tag_label: activity
+                        .as_ref()
+                        .map(|summary| summary.commits_since_tag_label.clone())
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    last_bump_label: activity
+                        .as_ref()
+                        .map(|summary| summary.last_bump_label.clone())
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    last_commit_label: activity
+                        .as_ref()
+                        .map(|summary| summary.last_commit_label.clone())
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    selected,
+                };
+                let hotspots = render_overview_tile(frame, tile_rect, &tile);
+                self.overview_tile_rects.push((hotspots.tile_rect, scope_index));
 
-            self.hit_targets.push(HitTarget::new(hotspots.title_rect, HitAction::SelectOverviewScope(scope_index)));
-            self.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::SelectOverviewScope(scope_index)));
-            self.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::ApplyOverviewVersion(scope_index)));
-            self.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::ApplyOverviewVersionAndTag(scope_index)));
-            if let Some(rect) = hotspots.major_rect {
-                self.hit_targets.push(HitTarget::with_right_action(
-                    rect,
-                    HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Major, 1),
-                    HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Major, -1),
-                ));
-            }
-            if let Some(rect) = hotspots.minor_rect {
-                self.hit_targets.push(HitTarget::with_right_action(
-                    rect,
-                    HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Minor, 1),
-                    HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Minor, -1),
-                ));
-            }
-            if let Some(rect) = hotspots.patch_rect {
-                self.hit_targets.push(HitTarget::with_right_action(
-                    rect,
-                    HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Patch, 1),
-                    HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Patch, -1),
-                ));
-            }
-            if let Some(rect) = hotspots.version_rect {
-                self.hit_targets.push(HitTarget::with_right_action(
-                    rect,
-                    HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Whole, 1),
-                    HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Whole, -1),
-                ));
+                self.hit_targets.push(HitTarget::new(hotspots.title_rect, HitAction::SelectOverviewScope(scope_index)));
+                self.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::SelectOverviewScope(scope_index)));
+                self.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::ApplyOverviewVersion(scope_index)));
+                self.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::ApplyOverviewVersionAndTag(scope_index)));
+                if let Some(rect) = hotspots.major_rect {
+                    self.hit_targets.push(HitTarget::with_right_action(
+                        rect,
+                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Major, 1),
+                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Major, -1),
+                    ));
+                }
+                if let Some(rect) = hotspots.minor_rect {
+                    self.hit_targets.push(HitTarget::with_right_action(
+                        rect,
+                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Minor, 1),
+                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Minor, -1),
+                    ));
+                }
+                if let Some(rect) = hotspots.patch_rect {
+                    self.hit_targets.push(HitTarget::with_right_action(
+                        rect,
+                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Patch, 1),
+                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Patch, -1),
+                    ));
+                }
+                if let Some(rect) = hotspots.version_rect {
+                    self.hit_targets.push(HitTarget::with_right_action(
+                        rect,
+                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Whole, 1),
+                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Whole, -1),
+                    ));
+                }
             }
         }
 
