@@ -12,7 +12,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::{
     config::{IntegrationMode, ProjectConfig},
     git::{
-        GitScopeContext, collect_git_scope_contexts, ensure_git_repo, run_git, run_git_checked,
+        GitScopeContext, collect_all_branch_git_scope_contexts, collect_git_scope_contexts,
+        ensure_git_repo, run_git, run_git_checked,
         split_output_lines,
     },
     targets::{BumpScope, BumpTarget, collect_bump_scopes, shared_bump_version},
@@ -79,7 +80,7 @@ fn load_change_ranges(repo_root: &str) -> Result<(ChangeRange, Vec<ChangeRange>)
 
 impl RecentChangesDialog {
     pub(crate) fn from_project(project: &ProjectConfig) -> Result<Self> {
-        let scopes = collect_git_scope_contexts(project)?;
+        let scopes = collect_all_branch_git_scope_contexts(project)?;
         let (recent_range, history_ranges) = load_change_ranges(&scopes[0].repo_root)?;
 
         Ok(Self {
