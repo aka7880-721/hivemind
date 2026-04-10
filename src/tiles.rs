@@ -105,18 +105,18 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		);
 	}
 	frame.render_widget(
-		Paragraph::new("  .  ").alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
+		Paragraph::new("  ·  ").alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
 		left_rows[3],
 	);
 	frame.render_widget(
-		Paragraph::new("  .  ").alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
+		Paragraph::new("  ·  ").alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)),
 		left_rows[5],
 	);
 
 	let details = [
-		format_activity_detail("tag..→HEAD", &tile.commits_since_tag_label, 8),
-		format_activity_detail("last bump", &tile.last_bump_label, 9),
-		format_activity_detail("last commit", &tile.last_commit_label, 7),
+		format_activity_detail(" tag..→HEAD", &tile.commits_since_tag_label, 8),
+		format_activity_detail(" last bump", &tile.last_bump_label, 9),
+		format_activity_detail(" last commit", &tile.last_commit_label, 7),
 	];
 	for (row, detail) in [right_rows[2], right_rows[3], right_rows[4]].iter().zip(details.iter()) {
 		frame.render_widget(Paragraph::new(detail.as_str()).wrap(Wrap { trim: false }), *row);
