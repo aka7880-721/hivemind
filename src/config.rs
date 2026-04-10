@@ -74,12 +74,23 @@ impl ProjectConfig {
                 self.project_type.display_name(),
                 self.branches.len(),
                 if self.branches.len() == 1 { "" } else { "s" },
-                if self.unified_versioning {
-                    format!("unified {}", self.version_scheme.display_name())
-                } else {
-                    "per-branch versioning".to_string()
-                }
+                self.branched_scheme_summary()
             ),
+        }
+    }
+
+    fn branched_scheme_summary(&self) -> &'static str {
+        let semver_count = self
+            .branches
+            .iter()
+            .filter(|branch| branch.version_scheme == VersionScheme::SemVer)
+            .count();
+        if semver_count == self.branches.len() {
+            "SemVer"
+        } else if semver_count == 0 {
+            "CalVer"
+        } else {
+            "Mixed"
         }
     }
 
@@ -486,5 +497,47 @@ format = "json"
         assert_eq!(migrated.projects[0].branches.len(), 1);
         assert_eq!(migrated.projects[0].branches[0].name, "core");
         assert_eq!(migrated.projects[0].branches[0].targets[0].path, "package.json");
+    }
+
+    #[test]
+    fn branched_summary_reports_semver_or_mixed_compactly() {
+        let semver_project = ProjectConfig {
+            name: "Example".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            targets: Vec::new(),
+            branches: vec![BranchConfig {
+                name: "core".to_string(),
+                label: "core".to_string(),
+                scope_kind: BranchScopeKind::Branch,
+                repo: None,
+                version_scheme: VersionScheme::SemVer,
+                targets: Vec::new(),
+            }],
+            repo: None,
+        };
+
+        let mixed_project = ProjectConfig {
+            branches: vec![
+                BranchConfig {
+                    version_scheme: VersionScheme::SemVer,
+                    ..semver_project.branches[0].clone()
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    label: "api".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    repo: None,
+                    version_scheme: VersionScheme::CalVerYearMonthMicro,
+                    targets: Vec::new(),
+                },
+            ],
+            ..semver_project.clone()
+        };
+
+        assert!(semver_project.summary().ends_with("SemVer"));
+        assert!(mixed_project.summary().ends_with("Mixed"));
     }
 }
