@@ -39,6 +39,7 @@ pub struct UiSettings {
     pub show_mouse_hints: bool,
     pub show_tab_hints: bool,
     pub hide_footer: bool,
+    pub footer_content: FooterContent,
 }
 
 impl Default for UiSettings {
@@ -48,7 +49,36 @@ impl Default for UiSettings {
             show_mouse_hints: true,
             show_tab_hints: true,
             hide_footer: false,
+            footer_content: FooterContent::Centered,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FooterContent {
+    #[default]
+    Centered,
+    Left,
+}
+
+impl FooterContent {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            FooterContent::Centered => "Centered",
+            FooterContent::Left => "Left",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            FooterContent::Centered => FooterContent::Left,
+            FooterContent::Left => FooterContent::Centered,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        self.next()
     }
 }
 
