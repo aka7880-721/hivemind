@@ -132,7 +132,11 @@ impl RecentChangesDialog {
     }
 
     pub(crate) fn refresh_current_scope(&mut self) -> Result<()> {
-        self.reload_selected_scope(false)
+        let previous_scroll = self.scroll;
+        self.reload_selected_scope(false)?;
+        let max_scroll = self.current_range().lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        self.scroll = previous_scroll.min(max_scroll);
+        Ok(())
     }
 
     pub(crate) fn rotate_scope(&mut self, delta: isize) -> Result<()> {

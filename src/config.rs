@@ -38,6 +38,7 @@ pub struct UiSettings {
     pub accent_color: String,
     pub show_mouse_hints: bool,
     pub show_tab_hints: bool,
+    pub hide_footer: bool,
 }
 
 impl Default for UiSettings {
@@ -46,6 +47,7 @@ impl Default for UiSettings {
             accent_color: "cyan".to_string(),
             show_mouse_hints: true,
             show_tab_hints: true,
+            hide_footer: false,
         }
     }
 }
