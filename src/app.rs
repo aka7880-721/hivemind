@@ -133,6 +133,7 @@ struct App {
     screen: Screen,
     selected_project: usize,
     overview_tab: OverviewTab,
+    overview_show_recent_tab: bool,
     overview_recent_changes: Option<RecentChangesDialog>,
     overview_recent_project: Option<usize>,
     overview_recent_error: Option<String>,
@@ -173,6 +174,7 @@ impl App {
             screen: Screen::Dashboard,
             selected_project: 0,
             overview_tab: OverviewTab::Overview,
+            overview_show_recent_tab: false,
             overview_recent_changes: None,
             overview_recent_project: None,
             overview_recent_error: None,
@@ -216,10 +218,11 @@ impl App {
         self.overview_recent_viewport = None;
         self.overview_tile_rects.clear();
 
+        let header_height = header_height_for_viewport(frame.area().height);
         let root = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(12),
+                Constraint::Length(header_height),
                 Constraint::Length(3),
                 Constraint::Min(12),
                 Constraint::Length(3),
@@ -338,6 +341,10 @@ impl App {
     }
 
     fn render_nav(&mut self, frame: &mut Frame, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
         let labels = self.main_tab_labels();
         let widths = labels
             .iter()
@@ -345,63 +352,71 @@ impl App {
             .collect::<Vec<_>>();
 
         let active_index = self.current_main_tab_index();
-        let left_width = widths[0].min(area.width);
-        let right_width = widths
-            .iter()
-            .skip(1)
-            .copied()
-            .sum::<u16>()
-            .min(area.width.saturating_sub(left_width));
-        let left_rect = Rect { x: area.x, y: area.y, width: left_width, height: area.height };
-        let right_rect = Rect {
-            x: area.x + area.width.saturating_sub(right_width),
-            y: area.y,
-            width: right_width,
-            height: area.height,
+        let border_rect = Rect {
+            x: area.x,
+            y: area.y + area.height.saturating_sub(1),
+            width: area.width,
+            height: 1,
         };
+        frame.render_widget(
+            Paragraph::new("─".repeat(area.width as usize)).style(Style::default().fg(Color::DarkGray)),
+            border_rect,
+        );
 
-        self.render_main_nav_tabs(frame, left_rect, &labels[..1], if active_index == 0 { Some(0) } else { None });
+        let left_rect = Rect { x: area.x, y: area.y, width: widths[0].min(area.width), height: area.height };
+        self.render_main_nav_tab(frame, left_rect, &labels[0], active_index == 0);
         self.hit_targets.push(HitTarget::new(left_rect, HitAction::Switch(main_screen_from_index(0))));
 
-        if right_rect.width > 0 {
-            self.render_main_nav_tabs(
-                frame,
-                right_rect,
-                &labels[1..],
-                if active_index > 0 { Some(active_index - 1) } else { None },
-            );
-            let constraints = widths
-                .iter()
-                .skip(1)
-                .copied()
-                .map(Constraint::Length)
-                .collect::<Vec<_>>();
-            for (offset, rect) in Layout::default().direction(Direction::Horizontal).constraints(constraints).split(right_rect).iter().enumerate() {
-                self.hit_targets.push(HitTarget::new(*rect, HitAction::Switch(main_screen_from_index(offset + 1))));
+        let right_total_width = widths.iter().skip(1).copied().sum::<u16>();
+        let mut current_x = area.x + area.width.saturating_sub(right_total_width);
+        for index in 1..labels.len() {
+            let width = widths[index].min(area.x + area.width - current_x);
+            if width == 0 {
+                continue;
             }
+            let rect = Rect {
+                x: current_x,
+                y: area.y,
+                width,
+                height: area.height,
+            };
+            self.render_main_nav_tab(frame, rect, &labels[index], active_index == index);
+            self.hit_targets.push(HitTarget::new(rect, HitAction::Switch(main_screen_from_index(index))));
+            current_x = current_x.saturating_add(widths[index]);
         }
     }
 
-    fn render_main_nav_tabs(&self, frame: &mut Frame, area: Rect, labels: &[String], active_index: Option<usize>) {
-        if area.width == 0 || labels.is_empty() {
+    fn render_main_nav_tab(&self, frame: &mut Frame, area: Rect, label: &str, selected: bool) {
+        if area.width == 0 || area.height == 0 {
             return;
         }
 
-        let tab_labels = labels.iter().map(String::as_str).collect::<Vec<_>>();
-        let tabs = TabNav::new(&tab_labels, active_index.unwrap_or(0))
-            .highlight_style(if active_index.is_some() {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            })
-            .border_style(if active_index.is_some() {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            })
-            .style(Style::default().fg(Color::White))
-            .indicator(None);
-        frame.render_widget(tabs, area);
+        let border_style = if selected {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let label_style = if selected {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let block = Block::default()
+            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+            .border_style(border_style);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        frame.render_widget(Paragraph::new(label).alignment(Alignment::Center).style(label_style), inner);
+
+        if selected && area.width > 2 {
+            let clear_rect = Rect {
+                x: area.x + 1,
+                y: area.y + area.height.saturating_sub(1),
+                width: area.width.saturating_sub(2),
+                height: 1,
+            };
+            frame.render_widget(Paragraph::new(" ".repeat(clear_rect.width as usize)), clear_rect);
+        }
     }
 
     fn scope_repo_roots(&self, project: &ProjectConfig, scope_count: usize) -> Vec<Option<String>> {
@@ -472,8 +487,12 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(8)])
             .split(chunks[1]);
-        render_overview_tabs(frame, right_sections[0], self.overview_tab);
-        for (tab, rect) in overview_tab_rects(right_sections[0]) {
+        self.overview_show_recent_tab = self.should_use_recent_changes_tab(right_sections[1]);
+        if !self.overview_show_recent_tab && self.overview_tab == OverviewTab::RecentChanges {
+            self.overview_tab = OverviewTab::Overview;
+        }
+        render_overview_tabs(frame, right_sections[0], self.overview_tab, self.overview_show_recent_tab);
+        for (tab, rect) in overview_tab_rects(right_sections[0], self.overview_show_recent_tab) {
             self.hit_targets.push(HitTarget::new(rect, HitAction::SelectOverviewTab(tab)));
         }
 
@@ -554,6 +573,17 @@ impl App {
             .map(|scope| tile_height(scope.scheme))
             .max()
             .unwrap_or(7);
+
+        if self.overview_show_recent_tab && self.overview_tab == OverviewTab::RecentChanges {
+            self.render_overview_recent_changes(frame, area);
+            return;
+        }
+
+        if self.overview_show_recent_tab {
+            self.render_dashboard_tiles(frame, area, &project, &scopes);
+            return;
+        }
+
         let row_height = max_tile_height.saturating_add(1);
         let desired_tile_height = tile_rows as u16 * row_height - 1;
         let tile_height_budget = area.height.saturating_sub(9).max(max_tile_height.min(area.height));
@@ -565,10 +595,14 @@ impl App {
 
         self.render_dashboard_tiles(frame, sections[0], &project, &scopes);
 
+        self.render_overview_recent_changes(frame, sections[2]);
+    }
+
+    fn render_overview_recent_changes(&mut self, frame: &mut Frame, area: Rect) {
         let recent_block = Block::default().borders(Borders::ALL).title(" Recent Changes ");
-        let recent_inner = recent_block.inner(sections[2]);
+        let recent_inner = recent_block.inner(area);
         self.overview_recent_viewport = Some(recent_inner);
-        frame.render_widget(recent_block, sections[2]);
+        frame.render_widget(recent_block, area);
 
         let recent_lines = if let Some(dialog) = &self.overview_recent_changes {
             let mut lines = vec![
@@ -609,6 +643,21 @@ impl App {
                 .wrap(Wrap { trim: false }),
             recent_inner,
         );
+    }
+
+    fn should_use_recent_changes_tab(&self, area: Rect) -> bool {
+        let Some(project) = self.config.projects.get(self.selected_project) else {
+            return false;
+        };
+        let Ok(scopes) = collect_bump_scopes(project) else {
+            return false;
+        };
+        let max_tile_height = scopes
+            .iter()
+            .map(|scope| tile_height(scope.scheme))
+            .max()
+            .unwrap_or(7);
+        should_use_recent_changes_tab(area.height, max_tile_height)
     }
 
     fn render_bump_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -1563,7 +1612,7 @@ impl App {
             "1-3 or Up/Down choose warning action | Enter confirm | Esc cancel"
         } else {
             match self.screen {
-                Screen::Dashboard => "1-4 tabs | N new project | B bump | V view changes | T create tag | Up/Down select | Q quit",
+                Screen::Dashboard => "1-4 tabs | Left/Right overview tabs | N new project | B bump | V view changes | T create tag | Up/Down select or scroll recent | Q quit",
                 Screen::Settings => "1-4 tabs | Up/Down select project | E edit selected project | N new project | Q quit",
                 Screen::UiSettings => "1-4 tabs | Enter, Space, T, Left, Right toggle tab hints | N new project | Q quit",
                 Screen::Wizard => "Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F5 read target | F2 save | Esc cancel",
@@ -1701,10 +1750,26 @@ impl App {
             KeyCode::Char('v') => self.open_recent_changes()?,
             KeyCode::Char('t') => self.open_tag_dialog()?,
             KeyCode::Char('s') => self.screen = Screen::Settings,
-            KeyCode::Up => self.move_project_selection(-1),
-            KeyCode::Down => self.move_project_selection(1),
-            KeyCode::Left => self.overview_tab = OverviewTab::Overview,
-            KeyCode::Right => self.overview_tab = OverviewTab::ProjectDetail,
+            KeyCode::Up => {
+                if self.overview_show_recent_tab && self.overview_tab == OverviewTab::RecentChanges {
+                    if let Some(dialog) = &mut self.overview_recent_changes {
+                        dialog.scroll_by(-1);
+                    }
+                } else {
+                    self.move_project_selection(-1);
+                }
+            }
+            KeyCode::Down => {
+                if self.overview_show_recent_tab && self.overview_tab == OverviewTab::RecentChanges {
+                    if let Some(dialog) = &mut self.overview_recent_changes {
+                        dialog.scroll_by(1);
+                    }
+                } else {
+                    self.move_project_selection(1);
+                }
+            }
+            KeyCode::Left => self.cycle_overview_tab(-1),
+            KeyCode::Right => self.cycle_overview_tab(1),
             KeyCode::PageUp => {
                 if let Some(dialog) = &mut self.overview_recent_changes {
                     dialog.scroll_by(-6);
@@ -2116,6 +2181,10 @@ impl App {
                     } else {
                         self.move_project_selection(-1);
                     }
+                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::RecentChanges {
+                    if let Some(dialog) = &mut self.overview_recent_changes {
+                        dialog.scroll_by(-2);
+                    }
                 } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
                     self.move_project_selection(-1);
                 }
@@ -2154,6 +2223,10 @@ impl App {
                         dialog.scroll_by(2);
                     } else {
                         self.move_project_selection(1);
+                    }
+                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::RecentChanges {
+                    if let Some(dialog) = &mut self.overview_recent_changes {
+                        dialog.scroll_by(2);
                     }
                 } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
                     self.move_project_selection(1);
@@ -3575,6 +3648,20 @@ impl App {
             _ => self.screen = target,
         }
         true
+    }
+
+    fn cycle_overview_tab(&mut self, delta: isize) {
+        let tabs = if self.overview_show_recent_tab {
+            [OverviewTab::Overview, OverviewTab::RecentChanges, OverviewTab::ProjectDetail].as_slice()
+        } else {
+            [OverviewTab::Overview, OverviewTab::ProjectDetail].as_slice()
+        };
+        let current = tabs
+            .iter()
+            .position(|tab| *tab == self.overview_tab)
+            .unwrap_or(0) as isize;
+        let next = (current + delta).rem_euclid(tabs.len() as isize) as usize;
+        self.overview_tab = tabs[next];
     }
 
     fn try_handle_toast_shortcut(&mut self, key: KeyEvent) -> bool {
@@ -6201,6 +6288,14 @@ fn main_screen_from_index(index: usize) -> Screen {
     }
 }
 
+fn header_height_for_viewport(total_height: u16) -> u16 {
+    if total_height < 40 { 6 } else { 12 }
+}
+
+fn should_use_recent_changes_tab(area_height: u16, max_tile_height: u16) -> bool {
+    area_height < max_tile_height.saturating_add(1).saturating_add(8)
+}
+
 impl App {
     fn main_tab_labels(&self) -> Vec<String> {
         ["Dashboard", "New Project", "Settings", "UI Settings"]
@@ -6250,6 +6345,18 @@ mod tests {
         wizard.insert_text("C:/repo");
 
         assert!(matches!(wizard.last_probe.as_ref().map(|probe| probe.kind), Some(ProbeKind::Success)));
+    }
+
+    #[test]
+    fn compact_viewports_use_short_header() {
+        assert_eq!(header_height_for_viewport(39), 6);
+        assert_eq!(header_height_for_viewport(40), 12);
+    }
+
+    #[test]
+    fn recent_changes_tab_appears_when_vertical_space_is_tight() {
+        assert!(should_use_recent_changes_tab(15, 7));
+        assert!(!should_use_recent_changes_tab(20, 7));
     }
 
     #[test]
