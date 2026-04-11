@@ -55,7 +55,7 @@ impl Default for ProjectWizard {
 			unified_versioning: false,
 			integration_mode: IntegrationMode::LocalOnly,
 			version_scheme: VersionScheme::SemVer,
-			focus: WizardField::Name,
+			focus: WizardField::ProjectType,
 			last_probe: None,
 		}
 	}
@@ -74,7 +74,7 @@ impl ProjectWizard {
 	}
 
 	fn visible_fields(&self) -> Vec<WizardField> {
-		let mut fields = vec![WizardField::Name, WizardField::ProjectType];
+		let mut fields = vec![WizardField::ProjectType, WizardField::Name];
 		if self.project_type == ProjectType::Branched {
 			fields.extend([
 				WizardField::ScopeSelection,
