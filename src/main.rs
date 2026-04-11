@@ -12,6 +12,8 @@ mod dialogs;
 mod git;
 #[path = "overview-pg.rs"]
 mod overview_pg;
+mod project_edit;
+mod project_wizard;
 mod targets;
 mod tiles;
 mod ui;
