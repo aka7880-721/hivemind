@@ -5,6 +5,8 @@
 //
 // For details, see the LICENSE file in the repository root.
 
+/// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
+
 use std::{path::Path, process::Command};
 
 use anyhow::{Context, Result, anyhow, bail};
