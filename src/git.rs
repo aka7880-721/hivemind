@@ -3,6 +3,30 @@
 //
 // Licensed under the ComfyVersionBumper License v1.2
 //
+pub(crate) fn current_branch(repo_root: &str) -> Result<String> {
+    let branch = run_git_checked(repo_root, &["branch", "--show-current"])?;
+    let branch = branch.trim();
+    if !branch.is_empty() {
+        return Ok(branch.to_string());
+    }
+
+    let head = run_git_checked(repo_root, &["rev-parse", "--short", "HEAD"])?;
+    Ok(format!("detached ({})", head.trim()))
+}
+
+pub(crate) fn switch_to_main_branch(repo_root: &str, remote_spec: Option<&str>, sync_remote: bool) -> Result<()> {
+    let switch_output = run_git(repo_root, &["switch", "main"])?;
+    if !switch_output.success {
+        run_git_checked(repo_root, &["checkout", "main"])?;
+    }
+
+    if sync_remote {
+        let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+        run_git_checked(repo_root, &["pull", "--ff-only", remote_spec, "main"])?;
+    }
+
+    Ok(())
+}
 // For details, see the LICENSE file in the repository root.
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
