@@ -481,7 +481,7 @@ impl App {
                 .iter()
                 .map(|project| ListItem::new(vec![
                     Line::from(project.name.clone()).style(Style::default().add_modifier(Modifier::BOLD)),
-                    Line::from(project.summary()).style(Style::default().fg(Color::Indexed(244))),
+                    Line::from(project.summary()).style(Style::default().fg(Color::Indexed(240))),
                 ]))
                 .collect::<Vec<_>>();
             let mut state = ListState::default();
