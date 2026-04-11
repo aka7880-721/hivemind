@@ -8,6 +8,14 @@
 /// Git-related workflow operations for applying version bumps across repositories, managing staged changes, and ensuring tag consistency.
 
 use super::*;
+use crate::git::{current_branch, switch_to_main_branch};
+
+#[derive(Clone)]
+pub(super) struct RepoBranchState {
+	pub(super) repo_root: String,
+	pub(super) current_branch: String,
+	pub(super) remote_spec: Option<String>,
+}
 
 pub(super) fn collect_repo_bump_operations(
 	_project: &ProjectConfig,
@@ -79,6 +87,40 @@ pub(super) fn apply_repo_bump_workflow(
 		}
 	}
 
+	Ok(())
+}
+
+pub(super) fn collect_non_main_repo_states(
+	project: &ProjectConfig,
+	scopes: &[BumpScope],
+	git_contexts: &[crate::git::GitScopeContext],
+	affected_scope_indexes: &[usize],
+) -> Result<Vec<RepoBranchState>> {
+	let operations = collect_repo_bump_operations(project, scopes, git_contexts, affected_scope_indexes)?;
+	let mut repo_states = Vec::new();
+
+	for operation in operations {
+		let current_branch = current_branch(&operation.repo_root)?;
+		if current_branch != "main" {
+			repo_states.push(RepoBranchState {
+				repo_root: operation.repo_root,
+				current_branch,
+				remote_spec: operation.remote_spec,
+			});
+		}
+	}
+
+	Ok(repo_states)
+}
+
+pub(super) fn switch_repos_to_main(
+	repos: &[RepoBranchState],
+	integration_mode: IntegrationMode,
+) -> Result<()> {
+	let sync_remote = integration_mode == IntegrationMode::GitHubEnabled;
+	for repo in repos {
+		switch_to_main_branch(&repo.repo_root, repo.remote_spec.as_deref(), sync_remote)?;
+	}
 	Ok(())
 }
 
