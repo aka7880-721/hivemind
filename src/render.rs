@@ -333,7 +333,10 @@ impl App {
 				lines.push(Line::from("Available actions:".yellow().bold()));
 				lines.push(Line::from("- B opens a bump preview for the selected project"));
 				if project.integration_mode.requires_repo() {
-					lines.push(Line::from("- V opens view changes from the configured repo"));
+					lines.push(Line::from("- G opens the git log from the configured repo"));
+					if project.changelog.enabled {
+						lines.push(Line::from("- C opens a changelog preview using the current commit history"));
+					}
 					lines.push(Line::from("- T creates a local tag in the configured repo"));
 				} else {
 					lines.push(Line::from("- git actions unlock once the project is git-backed"));
@@ -686,32 +689,43 @@ impl App {
 
 		let sections = Layout::default()
 			.direction(Direction::Vertical)
-			.constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Min(12), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.constraints(if dialog.workflow.is_some() {
+				[Constraint::Length(4), Constraint::Length(3), Constraint::Min(12), Constraint::Length(BUTTON_ROW_HEIGHT)]
+			} else {
+				[Constraint::Length(4), Constraint::Length(0), Constraint::Min(15), Constraint::Length(BUTTON_ROW_HEIGHT)]
+			})
 			.split(inner);
 
-		let header = vec![
+		let mut header = vec![
 			Line::from(format!("Project: {}", dialog.project_name)).bold(),
 			Line::from(format!("Version: {}", dialog.next_version)),
-			Line::from(format!("Workflow: {}", dialog.workflow.display_name())),
-			Line::from("Review the generated changelog below. Edit the optional release message and confirm to write and stage the changelog file."),
 		];
+		if let Some(workflow) = dialog.workflow {
+			header.push(Line::from(format!("Workflow: {}", workflow.display_name())));
+			header.push(Line::from("Review the generated changelog below. Edit the optional release message and confirm to write and stage the changelog file."));
+		} else {
+			header.push(Line::from("Preview mode: current git history rendered as the changelog."));
+			header.push(Line::from("Press Enter or Close to dismiss this preview."));
+		}
 		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
-		let input_row = Layout::default()
-			.direction(Direction::Horizontal)
-			.constraints([Constraint::Length(20), Constraint::Min(10)])
-			.split(sections[1]);
-		frame.render_widget(Paragraph::new("Release message"), input_row[0]);
-		let input_block = Block::default()
-			.borders(Borders::ALL)
-			.title(" optional ")
-			.border_style(Style::default().fg(Color::Cyan));
-		frame.render_widget(
-			Paragraph::new(dialog.release_message.display_value(true))
-				.block(input_block)
-				.style(Style::default().fg(Color::White)),
-			input_row[1],
-		);
+		if dialog.workflow.is_some() {
+			let input_row = Layout::default()
+				.direction(Direction::Horizontal)
+				.constraints([Constraint::Length(20), Constraint::Min(10)])
+				.split(sections[1]);
+			frame.render_widget(Paragraph::new("Release message"), input_row[0]);
+			let input_block = Block::default()
+				.borders(Borders::ALL)
+				.title(" optional ")
+				.border_style(Style::default().fg(Color::Cyan));
+			frame.render_widget(
+				Paragraph::new(dialog.release_message.display_value(true))
+					.block(input_block)
+					.style(Style::default().fg(Color::White)),
+				input_row[1],
+			);
+		}
 
 		let body_block = Block::default().borders(Borders::ALL).title(" Preview ");
 		let body_inner = body_block.inner(sections[2]);
@@ -732,9 +746,9 @@ impl App {
 			frame,
 			sections[3],
 			&[
-				DialogButton::new("Continue", false, HitAction::ConfirmChangelogPreview, Style::default().fg(Color::Black).bg(Color::Green)),
+				DialogButton::new(if dialog.workflow.is_some() { "Continue" } else { "Close" }, false, HitAction::ConfirmChangelogPreview, Style::default().fg(Color::Black).bg(Color::Green)),
 				DialogButton::new("Scroll", false, HitAction::ScrollChangelogPreview(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
-				DialogButton::new("Cancel", false, HitAction::CancelChangelogPreview, Style::default().fg(Color::White).bg(Color::Red)),
+				DialogButton::new(if dialog.workflow.is_some() { "Cancel" } else { "Back" }, false, HitAction::CancelChangelogPreview, Style::default().fg(Color::White).bg(Color::Red)),
 			],
 		);
 	}
@@ -1570,7 +1584,9 @@ impl App {
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("B", "ump"));
 		spans.push(Span::raw(" | "));
-		spans.extend(shortcut_key_label("V", "iew Changes"));
+		spans.extend(shortcut_key_label("G", "itlog"));
+		spans.push(Span::raw(" / "));
+		spans.extend(shortcut_key_label("C", "hangelog"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("T", " Create Tag"));
 		spans.push(Span::raw(" | "));
