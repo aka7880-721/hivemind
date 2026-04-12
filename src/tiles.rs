@@ -31,6 +31,7 @@ pub(crate) struct OverviewTileData {
 pub(crate) struct OverviewTileHotspots {
 	pub(crate) tile_rect: Rect,
 	pub(crate) title_rect: Rect,
+	pub(crate) reset_rect: Option<Rect>,
 	pub(crate) major_rect: Option<Rect>,
 	pub(crate) minor_rect: Option<Rect>,
 	pub(crate) patch_rect: Option<Rect>,
@@ -94,6 +95,7 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	OverviewTileHotspots {
 		tile_rect: area,
 		title_rect: Rect::new(right_x, inner_y, right_width as u16, 1),
+		reset_rect: Some(Rect::new(area.x + 1, inner_y, SEMVER_LEFT_WIDTH as u16, 1)),
 		major_rect: Some(Rect::new(area.x + 1, inner_y + 2, SEMVER_LEFT_WIDTH as u16, 1)),
 		minor_rect: Some(Rect::new(area.x + 1, inner_y + 4, SEMVER_LEFT_WIDTH as u16, 1)),
 		patch_rect: Some(Rect::new(area.x + 1, inner_y + 6, SEMVER_LEFT_WIDTH as u16, 1)),
@@ -142,6 +144,7 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	OverviewTileHotspots {
 		tile_rect: area,
 		title_rect: Rect::new(area.x + 1, inner_y, content_width as u16, 1),
+		reset_rect: None,
 		major_rect: None,
 		minor_rect: None,
 		patch_rect: None,
