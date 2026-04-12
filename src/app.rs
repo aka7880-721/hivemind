@@ -44,7 +44,10 @@ use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTe
 
 use crate::{
     branding::{PixelLogo, choose_header_content},
-    changelog::{ChangelogDocument, build_document_from_git_log, write_changelog_markdown},
+    changelog::{
+        ChangelogDocument, archive_changelog_markdown, build_document_from_git_log,
+        write_changelog_markdown, write_temp_changelog_markdown,
+    },
     config::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
         ProjectConfig, ProjectType, RepoConfig, TargetFormat, TargetSpec,
@@ -507,6 +510,7 @@ impl App {
         match key.code {
             KeyCode::Esc => self.cancel_changelog_preview(),
             KeyCode::Enter | KeyCode::F(2) => return self.confirm_changelog_preview(),
+            KeyCode::Char('s') | KeyCode::Char('S') => return self.save_changelog_preview(),
             KeyCode::Up => self.scroll_changelog_preview(-1),
             KeyCode::Down => self.scroll_changelog_preview(1),
             KeyCode::PageUp => self.scroll_changelog_preview(-8),
@@ -1039,6 +1043,7 @@ impl App {
             HitAction::SelectOverviewBumpWarningChoice(index) => self.select_overview_bump_warning(index),
             HitAction::SelectMainBranchWarningChoice(index) => self.select_main_branch_warning(index),
             HitAction::ConfirmChangelogPreview => return self.confirm_changelog_preview(),
+            HitAction::SaveChangelogPreview => return self.save_changelog_preview(),
             HitAction::CancelChangelogPreview => self.cancel_changelog_preview(),
             HitAction::ScrollChangelogPreview(delta) => self.scroll_changelog_preview(delta),
             HitAction::AdjustOverviewVersion(scope_index, control, delta) => {
@@ -1337,6 +1342,35 @@ impl App {
         self.status = StatusMessage::info("Changelog preview closed.");
     }
 
+    fn save_changelog_preview(&mut self) -> Result<()> {
+        let Some(dialog) = self.changelog_preview_dialog.clone() else {
+            return Ok(());
+        };
+
+        let release_message = dialog.release_message.value.trim().to_string();
+        let written_paths = dialog
+            .entries
+            .iter()
+            .map(|entry| {
+                let markdown = entry.rendered_markdown(&release_message);
+                write_temp_changelog_markdown(&entry.repo_root, &markdown)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.status = if written_paths.len() == 1 {
+            StatusMessage::success(format!(
+                "Saved changelog preview to {}.",
+                written_paths[0].display()
+            ))
+        } else {
+            StatusMessage::success(format!(
+                "Saved changelog previews to changelog_temp.md in {} repositories.",
+                written_paths.len()
+            ))
+        };
+        Ok(())
+    }
+
     fn scroll_changelog_preview(&mut self, delta: i16) {
         if let Some(dialog) = &mut self.changelog_preview_dialog {
             let max_scroll = dialog
@@ -1530,6 +1564,7 @@ impl App {
     }
 
     fn create_local_tag(&mut self) -> Result<()> {
+        let changelog_enabled = self.selected_project()?.changelog.enabled;
         let Some(dialog) = &self.tag_dialog else {
             return Ok(());
         };
@@ -1552,6 +1587,18 @@ impl App {
             if annotation.is_empty() { None } else { Some(annotation.as_str()) },
         )?;
 
+        let generated_changelog = if created || matches!(action, TagAction::CreatePushAndRelease) {
+            Some(self.build_release_notes_markdown(&tag_name, &active_scope)?)
+        } else {
+            None
+        };
+
+        if changelog_enabled {
+            if let Some(markdown) = generated_changelog.as_deref() {
+                archive_changelog_markdown(&repo_root, &tag_name, markdown)?;
+            }
+        }
+
         if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
             let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
             run_git_checked(&repo_root, &["push", &remote_spec, &tag_name])?;
@@ -1559,7 +1606,9 @@ impl App {
 
         if matches!(action, TagAction::CreatePushAndRelease) {
             ensure_gh_available()?;
-            let release_notes = self.build_release_notes_markdown(&tag_name, &active_scope)?;
+            let release_notes = generated_changelog
+                .as_deref()
+                .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
             self.create_github_release(&repo_root, &tag_name, &release_notes)?;
         }
 
@@ -2251,6 +2300,7 @@ pub(crate) enum HitAction {
     SelectOverviewBumpWarningChoice(usize),
     SelectMainBranchWarningChoice(usize),
     ConfirmChangelogPreview,
+    SaveChangelogPreview,
     CancelChangelogPreview,
     ScrollChangelogPreview(i16),
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
