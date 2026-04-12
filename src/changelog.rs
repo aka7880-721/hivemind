@@ -11,6 +11,8 @@ use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 
 const FOOTER: &str = "<br>\n\n---\n... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)";
+const TEMP_CHANGELOG_FILE: &str = "changelog_temp.md";
+const HISTORY_DIR_NAME: &str = ".changelogs";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Category {
@@ -93,15 +95,28 @@ pub(crate) struct ParsedCommit {
 	pub(crate) short_hash: String,
 	pub(crate) category: Option<Category>,
 	pub(crate) specific: Option<String>,
+	pub(crate) specific_heading: Option<&'static str>,
 	pub(crate) is_new: bool,
 	pub(crate) is_breaking: bool,
 	pub(crate) message_items: Vec<MessageItem>,
 }
 
 impl ParsedCommit {
+	#[cfg(test)]
 	pub(crate) fn parse(subject: &str, short_hash: impl Into<String>) -> Self {
-		let raw_subject = subject.trim().to_string();
+		Self::parse_single(subject, short_hash.into())
+	}
+
+	pub(crate) fn parse_many(subject: &str, short_hash: impl Into<String>) -> Vec<Self> {
 		let short_hash = short_hash.into();
+		split_subject_clauses(subject)
+			.into_iter()
+			.map(|clause| Self::parse_single(&clause, short_hash.clone()))
+			.collect()
+	}
+
+	fn parse_single(subject: &str, short_hash: String) -> Self {
+		let raw_subject = subject.trim().to_string();
 		let mut remainder = raw_subject.as_str().trim();
 		let mut is_breaking = false;
 		let mut is_new = false;
@@ -123,7 +138,7 @@ impl ParsedCommit {
 		}
 
 		let (prefix, message) = split_prefix_and_message(remainder);
-		let (category, specific) = parse_prefix(prefix);
+		let (category, specific, specific_heading) = parse_prefix(prefix);
 		let message_items = parse_message_items(message);
 
 		Self {
@@ -131,6 +146,7 @@ impl ParsedCommit {
 			short_hash,
 			category,
 			specific,
+			specific_heading,
 			is_new,
 			is_breaking,
 			message_items,
@@ -177,6 +193,7 @@ impl ChangelogDocument {
 		}
 	}
 
+	#[cfg(test)]
 	pub(crate) fn with_date(mut self, date: NaiveDate) -> Self {
 		self.date = date;
 		self
@@ -230,7 +247,7 @@ impl ChangelogDocument {
 pub(crate) fn build_document_from_git_log(current_tag: impl Into<String>, lines: &[String]) -> ChangelogDocument {
 	let commits = lines
 		.iter()
-		.filter_map(|line| parse_graph_log_line(line))
+		.flat_map(|line| parse_graph_log_entries(line))
 		.collect::<Vec<_>>();
 	ChangelogDocument::new(current_tag, commits)
 }
@@ -264,6 +281,29 @@ pub(crate) fn write_changelog_markdown(
 	Ok(output_path)
 }
 
+pub(crate) fn write_temp_changelog_markdown(repo_root: &str, markdown: &str) -> Result<PathBuf> {
+	let output_path = Path::new(repo_root).join(TEMP_CHANGELOG_FILE);
+	fs::write(&output_path, markdown.trim_end())
+		.with_context(|| format!("failed to write {}", output_path.display()))?;
+	Ok(output_path)
+}
+
+pub(crate) fn archive_changelog_markdown(repo_root: &str, label: &str, markdown: &str) -> Result<PathBuf> {
+	let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
+	fs::create_dir_all(&history_dir)
+		.with_context(|| format!("failed to create {}", history_dir.display()))?;
+
+	let file_name = format!(
+		"{}-{}.md",
+		Local::now().format("%Y%m%d-%H%M%S-%3f"),
+		sanitize_history_label(label),
+	);
+	let output_path = history_dir.join(file_name);
+	fs::write(&output_path, markdown.trim_end())
+		.with_context(|| format!("failed to write {}", output_path.display()))?;
+	Ok(output_path)
+}
+
 fn resolve_changelog_path(repo_root: &str, changelog_path: &str) -> PathBuf {
 	let candidate = Path::new(changelog_path);
 	if candidate.is_absolute() {
@@ -273,10 +313,29 @@ fn resolve_changelog_path(repo_root: &str, changelog_path: &str) -> PathBuf {
 	}
 }
 
+fn sanitize_history_label(label: &str) -> String {
+	let sanitized = label
+		.trim()
+		.chars()
+		.map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+		.collect::<String>();
+	let sanitized = sanitized.trim_matches('-');
+	if sanitized.is_empty() {
+		"changelog".to_string()
+	} else {
+		sanitized.to_string()
+	}
+}
+
+#[cfg(test)]
 fn parse_graph_log_line(line: &str) -> Option<ParsedCommit> {
+	parse_graph_log_entries(line).into_iter().next()
+}
+
+fn parse_graph_log_entries(line: &str) -> Vec<ParsedCommit> {
 	let trimmed = line.trim();
 	if trimmed.is_empty() {
-		return None;
+		return Vec::new();
 	}
 
 	let chars = trimmed.char_indices().collect::<Vec<_>>();
@@ -301,14 +360,14 @@ fn parse_graph_log_line(line: &str) -> Option<ParsedCommit> {
 		if hash.len() >= 7 {
 			let subject = trimmed[end_offset..].trim();
 			if !subject.is_empty() {
-				return Some(ParsedCommit::parse(subject, hash.to_string()));
+				return ParsedCommit::parse_many(subject, hash.to_string());
 			}
 		}
 
 		index = end_index;
 	}
 
-	None
+	Vec::new()
 }
 
 fn normalize_alias(alias: &str) -> String {
@@ -325,7 +384,23 @@ fn split_prefix_and_message(input: &str) -> (&str, &str) {
 	}
 }
 
-fn parse_prefix(prefix: &str) -> (Option<Category>, Option<String>) {
+fn parse_prefix(prefix: &str) -> (Option<Category>, Option<String>, Option<&'static str>) {
+	let trimmed = prefix.trim();
+	if trimmed.is_empty() {
+		return (None, None, None);
+	}
+
+	if let Some(dotted) = trimmed.strip_prefix('.') {
+		let (category, specific) = parse_prefix_parts(dotted);
+		let specific_heading = category.and_then(singular_specific_heading);
+		return (category, specific, specific_heading);
+	}
+
+	let (category, specific) = parse_prefix_parts(trimmed);
+	(category, specific, None)
+}
+
+fn parse_prefix_parts(prefix: &str) -> (Option<Category>, Option<String>) {
 	let trimmed = prefix.trim();
 	if trimmed.is_empty() {
 		return (None, None);
@@ -354,6 +429,14 @@ fn parse_prefix(prefix: &str) -> (Option<Category>, Option<String>) {
 	}
 
 	(Category::from_alias(trimmed), None)
+}
+
+fn singular_specific_heading(category: Category) -> Option<&'static str> {
+	match category {
+		Category::Features => Some("Feature"),
+		Category::Enhancements => Some("Enhancement"),
+		_ => None,
+	}
 }
 
 fn normalize_specific(value: &str) -> Option<String> {
@@ -386,6 +469,70 @@ fn parse_message_items(message: &str) -> Vec<MessageItem> {
 			Some(MessageItem::Text(segment.to_string()))
 		})
 		.collect()
+}
+
+fn split_subject_clauses(subject: &str) -> Vec<String> {
+	let mut clauses = Vec::new();
+	let mut current = String::new();
+
+	for segment in subject.split(';') {
+		let trimmed = segment.trim();
+		if trimmed.is_empty() {
+			continue;
+		}
+
+		if current.is_empty() {
+			current.push_str(trimmed);
+			continue;
+		}
+
+		if looks_like_prefixed_clause(trimmed) {
+			clauses.push(current);
+			current = trimmed.to_string();
+		} else {
+			current.push_str("; ");
+			current.push_str(trimmed);
+		}
+	}
+
+	if !current.is_empty() {
+		clauses.push(current);
+	}
+
+	clauses
+}
+
+fn looks_like_prefixed_clause(segment: &str) -> bool {
+	let trimmed = segment.trim_start();
+	let Some((prefix, _)) = trimmed.split_once(':') else {
+		return false;
+	};
+	let prefix = prefix.trim();
+	if prefix.is_empty() {
+		return false;
+	}
+
+	let mut remainder = prefix;
+	loop {
+		let next = remainder.trim_start();
+		if let Some(stripped) = next.strip_prefix('!') {
+			remainder = stripped;
+			continue;
+		}
+		if let Some(stripped) = next.strip_prefix('@') {
+			remainder = stripped;
+			continue;
+		}
+		break;
+	}
+
+	let remainder = remainder.trim();
+	if remainder.is_empty() {
+		return false;
+	}
+
+	let (category, specific, specific_heading) = parse_prefix(remainder);
+	category.is_some() || specific.is_some() || specific_heading.is_some()
 }
 
 fn parse_nested_list(segment: &str) -> Option<(String, Vec<String>)> {
@@ -438,7 +585,7 @@ fn render_breaking_section(lines: &mut Vec<String>, commits: &[ParsedCommit]) {
 }
 
 fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
-	let specific_names = ordered_specific_names(
+	let specific_keys = ordered_new_specific_keys(
 		&commits
 			.iter()
 			.copied()
@@ -446,13 +593,21 @@ fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommi
 			.collect::<Vec<_>>(),
 	);
 
-	for specific_name in specific_names {
-		lines.push(format!("### ✨ New in {}:", specific_name));
+	for (specific_name, specific_heading) in specific_keys {
+		if let Some(specific_heading) = specific_heading {
+			lines.push(format!("### ✨ New {}: {}", specific_heading, specific_name));
+		} else {
+			lines.push(format!("### ✨ New in {}:", specific_name));
+		}
 		lines.push(String::new());
 		let section_commits: Vec<&ParsedCommit> = commits
 			.iter()
 			.copied()
-			.filter(|commit| commit.is_new && commit.specific.as_deref() == Some(specific_name.as_str()))
+			.filter(|commit| {
+				commit.is_new
+					&& commit.specific.as_deref() == Some(specific_name.as_str())
+					&& commit.specific_heading == specific_heading
+			})
 			.collect::<Vec<_>>();
 		render_category_subsections(lines, &section_commits, 4);
 	}
@@ -573,6 +728,23 @@ where
 	names
 }
 
+fn ordered_new_specific_keys<T>(commits: &[T]) -> Vec<(String, Option<&'static str>)>
+where
+	T: std::borrow::Borrow<ParsedCommit>,
+{
+	let mut keys = Vec::new();
+	for commit in commits {
+		let commit = commit.borrow();
+		if let Some(name) = &commit.specific {
+			let candidate = (name.clone(), commit.specific_heading);
+			if !keys.iter().any(|existing| existing == &candidate) {
+				keys.push(candidate);
+			}
+		}
+	}
+	keys
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -583,6 +755,7 @@ mod tests {
 
 		assert_eq!(parsed.category, Some(Category::Features));
 		assert_eq!(parsed.specific.as_deref(), Some("Phase 1"));
+		assert_eq!(parsed.specific_heading, None);
 		assert!(!parsed.is_new);
 		assert!(!parsed.is_breaking);
 		assert_eq!(parsed.message_items, vec![MessageItem::Text("add parsing pipeline".to_string())]);
@@ -636,6 +809,31 @@ mod tests {
 	}
 
 	#[test]
+	fn splits_semicolons_into_new_prefixed_entries() {
+		let parsed = ParsedCommit::parse_many(
+			"@feat(Tiles): add reset functionality for pending version; @enh(Changelog Preview): implement changelog preview handling",
+			"abc1234",
+		);
+
+		assert_eq!(parsed.len(), 2);
+		assert_eq!(parsed[0].category, Some(Category::Features));
+		assert_eq!(parsed[0].specific.as_deref(), Some("Tiles"));
+		assert_eq!(parsed[1].category, Some(Category::Enhancements));
+		assert_eq!(parsed[1].specific.as_deref(), Some("Changelog Preview"));
+	}
+
+	#[test]
+	fn parses_dotted_new_specific_heading_for_supported_categories() {
+		let feature = ParsedCommit::parse("@.feat(Tiles): add reset flow", "abc1234");
+		let enhancement = ParsedCommit::parse("@.enh(Changelog Preview): add preview actions", "abc1234");
+
+		assert_eq!(feature.specific_heading, Some("Feature"));
+		assert_eq!(feature.specific.as_deref(), Some("Tiles"));
+		assert_eq!(enhancement.specific_heading, Some("Enhancement"));
+		assert_eq!(enhancement.specific.as_deref(), Some("Changelog Preview"));
+	}
+
+	#[test]
 	fn renders_markdown_with_breaking_new_specific_and_footer() {
 		let changelog = ChangelogDocument::new(
 			"v0.4.0",
@@ -668,5 +866,37 @@ mod tests {
 		assert_eq!(parsed.short_hash, "a1b2c3d");
 		assert_eq!(parsed.category, Some(Category::Features));
 		assert_eq!(parsed.specific.as_deref(), Some("UI"));
+	}
+
+	#[test]
+	fn renders_dotted_new_specific_heading() {
+		let changelog = ChangelogDocument::new(
+			"v0.4.0",
+			vec![ParsedCommit::parse("@.enh(Changelog Preview): add preview save button", "abc1234")],
+		)
+		.with_date(NaiveDate::from_ymd_opt(2026, 4, 12).unwrap())
+		.render_markdown();
+
+		assert!(changelog.markdown.contains("### ✨ New Enhancement: Changelog Preview"));
+	}
+
+	#[test]
+	fn writes_temp_changelog_to_repo_root() {
+		let repo_root = std::env::temp_dir().join(format!(
+			"cvb-temp-changelog-{}",
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap_or_default()
+				.as_nanos()
+		));
+		std::fs::create_dir_all(&repo_root).expect("repo root should be created");
+
+		let output_path = write_temp_changelog_markdown(&repo_root.display().to_string(), "hello world")
+			.expect("temp changelog should be written");
+
+		assert_eq!(output_path.file_name().and_then(|name| name.to_str()), Some("changelog_temp.md"));
+		assert_eq!(std::fs::read_to_string(&output_path).expect("temp changelog should be readable"), "hello world");
+
+		let _ = std::fs::remove_dir_all(repo_root);
 	}
 }
