@@ -5,6 +5,9 @@
 //
 // For details, see the LICENSE file in the repository root.
 
+use std::{fs, path::{Path, PathBuf}};
+
+use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 
 const FOOTER: &str = "<br>\n\n---\n... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)";
@@ -222,6 +225,90 @@ impl ChangelogDocument {
 
 		RenderedChangelog::new(lines.join("\n"))
 	}
+}
+
+pub(crate) fn build_document_from_git_log(current_tag: impl Into<String>, lines: &[String]) -> ChangelogDocument {
+	let commits = lines
+		.iter()
+		.filter_map(|line| parse_graph_log_line(line))
+		.collect::<Vec<_>>();
+	ChangelogDocument::new(current_tag, commits)
+}
+
+pub(crate) fn write_changelog_markdown(
+	repo_root: &str,
+	changelog_path: &str,
+	markdown: &str,
+) -> Result<PathBuf> {
+	let output_path = resolve_changelog_path(repo_root, changelog_path);
+	if let Some(parent) = output_path.parent() {
+		fs::create_dir_all(parent)
+			.with_context(|| format!("failed to create {}", parent.display()))?;
+	}
+
+	let rendered = if output_path.is_file() {
+		let existing = fs::read_to_string(&output_path)
+			.with_context(|| format!("failed to read {}", output_path.display()))?;
+		let existing = existing.trim();
+		if existing.is_empty() {
+			markdown.trim_end().to_string()
+		} else {
+			format!("{}\n\n{}", markdown.trim_end(), existing)
+		}
+	} else {
+		markdown.trim_end().to_string()
+	};
+
+	fs::write(&output_path, rendered)
+		.with_context(|| format!("failed to write {}", output_path.display()))?;
+	Ok(output_path)
+}
+
+fn resolve_changelog_path(repo_root: &str, changelog_path: &str) -> PathBuf {
+	let candidate = Path::new(changelog_path);
+	if candidate.is_absolute() {
+		candidate.to_path_buf()
+	} else {
+		Path::new(repo_root).join(candidate)
+	}
+}
+
+fn parse_graph_log_line(line: &str) -> Option<ParsedCommit> {
+	let trimmed = line.trim();
+	if trimmed.is_empty() {
+		return None;
+	}
+
+	let chars = trimmed.char_indices().collect::<Vec<_>>();
+	let mut index = 0;
+	while index < chars.len() {
+		let (start_offset, current) = chars[index];
+		if !current.is_ascii_hexdigit() {
+			index += 1;
+			continue;
+		}
+
+		let mut end_index = index;
+		while end_index < chars.len() && chars[end_index].1.is_ascii_hexdigit() {
+			end_index += 1;
+		}
+
+		let end_offset = chars
+			.get(end_index)
+			.map(|(offset, _)| *offset)
+			.unwrap_or(trimmed.len());
+		let hash = &trimmed[start_offset..end_offset];
+		if hash.len() >= 7 {
+			let subject = trimmed[end_offset..].trim();
+			if !subject.is_empty() {
+				return Some(ParsedCommit::parse(subject, hash.to_string()));
+			}
+		}
+
+		index = end_index;
+	}
+
+	None
 }
 
 fn normalize_alias(alias: &str) -> String {
@@ -572,5 +659,14 @@ mod tests {
 		assert!(changelog.markdown.contains("### ℹ️ Documentation"));
 		assert!(changelog.markdown.contains("Heads-up: this release updates the public dashboard."));
 		assert!(changelog.markdown.contains("... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)"));
+	}
+
+	#[test]
+	fn parses_graph_log_lines_into_commits() {
+		let parsed = parse_graph_log_line("* a1b2c3d feat(UI): ship new dashboard").expect("graph line should parse");
+
+		assert_eq!(parsed.short_hash, "a1b2c3d");
+		assert_eq!(parsed.category, Some(Category::Features));
+		assert_eq!(parsed.specific.as_deref(), Some("UI"));
 	}
 }
