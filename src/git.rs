@@ -457,7 +457,7 @@ fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{
-        config::{BranchConfig, IntegrationMode, RepoConfig, TargetFormat, TargetSpec},
+        config::{BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec},
         versioning::VersionScheme,
     };
 
@@ -469,6 +469,7 @@ mod tests {
             integration_mode: IntegrationMode::GitHubEnabled,
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -527,6 +528,7 @@ mod tests {
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: true,
             version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -596,6 +598,7 @@ mod tests {
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
