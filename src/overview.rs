@@ -391,6 +391,9 @@ pub(super) fn render_dashboard_tiles(
 			app.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::OpenOverviewRecentChanges(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::BeginOverviewBump(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::ApplyOverviewVersionAndTag(scope_index)));
+			if let Some(rect) = hotspots.reset_rect {
+				app.hit_targets.push(HitTarget::new(rect, HitAction::ResetOverviewPendingVersion(scope_index)));
+			}
 			if let Some(rect) = hotspots.major_rect {
 				app.hit_targets.push(HitTarget::with_right_action(
 					rect,
@@ -566,6 +569,68 @@ pub(super) fn adjust_overview_pending_version(
 	} else if let Some(pending) = app.overview_pending_versions.get_mut(scope_index) {
 		*pending = next;
 	}
+	Ok(())
+}
+
+pub(super) fn reset_overview_pending_version(app: &mut App, scope_index: usize) -> Result<()> {
+	let project = app.selected_project()?.clone();
+	let scopes = collect_bump_scopes(&project)?;
+	ensure_dashboard_tile_state(app, &scopes);
+	let Some(scope) = scopes.get(scope_index) else {
+		return Ok(());
+	};
+	let restored = scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string());
+	if project.unified_versioning {
+		for pending in &mut app.overview_pending_versions {
+			*pending = restored.clone();
+		}
+	} else if let Some(pending) = app.overview_pending_versions.get_mut(scope_index) {
+		*pending = restored.clone();
+	}
+	app.status = StatusMessage::info(format!("Reset pending version preview to {}.", restored));
+	Ok(())
+}
+
+pub(super) fn open_dashboard_changelog_preview(app: &mut App) -> Result<()> {
+	let project = app.selected_project()?.clone();
+	if !project.integration_mode.requires_repo() {
+		bail!("changelog preview requires a git-backed project");
+	}
+	if !project.changelog.enabled {
+		bail!("changelog generation is disabled for this project");
+	}
+
+	let scopes = collect_bump_scopes(&project)?;
+	ensure_dashboard_tile_state(app, &scopes);
+	if scopes.is_empty() {
+		return Ok(());
+	}
+
+	let scope_index = app.overview_focused_scope.min(scopes.len().saturating_sub(1));
+	let affected_scope_indexes = if project.unified_versioning {
+		(0..scopes.len()).collect::<Vec<_>>()
+	} else {
+		vec![scope_index]
+	};
+	let next_version = app
+		.overview_pending_versions
+		.get(scope_index)
+		.cloned()
+		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
+		.unwrap_or_else(|| scopes[scope_index].version_label().to_string());
+
+	let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+	let changelog_entries = collect_preview_entries(&project, &git_contexts, &affected_scope_indexes, &next_version)?;
+	if changelog_entries.is_empty() {
+		bail!("no changelog content was generated from the current git history");
+	}
+
+	app.open_changelog_preview(ChangelogPreviewDialog::preview_only(
+		project.name.clone(),
+		next_version,
+		scope_index,
+		changelog_entries,
+	));
 	Ok(())
 }
 
