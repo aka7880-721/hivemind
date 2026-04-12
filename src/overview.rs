@@ -27,8 +27,6 @@ pub(super) fn render_dashboard_overview(app: &mut App, frame: &mut Frame, area: 
 		return;
 	};
 
-	ensure_dashboard_recent_changes(app);
-
 	let scopes = match collect_bump_scopes(&project) {
 		Ok(scopes) => scopes,
 		Err(error) => {
@@ -189,6 +187,35 @@ pub(super) fn ensure_dashboard_tile_state(app: &mut App, scopes: &[BumpScope]) {
 pub(super) fn invalidate_overview_cache(app: &mut App) {
 	app.overview_recent_project = None;
 	app.overview_tile_project = None;
+	app.overview_activity_project = None;
+	app.overview_activity_summaries.clear();
+}
+
+pub(super) fn ensure_overview_activity_cache(app: &mut App) -> Result<()> {
+	if app.overview_activity_project == Some(app.selected_project) {
+		return Ok(());
+	}
+	reload_overview_activity_cache(app)
+}
+
+pub(super) fn reload_overview_activity_cache(app: &mut App) -> Result<()> {
+	app.overview_activity_project = None;
+	app.overview_activity_summaries.clear();
+
+	let Some(project) = app.config.projects.get(app.selected_project) else {
+		return Ok(());
+	};
+	if !project.integration_mode.requires_repo() {
+		return Ok(());
+	}
+
+	let contexts = collect_all_branch_git_scope_contexts(project)?;
+	app.overview_activity_summaries = contexts
+		.iter()
+		.map(|context| load_scope_activity_summary(context).ok())
+		.collect();
+	app.overview_activity_project = Some(app.selected_project);
+	Ok(())
 }
 
 pub(super) fn reorder_dashboard_tile_scope(app: &mut App, from_scope: usize, to_scope: usize) {
@@ -282,7 +309,7 @@ pub(super) fn render_dashboard_tiles(
 	app: &mut App,
 	frame: &mut Frame,
 	area: Rect,
-	project: &ProjectConfig,
+	_project: &ProjectConfig,
 	scopes: &[BumpScope],
 ) {
 	app.overview_tile_viewport = Some(area);
@@ -291,7 +318,6 @@ pub(super) fn render_dashboard_tiles(
 		return;
 	}
 
-	let git_contexts = collect_all_branch_git_scope_contexts(project).ok();
 	let columns = dashboard_tile_columns(area.width).max(1);
 	let vertical_gap = 1;
 	let row_height = scopes
@@ -349,10 +375,13 @@ pub(super) fn render_dashboard_tiles(
 				continue;
 			}
 
-			let activity = git_contexts
-				.as_ref()
-				.and_then(|entries| entries.get(scope_index))
-				.and_then(|context| load_scope_activity_summary(context).ok());
+			let activity = if app.overview_activity_project == Some(app.selected_project) {
+				app.overview_activity_summaries
+					.get(scope_index)
+					.and_then(|entry| entry.as_ref())
+			} else {
+				None
+			};
 			let selected = scope_index == app.overview_focused_scope;
 			let tile = OverviewTileData {
 				name: scope.display_name.clone(),
@@ -655,8 +684,7 @@ pub(super) fn apply_overview_pending_version(app: &mut App, scope_index: usize, 
 		}
 	}
 
-	invalidate_overview_cache(app);
-	ensure_dashboard_recent_changes(app);
+	app.sync_dashboard_overview_after_repo_change();
 
 	if open_tag_after {
 		if project.integration_mode.requires_repo() {
@@ -797,8 +825,7 @@ pub(super) fn execute_overview_bump_workflow(
 		apply_repo_bump_workflow(&repo_operations, &next_version, workflow)?;
 	}
 
-	invalidate_overview_cache(app);
-	ensure_dashboard_recent_changes(app);
+	app.sync_dashboard_overview_after_repo_change();
 
 	let target_count = affected_scope_indexes
 		.iter()
