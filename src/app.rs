@@ -1186,229 +1186,17 @@ impl App {
         }
     }
 
-    fn ensure_dashboard_tile_state(&mut self, scopes: &[BumpScope]) {
-        if self.overview_tile_project == Some(self.selected_project)
-            && self.overview_scope_order.len() == scopes.len()
-            && self.overview_pending_versions.len() == scopes.len()
-        {
-            return;
-        }
-
-        self.overview_tile_project = Some(self.selected_project);
-        self.overview_scope_order = (0..scopes.len()).collect();
-        self.overview_pending_versions = scopes
-            .iter()
-            .map(|scope| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string()))
-            .collect();
-        self.overview_tile_scroll = 0;
-    }
-
     fn invalidate_overview_cache(&mut self) {
         self.overview_recent_project = None;
         self.overview_tile_project = None;
     }
 
     fn reorder_dashboard_tile_scope(&mut self, from_scope: usize, to_scope: usize) {
-        let Some(from_index) = self.overview_scope_order.iter().position(|scope| *scope == from_scope) else {
-            return;
-        };
-        let Some(to_index) = self.overview_scope_order.iter().position(|scope| *scope == to_scope) else {
-            return;
-        };
-        if from_index == to_index {
-            return;
-        }
-
-        let moved = self.overview_scope_order.remove(from_index);
-        self.overview_scope_order.insert(to_index, moved);
+        overview::reorder_dashboard_tile_scope(self, from_scope, to_scope);
     }
 
     fn scroll_dashboard_tiles(&mut self, delta: isize) -> Result<()> {
-        let viewport = match self.overview_tile_viewport {
-            Some(viewport) => viewport,
-            None => return Ok(()),
-        };
-        let project = self.selected_project()?.clone();
-        let scopes = collect_bump_scopes(&project)?;
-        if scopes.is_empty() {
-            self.overview_tile_scroll = 0;
-            return Ok(());
-        }
-
-        let columns = dashboard_tile_columns(viewport.width).max(1);
-        let row_height = scopes
-            .iter()
-            .map(|scope| tile_height(scope.scheme))
-            .max()
-            .unwrap_or(7)
-            .saturating_add(1);
-        let visible_rows = ((viewport.height.saturating_add(1)) / row_height.max(1)).max(1) as usize;
-        let total_rows = self.overview_scope_order.len().div_ceil(columns);
-        let max_scroll = total_rows.saturating_sub(visible_rows);
-        self.overview_tile_scroll = (self.overview_tile_scroll as isize + delta)
-            .clamp(0, max_scroll as isize) as usize;
-        Ok(())
-    }
-
-    fn render_dashboard_tiles(&mut self, frame: &mut Frame, area: Rect, project: &ProjectConfig, scopes: &[BumpScope]) {
-        self.overview_tile_viewport = Some(area);
-
-        if scopes.is_empty() || area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        let git_contexts = collect_all_branch_git_scope_contexts(project).ok();
-        let columns = dashboard_tile_columns(area.width).max(1);
-        let vertical_gap = 1;
-        let row_height = scopes
-            .iter()
-            .map(|scope| tile_height(scope.scheme))
-            .max()
-            .unwrap_or(7)
-            .saturating_add(vertical_gap);
-        let visible_rows = ((area.height.saturating_add(vertical_gap)) / row_height.max(1)).max(1) as usize;
-        let total_rows = self.overview_scope_order.len().div_ceil(columns);
-        let max_scroll = total_rows.saturating_sub(visible_rows);
-        self.overview_tile_scroll = self.overview_tile_scroll.min(max_scroll);
-
-        let visible_row_scopes = (self.overview_tile_scroll..(self.overview_tile_scroll + visible_rows).min(total_rows))
-            .map(|row| {
-                let start = row * columns;
-                let end = (start + columns).min(self.overview_scope_order.len());
-                self.overview_scope_order[start..end].to_vec()
-            })
-            .filter(|row| !row.is_empty())
-            .collect::<Vec<_>>();
-
-        let row_constraints = visible_row_scopes
-            .iter()
-            .map(|row| {
-                let row_tile_height = row
-                    .iter()
-                    .filter_map(|scope_index| scopes.get(*scope_index))
-                    .map(|scope| tile_height(scope.scheme))
-                    .max()
-                    .unwrap_or(7);
-                Constraint::Length(row_tile_height)
-            })
-            .collect::<Vec<_>>();
-        let row_areas = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(row_constraints)
-            .flex(Flex::SpaceEvenly)
-            .split(area);
-
-        for (row_area, row_scopes) in row_areas.iter().zip(visible_row_scopes.iter()) {
-            let column_areas = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(vec![Constraint::Length(TILE_WIDTH.min(area.width)); row_scopes.len()])
-                .flex(Flex::SpaceEvenly)
-                .split(*row_area);
-
-            for (cell_area, scope_index) in column_areas.iter().zip(row_scopes.iter().copied()) {
-                let Some(scope) = scopes.get(scope_index) else {
-                    continue;
-                };
-
-                let tile_rect = center_vertically(*cell_area, tile_height(scope.scheme));
-                if tile_rect.width < 12 || tile_rect.height < 4 {
-                    continue;
-                }
-
-                let activity = git_contexts
-                    .as_ref()
-                    .and_then(|entries| entries.get(scope_index))
-                    .and_then(|context| load_scope_activity_summary(context).ok());
-                let selected = self
-                    .overview_recent_changes
-                    .as_ref()
-                    .map(|dialog| dialog.selected_scope == scope_index)
-                    .unwrap_or(scope_index == 0);
-                let tile = OverviewTileData {
-                    name: scope.display_name.clone(),
-                    scheme: scope.scheme,
-                    preview_version: self
-                        .overview_pending_versions
-                        .get(scope_index)
-                        .cloned()
-                        .unwrap_or_else(|| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string())),
-                    commits_since_tag_label: activity
-                        .as_ref()
-                        .map(|summary| summary.commits_since_tag_label.clone())
-                        .unwrap_or_else(|| "n/a".to_string()),
-                    last_bump_label: activity
-                        .as_ref()
-                        .map(|summary| summary.last_bump_label.clone())
-                        .unwrap_or_else(|| "n/a".to_string()),
-                    last_commit_label: activity
-                        .as_ref()
-                        .map(|summary| summary.last_commit_label.clone())
-                        .unwrap_or_else(|| "n/a".to_string()),
-                    selected,
-                };
-                let hotspots = render_overview_tile(frame, tile_rect, &tile);
-                self.overview_tile_rects.push((hotspots.tile_rect, scope_index));
-
-                self.hit_targets.push(HitTarget::new(hotspots.title_rect, HitAction::SelectOverviewScope(scope_index)));
-                self.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::OpenOverviewRecentChanges(scope_index)));
-                self.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::BeginOverviewBump(scope_index)));
-                self.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::ApplyOverviewVersionAndTag(scope_index)));
-                if let Some(rect) = hotspots.major_rect {
-                    self.hit_targets.push(HitTarget::with_right_action(
-                        rect,
-                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Major, 1),
-                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Major, -1),
-                    ));
-                }
-                if let Some(rect) = hotspots.minor_rect {
-                    self.hit_targets.push(HitTarget::with_right_action(
-                        rect,
-                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Minor, 1),
-                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Minor, -1),
-                    ));
-                }
-                if let Some(rect) = hotspots.patch_rect {
-                    self.hit_targets.push(HitTarget::with_right_action(
-                        rect,
-                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Patch, 1),
-                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Patch, -1),
-                    ));
-                }
-                if let Some(rect) = hotspots.version_rect {
-                    self.hit_targets.push(HitTarget::with_right_action(
-                        rect,
-                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Whole, 1),
-                        HitAction::AdjustOverviewVersion(scope_index, OverviewVersionControl::Whole, -1),
-                    ));
-                }
-            }
-        }
-
-        if self.overview_tile_scroll > 0 && area.height > 0 {
-            let indicator = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: 1,
-            };
-            frame.render_widget(
-                Paragraph::new("more scopes above").alignment(Alignment::Right).style(Style::default().fg(Color::DarkGray)),
-                indicator,
-            );
-        }
-
-        if self.overview_tile_scroll < max_scroll && area.height > 0 {
-            let indicator = Rect {
-                x: area.x,
-                y: area.y + area.height.saturating_sub(1),
-                width: area.width,
-                height: 1,
-            };
-            frame.render_widget(
-                Paragraph::new("more scopes below").alignment(Alignment::Right).style(Style::default().fg(Color::DarkGray)),
-                indicator,
-            );
-        }
+        overview::scroll_dashboard_tiles(self, delta)
     }
 
     fn move_dashboard_overview_focus(&mut self, delta: isize) -> Result<()> {
@@ -1428,32 +1216,23 @@ impl App {
     }
 
     fn select_overview_bump_workflow(&mut self, index: usize) {
-        if let Some(dialog) = &mut self.overview_bump_workflow_dialog {
-            dialog.select(index);
-        }
+        overview::select_overview_bump_workflow(self, index);
     }
 
     fn rotate_overview_bump_workflow(&mut self, delta: isize) {
-        if let Some(dialog) = &mut self.overview_bump_workflow_dialog {
-            dialog.rotate(delta);
-        }
+        overview::rotate_overview_bump_workflow(self, delta);
     }
 
     fn cancel_overview_bump_workflow(&mut self) {
-        self.overview_bump_workflow_dialog = None;
-        self.status = StatusMessage::info("Tile bump action cancelled.");
+        overview::cancel_overview_bump_workflow(self);
     }
 
     fn select_overview_bump_warning(&mut self, index: usize) {
-        if let Some(dialog) = &mut self.overview_bump_warning_dialog {
-            dialog.select(index);
-        }
+        overview::select_overview_bump_warning(self, index);
     }
 
     fn rotate_overview_bump_warning(&mut self, delta: isize) {
-        if let Some(dialog) = &mut self.overview_bump_warning_dialog {
-            dialog.rotate(delta);
-        }
+        overview::rotate_overview_bump_warning(self, delta);
     }
 
     fn cancel_overview_bump_warning(&mut self) {
@@ -1501,14 +1280,6 @@ impl App {
 
     fn confirm_overview_bump_warning(&mut self) -> Result<()> {
         overview::confirm_overview_bump_warning(self)
-    }
-
-    fn collect_overview_bump_warnings(&self, scope_index: usize) -> Result<Vec<UnexpectedStagedRepo>> {
-        overview::collect_overview_bump_warnings(self, scope_index)
-    }
-
-    fn execute_overview_bump_workflow(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) -> Result<()> {
-        overview::execute_overview_bump_workflow(self, scope_index, workflow)
     }
 
     fn are_we_on_main(&mut self, pending_action: PendingBumpAction) -> Result<bool> {
@@ -2953,145 +2724,6 @@ struct UnexpectedStagedRepo {
     extra_paths: Vec<String>,
 }
 
-fn collect_repo_bump_operations(
-    _project: &ProjectConfig,
-    scopes: &[BumpScope],
-    git_contexts: &[crate::git::GitScopeContext],
-    affected_scope_indexes: &[usize],
-) -> Result<Vec<RepoBumpOperation>> {
-    let mut operations = Vec::<RepoBumpOperation>::new();
-
-    for scope_index in affected_scope_indexes {
-        let scope = scopes
-            .get(*scope_index)
-            .ok_or_else(|| anyhow!("the selected scope does not exist"))?;
-        let context = git_contexts
-            .get(*scope_index)
-            .or_else(|| git_contexts.first())
-            .ok_or_else(|| anyhow!("git scope metadata is unavailable for the selected bump targets"))?;
-        let stage_paths = collect_stage_paths_for_targets(&context.repo_root, &scope.targets);
-
-        if let Some(existing) = operations.iter_mut().find(|operation| operation.repo_root == context.repo_root) {
-            for path in stage_paths {
-                if !existing.stage_paths.iter().any(|candidate| candidate == &path) {
-                    existing.stage_paths.push(path);
-                }
-            }
-        } else {
-            operations.push(RepoBumpOperation {
-                repo_root: context.repo_root.clone(),
-                remote_spec: context.remote_spec.clone(),
-                stage_paths,
-            });
-        }
-    }
-
-    Ok(operations)
-}
-
-fn apply_repo_bump_workflow(
-    operations: &[RepoBumpOperation],
-    next_version: &str,
-    workflow: OverviewBumpWorkflow,
-) -> Result<()> {
-    let commit_message = format!("bump: CVB version bump to {}", next_version);
-
-    for operation in operations {
-        if !operation.stage_paths.is_empty() {
-            let mut add_args = vec!["add".to_string(), "--".to_string()];
-            add_args.extend(operation.stage_paths.iter().cloned());
-            run_git_checked_owned(&operation.repo_root, add_args)?;
-        }
-
-        if has_staged_changes(&operation.repo_root)? {
-            run_git_checked(&operation.repo_root, &["commit", "-m", &commit_message])?;
-        }
-
-        if workflow.requires_tag() {
-            ensure_local_tag(&operation.repo_root, next_version, None)?;
-        }
-
-        if workflow.requires_push() {
-            let remote_spec = operation
-                .remote_spec
-                .as_deref()
-                .ok_or_else(|| anyhow!("no remote is configured for this project"))?;
-            run_git_checked(&operation.repo_root, &["push", remote_spec])?;
-            if workflow.requires_tag() {
-                run_git_checked(&operation.repo_root, &["push", remote_spec, next_version])?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn has_staged_changes(repo_root: &str) -> Result<bool> {
-    Ok(!run_git(repo_root, &["diff", "--cached", "--quiet", "--exit-code"])?.success)
-}
-
-fn staged_paths(repo_root: &str) -> Result<Vec<String>> {
-    Ok(split_output_lines(&run_git_checked(repo_root, &["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?))
-}
-
-fn collect_unexpected_staged_paths(operations: &[RepoBumpOperation]) -> Result<Vec<UnexpectedStagedRepo>> {
-    let mut warnings = Vec::new();
-
-    for operation in operations {
-        let expected = operation
-            .stage_paths
-            .iter()
-            .map(|path| comparable_git_path(path))
-            .collect::<HashSet<_>>();
-        let extra_paths = staged_paths(&operation.repo_root)?
-            .into_iter()
-            .filter(|path| !expected.contains(&comparable_git_path(path)))
-            .collect::<Vec<_>>();
-        if !extra_paths.is_empty() {
-            warnings.push(UnexpectedStagedRepo {
-                repo_root: operation.repo_root.clone(),
-                extra_paths,
-            });
-        }
-    }
-
-    Ok(warnings)
-}
-
-fn unstage_paths(repo_root: &str, paths: &[String]) -> Result<()> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-
-    let mut args = vec!["restore".to_string(), "--staged".to_string(), "--".to_string()];
-    args.extend(paths.iter().cloned());
-    run_git_checked_owned(repo_root, args)?;
-    Ok(())
-}
-
-fn collect_stage_paths_for_targets(repo_root: &str, targets: &[BumpTarget]) -> Vec<String> {
-    let mut paths = Vec::new();
-
-    for target in targets {
-        push_stage_path(&mut paths, repo_root, &target.path);
-        if target.format == TargetFormat::Toml {
-            let target_path = resolve_repo_path(repo_root, &target.path);
-            let is_cargo_manifest = target_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.eq_ignore_ascii_case("Cargo.toml"));
-            if is_cargo_manifest {
-                let lock_path = target_path.with_file_name("Cargo.lock");
-                if lock_path.is_file() {
-                    push_stage_path(&mut paths, repo_root, &lock_path.display().to_string());
-                }
-            }
-        }
-    }
-
-    paths
-}
-
 fn refresh_target_artifacts(target: &BumpTarget, repo_root: Option<&str>) -> Result<()> {
     if target.format != TargetFormat::Toml {
         return Ok(());
@@ -3127,34 +2759,6 @@ fn refresh_target_artifacts(target: &BumpTarget, repo_root: Option<&str>) -> Res
     Ok(())
 }
 
-fn push_stage_path(paths: &mut Vec<String>, repo_root: &str, path: &str) {
-    let candidate = normalize_repo_stage_path(repo_root, path);
-    if !candidate.is_empty() && !paths.iter().any(|existing| existing == &candidate) {
-        paths.push(candidate);
-    }
-}
-
-fn normalize_repo_stage_path(repo_root: &str, path: &str) -> String {
-    let candidate = Path::new(path);
-    if candidate.is_absolute() {
-        candidate
-            .strip_prefix(repo_root)
-            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_else(|_| path.replace('\\', "/"))
-    } else {
-        path.replace('\\', "/")
-    }
-}
-
-fn resolve_repo_path(repo_root: &str, path: &str) -> PathBuf {
-    let candidate = Path::new(path);
-    if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        Path::new(repo_root).join(candidate)
-    }
-}
-
 fn resolve_target_path(repo_root: Option<&str>, path: &str) -> PathBuf {
     let candidate = Path::new(path);
     if candidate.is_absolute() {
@@ -3164,15 +2768,6 @@ fn resolve_target_path(repo_root: Option<&str>, path: &str) -> PathBuf {
     } else {
         candidate.to_path_buf()
     }
-}
-
-fn comparable_git_path(path: &str) -> String {
-    path.replace('\\', "/").to_ascii_lowercase()
-}
-
-fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_checked(repo_root, &arg_refs)
 }
 
 #[derive(Clone)]
