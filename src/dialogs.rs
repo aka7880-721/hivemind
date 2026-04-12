@@ -27,6 +27,7 @@ pub(crate) struct RecentChangesDialog {
     pub(crate) selected_scope: usize,
     pub(crate) recent_range: ChangeRange,
     pub(crate) history_ranges: Vec<ChangeRange>,
+    pub(crate) history_loaded: bool,
     pub(crate) active_tab: RecentChangesTab,
     pub(crate) history_index: usize,
     pub(crate) scroll: u16,
@@ -44,7 +45,7 @@ pub(crate) enum RecentChangesTab {
     History,
 }
 
-fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<ChangeRange>)> {
+pub(crate) fn load_recent_change_range(scope: &GitScopeContext) -> Result<ChangeRange> {
     let repo_root = &scope.repo_root;
     let pathspecs = scope.git_pathspecs();
 
@@ -71,6 +72,14 @@ fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<Chang
         }
     };
 
+    Ok(recent_range)
+}
+
+fn load_history_ranges(scope: &GitScopeContext) -> Result<Vec<ChangeRange>> {
+    let repo_root = &scope.repo_root;
+
+    ensure_git_repo(repo_root)?;
+
     let tags = split_output_lines(&run_git_checked(repo_root, &["tag", "--sort=-creatordate"])?);
     let mut history_ranges = Vec::new();
     for window in tags.windows(2) {
@@ -84,12 +93,7 @@ fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<Chang
         });
     }
 
-    Ok((recent_range, history_ranges))
-}
-
-pub(crate) fn load_recent_change_range(scope: &GitScopeContext) -> Result<ChangeRange> {
-    let (recent_range, _) = load_change_ranges(scope)?;
-    Ok(recent_range)
+    Ok(history_ranges)
 }
 
 fn build_log_args<const N: usize>(base: [&str; N], pathspecs: &[String]) -> Vec<String> {
@@ -114,14 +118,15 @@ impl RecentChangesDialog {
     pub(crate) fn from_project_with_scope(project: &ProjectConfig, preferred_scope: usize) -> Result<Self> {
         let scopes = collect_all_branch_git_scope_contexts(project)?;
         let selected_scope = preferred_scope.min(scopes.len().saturating_sub(1));
-        let (recent_range, history_ranges) = load_change_ranges(&scopes[selected_scope])?;
+        let recent_range = load_recent_change_range(&scopes[selected_scope])?;
 
         Ok(Self {
             project_name: project.name.clone(),
             scopes,
             selected_scope,
             recent_range,
-            history_ranges,
+            history_ranges: Vec::new(),
+            history_loaded: false,
             active_tab: RecentChangesTab::Recent,
             history_index: 0,
             scroll: 0,
@@ -173,20 +178,39 @@ impl RecentChangesDialog {
     fn reload_selected_scope(&mut self, reset_navigation: bool) -> Result<()> {
         let previous_tab = self.active_tab;
         let previous_history_label = self.history_ranges.get(self.history_index).map(|range| range.label.clone());
-        let (recent_range, history_ranges) = load_change_ranges(self.active_scope())?;
-        self.recent_range = recent_range;
-        self.history_ranges = history_ranges;
+        let history_loaded = self.history_loaded;
+        self.recent_range = load_recent_change_range(self.active_scope())?;
         if reset_navigation {
+            self.history_ranges.clear();
+            self.history_loaded = false;
             self.active_tab = RecentChangesTab::Recent;
             self.history_index = 0;
         } else {
             self.active_tab = previous_tab;
-            self.history_index = previous_history_label
-                .as_ref()
-                .and_then(|label| self.history_ranges.iter().position(|range| &range.label == label))
-                .unwrap_or_else(|| self.history_index.min(self.history_ranges.len().saturating_sub(1)));
+            self.history_loaded = history_loaded;
+            if self.history_loaded {
+                self.history_ranges = load_history_ranges(self.active_scope())?;
+                self.history_index = previous_history_label
+                    .as_ref()
+                    .and_then(|label| self.history_ranges.iter().position(|range| &range.label == label))
+                    .unwrap_or_else(|| self.history_index.min(self.history_ranges.len().saturating_sub(1)));
+            } else {
+                self.history_ranges.clear();
+                self.history_index = 0;
+            }
         }
         self.scroll = 0;
+        Ok(())
+    }
+
+    fn ensure_history_loaded(&mut self) -> Result<()> {
+        if self.history_loaded {
+            return Ok(());
+        }
+
+        self.history_ranges = load_history_ranges(self.active_scope())?;
+        self.history_loaded = true;
+        self.history_index = self.history_index.min(self.history_ranges.len().saturating_sub(1));
         Ok(())
     }
 
@@ -200,19 +224,23 @@ impl RecentChangesDialog {
         }
     }
 
-    pub(crate) fn switch_tab(&mut self, tab: RecentChangesTab) {
+    pub(crate) fn switch_tab(&mut self, tab: RecentChangesTab) -> Result<()> {
+        if tab == RecentChangesTab::History {
+            self.ensure_history_loaded()?;
+        }
         self.active_tab = tab;
         self.scroll = 0;
+        Ok(())
     }
 
-    pub(crate) fn cycle_tab(&mut self, delta: isize) {
+    pub(crate) fn cycle_tab(&mut self, delta: isize) -> Result<()> {
         let tabs = [RecentChangesTab::Recent, RecentChangesTab::History];
         let current = match self.active_tab {
             RecentChangesTab::Recent => 0,
             RecentChangesTab::History => 1,
         } as isize;
         let next = (current + delta).rem_euclid(tabs.len() as isize) as usize;
-        self.switch_tab(tabs[next]);
+        self.switch_tab(tabs[next])
     }
 
     pub(crate) fn navigate_history(&mut self, delta: isize) {
