@@ -3271,12 +3271,13 @@ mod tests {
         let mut wizard = ProjectWizard::default();
         wizard.project_type = ProjectType::Branched;
         wizard.integration_mode = IntegrationMode::GitHubEnabled;
-        wizard.focus = WizardField::RemoteUrl;
+        wizard.changelog_enabled = true;
+        wizard.focus = WizardField::ChangelogPath;
 
         let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
 
         assert_eq!(row_height, 2);
-        assert!(visible_fields.contains(&WizardField::RemoteUrl));
+        assert!(visible_fields.contains(&WizardField::ChangelogPath));
         assert!(show_above);
         assert!(!show_below);
     }
