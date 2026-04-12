@@ -51,6 +51,9 @@ impl App {
 		if self.main_branch_warning_dialog.is_some() {
 			self.render_main_branch_warning_dialog(frame, frame.area());
 		}
+		if self.changelog_preview_dialog.is_some() {
+			self.render_changelog_preview_dialog(frame, frame.area());
+		}
 		if self.recent_changes_dialog.is_some() {
 			self.render_recent_changes_dialog(frame, frame.area());
 		}
@@ -667,6 +670,75 @@ impl App {
 		);
 	}
 
+	fn render_changelog_preview_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.changelog_preview_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 88, 78);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(" Changelog Preview ")
+			.border_style(Style::default().fg(Color::Cyan));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let sections = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Min(12), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.split(inner);
+
+		let header = vec![
+			Line::from(format!("Project: {}", dialog.project_name)).bold(),
+			Line::from(format!("Version: {}", dialog.next_version)),
+			Line::from(format!("Workflow: {}", dialog.workflow.display_name())),
+			Line::from("Review the generated changelog below. Edit the optional release message and confirm to write and stage the changelog file."),
+		];
+		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
+
+		let input_row = Layout::default()
+			.direction(Direction::Horizontal)
+			.constraints([Constraint::Length(20), Constraint::Min(10)])
+			.split(sections[1]);
+		frame.render_widget(Paragraph::new("Release message"), input_row[0]);
+		let input_block = Block::default()
+			.borders(Borders::ALL)
+			.title(" optional ")
+			.border_style(Style::default().fg(Color::Cyan));
+		frame.render_widget(
+			Paragraph::new(dialog.release_message.display_value(true))
+				.block(input_block)
+				.style(Style::default().fg(Color::White)),
+			input_row[1],
+		);
+
+		let body_block = Block::default().borders(Borders::ALL).title(" Preview ");
+		let body_inner = body_block.inner(sections[2]);
+		frame.render_widget(body_block, sections[2]);
+		let body = dialog
+			.combined_preview_lines()
+			.into_iter()
+			.map(Line::from)
+			.collect::<Vec<_>>();
+		frame.render_widget(
+			Paragraph::new(body)
+				.wrap(Wrap { trim: false })
+				.scroll((dialog.scroll, 0)),
+			body_inner,
+		);
+
+		self.render_button_row(
+			frame,
+			sections[3],
+			&[
+				DialogButton::new("Continue", false, HitAction::ConfirmChangelogPreview, Style::default().fg(Color::Black).bg(Color::Green)),
+				DialogButton::new("Scroll", false, HitAction::ScrollChangelogPreview(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
+				DialogButton::new("Cancel", false, HitAction::CancelChangelogPreview, Style::default().fg(Color::White).bg(Color::Red)),
+			],
+		);
+	}
+
 	fn render_recent_changes_dialog(&mut self, frame: &mut Frame, area: Rect) {
 		let Some(dialog) = &self.recent_changes_dialog else {
 			return;
@@ -815,7 +887,7 @@ impl App {
 			Line::from(match dialog.selected_action() {
 				TagAction::CreateLocal => "Creates a local tag only.",
 				TagAction::CreateAndPush => "Creates the local tag if needed, then pushes it.",
-				TagAction::CreatePushAndRelease => "Creates the tag, pushes it, then runs `gh release create --generate-notes`.",
+				TagAction::CreatePushAndRelease => "Creates the tag, pushes it, then publishes a GitHub release with CVB-generated notes.",
 			}),
 		];
 		frame.render_widget(Paragraph::new(notes).wrap(Wrap { trim: false }), sections[2]);
