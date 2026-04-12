@@ -6,7 +6,7 @@
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
-use crate::changelog::build_document_from_git_log;
+use crate::changelog::{archive_changelog_markdown, build_document_from_git_log};
 use crate::dialogs::load_recent_change_range;
 use super::git_flow::{
 	append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
@@ -792,7 +792,15 @@ pub(super) fn execute_overview_bump_workflow(
 		if let Some(pending_changelog) = app.take_matching_pending_changelog_write(scope_index, workflow) {
 			for entry in &pending_changelog.entries {
 				write_changelog_markdown(&entry.repo_root, &entry.changelog_path, &entry.markdown)?;
-				append_repo_stage_paths(&mut repo_operations, &entry.repo_root, &[entry.stage_path.clone()]);
+				let history_path = archive_changelog_markdown(&entry.repo_root, &next_version, &entry.markdown)?;
+				append_repo_stage_paths(
+					&mut repo_operations,
+					&entry.repo_root,
+					&[
+						entry.stage_path.clone(),
+						stage_path_for_file(&entry.repo_root, &history_path.to_string_lossy()),
+					],
+				);
 			}
 		}
 		apply_repo_bump_workflow(&repo_operations, &next_version, workflow)?;
