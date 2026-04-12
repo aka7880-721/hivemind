@@ -702,10 +702,10 @@ impl App {
 		];
 		if let Some(workflow) = dialog.workflow {
 			header.push(Line::from(format!("Workflow: {}", workflow.display_name())));
-			header.push(Line::from("Review the generated changelog below. Edit the optional release message and confirm to write and stage the changelog file."));
+			header.push(Line::from("Review the generated changelog below. Edit the optional release message, Save to repo root if needed, then confirm to write and stage the changelog file."));
 		} else {
 			header.push(Line::from("Preview mode: current git history rendered as the changelog."));
-			header.push(Line::from("Press Enter or Close to dismiss this preview."));
+			header.push(Line::from("Press S or Save to write changelog_temp.md in each repo root, or Enter/Close to dismiss this preview."));
 		}
 		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
@@ -747,6 +747,7 @@ impl App {
 			sections[3],
 			&[
 				DialogButton::new(if dialog.workflow.is_some() { "Continue" } else { "Close" }, false, HitAction::ConfirmChangelogPreview, Style::default().fg(Color::Black).bg(Color::Green)),
+				DialogButton::new("Save", false, HitAction::SaveChangelogPreview, Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180))),
 				DialogButton::new("Scroll", false, HitAction::ScrollChangelogPreview(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
 				DialogButton::new(if dialog.workflow.is_some() { "Cancel" } else { "Back" }, false, HitAction::CancelChangelogPreview, Style::default().fg(Color::White).bg(Color::Red)),
 			],
