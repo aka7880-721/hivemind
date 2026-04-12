@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::versioning::VersionScheme;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
+pub const DEFAULT_CHANGELOG_PATH: &str = "CHANGELOG.md";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -90,6 +91,8 @@ pub struct ProjectConfig {
     pub unified_versioning: bool,
     pub version_scheme: VersionScheme,
     #[serde(default)]
+    pub changelog: ChangelogSettings,
+    #[serde(default)]
     pub targets: Vec<TargetSpec>,
     #[serde(default)]
     pub branches: Vec<BranchConfig>,
@@ -165,7 +168,40 @@ impl ProjectConfig {
             }
         }
 
+        lines.push(format!(
+            "Changelog: {}",
+            if self.changelog.enabled { "Enabled" } else { "Disabled" }
+        ));
+        lines.push(format!("Changelog path: {}", self.changelog.effective_path()));
+
         lines
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChangelogSettings {
+    pub enabled: bool,
+    pub file_path: String,
+}
+
+impl Default for ChangelogSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            file_path: DEFAULT_CHANGELOG_PATH.to_string(),
+        }
+    }
+}
+
+impl ChangelogSettings {
+    pub fn effective_path(&self) -> &str {
+        let trimmed = self.file_path.trim();
+        if trimmed.is_empty() {
+            DEFAULT_CHANGELOG_PATH
+        } else {
+            trimmed
+        }
     }
 }
 
@@ -461,6 +497,8 @@ format = "json"
         assert_eq!(branch.scope_kind, BranchScopeKind::Branch);
         assert!(branch.repo.is_none());
         assert_eq!(branch.targets.len(), 1);
+        assert!(!config.projects[0].changelog.enabled);
+        assert_eq!(config.projects[0].changelog.effective_path(), DEFAULT_CHANGELOG_PATH);
     }
 
     #[test]
@@ -510,6 +548,7 @@ format = "json"
                 integration_mode: IntegrationMode::LocalOnly,
                 unified_versioning: true,
                 version_scheme: VersionScheme::SemVer,
+                changelog: ChangelogSettings::default(),
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),
                     path: "package.json".to_string(),
@@ -539,6 +578,7 @@ format = "json"
             integration_mode: IntegrationMode::LocalOnly,
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
@@ -571,5 +611,15 @@ format = "json"
 
         assert!(semver_project.summary().ends_with("SemVer"));
         assert!(mixed_project.summary().ends_with("Mixed"));
+    }
+
+    #[test]
+    fn changelog_settings_fall_back_to_default_path_when_blank() {
+        let settings = ChangelogSettings {
+            enabled: true,
+            file_path: "   ".to_string(),
+        };
+
+        assert_eq!(settings.effective_path(), DEFAULT_CHANGELOG_PATH);
     }
 }

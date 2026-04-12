@@ -7,6 +7,7 @@
 
 mod app;
 mod branding;
+mod changelog;
 mod config;
 mod dialogs;
 mod git;

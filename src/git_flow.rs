@@ -190,6 +190,24 @@ pub(super) fn collect_stage_paths_for_targets(repo_root: &str, targets: &[BumpTa
 	paths
 }
 
+pub(super) fn append_repo_stage_paths(
+	operations: &mut [RepoBumpOperation],
+	repo_root: &str,
+	paths: &[String],
+) {
+	if let Some(operation) = operations.iter_mut().find(|operation| operation.repo_root == repo_root) {
+		for path in paths {
+			if !operation.stage_paths.iter().any(|existing| existing == path) {
+				operation.stage_paths.push(path.clone());
+			}
+		}
+	}
+}
+
+pub(super) fn stage_path_for_file(repo_root: &str, path: &str) -> String {
+	normalize_repo_stage_path(repo_root, path)
+}
+
 pub(super) fn refresh_target_artifacts(target: &BumpTarget, repo_root: Option<&str>) -> Result<()> {
 	if target.format != TargetFormat::Toml {
 		return Ok(());

@@ -6,9 +6,12 @@
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
+use crate::changelog::{archive_changelog_markdown, build_document_from_git_log};
+use crate::dialogs::load_recent_change_range;
 use super::git_flow::{
-	apply_repo_bump_workflow, collect_repo_bump_operations, collect_unexpected_staged_paths,
-	refresh_target_artifacts, unstage_paths,
+	append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
+	collect_unexpected_staged_paths, refresh_target_artifacts, stage_path_for_file,
+	unstage_paths,
 };
 
 pub(super) fn render_dashboard_overview(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -388,6 +391,9 @@ pub(super) fn render_dashboard_tiles(
 			app.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::OpenOverviewRecentChanges(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::BeginOverviewBump(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::ApplyOverviewVersionAndTag(scope_index)));
+			if let Some(rect) = hotspots.reset_rect {
+				app.hit_targets.push(HitTarget::new(rect, HitAction::ResetOverviewPendingVersion(scope_index)));
+			}
 			if let Some(rect) = hotspots.major_rect {
 				app.hit_targets.push(HitTarget::with_right_action(
 					rect,
@@ -566,6 +572,68 @@ pub(super) fn adjust_overview_pending_version(
 	Ok(())
 }
 
+pub(super) fn reset_overview_pending_version(app: &mut App, scope_index: usize) -> Result<()> {
+	let project = app.selected_project()?.clone();
+	let scopes = collect_bump_scopes(&project)?;
+	ensure_dashboard_tile_state(app, &scopes);
+	let Some(scope) = scopes.get(scope_index) else {
+		return Ok(());
+	};
+	let restored = scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string());
+	if project.unified_versioning {
+		for pending in &mut app.overview_pending_versions {
+			*pending = restored.clone();
+		}
+	} else if let Some(pending) = app.overview_pending_versions.get_mut(scope_index) {
+		*pending = restored.clone();
+	}
+	app.status = StatusMessage::info(format!("Reset pending version preview to {}.", restored));
+	Ok(())
+}
+
+pub(super) fn open_dashboard_changelog_preview(app: &mut App) -> Result<()> {
+	let project = app.selected_project()?.clone();
+	if !project.integration_mode.requires_repo() {
+		bail!("changelog preview requires a git-backed project");
+	}
+	if !project.changelog.enabled {
+		bail!("changelog generation is disabled for this project");
+	}
+
+	let scopes = collect_bump_scopes(&project)?;
+	ensure_dashboard_tile_state(app, &scopes);
+	if scopes.is_empty() {
+		return Ok(());
+	}
+
+	let scope_index = app.overview_focused_scope.min(scopes.len().saturating_sub(1));
+	let affected_scope_indexes = if project.unified_versioning {
+		(0..scopes.len()).collect::<Vec<_>>()
+	} else {
+		vec![scope_index]
+	};
+	let next_version = app
+		.overview_pending_versions
+		.get(scope_index)
+		.cloned()
+		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
+		.unwrap_or_else(|| scopes[scope_index].version_label().to_string());
+
+	let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+	let changelog_entries = collect_preview_entries(&project, &git_contexts, &affected_scope_indexes, &next_version)?;
+	if changelog_entries.is_empty() {
+		bail!("no changelog content was generated from the current git history");
+	}
+
+	app.open_changelog_preview(ChangelogPreviewDialog::preview_only(
+		project.name.clone(),
+		next_version,
+		scope_index,
+		changelog_entries,
+	));
+	Ok(())
+}
+
 pub(super) fn apply_overview_pending_version(app: &mut App, scope_index: usize, open_tag_after: bool) -> Result<()> {
 	let project = app.selected_project()?.clone();
 	let scopes = collect_bump_scopes(&project)?;
@@ -631,6 +699,10 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
 		}
 	}
 
+	if open_overview_changelog_preview_if_enabled(app, dialog.scope_index, dialog.selected_workflow())? {
+		return Ok(());
+	}
+
 	execute_overview_bump_workflow(app, dialog.scope_index, dialog.selected_workflow())?;
 	app.overview_bump_workflow_dialog = None;
 	Ok(())
@@ -643,6 +715,10 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
 
 	match dialog.selected_choice() {
 		OverviewBumpWarningChoice::Continue => {
+			if open_overview_changelog_preview_if_enabled(app, dialog.scope_index, dialog.workflow)? {
+				app.overview_bump_warning_dialog = None;
+				return Ok(());
+			}
 			execute_overview_bump_workflow(app, dialog.scope_index, dialog.workflow)?;
 			app.overview_bump_warning_dialog = None;
 			app.overview_bump_workflow_dialog = None;
@@ -650,6 +726,10 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
 		OverviewBumpWarningChoice::UnstageExtras => {
 			for repo in &dialog.repos {
 				unstage_paths(&repo.repo_root, &repo.extra_paths)?;
+			}
+			if open_overview_changelog_preview_if_enabled(app, dialog.scope_index, dialog.workflow)? {
+				app.overview_bump_warning_dialog = None;
+				return Ok(());
 			}
 			execute_overview_bump_workflow(app, dialog.scope_index, dialog.workflow)?;
 			app.overview_bump_warning_dialog = None;
@@ -708,7 +788,21 @@ pub(super) fn execute_overview_bump_workflow(
 
 	if workflow != OverviewBumpWorkflow::JustBump {
 		let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-		let repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
+		let mut repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
+		if let Some(pending_changelog) = app.take_matching_pending_changelog_write(scope_index, workflow) {
+			for entry in &pending_changelog.entries {
+				write_changelog_markdown(&entry.repo_root, &entry.changelog_path, &entry.markdown)?;
+				let history_path = archive_changelog_markdown(&entry.repo_root, &next_version, &entry.markdown)?;
+				append_repo_stage_paths(
+					&mut repo_operations,
+					&entry.repo_root,
+					&[
+						entry.stage_path.clone(),
+						stage_path_for_file(&entry.repo_root, &history_path.to_string_lossy()),
+					],
+				);
+			}
+		}
 		apply_repo_bump_workflow(&repo_operations, &next_version, workflow)?;
 	}
 
@@ -737,4 +831,86 @@ pub(super) fn execute_overview_bump_workflow(
 		workflow.display_name()
 	));
 	Ok(())
+}
+
+fn open_overview_changelog_preview_if_enabled(
+	app: &mut App,
+	scope_index: usize,
+	workflow: OverviewBumpWorkflow,
+) -> Result<bool> {
+	if workflow == OverviewBumpWorkflow::JustBump {
+		return Ok(false);
+	}
+
+	let project = app.selected_project()?.clone();
+	if !project.changelog.enabled || !project.integration_mode.requires_repo() {
+		return Ok(false);
+	}
+
+	let scopes = collect_bump_scopes(&project)?;
+	let affected_scope_indexes = if project.unified_versioning {
+		(0..scopes.len()).collect::<Vec<_>>()
+	} else {
+		vec![scope_index]
+	};
+	let next_version = app
+		.overview_pending_versions
+		.get(scope_index)
+		.cloned()
+		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
+		.ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
+
+	let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+	let changelog_entries = collect_preview_entries(&project, &git_contexts, &affected_scope_indexes, &next_version)?;
+	if changelog_entries.is_empty() {
+		return Ok(false);
+	}
+
+	app.open_changelog_preview(ChangelogPreviewDialog::new(
+		project.name.clone(),
+		next_version,
+		scope_index,
+		workflow,
+		changelog_entries,
+	));
+	Ok(true)
+}
+
+fn collect_preview_entries(
+	project: &ProjectConfig,
+	git_contexts: &[crate::git::GitScopeContext],
+	affected_scope_indexes: &[usize],
+	next_version: &str,
+) -> Result<Vec<ChangelogPreviewEntry>> {
+	let mut merged_contexts = Vec::<crate::git::GitScopeContext>::new();
+	for scope_index in affected_scope_indexes {
+		let context = git_contexts
+			.get(*scope_index)
+			.or_else(|| git_contexts.first())
+			.ok_or_else(|| anyhow!("git scope metadata is unavailable for changelog preview"))?;
+
+		if let Some(existing) = merged_contexts.iter_mut().find(|existing| existing.repo_root == context.repo_root) {
+			for path in &context.path_filters {
+				if !existing.path_filters.iter().any(|candidate| candidate == path) {
+					existing.path_filters.push(path.clone());
+				}
+			}
+		} else {
+			merged_contexts.push(context.clone());
+		}
+	}
+
+	merged_contexts
+		.into_iter()
+		.map(|context| {
+			let recent_range = load_recent_change_range(&context)?;
+			let changelog_path = project.changelog.effective_path().to_string();
+			Ok(ChangelogPreviewEntry {
+				repo_root: context.repo_root.clone(),
+				changelog_path: changelog_path.clone(),
+				stage_path: stage_path_for_file(&context.repo_root, &changelog_path),
+				document: build_document_from_git_log(next_version.to_string(), &recent_range.lines),
+			})
+		})
+		.collect()
 }
