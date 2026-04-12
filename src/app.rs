@@ -7,6 +7,7 @@
 
 use std::{
     collections::HashSet,
+    fs,
     io,
     path::{Path, PathBuf},
     process::Command,
@@ -43,11 +44,15 @@ use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTe
 
 use crate::{
     branding::{PixelLogo, choose_header_content},
+    changelog::{ChangelogDocument, build_document_from_git_log, write_changelog_markdown},
     config::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
         ProjectConfig, ProjectType, RepoConfig, TargetFormat, TargetSpec,
     },
-    dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog, TextInput},
+    dialogs::{
+        BumpDialog, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog, TextInput,
+        load_recent_change_range,
+    },
     git::{
         collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
         load_scope_activity_summary, run_gh_checked, run_git, run_git_checked, split_output_lines,
@@ -165,6 +170,7 @@ struct App {
     overview_bump_workflow_dialog: Option<OverviewBumpWorkflowDialog>,
     overview_bump_warning_dialog: Option<OverviewBumpWarningDialog>,
     main_branch_warning_dialog: Option<MainBranchWarningDialog>,
+    changelog_preview_dialog: Option<ChangelogPreviewDialog>,
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
@@ -176,6 +182,7 @@ struct App {
     transient_toaster: ToastEngine<()>,
     sticky_toaster: ToastEngine<()>,
     logo: PixelLogo,
+    pending_changelog_write: Option<PendingChangelogWrite>,
     should_quit: bool,
 }
 
@@ -209,6 +216,7 @@ impl App {
             overview_bump_workflow_dialog: None,
             overview_bump_warning_dialog: None,
             main_branch_warning_dialog: None,
+            changelog_preview_dialog: None,
             recent_changes_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
@@ -224,6 +232,7 @@ impl App {
                 .build(),
             status,
             logo: PixelLogo::load(),
+            pending_changelog_write: None,
             should_quit: false,
         })
     }
@@ -257,6 +266,10 @@ impl App {
 
         if self.main_branch_warning_dialog.is_some() {
             return self.handle_main_branch_warning_key(key);
+        }
+
+        if self.changelog_preview_dialog.is_some() {
+            return self.handle_changelog_preview_key(key);
         }
 
         if self.recent_changes_dialog.is_some() {
@@ -485,6 +498,23 @@ impl App {
             KeyCode::Char('3') => self.select_main_branch_warning(2),
             KeyCode::Enter | KeyCode::F(2) => return self.confirm_main_branch_warning(),
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_changelog_preview_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_changelog_preview(),
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_changelog_preview(),
+            KeyCode::Up => self.scroll_changelog_preview(-1),
+            KeyCode::Down => self.scroll_changelog_preview(1),
+            KeyCode::PageUp => self.scroll_changelog_preview(-8),
+            KeyCode::PageDown => self.scroll_changelog_preview(8),
+            _ => {
+                if let Some(dialog) = &mut self.changelog_preview_dialog {
+                    dialog.release_message.handle_key(key);
+                }
+            }
         }
         Ok(())
     }
@@ -737,6 +767,8 @@ impl App {
             MouseEventKind::ScrollUp => {
                 if self.project_edit_dialog.is_some() {
                     self.scroll_project_edit_body(-1);
+                } else if self.changelog_preview_dialog.is_some() {
+                    self.scroll_changelog_preview(-2);
                 } else if self.overview_bump_workflow_dialog.is_some() {
                 } else if self.tag_dialog.is_some() {
                 } else if self.recent_changes_dialog.is_some() {
@@ -780,6 +812,8 @@ impl App {
             MouseEventKind::ScrollDown => {
                 if self.project_edit_dialog.is_some() {
                     self.scroll_project_edit_body(1);
+                } else if self.changelog_preview_dialog.is_some() {
+                    self.scroll_changelog_preview(2);
                 } else if self.overview_bump_workflow_dialog.is_some() {
                 } else if self.tag_dialog.is_some() {
                 } else if self.recent_changes_dialog.is_some() {
@@ -1000,6 +1034,9 @@ impl App {
             HitAction::CancelOverviewBumpWorkflow => self.cancel_overview_bump_workflow(),
             HitAction::SelectOverviewBumpWarningChoice(index) => self.select_overview_bump_warning(index),
             HitAction::SelectMainBranchWarningChoice(index) => self.select_main_branch_warning(index),
+            HitAction::ConfirmChangelogPreview => return self.confirm_changelog_preview(),
+            HitAction::CancelChangelogPreview => self.cancel_changelog_preview(),
+            HitAction::ScrollChangelogPreview(delta) => self.scroll_changelog_preview(delta),
             HitAction::AdjustOverviewVersion(scope_index, control, delta) => {
                 return self.adjust_overview_pending_version(scope_index, control, delta)
             }
@@ -1272,6 +1309,64 @@ impl App {
         Ok(())
     }
 
+    fn open_changelog_preview(&mut self, dialog: ChangelogPreviewDialog) {
+        self.pending_changelog_write = None;
+        self.changelog_preview_dialog = Some(dialog);
+        self.status = StatusMessage::info(
+            "Review the generated changelog, add an optional release message, then confirm the bump.",
+        );
+    }
+
+    fn cancel_changelog_preview(&mut self) {
+        self.changelog_preview_dialog = None;
+        self.pending_changelog_write = None;
+        self.status = StatusMessage::info("Changelog preview cancelled.");
+    }
+
+    fn scroll_changelog_preview(&mut self, delta: i16) {
+        if let Some(dialog) = &mut self.changelog_preview_dialog {
+            let max_scroll = dialog
+                .combined_preview_lines()
+                .len()
+                .saturating_sub(1)
+                .min(u16::MAX as usize) as u16;
+            if delta.is_negative() {
+                dialog.scroll = dialog.scroll.saturating_sub(delta.unsigned_abs());
+            } else {
+                dialog.scroll = dialog.scroll.saturating_add(delta as u16).min(max_scroll);
+            }
+        }
+    }
+
+    fn confirm_changelog_preview(&mut self) -> Result<()> {
+        let Some(dialog) = self.changelog_preview_dialog.clone() else {
+            return Ok(());
+        };
+
+        self.pending_changelog_write = Some(dialog.prepare_pending_write());
+        self.changelog_preview_dialog = None;
+        overview::execute_overview_bump_workflow(self, dialog.scope_index, dialog.workflow)?;
+        self.overview_bump_warning_dialog = None;
+        self.overview_bump_workflow_dialog = None;
+        Ok(())
+    }
+
+    fn take_matching_pending_changelog_write(
+        &mut self,
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+    ) -> Option<PendingChangelogWrite> {
+        let matches = self
+            .pending_changelog_write
+            .as_ref()
+            .is_some_and(|pending| pending.scope_index == scope_index && pending.workflow == workflow);
+        if matches {
+            self.pending_changelog_write.take()
+        } else {
+            None
+        }
+    }
+
     fn resume_pending_bump_action(&mut self, pending_action: PendingBumpAction) -> Result<()> {
         match pending_action {
             PendingBumpAction::Standard => self.apply_bump(),
@@ -1436,7 +1531,8 @@ impl App {
 
         if matches!(action, TagAction::CreatePushAndRelease) {
             ensure_gh_available()?;
-            run_gh_checked(&repo_root, &["release", "create", &tag_name, "--generate-notes"])?;
+            let release_notes = self.build_release_notes_markdown(&tag_name, &active_scope)?;
+            self.create_github_release(&repo_root, &tag_name, &release_notes)?;
         }
 
         self.tag_dialog = None;
@@ -1457,6 +1553,34 @@ impl App {
         } else {
             format!("{} Annotation included.", summary)
         });
+        Ok(())
+    }
+
+    fn build_release_notes_markdown(&self, tag_name: &str, scope: &crate::git::GitScopeContext) -> Result<String> {
+        let recent_range = load_recent_change_range(scope)?;
+        Ok(build_document_from_git_log(tag_name.to_string(), &recent_range.lines)
+            .render_markdown()
+            .markdown)
+    }
+
+    fn create_github_release(&self, repo_root: &str, tag_name: &str, release_notes: &str) -> Result<()> {
+        let notes_file = std::env::temp_dir().join(format!(
+            "cvb-release-notes-{}-{}.md",
+            std::process::id(),
+            sanitize_tag_fragment(tag_name)
+        ));
+        fs::write(&notes_file, release_notes)
+            .with_context(|| format!("failed to write release notes to '{}'", notes_file.display()))?;
+
+        let notes_file_string = notes_file.to_string_lossy().into_owned();
+        let release_result = run_gh_checked(
+            repo_root,
+            &["release", "create", tag_name, "--notes-file", notes_file_string.as_str()],
+        );
+        let cleanup_result = fs::remove_file(&notes_file);
+
+        release_result?;
+        cleanup_result.with_context(|| format!("failed to remove temporary release notes file '{}'", notes_file.display()))?;
         Ok(())
     }
 
@@ -2098,6 +2222,9 @@ pub(crate) enum HitAction {
     CancelOverviewBumpWorkflow,
     SelectOverviewBumpWarningChoice(usize),
     SelectMainBranchWarningChoice(usize),
+    ConfirmChangelogPreview,
+    CancelChangelogPreview,
+    ScrollChangelogPreview(i16),
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
     ApplyOverviewVersionAndTag(usize),
     OpenProjectEdit,
@@ -2302,6 +2429,113 @@ enum MainBranchWarningChoice {
     SwitchToMain,
     IgnoreAndContinue,
     Cancel,
+}
+
+#[derive(Clone)]
+struct ChangelogPreviewDialog {
+    project_name: String,
+    next_version: String,
+    scope_index: usize,
+    workflow: OverviewBumpWorkflow,
+    entries: Vec<ChangelogPreviewEntry>,
+    release_message: TextInput,
+    scroll: u16,
+}
+
+impl ChangelogPreviewDialog {
+    fn new(
+        project_name: String,
+        next_version: String,
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+        entries: Vec<ChangelogPreviewEntry>,
+    ) -> Self {
+        Self {
+            project_name,
+            next_version,
+            scope_index,
+            workflow,
+            entries,
+            release_message: TextInput::with_value(""),
+            scroll: 0,
+        }
+    }
+
+    fn combined_preview_lines(&self) -> Vec<String> {
+        let release_message = self.release_message.value.trim();
+        let mut lines = Vec::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if self.entries.len() > 1 {
+                lines.push(format!("### Repo: {}", entry.repo_root));
+                lines.push(format!("Path: {}", entry.changelog_path));
+                lines.push(String::new());
+            }
+
+            let rendered = entry.rendered_markdown(release_message);
+            lines.extend(rendered.lines().map(ToOwned::to_owned));
+            if index + 1 < self.entries.len() {
+                lines.push(String::new());
+            }
+        }
+
+        if lines.is_empty() {
+            lines.push("No changelog content was generated from the recent git range.".to_string());
+        }
+
+        lines
+    }
+
+    fn prepare_pending_write(&self) -> PendingChangelogWrite {
+        let release_message = self.release_message.value.trim();
+        PendingChangelogWrite {
+            scope_index: self.scope_index,
+            workflow: self.workflow,
+            entries: self
+                .entries
+                .iter()
+                .map(|entry| PreparedChangelogEntry {
+                    repo_root: entry.repo_root.clone(),
+                    changelog_path: entry.changelog_path.clone(),
+                    stage_path: entry.stage_path.clone(),
+                    markdown: entry.rendered_markdown(release_message),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ChangelogPreviewEntry {
+    repo_root: String,
+    changelog_path: String,
+    stage_path: String,
+    document: ChangelogDocument,
+}
+
+impl ChangelogPreviewEntry {
+    fn rendered_markdown(&self, release_message: &str) -> String {
+        let document = if release_message.trim().is_empty() {
+            self.document.clone()
+        } else {
+            self.document.clone().with_release_message(release_message.to_string())
+        };
+        document.render_markdown().markdown
+    }
+}
+
+#[derive(Clone)]
+struct PreparedChangelogEntry {
+    repo_root: String,
+    changelog_path: String,
+    stage_path: String,
+    markdown: String,
+}
+
+#[derive(Clone)]
+struct PendingChangelogWrite {
+    scope_index: usize,
+    workflow: OverviewBumpWorkflow,
+    entries: Vec<PreparedChangelogEntry>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2534,6 +2768,14 @@ enum StatusKind {
 
 fn sanitize_pasted_text(text: &str) -> String {
     text.chars().filter(|character| *character != '\r' && *character != '\n').collect()
+}
+
+fn sanitize_tag_fragment(text: &str) -> String {
+    let sanitized = text
+        .chars()
+        .map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+        .collect::<String>();
+    sanitized.trim_matches('-').to_string()
 }
 
 #[derive(Clone)]
