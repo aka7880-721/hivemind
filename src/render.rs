@@ -1474,7 +1474,7 @@ impl App {
 		} else if self.tag_dialog.is_some() {
 			Line::from("Type tag name | [ ] scope | A annotation | Left/Right action | Enter run | Esc cancel")
 		} else if self.recent_changes_dialog.is_some() {
-			Line::from("1/2 switch tabs | [ ] scope | Left/Right history | Up/Down scroll | T create tag | Esc close")
+			Line::from("1/2 switch tabs | [ ] scope | Left/Right history | Up/Down scroll | R reload | T create tag | Esc close")
 		} else if self.bump_dialog.is_some() {
 			Line::from("Up/Down scope | Left/Right change bump action | Enter apply | Esc cancel")
 		} else if self.overview_bump_workflow_dialog.is_some() {
@@ -1588,6 +1588,8 @@ impl App {
 		spans.extend(shortcut_key_label("C", "hangelog"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("T", " Create Tag"));
+		spans.push(Span::raw(" | "));
+		spans.extend(shortcut_key_label("R", " Reload"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("H", "ide Footer"));
 		spans.push(Span::raw(" | "));
