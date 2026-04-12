@@ -162,16 +162,8 @@ pub(super) fn ensure_dashboard_recent_changes(app: &mut App) {
 			Ok(dialog) => app.overview_recent_changes = Some(dialog),
 			Err(error) => app.overview_recent_error = Some(error.to_string()),
 		}
-		return;
-	}
-
-	if let Some(dialog) = &mut app.overview_recent_changes {
-		if let Err(error) = dialog.refresh_current_scope() {
-			app.overview_recent_changes = None;
-			app.overview_recent_error = Some(error.to_string());
-		} else {
-			app.overview_recent_error = None;
-		}
+	} else {
+		app.overview_recent_error = None;
 	}
 }
 
