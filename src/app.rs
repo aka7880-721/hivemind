@@ -87,6 +87,8 @@ const BROWSE_BUTTON_WIDTH: u16 = 12;
 const BUTTON_ROW_HEIGHT: u16 = 3;
 const BUTTON_GAP_HEIGHT: u16 = 3;
 const SHORTCUT_HINT_COLOR: Color = Color::Yellow;
+const ACTIVE_UI_TICK_INTERVAL: Duration = Duration::from_millis(100);
+const IDLE_UI_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const GIT_BRANCH_COLORS: [Color; 6] = [
     Color::Green,
     Color::Cyan,
@@ -127,23 +129,36 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut app = App::new()?;
     app.prime_selected_project_dashboard_data();
+    let mut needs_draw = true;
 
     while !app.should_quit {
-        terminal.draw(|frame| app.draw(frame))?;
+        if needs_draw {
+            terminal.draw(|frame| app.draw(frame))?;
+            needs_draw = false;
+        }
 
-        if event::poll(Duration::from_millis(200)).context("event polling failed")? {
+        if event::poll(app.next_poll_timeout()).context("event polling failed")? {
             match event::read().context("event read failed")? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     if let Err(error) = app.handle_key(key) {
                         app.status = StatusMessage::error(error.to_string());
                     }
+                    needs_draw = true;
                 }
-                Event::Mouse(mouse) => app.handle_mouse(mouse),
-                Event::Paste(text) => app.handle_paste(text),
-                Event::Resize(_, _) => {}
+                Event::Mouse(mouse) => {
+                    app.handle_mouse(mouse);
+                    needs_draw = true;
+                }
+                Event::Paste(text) => {
+                    app.handle_paste(text);
+                    needs_draw = true;
+                }
+                Event::Resize(_, _) => needs_draw = true,
                 Event::FocusGained | Event::FocusLost => {}
                 Event::Key(_) => {}
             }
+        } else if app.tick_ui_state() {
+            needs_draw = true;
         }
     }
 
@@ -1183,6 +1198,25 @@ impl App {
     fn prime_selected_project_dashboard_data(&mut self) {
         self.ensure_dashboard_recent_changes();
         let _ = self.ensure_overview_activity_cache();
+    }
+
+    fn next_poll_timeout(&self) -> Duration {
+        if self.transient_toaster.has_toast() {
+            ACTIVE_UI_TICK_INTERVAL
+        } else {
+            IDLE_UI_POLL_INTERVAL
+        }
+    }
+
+    fn tick_ui_state(&mut self) -> bool {
+        let had_transient_toast = self.transient_toaster.has_toast();
+        let had_sticky_toast = self.sticky_toaster.has_toast();
+        self.transient_toaster.tick();
+        self.sticky_toaster.tick();
+
+        had_transient_toast
+            || self.transient_toaster.has_toast() != had_transient_toast
+            || self.sticky_toaster.has_toast() != had_sticky_toast
     }
 
     fn sync_dashboard_overview_after_repo_change(&mut self) {
