@@ -778,9 +778,9 @@ impl App {
 			Line::from(format!("Repo: {}", dialog.active_scope().repo_root)),
 			Line::from(format!("View: {}", dialog.current_range().label)),
 			Line::from(if dialog.can_select_scope() {
-				"Tab switches view. Left/Right changes scope only on Recent. In History, Left/Right browses tag windows. [ and ] still change scope."
+				"Tab switches view. Left/Right changes scope only on Recent. In History, Left/Right browses tag windows. [ and ] still change scope. R refreshes the current scope."
 			} else {
-				"Tab switches view. Left/Right moves history when History is active."
+				"Tab switches view. Left/Right moves history when History is active. R refreshes the current scope."
 			}),
 		];
 		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
