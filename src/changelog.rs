@@ -686,10 +686,10 @@ fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit) {
 	for item in &commit.message_items {
 		match item {
 			MessageItem::Text(text) => {
-				lines.push(format!("* {} `{}`", text, commit.short_hash));
+				lines.push(format!("* {}   _({})_", text, commit.short_hash));
 			}
 			MessageItem::NestedList { intro, items } => {
-				lines.push(format!("* {} `{}`", intro, commit.short_hash));
+				lines.push(format!("* {}   _({})_", intro, commit.short_hash));
 				for item in items {
 					lines.push(format!("  * {}", item));
 				}
