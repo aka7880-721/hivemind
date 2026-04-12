@@ -313,7 +313,8 @@ impl App {
         match key.code {
             KeyCode::Char('n') => self.open_wizard(),
             KeyCode::Char('b') => self.open_bump_dialog()?,
-            KeyCode::Char('v') => self.open_recent_changes()?,
+            KeyCode::Char('g') => self.open_recent_changes()?,
+            KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
             KeyCode::Char('t') => self.open_tag_dialog()?,
             KeyCode::Char('s') => self.screen = Screen::Settings,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
@@ -512,6 +513,9 @@ impl App {
             KeyCode::PageDown => self.scroll_changelog_preview(8),
             _ => {
                 if let Some(dialog) = &mut self.changelog_preview_dialog {
+                    if dialog.workflow.is_none() {
+                        return Ok(());
+                    }
                     dialog.release_message.handle_key(key);
                 }
             }
@@ -523,7 +527,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.recent_changes_dialog = None;
-                self.status = StatusMessage::info("View changes closed.");
+                self.status = StatusMessage::info("Git log closed.");
             }
             KeyCode::Up => self.scroll_recent_changes(-1),
             KeyCode::Down => self.scroll_recent_changes(1),
@@ -1040,6 +1044,9 @@ impl App {
             HitAction::AdjustOverviewVersion(scope_index, control, delta) => {
                 return self.adjust_overview_pending_version(scope_index, control, delta)
             }
+            HitAction::ResetOverviewPendingVersion(scope_index) => {
+                return self.reset_overview_pending_version(scope_index)
+            }
             HitAction::ApplyOverviewVersionAndTag(scope_index) => {
                 return self.apply_overview_pending_version(scope_index, true)
             }
@@ -1093,7 +1100,7 @@ impl App {
             }
             HitAction::CloseRecentChanges => {
                 self.recent_changes_dialog = None;
-                self.status = StatusMessage::info("View changes closed.");
+                self.status = StatusMessage::info("Git log closed.");
             }
             HitAction::ScrollRecentChanges(delta) => self.scroll_recent_changes(delta),
             HitAction::OpenTagDialog => return self.open_tag_dialog(),
@@ -1134,8 +1141,12 @@ impl App {
         self.tag_dialog = None;
         self.project_edit_dialog = None;
         self.recent_changes_dialog = Some(dialog);
-        self.status = StatusMessage::info("Showing git changes for the selected project.");
+        self.status = StatusMessage::info("Showing git log for the selected project.");
         Ok(())
+    }
+
+    fn open_dashboard_changelog_preview(&mut self) -> Result<()> {
+        overview::open_dashboard_changelog_preview(self)
     }
 
     fn invalidate_overview_cache(&mut self) {
@@ -1311,16 +1322,19 @@ impl App {
 
     fn open_changelog_preview(&mut self, dialog: ChangelogPreviewDialog) {
         self.pending_changelog_write = None;
+        let preview_only = dialog.workflow.is_none();
         self.changelog_preview_dialog = Some(dialog);
-        self.status = StatusMessage::info(
-            "Review the generated changelog, add an optional release message, then confirm the bump.",
-        );
+        self.status = StatusMessage::info(if preview_only {
+            "Showing the generated changelog preview for the current git history."
+        } else {
+            "Review the generated changelog, add an optional release message, then confirm the bump."
+        });
     }
 
     fn cancel_changelog_preview(&mut self) {
         self.changelog_preview_dialog = None;
         self.pending_changelog_write = None;
-        self.status = StatusMessage::info("Changelog preview cancelled.");
+        self.status = StatusMessage::info("Changelog preview closed.");
     }
 
     fn scroll_changelog_preview(&mut self, delta: i16) {
@@ -1343,12 +1357,26 @@ impl App {
             return Ok(());
         };
 
+        if dialog.workflow.is_none() {
+            self.changelog_preview_dialog = None;
+            self.status = StatusMessage::info("Changelog preview closed.");
+            return Ok(());
+        }
+
         self.pending_changelog_write = Some(dialog.prepare_pending_write());
         self.changelog_preview_dialog = None;
-        overview::execute_overview_bump_workflow(self, dialog.scope_index, dialog.workflow)?;
+        overview::execute_overview_bump_workflow(
+            self,
+            dialog.scope_index,
+            dialog.workflow.expect("workflow preview should execute a workflow"),
+        )?;
         self.overview_bump_warning_dialog = None;
         self.overview_bump_workflow_dialog = None;
         Ok(())
+    }
+
+    fn reset_overview_pending_version(&mut self, scope_index: usize) -> Result<()> {
+        overview::reset_overview_pending_version(self, scope_index)
     }
 
     fn take_matching_pending_changelog_write(
@@ -2226,6 +2254,7 @@ pub(crate) enum HitAction {
     CancelChangelogPreview,
     ScrollChangelogPreview(i16),
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
+    ResetOverviewPendingVersion(usize),
     ApplyOverviewVersionAndTag(usize),
     OpenProjectEdit,
     EditProjectField(ProjectEditFocus),
@@ -2436,7 +2465,7 @@ struct ChangelogPreviewDialog {
     project_name: String,
     next_version: String,
     scope_index: usize,
-    workflow: OverviewBumpWorkflow,
+    workflow: Option<OverviewBumpWorkflow>,
     entries: Vec<ChangelogPreviewEntry>,
     release_message: TextInput,
     scroll: u16,
@@ -2454,7 +2483,24 @@ impl ChangelogPreviewDialog {
             project_name,
             next_version,
             scope_index,
-            workflow,
+            workflow: Some(workflow),
+            entries,
+            release_message: TextInput::with_value(""),
+            scroll: 0,
+        }
+    }
+
+    fn preview_only(
+        project_name: String,
+        next_version: String,
+        scope_index: usize,
+        entries: Vec<ChangelogPreviewEntry>,
+    ) -> Self {
+        Self {
+            project_name,
+            next_version,
+            scope_index,
+            workflow: None,
             entries,
             release_message: TextInput::with_value(""),
             scroll: 0,
@@ -2489,7 +2535,7 @@ impl ChangelogPreviewDialog {
         let release_message = self.release_message.value.trim();
         PendingChangelogWrite {
             scope_index: self.scope_index,
-            workflow: self.workflow,
+            workflow: self.workflow.expect("workflow preview required to prepare changelog write"),
             entries: self
                 .entries
                 .iter()
@@ -3260,6 +3306,16 @@ fn adjust_semver_overview_value(current: &str, control: OverviewVersionControl, 
         OverviewVersionControl::Patch | OverviewVersionControl::Whole => 2,
     };
     parts[index] = (parts[index] + delta).max(0);
+    match control {
+        OverviewVersionControl::Major => {
+            parts[1] = 0;
+            parts[2] = 0;
+        }
+        OverviewVersionControl::Minor => {
+            parts[2] = 0;
+        }
+        OverviewVersionControl::Patch | OverviewVersionControl::Whole => {}
+    }
     Ok(format!("{}.{}.{}", parts[0], parts[1], parts[2]))
 }
 
@@ -3594,8 +3650,16 @@ mod tests {
             -1,
         )
         .expect("decrement should succeed");
+        let major_bumped = adjust_pending_version_value(
+            VersionScheme::SemVer,
+            "1.2.3",
+            OverviewVersionControl::Major,
+            1,
+        )
+        .expect("major bump should succeed");
 
-        assert_eq!(incremented, "1.3.3");
+        assert_eq!(incremented, "1.3.0");
         assert_eq!(decremented, "1.2.2");
+        assert_eq!(major_bumped, "2.0.0");
     }
 }
