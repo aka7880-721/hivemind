@@ -9,8 +9,6 @@ use super::*;
 
 impl App {
 	pub(crate) fn draw(&mut self, frame: &mut Frame) {
-		self.transient_toaster.tick();
-		self.sticky_toaster.tick();
 		self.sync_status_toasts();
 		self.hit_targets.clear();
 		self.overview_tile_viewport = None;
