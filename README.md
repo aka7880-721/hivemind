@@ -4,4 +4,4 @@
 
 README to be updated
 
-Test: [(b22e451)](https://github.com/comfy-home/perk-ComfyVersionBumper/commit/b22e451)
+Test: _([b22e451](https://github.com/comfy-home/perk-ComfyVersionBumper/commit/b22e451))_
