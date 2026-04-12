@@ -539,22 +539,22 @@ impl App {
             KeyCode::PageDown => self.scroll_recent_changes(8),
             KeyCode::Tab => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.cycle_tab(1);
+                    dialog.cycle_tab(1)?;
                 }
             }
             KeyCode::BackTab => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.cycle_tab(-1);
+                    dialog.cycle_tab(-1)?;
                 }
             }
             KeyCode::Char('1') => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.switch_tab(RecentChangesTab::Recent);
+                    dialog.switch_tab(RecentChangesTab::Recent)?;
                 }
             }
             KeyCode::Char('2') => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.switch_tab(RecentChangesTab::History);
+                    dialog.switch_tab(RecentChangesTab::History)?;
                 }
             }
             KeyCode::Char('[') => {
@@ -565,6 +565,12 @@ impl App {
             KeyCode::Char(']') => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
                     dialog.rotate_scope(1)?;
+                }
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.refresh_current_scope()?;
+                    self.status = StatusMessage::info("Refreshed git history for the current scope.");
                 }
             }
             KeyCode::Left => {
@@ -1088,7 +1094,7 @@ impl App {
             HitAction::BrowserSelect(index) => self.select_browser_index(index),
             HitAction::SelectRecentChangesTab(tab) => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.switch_tab(tab);
+                    dialog.switch_tab(tab)?;
                 }
             }
             HitAction::CycleRecentChangesScope(delta) => {
@@ -1151,39 +1157,7 @@ impl App {
     }
 
     fn ensure_dashboard_recent_changes(&mut self) {
-        let Some(project) = self.config.projects.get(self.selected_project) else {
-            self.overview_recent_project = None;
-            self.overview_recent_changes = None;
-            self.overview_recent_error = None;
-            return;
-        };
-
-        let project_changed = self.overview_recent_project != Some(self.selected_project);
-        self.overview_recent_project = Some(self.selected_project);
-        if !project.integration_mode.requires_repo() {
-            self.overview_recent_changes = None;
-            self.overview_recent_error = None;
-            return;
-        }
-
-        if project_changed || self.overview_recent_changes.is_none() {
-            self.overview_recent_changes = None;
-            self.overview_recent_error = None;
-            match RecentChangesDialog::from_project(project) {
-                Ok(dialog) => self.overview_recent_changes = Some(dialog),
-                Err(error) => self.overview_recent_error = Some(error.to_string()),
-            }
-            return;
-        }
-
-        if let Some(dialog) = &mut self.overview_recent_changes {
-            if let Err(error) = dialog.refresh_current_scope() {
-                self.overview_recent_changes = None;
-                self.overview_recent_error = Some(error.to_string());
-            } else {
-                self.overview_recent_error = None;
-            }
-        }
+        overview::ensure_dashboard_recent_changes(self);
     }
 
     fn invalidate_overview_cache(&mut self) {
