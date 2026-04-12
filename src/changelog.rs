@@ -33,7 +33,7 @@ impl Category {
 			Self::Fixes => "🐛 Fix(es)",
 			Self::Build => "📦 Build",
 			Self::Maintenance => "🔧 Maintenance",
-			Self::Enhancements => "💎 Enhancement",
+			Self::Enhancements => "💎 Enhancements",
 			Self::Documentation => "ℹ️ Documentation",
 			Self::Visuals => "🎨 Visuals",
 			Self::UiChanges => "📱UI Changes",
