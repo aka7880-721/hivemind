@@ -87,6 +87,11 @@ fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<Chang
     Ok((recent_range, history_ranges))
 }
 
+pub(crate) fn load_recent_change_range(scope: &GitScopeContext) -> Result<ChangeRange> {
+    let (recent_range, _) = load_change_ranges(scope)?;
+    Ok(recent_range)
+}
+
 fn build_log_args<const N: usize>(base: [&str; N], pathspecs: &[String]) -> Vec<String> {
     let mut args = base.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
     if !pathspecs.is_empty() {
