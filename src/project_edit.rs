@@ -17,8 +17,8 @@ use crate::{
 		dialog_form_row_height, dialog_visible_rows, rotate_scope_kind,
 	},
 	config::{
-		BranchConfig, BranchScopeKind, IntegrationMode, ProjectConfig, ProjectType, RepoConfig,
-		TargetSpec,
+		BranchConfig, BranchScopeKind, ChangelogSettings, IntegrationMode, ProjectConfig,
+		ProjectType, RepoConfig, TargetSpec, DEFAULT_CHANGELOG_PATH,
 	},
 	dialogs::TextInput,
 	versioning::VersionScheme,
@@ -38,10 +38,12 @@ pub(crate) struct ProjectEditDialog {
 	pub(crate) viewport_rows: usize,
 	pub(crate) repo_root: TextInput,
 	pub(crate) remote_url: TextInput,
+	pub(crate) changelog_path: TextInput,
 	pub(crate) project_type: ProjectType,
 	pub(crate) unified_versioning: bool,
 	pub(crate) integration_mode: IntegrationMode,
 	pub(crate) version_scheme: VersionScheme,
+	pub(crate) changelog_enabled: bool,
 	pub(crate) focus: ProjectEditFocus,
 }
 
@@ -84,10 +86,12 @@ impl ProjectEditDialog {
 			viewport_rows: 1,
 			repo_root: TextInput::with_value(repo_root),
 			remote_url: TextInput::with_value(remote_url),
+			changelog_path: TextInput::with_value(project.changelog.effective_path().to_string()),
 			project_type: project.project_type,
 			unified_versioning: project.unified_versioning,
 			integration_mode: project.integration_mode,
 			version_scheme: project.version_scheme,
+			changelog_enabled: project.changelog.enabled,
 			focus: ProjectEditFocus::Name,
 		})
 	}
@@ -124,6 +128,7 @@ impl ProjectEditDialog {
 			ProjectEditFocus::Name
 				| ProjectEditFocus::ScopeName
 				| ProjectEditFocus::TargetPath
+				| ProjectEditFocus::ChangelogPath
 				| ProjectEditFocus::RepoRoot
 				| ProjectEditFocus::RemoteUrl
 		) || (self.focus == ProjectEditFocus::TargetKey && self.target_key_accepts_text())
@@ -159,6 +164,10 @@ impl ProjectEditDialog {
 		if self.integration_mode.requires_remote() {
 			fields.push(ProjectEditFocus::RemoteUrl);
 		}
+		fields.push(ProjectEditFocus::ChangelogEnabled);
+		if self.changelog_enabled {
+			fields.push(ProjectEditFocus::ChangelogPath);
+		}
 		fields.extend([ProjectEditFocus::Save, ProjectEditFocus::Remove, ProjectEditFocus::Cancel]);
 		fields
 	}
@@ -188,6 +197,8 @@ impl ProjectEditDialog {
 			ProjectEditFocus::MoveScopeDown => ("Move scope down", HitAction::ProjectEditScopeAction(ScopeAction::MoveDown)),
 			ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
 			ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
+			ProjectEditFocus::ChangelogEnabled => ("Generate changelog", HitAction::EditProjectField(field)),
+			ProjectEditFocus::ChangelogPath => ("Changelog path", HitAction::EditProjectField(field)),
 			ProjectEditFocus::Save => ("Save", HitAction::SaveProjectEdit),
 			ProjectEditFocus::Remove => ("Remove", HitAction::RemoveProject),
 			ProjectEditFocus::Cancel => ("Cancel", HitAction::CancelProjectEdit),
@@ -248,6 +259,10 @@ impl ProjectEditDialog {
 			ProjectEditFocus::MoveScopeDown => "Move the selected scope later".to_string(),
 			ProjectEditFocus::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
 			ProjectEditFocus::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
+			ProjectEditFocus::ChangelogEnabled => {
+				format!("< {} >", if self.changelog_enabled { "Yes" } else { "No" })
+			}
+			ProjectEditFocus::ChangelogPath => self.changelog_path.display_value_with_width(focused, max_width),
 			ProjectEditFocus::Save => "Persist project".to_string(),
 			ProjectEditFocus::Remove => "Delete project".to_string(),
 			ProjectEditFocus::Cancel => "Discard changes".to_string(),
@@ -281,6 +296,9 @@ impl ProjectEditDialog {
 			}
 			ProjectEditFocus::IntegrationMode => {
 				self.integration_mode = if delta >= 0 { self.integration_mode.next() } else { self.integration_mode.previous() };
+			}
+			ProjectEditFocus::ChangelogEnabled => {
+				self.changelog_enabled = !self.changelog_enabled;
 			}
 			_ => {}
 		}
@@ -346,6 +364,7 @@ impl ProjectEditDialog {
 			}
 			ProjectEditFocus::RepoRoot => Some(&mut self.repo_root),
 			ProjectEditFocus::RemoteUrl => Some(&mut self.remote_url),
+			ProjectEditFocus::ChangelogPath => Some(&mut self.changelog_path),
 			_ => None,
 		}
 	}
@@ -495,6 +514,7 @@ impl ProjectEditDialog {
 		project.integration_mode = self.integration_mode;
 		project.unified_versioning = self.project_type == ProjectType::AllInOne || self.unified_versioning;
 		project.version_scheme = self.version_scheme;
+		project.changelog = self.build_changelog_settings();
 
 		if self.project_type == ProjectType::AllInOne {
 			let target_path = self.target_path.value.trim();
@@ -548,6 +568,17 @@ impl ProjectEditDialog {
 		}
 
 		Ok(())
+	}
+
+	fn build_changelog_settings(&self) -> ChangelogSettings {
+		ChangelogSettings {
+			enabled: self.changelog_enabled,
+			file_path: if self.changelog_path.value.trim().is_empty() {
+				DEFAULT_CHANGELOG_PATH.to_string()
+			} else {
+				self.changelog_path.value.trim().to_string()
+			},
+		}
 	}
 
 	pub(crate) fn current_scope(&self) -> Option<&ScopeDraft> {
@@ -695,7 +726,44 @@ pub(crate) enum ProjectEditFocus {
 	MoveScopeDown,
 	RepoRoot,
 	RemoteUrl,
+	ChangelogEnabled,
+	ChangelogPath,
 	Save,
 	Remove,
 	Cancel,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::config::{TargetFormat, TargetSpec};
+
+	#[test]
+	fn apply_updates_changelog_settings() {
+		let mut project = ProjectConfig {
+			name: "Example".to_string(),
+			project_type: ProjectType::AllInOne,
+			integration_mode: IntegrationMode::LocalOnly,
+			unified_versioning: true,
+			version_scheme: VersionScheme::SemVer,
+			changelog: ChangelogSettings::default(),
+			targets: vec![TargetSpec {
+				label: "Version".to_string(),
+				path: "Cargo.toml".to_string(),
+				key_path: "package.version".to_string(),
+				format: TargetFormat::Toml,
+			}],
+			branches: Vec::new(),
+			repo: None,
+		};
+
+		let mut dialog = ProjectEditDialog::from_project(0, &project).expect("dialog should build");
+		dialog.changelog_enabled = true;
+		dialog.changelog_path.set_value("notes/CHANGELOG.md".to_string());
+
+		dialog.apply(&mut project).expect("apply should succeed");
+
+		assert!(project.changelog.enabled);
+		assert_eq!(project.changelog.file_path, "notes/CHANGELOG.md");
+	}
 }
