@@ -58,7 +58,8 @@ use crate::{
     },
     git::{
         collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
-        load_scope_activity_summary, run_gh_checked, run_git, run_git_checked, split_output_lines,
+        RepoActivitySummary, load_scope_activity_summary, run_gh_checked, run_git, run_git_checked,
+        split_output_lines,
     },
     overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
     project_edit::{ProjectEditDialog, ProjectEditFocus},
@@ -125,6 +126,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut app = App::new()?;
+    app.prime_selected_project_dashboard_data();
 
     while !app.should_quit {
         terminal.draw(|frame| app.draw(frame))?;
@@ -161,6 +163,8 @@ struct App {
     overview_recent_project: Option<usize>,
     overview_recent_error: Option<String>,
     overview_tile_project: Option<usize>,
+    overview_activity_project: Option<usize>,
+    overview_activity_summaries: Vec<Option<RepoActivitySummary>>,
     overview_scope_order: Vec<usize>,
     overview_pending_versions: Vec<String>,
     overview_tile_scroll: usize,
@@ -207,6 +211,8 @@ impl App {
             overview_recent_project: None,
             overview_recent_error: None,
             overview_tile_project: None,
+            overview_activity_project: None,
+            overview_activity_summaries: Vec::new(),
             overview_scope_order: Vec::new(),
             overview_pending_versions: Vec::new(),
             overview_tile_scroll: 0,
@@ -319,6 +325,7 @@ impl App {
             KeyCode::Char('g') => self.open_recent_changes()?,
             KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
             KeyCode::Char('t') => self.open_tag_dialog()?,
+            KeyCode::Char('r') | KeyCode::Char('R') => self.reload_dashboard_overview_data()?,
             KeyCode::Char('s') => self.screen = Screen::Settings,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
             KeyCode::Up => {
@@ -1032,6 +1039,7 @@ impl App {
             }
             HitAction::SelectProject(index) => {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
+                self.prime_selected_project_dashboard_data();
                 self.dashboard_focus = DashboardPane::Projects;
             }
             HitAction::SelectOverviewScope(scope_index) => return self.select_dashboard_overview_scope(scope_index),
@@ -1160,9 +1168,53 @@ impl App {
         overview::ensure_dashboard_recent_changes(self);
     }
 
+    fn ensure_overview_activity_cache(&mut self) -> Result<()> {
+        overview::ensure_overview_activity_cache(self)
+    }
+
+    fn reload_overview_activity_cache(&mut self) -> Result<()> {
+        overview::reload_overview_activity_cache(self)
+    }
+
     fn invalidate_overview_cache(&mut self) {
-        self.overview_recent_project = None;
-        self.overview_tile_project = None;
+        overview::invalidate_overview_cache(self);
+    }
+
+    fn prime_selected_project_dashboard_data(&mut self) {
+        self.ensure_dashboard_recent_changes();
+        let _ = self.ensure_overview_activity_cache();
+    }
+
+    fn sync_dashboard_overview_after_repo_change(&mut self) {
+        self.invalidate_overview_cache();
+        self.ensure_dashboard_recent_changes();
+        let _ = self.reload_overview_activity_cache();
+    }
+
+    fn reload_dashboard_overview_data(&mut self) -> Result<()> {
+        let project = self.selected_project()?;
+        if !project.integration_mode.requires_repo() {
+            self.status = StatusMessage::info("Selected project has no git-backed dashboard data to reload.");
+            return Ok(());
+        }
+
+        let preferred_scope = self
+            .overview_recent_changes
+            .as_ref()
+            .map(|dialog| dialog.selected_scope)
+            .unwrap_or(self.overview_focused_scope);
+
+        self.invalidate_overview_cache();
+        self.ensure_dashboard_recent_changes();
+        if let Some(dialog) = &mut self.overview_recent_changes {
+            let scope_index = preferred_scope.min(dialog.scopes.len().saturating_sub(1));
+            if scope_index != dialog.selected_scope {
+                dialog.select_scope(scope_index)?;
+            }
+        }
+        self.reload_overview_activity_cache()?;
+        self.status = StatusMessage::info("Reloaded dashboard repo data for the selected project.");
+        Ok(())
     }
 
     fn reorder_dashboard_tile_scope(&mut self, from_scope: usize, to_scope: usize) {
@@ -1533,6 +1585,7 @@ impl App {
         dialog.apply(project)?;
         self.config_store.save(&self.config)?;
         self.invalidate_overview_cache();
+        self.prime_selected_project_dashboard_data();
         self.project_edit_dialog = None;
         self.status = StatusMessage::success("Project settings updated.");
         Ok(())
@@ -1556,6 +1609,7 @@ impl App {
             self.selected_project = dialog.project_index.min(self.config.projects.len().saturating_sub(1));
         }
         self.invalidate_overview_cache();
+        self.prime_selected_project_dashboard_data();
         self.status = StatusMessage::success(format!("Removed project '{}'.", removed.name));
         Ok(())
     }
@@ -1629,6 +1683,7 @@ impl App {
             self.create_github_release(&repo_root, &tag_name, &release_notes)?;
         }
 
+        self.sync_dashboard_overview_after_repo_change();
         self.tag_dialog = None;
         self.tag_annotation_dialog = None;
         let scope_notice = if active_scope.scope_kind.is_some() {
@@ -1778,6 +1833,8 @@ impl App {
         if repo_backed {
             self.open_tag_dialog_with_scope(preferred_scope, Some(TagAction::CreateAndPush))?;
             self.status = StatusMessage::info("Version bump applied. Review the suggested tag-and-push action next.");
+        } else {
+            self.sync_dashboard_overview_after_repo_change();
         }
         Ok(())
     }
@@ -1872,7 +1929,11 @@ impl App {
         }
         let len = self.config.projects.len() as isize;
         let next = (self.selected_project as isize + delta).clamp(0, len - 1);
-        self.selected_project = next as usize;
+        let next = next as usize;
+        if self.selected_project != next {
+            self.selected_project = next;
+            self.prime_selected_project_dashboard_data();
+        }
     }
 
     fn validate_wizard_target(&mut self) {
@@ -1932,6 +1993,7 @@ impl App {
         self.config_store.save(&self.config)?;
         self.selected_project = self.config.projects.len().saturating_sub(1);
         self.invalidate_overview_cache();
+        self.prime_selected_project_dashboard_data();
         self.screen = Screen::Dashboard;
         self.status = StatusMessage::success("Project saved to the user config directory.");
         Ok(())
