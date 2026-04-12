@@ -147,9 +147,13 @@ impl ProjectEditDialog {
 		fields.extend([
 			ProjectEditFocus::VersionScheme,
 			ProjectEditFocus::IntegrationMode,
+			ProjectEditFocus::ChangelogEnabled,
 			ProjectEditFocus::TargetPath,
 			ProjectEditFocus::TargetKey,
 		]);
+		if self.changelog_enabled {
+			fields.push(ProjectEditFocus::ChangelogPath);
+		}
 		if self.project_type == ProjectType::Branched {
 			fields.extend([
 				ProjectEditFocus::AddScope,
@@ -163,10 +167,6 @@ impl ProjectEditDialog {
 		}
 		if self.integration_mode.requires_remote() {
 			fields.push(ProjectEditFocus::RemoteUrl);
-		}
-		fields.push(ProjectEditFocus::ChangelogEnabled);
-		if self.changelog_enabled {
-			fields.push(ProjectEditFocus::ChangelogPath);
 		}
 		fields.extend([ProjectEditFocus::Save, ProjectEditFocus::Remove, ProjectEditFocus::Cancel]);
 		fields
@@ -765,5 +765,47 @@ mod tests {
 
 		assert!(project.changelog.enabled);
 		assert_eq!(project.changelog.file_path, "notes/CHANGELOG.md");
+	}
+
+	#[test]
+	fn visible_fields_surface_changelog_before_repo_fields() {
+		let dialog = ProjectEditDialog::from_project(
+			0,
+			&ProjectConfig {
+				name: "demo".to_string(),
+				project_type: ProjectType::AllInOne,
+				version_scheme: VersionScheme::SemVer,
+				unified_versioning: true,
+				integration_mode: IntegrationMode::GitHubEnabled,
+				targets: vec![TargetSpec {
+					label: "Version".to_string(),
+					path: "C:/repo/Cargo.toml".to_string(),
+					key_path: "package.version".to_string(),
+					format: crate::config::TargetFormat::Toml,
+				}],
+				branches: vec![],
+				repo: Some(RepoConfig {
+					local_root: "C:/repo".to_string(),
+					remote_url: Some("https://example.test/repo.git".to_string()),
+				}),
+				changelog: ChangelogSettings {
+					enabled: true,
+					file_path: "CHANGELOG.md".to_string(),
+				},
+			},
+		)
+		.expect("dialog should build");
+
+		let fields = dialog.visible_fields();
+		let changelog_index = fields
+			.iter()
+			.position(|field| *field == ProjectEditFocus::ChangelogEnabled)
+			.expect("changelog field should exist");
+		let repo_root_index = fields
+			.iter()
+			.position(|field| *field == ProjectEditFocus::RepoRoot)
+			.expect("repo root field should exist");
+
+		assert!(changelog_index < repo_root_index);
 	}
 }
