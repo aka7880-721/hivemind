@@ -6,18 +6,12 @@
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
-<<<<<<< HEAD
-use super::git_flow::{
-	apply_repo_bump_workflow, collect_repo_bump_operations, collect_unexpected_staged_paths,
-	refresh_target_artifacts, unstage_paths,
-=======
 use crate::changelog::{archive_changelog_markdown, build_document_from_git_log};
 use crate::dialogs::load_recent_change_range;
 use super::git_flow::{
 	append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
 	collect_unexpected_staged_paths, refresh_target_artifacts, stage_path_for_file,
 	unstage_paths,
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 };
 
 pub(super) fn render_dashboard_overview(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -397,12 +391,9 @@ pub(super) fn render_dashboard_tiles(
 			app.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::OpenOverviewRecentChanges(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::BeginOverviewBump(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::ApplyOverviewVersionAndTag(scope_index)));
-<<<<<<< HEAD
-=======
 			if let Some(rect) = hotspots.reset_rect {
 				app.hit_targets.push(HitTarget::new(rect, HitAction::ResetOverviewPendingVersion(scope_index)));
 			}
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 			if let Some(rect) = hotspots.major_rect {
 				app.hit_targets.push(HitTarget::with_right_action(
 					rect,
@@ -581,8 +572,6 @@ pub(super) fn adjust_overview_pending_version(
 	Ok(())
 }
 
-<<<<<<< HEAD
-=======
 pub(super) fn reset_overview_pending_version(app: &mut App, scope_index: usize) -> Result<()> {
 	let project = app.selected_project()?.clone();
 	let scopes = collect_bump_scopes(&project)?;
@@ -645,7 +634,6 @@ pub(super) fn open_dashboard_changelog_preview(app: &mut App) -> Result<()> {
 	Ok(())
 }
 
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 pub(super) fn apply_overview_pending_version(app: &mut App, scope_index: usize, open_tag_after: bool) -> Result<()> {
 	let project = app.selected_project()?.clone();
 	let scopes = collect_bump_scopes(&project)?;
@@ -711,13 +699,9 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
 		}
 	}
 
-<<<<<<< HEAD
-=======
 	if open_overview_changelog_preview_if_enabled(app, dialog.scope_index, dialog.selected_workflow())? {
 		return Ok(());
 	}
-
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 	execute_overview_bump_workflow(app, dialog.scope_index, dialog.selected_workflow())?;
 	app.overview_bump_workflow_dialog = None;
 	Ok(())
@@ -730,13 +714,10 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
 
 	match dialog.selected_choice() {
 		OverviewBumpWarningChoice::Continue => {
-<<<<<<< HEAD
-=======
 			if open_overview_changelog_preview_if_enabled(app, dialog.scope_index, dialog.workflow)? {
 				app.overview_bump_warning_dialog = None;
 				return Ok(());
 			}
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 			execute_overview_bump_workflow(app, dialog.scope_index, dialog.workflow)?;
 			app.overview_bump_warning_dialog = None;
 			app.overview_bump_workflow_dialog = None;
@@ -745,13 +726,10 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
 			for repo in &dialog.repos {
 				unstage_paths(&repo.repo_root, &repo.extra_paths)?;
 			}
-<<<<<<< HEAD
-=======
 			if open_overview_changelog_preview_if_enabled(app, dialog.scope_index, dialog.workflow)? {
 				app.overview_bump_warning_dialog = None;
 				return Ok(());
 			}
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 			execute_overview_bump_workflow(app, dialog.scope_index, dialog.workflow)?;
 			app.overview_bump_warning_dialog = None;
 			app.overview_bump_workflow_dialog = None;
@@ -809,9 +787,6 @@ pub(super) fn execute_overview_bump_workflow(
 
 	if workflow != OverviewBumpWorkflow::JustBump {
 		let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-<<<<<<< HEAD
-		let repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
-=======
 		let mut repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
 		if let Some(pending_changelog) = app.take_matching_pending_changelog_write(scope_index, workflow) {
 			for entry in &pending_changelog.entries {
@@ -827,7 +802,6 @@ pub(super) fn execute_overview_bump_workflow(
 				);
 			}
 		}
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 		apply_repo_bump_workflow(&repo_operations, &next_version, workflow)?;
 	}
 
@@ -856,8 +830,6 @@ pub(super) fn execute_overview_bump_workflow(
 		workflow.display_name()
 	));
 	Ok(())
-<<<<<<< HEAD
-=======
 }
 
 fn open_overview_changelog_preview_if_enabled(
@@ -940,5 +912,4 @@ fn collect_preview_entries(
 			})
 		})
 		.collect()
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 }

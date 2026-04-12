@@ -59,10 +59,7 @@ impl Default for ProjectWizard {
 			unified_versioning: false,
 			integration_mode: IntegrationMode::LocalOnly,
 			version_scheme: VersionScheme::SemVer,
-<<<<<<< HEAD
-=======
 			changelog_enabled: false,
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 			focus: WizardField::ProjectType,
 			last_probe: None,
 		}

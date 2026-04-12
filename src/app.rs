@@ -52,7 +52,10 @@ use crate::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
         ProjectConfig, ProjectType, RepoConfig, TargetFormat, TargetSpec,
     },
-    dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput},
+    dialogs::{
+        BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput,
+        load_recent_change_range,
+    },
     git::{
         collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
         load_scope_activity_summary, run_gh_checked, run_git, run_git_checked, split_output_lines,
@@ -68,13 +71,6 @@ use crate::{
     ui::{center_vertically, centered_rect},
     versioning::VersionScheme,
 };
-
-#[path = "git_flow.rs"]
-mod git_flow;
-#[path = "overview.rs"]
-mod overview;
-#[path = "render.rs"]
-mod render;
 
 #[path = "git_flow.rs"]
 mod git_flow;
@@ -176,6 +172,8 @@ struct App {
     bump_dialog: Option<BumpDialog>,
     overview_bump_workflow_dialog: Option<OverviewBumpWorkflowDialog>,
     overview_bump_warning_dialog: Option<OverviewBumpWarningDialog>,
+    main_branch_warning_dialog: Option<MainBranchWarningDialog>,
+    changelog_preview_dialog: Option<ChangelogPreviewDialog>,
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
@@ -220,6 +218,8 @@ impl App {
             bump_dialog: None,
             overview_bump_workflow_dialog: None,
             overview_bump_warning_dialog: None,
+            main_branch_warning_dialog: None,
+            changelog_preview_dialog: None,
             recent_changes_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
@@ -265,6 +265,14 @@ impl App {
 
         if self.tag_dialog.is_some() {
             return self.handle_tag_key(key);
+        }
+
+        if self.main_branch_warning_dialog.is_some() {
+            return self.handle_main_branch_warning_key(key);
+        }
+
+        if self.changelog_preview_dialog.is_some() {
+            return self.handle_changelog_preview_key(key);
         }
 
         if self.recent_changes_dialog.is_some() {
@@ -480,6 +488,41 @@ impl App {
             KeyCode::Char('3') => self.select_overview_bump_warning(2),
             KeyCode::Enter | KeyCode::F(2) => return self.confirm_overview_bump_warning(),
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_main_branch_warning_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_main_branch_warning(),
+            KeyCode::Up | KeyCode::BackTab => self.rotate_main_branch_warning(-1),
+            KeyCode::Down | KeyCode::Tab => self.rotate_main_branch_warning(1),
+            KeyCode::Char('1') => self.select_main_branch_warning(0),
+            KeyCode::Char('2') => self.select_main_branch_warning(1),
+            KeyCode::Char('3') => self.select_main_branch_warning(2),
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_main_branch_warning(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_changelog_preview_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_changelog_preview(),
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_changelog_preview(),
+            KeyCode::Char('s') | KeyCode::Char('S') => return self.save_changelog_preview(),
+            KeyCode::Up => self.scroll_changelog_preview(-1),
+            KeyCode::Down => self.scroll_changelog_preview(1),
+            KeyCode::PageUp => self.scroll_changelog_preview(-8),
+            KeyCode::PageDown => self.scroll_changelog_preview(8),
+            _ => {
+                if let Some(dialog) = &mut self.changelog_preview_dialog {
+                    if dialog.workflow.is_none() {
+                        return Ok(());
+                    }
+                    dialog.release_message.handle_key(key);
+                }
+            }
         }
         Ok(())
     }
@@ -998,6 +1041,11 @@ impl App {
             HitAction::ConfirmOverviewBumpWorkflow => return self.request_confirm_overview_bump_workflow(),
             HitAction::CancelOverviewBumpWorkflow => self.cancel_overview_bump_workflow(),
             HitAction::SelectOverviewBumpWarningChoice(index) => self.select_overview_bump_warning(index),
+            HitAction::SelectMainBranchWarningChoice(index) => self.select_main_branch_warning(index),
+            HitAction::ConfirmChangelogPreview => return self.confirm_changelog_preview(),
+            HitAction::SaveChangelogPreview => return self.save_changelog_preview(),
+            HitAction::CancelChangelogPreview => self.cancel_changelog_preview(),
+            HitAction::ScrollChangelogPreview(delta) => self.scroll_changelog_preview(delta),
             HitAction::AdjustOverviewVersion(scope_index, control, delta) => {
                 return self.adjust_overview_pending_version(scope_index, control, delta)
             }
@@ -1363,6 +1411,10 @@ impl App {
         }
     }
 
+    fn move_dashboard_overview_focus(&mut self, delta: isize) -> Result<()> {
+        overview::move_dashboard_overview_focus(self, delta)
+    }
+
     fn select_dashboard_overview_scope(&mut self, scope_index: usize) -> Result<()> {
         self.ensure_dashboard_recent_changes();
         if let Some(dialog) = &mut self.overview_recent_changes {
@@ -1372,50 +1424,7 @@ impl App {
     }
 
     fn begin_overview_bump(&mut self, scope_index: usize) -> Result<()> {
-        let project = self.selected_project()?.clone();
-        if !project.integration_mode.requires_repo() {
-            return self.apply_overview_pending_version(scope_index, false);
-        }
-
-        let scopes = collect_bump_scopes(&project)?;
-        self.ensure_dashboard_tile_state(&scopes);
-        let next_version = self
-            .overview_pending_versions
-            .get(scope_index)
-            .cloned()
-            .or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
-            .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
-        let scope_label = if project.unified_versioning {
-            "All configured scopes".to_string()
-        } else {
-            scopes
-                .get(scope_index)
-                .map(|scope| scope.display_name.clone())
-                .unwrap_or_else(|| project.name.clone())
-        };
-        let options = match project.integration_mode {
-            IntegrationMode::LocalOnly => vec![OverviewBumpWorkflow::JustBump],
-            IntegrationMode::GitLocalOnly => vec![
-                OverviewBumpWorkflow::JustBump,
-                OverviewBumpWorkflow::Commit,
-                OverviewBumpWorkflow::CommitAndTag,
-            ],
-            IntegrationMode::GitHubEnabled => vec![
-                OverviewBumpWorkflow::JustBump,
-                OverviewBumpWorkflow::CommitAndPush,
-                OverviewBumpWorkflow::CommitPushAndTag,
-            ],
-        };
-
-        self.overview_bump_workflow_dialog = Some(OverviewBumpWorkflowDialog::new(
-            project.name,
-            scope_label,
-            next_version,
-            scope_index,
-            options,
-        ));
-        self.status = StatusMessage::info("Choose how the tile bump should be applied.");
-        Ok(())
+        overview::begin_overview_bump(self, scope_index)
     }
 
     fn select_overview_bump_workflow(&mut self, index: usize) {
@@ -1459,195 +1468,244 @@ impl App {
         control: OverviewVersionControl,
         delta: i32,
     ) -> Result<()> {
-        let project = self.selected_project()?.clone();
-        let scopes = collect_bump_scopes(&project)?;
-        self.ensure_dashboard_tile_state(&scopes);
-        let Some(scope) = scopes.get(scope_index) else {
-            return Ok(());
-        };
-        let current = self
-            .overview_pending_versions
-            .get(scope_index)
-            .cloned()
-            .unwrap_or_else(|| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string()));
-        let next = adjust_pending_version_value(scope.scheme, &current, control, delta)?;
-        if project.unified_versioning {
-            for pending in &mut self.overview_pending_versions {
-                *pending = next.clone();
-            }
-        } else if let Some(pending) = self.overview_pending_versions.get_mut(scope_index) {
-            *pending = next;
-        }
-        Ok(())
+        overview::adjust_overview_pending_version(self, scope_index, control, delta)
     }
 
     fn apply_overview_pending_version(&mut self, scope_index: usize, open_tag_after: bool) -> Result<()> {
-        let project = self.selected_project()?.clone();
-        let scopes = collect_bump_scopes(&project)?;
-        let scope_repo_roots = self.scope_repo_roots(&project, scopes.len());
-        self.ensure_dashboard_tile_state(&scopes);
-        let affected_scope_indexes = if project.unified_versioning {
-            (0..scopes.len()).collect::<Vec<_>>()
-        } else {
-            vec![scope_index]
+        overview::apply_overview_pending_version(self, scope_index, open_tag_after)
+    }
+
+    fn reset_overview_pending_version(&mut self, scope_index: usize) -> Result<()> {
+        overview::reset_overview_pending_version(self, scope_index)
+    }
+
+    fn open_dashboard_changelog_preview(&mut self) -> Result<()> {
+        overview::open_dashboard_changelog_preview(self)
+    }
+
+    fn request_confirm_overview_bump_workflow(&mut self) -> Result<()> {
+        let Some(dialog) = &self.overview_bump_workflow_dialog else {
+            return Ok(());
         };
-        let next_version = self
-            .overview_pending_versions
-            .get(scope_index)
-            .cloned()
-            .or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
-            .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
-
-        for index in &affected_scope_indexes {
-            if let Some(scope) = scopes.get(*index) {
-                for target in &scope.targets {
-                    write_target_version(target, &next_version)?;
-                    refresh_target_artifacts(target, scope_repo_roots.get(*index).and_then(|root| root.as_deref()))?;
-                }
-                if let Some(pending) = self.overview_pending_versions.get_mut(*index) {
-                    *pending = next_version.clone();
-                }
-            }
+        if !self.are_we_on_main(PendingBumpAction::OverviewWorkflow {
+            scope_index: dialog.scope_index,
+        })? {
+            return Ok(());
         }
-
-        self.invalidate_overview_cache();
-        self.ensure_dashboard_recent_changes();
-
-        if open_tag_after {
-            if project.integration_mode.requires_repo() {
-                let preferred_scope = if project.unified_versioning { None } else { Some(scope_index) };
-                self.open_tag_dialog_with_scope(preferred_scope, Some(TagAction::CreateAndPush))?;
-                self.status = StatusMessage::info("Version updated. Review the tag-and-push action next.");
-            } else {
-                self.status = StatusMessage::warning("Tagging requires a git-backed project.");
-            }
-        } else {
-            self.status = StatusMessage::success(format!("Updated version to {} from the overview tile.", next_version));
-        }
-
-        Ok(())
+        self.confirm_overview_bump_workflow()
     }
 
     fn confirm_overview_bump_workflow(&mut self) -> Result<()> {
-        let Some(dialog) = self.overview_bump_workflow_dialog.clone() else {
-            return Ok(());
-        };
-
-        if dialog.selected_workflow() != OverviewBumpWorkflow::JustBump {
-            let warnings = self.collect_overview_bump_warnings(dialog.scope_index)?;
-            if !warnings.is_empty() {
-                self.overview_bump_warning_dialog = Some(OverviewBumpWarningDialog::new(
-                    dialog.scope_index,
-                    dialog.selected_workflow(),
-                    warnings,
-                ));
-                self.status = StatusMessage::warning("Previously staged files were found. Review them before committing the bump.");
-                return Ok(());
-            }
-        }
-
-        self.execute_overview_bump_workflow(dialog.scope_index, dialog.selected_workflow())?;
-        self.overview_bump_workflow_dialog = None;
-        Ok(())
+        overview::confirm_overview_bump_workflow(self)
     }
 
     fn confirm_overview_bump_warning(&mut self) -> Result<()> {
-        let Some(dialog) = self.overview_bump_warning_dialog.clone() else {
+        overview::confirm_overview_bump_warning(self)
+    }
+
+    fn collect_overview_bump_warnings(&self, scope_index: usize) -> Result<Vec<UnexpectedStagedRepo>> {
+        overview::collect_overview_bump_warnings(self, scope_index)
+    }
+
+    fn execute_overview_bump_workflow(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) -> Result<()> {
+        overview::execute_overview_bump_workflow(self, scope_index, workflow)
+    }
+
+    fn are_we_on_main(&mut self, pending_action: PendingBumpAction) -> Result<bool> {
+        let project = self.selected_project()?.clone();
+        if !project.integration_mode.requires_repo() {
+            return Ok(true);
+        }
+
+        let affected_scope_indexes = self.affected_scope_indexes_for_pending_bump(pending_action)?;
+        if affected_scope_indexes.is_empty() {
+            return Ok(true);
+        }
+
+        let scopes = collect_bump_scopes(&project)?;
+        let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+        let repos = git_flow::collect_non_main_repo_states(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
+        if repos.is_empty() {
+            return Ok(true);
+        }
+
+        self.main_branch_warning_dialog = Some(MainBranchWarningDialog::new(
+            project.integration_mode,
+            repos,
+            pending_action,
+        ));
+        self.status = StatusMessage::warning(
+            "It seems like you are not on main branch. Please, choose what would you like to do...",
+        );
+        Ok(false)
+    }
+
+    fn affected_scope_indexes_for_pending_bump(&self, pending_action: PendingBumpAction) -> Result<Vec<usize>> {
+        let project = self.selected_project()?;
+        match pending_action {
+            PendingBumpAction::Standard => {
+                let dialog = self
+                    .bump_dialog
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("no bump preview is in progress"))?;
+                if dialog.unified_versioning {
+                    Ok((0..dialog.scopes.len()).collect())
+                } else {
+                    Ok(vec![dialog.selected_scope])
+                }
+            }
+            PendingBumpAction::OverviewWorkflow { scope_index } => {
+                if project.unified_versioning {
+                    Ok((0..project.branches.len().max(1)).collect())
+                } else {
+                    Ok(vec![scope_index])
+                }
+            }
+        }
+    }
+
+    fn select_main_branch_warning(&mut self, index: usize) {
+        if let Some(dialog) = &mut self.main_branch_warning_dialog {
+            dialog.select(index);
+        }
+    }
+
+    fn rotate_main_branch_warning(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.main_branch_warning_dialog {
+            dialog.rotate(delta);
+        }
+    }
+
+    fn cancel_main_branch_warning(&mut self) {
+        self.main_branch_warning_dialog = None;
+        self.status = StatusMessage::info("Bump cancelled.");
+    }
+
+    fn confirm_main_branch_warning(&mut self) -> Result<()> {
+        let Some(dialog) = self.main_branch_warning_dialog.clone() else {
             return Ok(());
         };
 
         match dialog.selected_choice() {
-            OverviewBumpWarningChoice::Continue => {
-                self.execute_overview_bump_workflow(dialog.scope_index, dialog.workflow)?;
-                self.overview_bump_warning_dialog = None;
-                self.overview_bump_workflow_dialog = None;
+            MainBranchWarningChoice::SwitchToMain => {
+                git_flow::switch_repos_to_main(&dialog.repos, dialog.integration_mode)?;
+                self.main_branch_warning_dialog = None;
+                self.resume_pending_bump_action(dialog.pending_action)?;
             }
-            OverviewBumpWarningChoice::UnstageExtras => {
-                for repo in &dialog.repos {
-                    unstage_paths(&repo.repo_root, &repo.extra_paths)?;
-                }
-                self.execute_overview_bump_workflow(dialog.scope_index, dialog.workflow)?;
-                self.overview_bump_warning_dialog = None;
-                self.overview_bump_workflow_dialog = None;
+            MainBranchWarningChoice::IgnoreAndContinue => {
+                self.main_branch_warning_dialog = None;
+                self.resume_pending_bump_action(dialog.pending_action)?;
             }
-            OverviewBumpWarningChoice::Cancel => self.cancel_overview_bump_warning(),
+            MainBranchWarningChoice::Cancel => self.cancel_main_branch_warning(),
         }
         Ok(())
     }
 
-    fn collect_overview_bump_warnings(&self, scope_index: usize) -> Result<Vec<UnexpectedStagedRepo>> {
-        let project = self.selected_project()?.clone();
-        let scopes = collect_bump_scopes(&project)?;
-        let affected_scope_indexes = if project.unified_versioning {
-            (0..scopes.len()).collect::<Vec<_>>()
+    fn open_changelog_preview(&mut self, dialog: ChangelogPreviewDialog) {
+        self.pending_changelog_write = None;
+        let preview_only = dialog.workflow.is_none();
+        self.changelog_preview_dialog = Some(dialog);
+        self.status = StatusMessage::info(if preview_only {
+            "Showing the generated changelog preview for the current git history."
         } else {
-            vec![scope_index]
-        };
-        let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-        let repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
-        collect_unexpected_staged_paths(&repo_operations)
+            "Review the generated changelog, add an optional release message, then confirm the bump."
+        });
     }
 
-    fn execute_overview_bump_workflow(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) -> Result<()> {
-        let project = self.selected_project()?.clone();
-        let scopes = collect_bump_scopes(&project)?;
-        let scope_repo_roots = self.scope_repo_roots(&project, scopes.len());
-        self.ensure_dashboard_tile_state(&scopes);
-        let affected_scope_indexes = if project.unified_versioning {
-            (0..scopes.len()).collect::<Vec<_>>()
-        } else {
-            vec![scope_index]
+    fn cancel_changelog_preview(&mut self) {
+        self.changelog_preview_dialog = None;
+        self.pending_changelog_write = None;
+        self.status = StatusMessage::info("Changelog preview closed.");
+    }
+
+    fn save_changelog_preview(&mut self) -> Result<()> {
+        let Some(dialog) = self.changelog_preview_dialog.clone() else {
+            return Ok(());
         };
-        let next_version = self
-            .overview_pending_versions
-            .get(scope_index)
-            .cloned()
-            .or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
-            .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
 
-        for index in &affected_scope_indexes {
-            if let Some(scope) = scopes.get(*index) {
-                for target in &scope.targets {
-                    write_target_version(target, &next_version)?;
-                    refresh_target_artifacts(target, scope_repo_roots.get(*index).and_then(|root| root.as_deref()))?;
-                }
-                if let Some(pending) = self.overview_pending_versions.get_mut(*index) {
-                    *pending = next_version.clone();
-                }
-            }
-        }
-
-        if workflow != OverviewBumpWorkflow::JustBump {
-            let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-            let repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
-            apply_repo_bump_workflow(&repo_operations, &next_version, workflow)?;
-        }
-
-        self.invalidate_overview_cache();
-        self.ensure_dashboard_recent_changes();
-
-        let target_count = affected_scope_indexes
+        let release_message = dialog.release_message.value.trim().to_string();
+        let written_paths = dialog
+            .entries
             .iter()
-            .filter_map(|index| scopes.get(*index))
-            .map(|scope| scope.targets.len())
-            .sum::<usize>();
-        let scope_notice = if project.unified_versioning {
-            String::new()
+            .map(|entry| {
+                let markdown = entry.rendered_markdown(&release_message);
+                write_temp_changelog_markdown(&entry.repo_root, &markdown)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.status = if written_paths.len() == 1 {
+            StatusMessage::success(format!(
+                "Saved changelog preview to {}.",
+                written_paths[0].display()
+            ))
         } else {
-            scopes
-                .get(scope_index)
-                .map(|scope| format!(" in scope '{}'", scope.display_name))
-                .unwrap_or_default()
+            StatusMessage::success(format!(
+                "Saved changelog previews to changelog_temp.md in {} repositories.",
+                written_paths.len()
+            ))
         };
-        self.status = StatusMessage::success(format!(
-            "Updated {} target{}{} to {} via {}.",
-            target_count,
-            if target_count == 1 { "" } else { "s" },
-            scope_notice,
-            next_version,
-            workflow.display_name()
-        ));
         Ok(())
+    }
+
+    fn scroll_changelog_preview(&mut self, delta: i16) {
+        if let Some(dialog) = &mut self.changelog_preview_dialog {
+            let max_scroll = dialog
+                .combined_preview_lines()
+                .len()
+                .saturating_sub(1)
+                .min(u16::MAX as usize) as u16;
+            if delta.is_negative() {
+                dialog.scroll = dialog.scroll.saturating_sub(delta.unsigned_abs());
+            } else {
+                dialog.scroll = dialog.scroll.saturating_add(delta as u16).min(max_scroll);
+            }
+        }
+    }
+
+    fn confirm_changelog_preview(&mut self) -> Result<()> {
+        let Some(dialog) = self.changelog_preview_dialog.clone() else {
+            return Ok(());
+        };
+
+        if dialog.workflow.is_none() {
+            self.changelog_preview_dialog = None;
+            self.status = StatusMessage::info("Changelog preview closed.");
+            return Ok(());
+        }
+
+        self.pending_changelog_write = Some(dialog.prepare_pending_write());
+        self.changelog_preview_dialog = None;
+        overview::execute_overview_bump_workflow(
+            self,
+            dialog.scope_index,
+            dialog.workflow.expect("workflow preview should execute a workflow"),
+        )?;
+        self.overview_bump_warning_dialog = None;
+        self.overview_bump_workflow_dialog = None;
+        Ok(())
+    }
+
+    fn take_matching_pending_changelog_write(
+        &mut self,
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+    ) -> Option<PendingChangelogWrite> {
+        let matches = self
+            .pending_changelog_write
+            .as_ref()
+            .is_some_and(|pending| pending.scope_index == scope_index && pending.workflow == workflow);
+        if matches {
+            self.pending_changelog_write.take()
+        } else {
+            None
+        }
+    }
+
+    fn resume_pending_bump_action(&mut self, pending_action: PendingBumpAction) -> Result<()> {
+        match pending_action {
+            PendingBumpAction::Standard => self.apply_bump(),
+            PendingBumpAction::OverviewWorkflow { .. } => self.confirm_overview_bump_workflow(),
+        }
     }
 
     fn open_tag_dialog_with_scope(&mut self, preferred_scope: Option<usize>, preferred_action: Option<TagAction>) -> Result<()> {
@@ -2512,6 +2570,11 @@ pub(crate) enum HitAction {
     ConfirmOverviewBumpWorkflow,
     CancelOverviewBumpWorkflow,
     SelectOverviewBumpWarningChoice(usize),
+    SelectMainBranchWarningChoice(usize),
+    ConfirmChangelogPreview,
+    SaveChangelogPreview,
+    CancelChangelogPreview,
+    ScrollChangelogPreview(i16),
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
     ResetOverviewPendingVersion(usize),
     ApplyOverviewVersionAndTag(usize),
@@ -2568,6 +2631,171 @@ pub(crate) enum OverviewVersionControl {
     Minor,
     Patch,
     Whole,
+}
+
+#[derive(Clone)]
+struct ChangelogPreviewDialog {
+    project_name: String,
+    next_version: String,
+    scope_index: usize,
+    workflow: Option<OverviewBumpWorkflow>,
+    entries: Vec<ChangelogPreviewEntry>,
+    release_message: TextInput,
+    scroll: u16,
+}
+
+impl ChangelogPreviewDialog {
+    fn new(
+        project_name: String,
+        next_version: String,
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+        entries: Vec<ChangelogPreviewEntry>,
+    ) -> Self {
+        Self {
+            project_name,
+            next_version,
+            scope_index,
+            workflow: Some(workflow),
+            entries,
+            release_message: TextInput::with_value(""),
+            scroll: 0,
+        }
+    }
+
+    fn preview_only(
+        project_name: String,
+        next_version: String,
+        scope_index: usize,
+        entries: Vec<ChangelogPreviewEntry>,
+    ) -> Self {
+        Self {
+            project_name,
+            next_version,
+            scope_index,
+            workflow: None,
+            entries,
+            release_message: TextInput::with_value(""),
+            scroll: 0,
+        }
+    }
+
+    fn combined_preview_lines(&self) -> Vec<String> {
+        let release_message = self.release_message.value.trim();
+        let mut lines = Vec::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if self.entries.len() > 1 {
+                lines.push(format!("### Repo: {}", entry.repo_root));
+                lines.push(format!("Path: {}", entry.changelog_path));
+                lines.push(String::new());
+            }
+
+            let rendered = entry.rendered_markdown(release_message);
+            lines.extend(rendered.lines().map(ToOwned::to_owned));
+            if index + 1 < self.entries.len() {
+                lines.push(String::new());
+            }
+        }
+        lines
+    }
+
+    fn prepare_pending_write(&self) -> PendingChangelogWrite {
+        let release_message = self.release_message.value.trim();
+        PendingChangelogWrite {
+            scope_index: self.scope_index,
+            workflow: self.workflow.expect("workflow preview required to prepare changelog write"),
+            entries: self
+                .entries
+                .iter()
+                .map(|entry| PreparedChangelogEntry {
+                    repo_root: entry.repo_root.clone(),
+                    changelog_path: entry.changelog_path.clone(),
+                    stage_path: entry.stage_path.clone(),
+                    markdown: entry.rendered_markdown(release_message),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ChangelogPreviewEntry {
+    repo_root: String,
+    changelog_path: String,
+    stage_path: String,
+    document: ChangelogDocument,
+}
+
+impl ChangelogPreviewEntry {
+    fn rendered_markdown(&self, release_message: &str) -> String {
+        let document = if release_message.trim().is_empty() {
+            self.document.clone()
+        } else {
+            self.document.clone().with_release_message(release_message.to_string())
+        };
+        document.render_markdown().markdown
+    }
+}
+
+#[derive(Clone)]
+struct PreparedChangelogEntry {
+    repo_root: String,
+    changelog_path: String,
+    stage_path: String,
+    markdown: String,
+}
+
+#[derive(Clone)]
+struct PendingChangelogWrite {
+    scope_index: usize,
+    workflow: OverviewBumpWorkflow,
+    entries: Vec<PreparedChangelogEntry>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OverviewBumpWorkflow {
+    JustBump,
+    Commit,
+    CommitAndTag,
+    CommitAndPush,
+    CommitPushAndTag,
+}
+
+impl OverviewBumpWorkflow {
+    fn display_name(self) -> &'static str {
+        match self {
+            OverviewBumpWorkflow::JustBump => "Just bump",
+            OverviewBumpWorkflow::Commit => "Bump & Commit",
+            OverviewBumpWorkflow::CommitAndTag => "Bump & Commit & Tag",
+            OverviewBumpWorkflow::CommitAndPush => "Bump & Commit & Push",
+            OverviewBumpWorkflow::CommitPushAndTag => "Bump & Commit & Push & Tag",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            OverviewBumpWorkflow::JustBump => "Writes the updated version files only.",
+            OverviewBumpWorkflow::Commit => "Stages the version files and commits them with the standard bump message.",
+            OverviewBumpWorkflow::CommitAndTag => "Stages and commits the version files, then creates a tag named after the new version.",
+            OverviewBumpWorkflow::CommitAndPush => "Stages and commits the version files, then pushes the bump commit to the configured remote.",
+            OverviewBumpWorkflow::CommitPushAndTag => "Stages and commits the version files, pushes the bump commit, then pushes a tag named after the new version.",
+        }
+    }
+
+    fn requires_push(self) -> bool {
+        matches!(self, OverviewBumpWorkflow::CommitAndPush | OverviewBumpWorkflow::CommitPushAndTag)
+    }
+
+    fn requires_tag(self) -> bool {
+        matches!(self, OverviewBumpWorkflow::CommitAndTag | OverviewBumpWorkflow::CommitPushAndTag)
+    }
+}
+
+#[derive(Clone)]
+struct RepoBumpOperation {
+    repo_root: String,
+    remote_spec: Option<String>,
+    stage_paths: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -2656,66 +2884,6 @@ impl OverviewBumpWarningDialog {
 enum OverviewBumpWarningChoice {
     Continue,
     UnstageExtras,
-    Cancel,
-}
-
-#[derive(Clone, Copy)]
-enum PendingBumpAction {
-    Standard,
-    OverviewWorkflow { scope_index: usize },
-}
-
-#[derive(Clone)]
-struct MainBranchWarningDialog {
-    integration_mode: IntegrationMode,
-    repos: Vec<git_flow::RepoBranchState>,
-    pending_action: PendingBumpAction,
-    selected: usize,
-}
-
-impl MainBranchWarningDialog {
-    fn new(
-        integration_mode: IntegrationMode,
-        repos: Vec<git_flow::RepoBranchState>,
-        pending_action: PendingBumpAction,
-    ) -> Self {
-        Self {
-            integration_mode,
-            repos,
-            pending_action,
-            selected: 0,
-        }
-    }
-
-    fn switch_label(&self) -> &'static str {
-        match self.integration_mode {
-            IntegrationMode::GitHubEnabled => "Switch to main & Sync & Bump",
-            IntegrationMode::GitLocalOnly => "Switch to main & Bump",
-            IntegrationMode::LocalOnly => "Continue",
-        }
-    }
-
-    fn select(&mut self, index: usize) {
-        self.selected = index.min(2);
-    }
-
-    fn rotate(&mut self, delta: isize) {
-        self.selected = (self.selected as isize + delta).rem_euclid(3) as usize;
-    }
-
-    fn selected_choice(&self) -> MainBranchWarningChoice {
-        match self.selected {
-            0 => MainBranchWarningChoice::SwitchToMain,
-            1 => MainBranchWarningChoice::IgnoreAndContinue,
-            _ => MainBranchWarningChoice::Cancel,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum MainBranchWarningChoice {
-    SwitchToMain,
-    IgnoreAndContinue,
     Cancel,
 }
 

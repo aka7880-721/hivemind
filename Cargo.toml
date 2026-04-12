@@ -1,10 +1,6 @@
 [package]
 name = "comfy-version-bumper"
-<<<<<<< HEAD
-version = "0.4.0"
-=======
 version = "0.5.0"
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 edition = "2024"
 rust-version = "1.94"
 description = "Ratatui public edition of the original Comfy Version Bumper"

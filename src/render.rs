@@ -51,12 +51,9 @@ impl App {
 		if self.main_branch_warning_dialog.is_some() {
 			self.render_main_branch_warning_dialog(frame, frame.area());
 		}
-<<<<<<< HEAD
-=======
 		if self.changelog_preview_dialog.is_some() {
 			self.render_changelog_preview_dialog(frame, frame.area());
 		}
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 		if self.recent_changes_dialog.is_some() {
 			self.render_recent_changes_dialog(frame, frame.area());
 		}
@@ -259,7 +256,6 @@ impl App {
 			});
 		let left_inner = left_block.inner(chunks[0]);
 		frame.render_widget(left_block, chunks[0]);
-
 		if self.config.projects.is_empty() {
 			let onboarding = vec![
 				Line::from("No projects have been configured yet.".bold()),
@@ -336,14 +332,10 @@ impl App {
 				lines.push(Line::from("Available actions:".yellow().bold()));
 				lines.push(Line::from("- B opens a bump preview for the selected project"));
 				if project.integration_mode.requires_repo() {
-<<<<<<< HEAD
-					lines.push(Line::from("- V opens view changes from the configured repo"));
-=======
 					lines.push(Line::from("- G opens the git log from the configured repo"));
 					if project.changelog.enabled {
 						lines.push(Line::from("- C opens a changelog preview using the current commit history"));
 					}
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 					lines.push(Line::from("- T creates a local tag in the configured repo"));
 				} else {
 					lines.push(Line::from("- git actions unlock once the project is git-backed"));
@@ -680,8 +672,6 @@ impl App {
 		);
 	}
 
-<<<<<<< HEAD
-=======
 	fn render_changelog_preview_dialog(&mut self, frame: &mut Frame, area: Rect) {
 		let Some(dialog) = &self.changelog_preview_dialog else {
 			return;
@@ -762,8 +752,6 @@ impl App {
 			],
 		);
 	}
-
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 	fn render_recent_changes_dialog(&mut self, frame: &mut Frame, area: Rect) {
 		let Some(dialog) = &self.recent_changes_dialog else {
 			return;
@@ -912,11 +900,7 @@ impl App {
 			Line::from(match dialog.selected_action() {
 				TagAction::CreateLocal => "Creates a local tag only.",
 				TagAction::CreateAndPush => "Creates the local tag if needed, then pushes it.",
-<<<<<<< HEAD
-				TagAction::CreatePushAndRelease => "Creates the tag, pushes it, then runs `gh release create --generate-notes`.",
-=======
 				TagAction::CreatePushAndRelease => "Creates the tag, pushes it, then publishes a GitHub release with CVB-generated notes.",
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 			}),
 		];
 		frame.render_widget(Paragraph::new(notes).wrap(Wrap { trim: false }), sections[2]);
@@ -1599,13 +1583,9 @@ impl App {
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("B", "ump"));
 		spans.push(Span::raw(" | "));
-<<<<<<< HEAD
-		spans.extend(shortcut_key_label("V", "iew Changes"));
-=======
 		spans.extend(shortcut_key_label("G", "itlog"));
 		spans.push(Span::raw(" / "));
 		spans.extend(shortcut_key_label("C", "hangelog"));
->>>>>>> 66fdebd2048919f52572afb4481f518711592b4b
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("T", " Create Tag"));
 		spans.push(Span::raw(" | "));
