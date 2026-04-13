@@ -230,9 +230,14 @@ impl ChangelogDocument {
 			.filter(|commit| !commit.is_breaking)
 			.collect::<Vec<_>>();
 
-		render_new_specific_sections(&mut lines, &non_breaking);
+		let rendered_new_specific = render_new_specific_sections(&mut lines, &non_breaking);
+		let rendered_specific = render_specific_sections(&mut lines, &non_breaking);
+		if (rendered_new_specific || rendered_specific) && has_general_improvements(&non_breaking) {
+			lines.push("### General Improvements:".to_string());
+			lines.push(String::new());
+		}
+
 		render_new_plain_section(&mut lines, &non_breaking);
-		render_specific_sections(&mut lines, &non_breaking);
 		render_plain_category_sections(&mut lines, &non_breaking);
 
 		if lines.last().is_some_and(|line| !line.is_empty()) {
@@ -584,7 +589,7 @@ fn render_breaking_section(lines: &mut Vec<String>, commits: &[ParsedCommit]) {
 	render_category_subsections(lines, &unspecific, 3);
 }
 
-fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
+fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) -> bool {
 	let specific_keys = ordered_new_specific_keys(
 		&commits
 			.iter()
@@ -592,6 +597,9 @@ fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommi
 			.filter(|commit| commit.is_new && commit.specific.is_some())
 			.collect::<Vec<_>>(),
 	);
+	if specific_keys.is_empty() {
+		return false;
+	}
 
 	for (specific_name, specific_heading) in specific_keys {
 		if let Some(specific_heading) = specific_heading {
@@ -610,7 +618,10 @@ fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommi
 			})
 			.collect::<Vec<_>>();
 		render_category_subsections(lines, &section_commits, 4);
+		end_specific_section(lines);
 	}
+
+	true
 }
 
 fn render_new_plain_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
@@ -628,7 +639,7 @@ fn render_new_plain_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) 
 	render_category_subsections(lines, &new_commits, 4);
 }
 
-fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
+fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) -> bool {
 	let specific_names = ordered_specific_names(
 		&commits
 			.iter()
@@ -636,6 +647,9 @@ fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) 
 			.filter(|commit| !commit.is_new && commit.specific.is_some())
 			.collect::<Vec<_>>(),
 	);
+	if specific_names.is_empty() {
+		return false;
+	}
 
 	for specific_name in specific_names {
 		lines.push(format!("### Changed in {}", specific_name));
@@ -646,7 +660,22 @@ fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) 
 			.filter(|commit| !commit.is_new && commit.specific.as_deref() == Some(specific_name.as_str()))
 			.collect::<Vec<_>>();
 		render_category_subsections(lines, &section_commits, 4);
+		end_specific_section(lines);
 	}
+
+	true
+}
+
+fn has_general_improvements(commits: &[&ParsedCommit]) -> bool {
+	commits.iter().any(|commit| commit.specific.is_none())
+}
+
+fn end_specific_section(lines: &mut Vec<String>) {
+	if lines.last().is_some_and(|line| !line.is_empty()) {
+		lines.push(String::new());
+	}
+	lines.push("---".to_string());
+	lines.push(String::new());
 }
 
 fn render_plain_category_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
@@ -878,6 +907,35 @@ mod tests {
 		.render_markdown();
 
 		assert!(changelog.markdown.contains("### ✨ New Enhancement: Changelog Preview"));
+	}
+
+	#[test]
+	fn renders_general_improvements_after_specific_sections() {
+		let changelog = ChangelogDocument::new(
+			"0.6.1",
+			vec![
+				ParsedCommit::parse("fix(Tiles): keep mouse-selected tile focus in sync", "56dcce1"),
+				ParsedCommit::parse("fix: update licensing statement", "e2fa12d"),
+			],
+		)
+		.with_date(NaiveDate::from_ymd_opt(2026, 4, 13).unwrap())
+		.render_markdown();
+
+		let specific_index = changelog
+			.markdown
+			.find("### Changed in Tiles")
+			.expect("specific section should render");
+		let separator_index = changelog
+			.markdown
+			.find("\n---\n\n### General Improvements:")
+			.expect("separator and general improvements header should render");
+		let general_fix_index = changelog
+			.markdown
+			.rfind("### 🐛 Fix(es)")
+			.expect("general fixes section should render");
+
+		assert!(specific_index < separator_index);
+		assert!(separator_index < general_fix_index);
 	}
 
 	#[test]
