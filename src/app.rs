@@ -608,12 +608,20 @@ impl App {
     }
 
     fn handle_changelog_preview_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            return self.save_changelog_preview();
+        }
+
         match key.code {
             KeyCode::Esc => self.cancel_changelog_preview(),
-            KeyCode::Enter | KeyCode::F(2) => return self.confirm_changelog_preview(),
-            KeyCode::Char('s') | KeyCode::Char('S') => return self.save_changelog_preview(),
-            KeyCode::Up => self.scroll_changelog_preview(-1),
-            KeyCode::Down => self.scroll_changelog_preview(1),
+            KeyCode::F(2) => return self.confirm_changelog_preview(),
+            KeyCode::Enter if self
+                .changelog_preview_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.workflow.is_none()) =>
+            {
+                return self.confirm_changelog_preview()
+            }
             KeyCode::PageUp => self.scroll_changelog_preview(-8),
             KeyCode::PageDown => self.scroll_changelog_preview(8),
             _ => {
@@ -621,7 +629,9 @@ impl App {
                     if dialog.workflow.is_none() {
                         return Ok(());
                     }
-                    dialog.release_message.handle_key(key);
+                    if let Some(input) = convert_to_textarea_input(key) {
+                        dialog.release_message.input(input);
+                    }
                 }
             }
         }
@@ -1020,6 +1030,11 @@ impl App {
                             None
                         }
                     });
+                    if let Some(scope_index) = self.overview_drag_scope {
+                        if let Err(error) = self.select_dashboard_overview_scope(scope_index) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
                 }
                 if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
                     if let Err(error) = self.handle_hit_action(action) {
@@ -1048,6 +1063,22 @@ impl App {
                 self.overview_drag_scope = None;
             }
             MouseEventKind::Down(MouseButton::Right) => {
+                if self.overview_bump_workflow_dialog.is_none()
+                    && self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::Overview
+                {
+                    if let Some(scope_index) = self.overview_tile_rects.iter().rev().find_map(|(rect, scope)| {
+                        (mouse.column >= rect.x
+                            && mouse.column < rect.x + rect.width
+                            && mouse.row >= rect.y
+                            && mouse.row < rect.y + rect.height)
+                            .then_some(*scope)
+                    }) {
+                        if let Err(error) = self.select_dashboard_overview_scope(scope_index) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                }
                 if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, true) {
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
@@ -1085,6 +1116,14 @@ impl App {
             return;
         }
 
+        if let Some(dialog) = &mut self.changelog_preview_dialog {
+            if dialog.workflow.is_some() {
+                dialog.release_message.insert_str(text);
+                self.status = StatusMessage::info("Pasted into the release notes.");
+                return;
+            }
+        }
+
         let sanitized = sanitize_pasted_text(&text);
         if self.insert_text(&sanitized) {
             self.status = StatusMessage::info("Pasted into the active field.");
@@ -1103,6 +1142,14 @@ impl App {
                     dialog.editor.insert_str(text);
                     self.status = StatusMessage::info("Pasted into the tag annotation.");
                     return;
+                }
+
+                if let Some(dialog) = &mut self.changelog_preview_dialog {
+                    if dialog.workflow.is_some() {
+                        dialog.release_message.insert_str(text);
+                        self.status = StatusMessage::info("Pasted into the release notes.");
+                        return;
+                    }
                 }
 
                 let sanitized = sanitize_pasted_text(&text);
@@ -1805,11 +1852,11 @@ impl App {
     }
 
     fn save_changelog_preview(&mut self) -> Result<()> {
-        let Some(dialog) = self.changelog_preview_dialog.clone() else {
+        let Some(dialog) = self.changelog_preview_dialog.as_ref() else {
             return Ok(());
         };
 
-        let release_message = dialog.release_message.value.trim().to_string();
+        let release_message = dialog.release_message_value();
         let written_paths = dialog
             .entries
             .iter()
@@ -1835,11 +1882,7 @@ impl App {
 
     fn scroll_changelog_preview(&mut self, delta: i16) {
         if let Some(dialog) = &mut self.changelog_preview_dialog {
-            let max_scroll = dialog
-                .combined_preview_lines()
-                .len()
-                .saturating_sub(1)
-                .min(u16::MAX as usize) as u16;
+            let max_scroll = dialog.preview_line_count().saturating_sub(1).min(u16::MAX as usize) as u16;
             if delta.is_negative() {
                 dialog.scroll = dialog.scroll.saturating_sub(delta.unsigned_abs());
             } else {
@@ -1849,12 +1892,11 @@ impl App {
     }
 
     fn confirm_changelog_preview(&mut self) -> Result<()> {
-        let Some(dialog) = self.changelog_preview_dialog.clone() else {
+        let Some(dialog) = self.changelog_preview_dialog.take() else {
             return Ok(());
         };
 
         if dialog.workflow.is_none() {
-            self.changelog_preview_dialog = None;
             self.cancel_background_job_kind(BackgroundJobKind::ChangelogPreview);
             self.current_changelog_preview_job_id = None;
             self.status = StatusMessage::info("Changelog preview closed.");
@@ -1862,7 +1904,6 @@ impl App {
         }
 
         self.pending_changelog_write = Some(dialog.prepare_pending_write());
-        self.changelog_preview_dialog = None;
         self.cancel_background_job_kind(BackgroundJobKind::ChangelogPreview);
         self.current_changelog_preview_job_id = None;
         overview::execute_overview_bump_workflow(
@@ -2765,14 +2806,14 @@ pub(crate) enum OverviewVersionControl {
     Whole,
 }
 
-#[derive(Clone)]
 struct ChangelogPreviewDialog {
     project_name: String,
     next_version: String,
     scope_index: usize,
     workflow: Option<OverviewBumpWorkflow>,
     entries: Vec<ChangelogPreviewEntry>,
-    release_message: TextInput,
+    release_message: TuiTextArea<'static>,
+    release_message_placeholder: String,
     scroll: u16,
 }
 
@@ -2790,7 +2831,8 @@ impl ChangelogPreviewDialog {
             scope_index,
             workflow: Some(workflow),
             entries,
-            release_message: TextInput::with_value(""),
+            release_message: new_release_message_editor(""),
+            release_message_placeholder: "Optional multi-line release notes in Markdown".to_string(),
             scroll: 0,
         }
     }
@@ -2807,32 +2849,46 @@ impl ChangelogPreviewDialog {
             scope_index,
             workflow: None,
             entries,
-            release_message: TextInput::with_value(""),
+            release_message: new_release_message_editor(""),
+            release_message_placeholder: "Optional multi-line release notes in Markdown".to_string(),
             scroll: 0,
         }
     }
 
-    fn combined_preview_lines(&self) -> Vec<String> {
-        let release_message = self.release_message.value.trim();
+    fn release_message_value(&self) -> String {
+        let release_message = self.release_message.lines().join("\n");
+        if release_message.trim().is_empty() {
+            String::new()
+        } else {
+            release_message
+        }
+    }
+
+    fn combined_preview_markdown(&self) -> String {
+        let release_message = self.release_message_value();
         let mut lines = Vec::new();
         for (index, entry) in self.entries.iter().enumerate() {
             if self.entries.len() > 1 {
                 lines.push(format!("### Repo: {}", entry.repo_root));
-                lines.push(format!("Path: {}", entry.changelog_path));
+                lines.push(format!("Path: `{}`", entry.changelog_path));
                 lines.push(String::new());
             }
 
-            let rendered = entry.rendered_markdown(release_message);
+            let rendered = entry.rendered_markdown(&release_message);
             lines.extend(rendered.lines().map(ToOwned::to_owned));
             if index + 1 < self.entries.len() {
                 lines.push(String::new());
             }
         }
-        lines
+        lines.join("\n")
+    }
+
+    fn preview_line_count(&self) -> usize {
+        tui_markdown::from_str(&self.combined_preview_markdown()).lines.len()
     }
 
     fn prepare_pending_write(&self) -> PendingChangelogWrite {
-        let release_message = self.release_message.value.trim();
+        let release_message = self.release_message_value();
         PendingChangelogWrite {
             scope_index: self.scope_index,
             workflow: self.workflow.expect("workflow preview required to prepare changelog write"),
@@ -2843,11 +2899,23 @@ impl ChangelogPreviewDialog {
                     repo_root: entry.repo_root.clone(),
                     changelog_path: entry.changelog_path.clone(),
                     stage_path: entry.stage_path.clone(),
-                    markdown: entry.rendered_markdown(release_message),
+                    markdown: entry.rendered_markdown(&release_message),
                 })
                 .collect(),
         }
     }
+}
+
+fn new_release_message_editor(existing_release_message: &str) -> TuiTextArea<'static> {
+    let mut editor = if existing_release_message.trim().is_empty() {
+        TuiTextArea::default()
+    } else {
+        TuiTextArea::from(existing_release_message.lines())
+    };
+    editor.set_placeholder_text("Optional multi-line release notes in Markdown");
+    editor.set_tab_length(2);
+    editor.set_max_histories(100);
+    editor
 }
 
 #[derive(Clone)]
@@ -4773,6 +4841,33 @@ mod tests {
     fn recent_changes_tab_appears_when_vertical_space_is_tight() {
         assert!(should_use_recent_changes_tab(15, 7));
         assert!(!should_use_recent_changes_tab(20, 7));
+    }
+
+    #[test]
+    fn changelog_preview_release_notes_preserve_multiline_markdown() {
+        let entry = ChangelogPreviewEntry {
+            repo_root: "C:/repo".to_string(),
+            changelog_path: "CHANGELOG.md".to_string(),
+            stage_path: "CHANGELOG.md".to_string(),
+            document: build_document_from_git_log(
+                "v0.6.0",
+                &["feat: add changelog preview".to_string()],
+            ),
+        };
+        let mut dialog = ChangelogPreviewDialog::new(
+            "Demo".to_string(),
+            "0.6.0".to_string(),
+            0,
+            OverviewBumpWorkflow::CommitAndTag,
+            vec![entry],
+        );
+        dialog.release_message = new_release_message_editor("Intro line\n\n- bullet item");
+
+        let markdown = dialog.combined_preview_markdown();
+        let pending_write = dialog.prepare_pending_write();
+
+        assert!(markdown.contains("Intro line\n\n- bullet item"));
+        assert!(pending_write.entries[0].markdown.contains("Intro line\n\n- bullet item"));
     }
 
     #[test]
