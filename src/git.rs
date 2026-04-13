@@ -301,16 +301,30 @@ fn activity_filter_for_target(path: &str) -> Option<String> {
 }
 
 fn normalize_pathspec(repo_root: &Path, path: &str) -> Option<String> {
-    let candidate = Path::new(path);
-    let relative = if candidate.is_absolute() {
-        candidate.strip_prefix(repo_root).ok()?
+    let normalized = path.replace('\\', "/");
+    let repo_root_str = repo_root.display().to_string().replace('\\', "/").trim_end_matches('/').to_string();
+
+    let relative = if Path::new(&normalized).is_absolute() {
+        if let Ok(stripped) = Path::new(&normalized).strip_prefix(repo_root) {
+            stripped.to_string_lossy().replace('\\', "/")
+        } else if normalized == repo_root_str {
+            String::new()
+        } else if let Some(stripped) = normalized.strip_prefix(&(repo_root_str.clone() + "/")) {
+            stripped.to_string()
+        } else {
+            normalized.clone()
+        }
+    } else if normalized == repo_root_str {
+        String::new()
+    } else if let Some(stripped) = normalized.strip_prefix(&(repo_root_str.clone() + "/")) {
+        stripped.to_string()
     } else {
-        candidate
+        normalized.clone()
     };
 
-    let rendered = relative.to_string_lossy().replace('\\', "/");
-    (!rendered.is_empty()).then_some(rendered)
+    (!relative.is_empty()).then_some(relative)
 }
+
 
 fn slugify(value: &str) -> String {
     value
