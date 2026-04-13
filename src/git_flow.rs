@@ -8,7 +8,7 @@
 /// Git-related workflow operations for applying version bumps across repositories, managing staged changes, and ensuring tag consistency.
 
 use super::*;
-use crate::git::{current_branch, switch_to_main_branch};
+use crate::git::{GitCancellation, current_branch_with_cancel, run_git_checked_with_cancel, switch_to_main_branch};
 
 #[derive(Clone)]
 pub(super) struct RepoBranchState {
@@ -90,17 +90,18 @@ pub(super) fn apply_repo_bump_workflow(
 	Ok(())
 }
 
-pub(super) fn collect_non_main_repo_states(
+pub(super) fn collect_non_main_repo_states_with_cancel(
 	project: &ProjectConfig,
 	scopes: &[BumpScope],
 	git_contexts: &[crate::git::GitScopeContext],
 	affected_scope_indexes: &[usize],
+	cancel: Option<GitCancellation>,
 ) -> Result<Vec<RepoBranchState>> {
 	let operations = collect_repo_bump_operations(project, scopes, git_contexts, affected_scope_indexes)?;
 	let mut repo_states = Vec::new();
 
 	for operation in operations {
-		let current_branch = current_branch(&operation.repo_root)?;
+		let current_branch = current_branch_with_cancel(&operation.repo_root, cancel.clone())?;
 		if current_branch != "main" {
 			repo_states.push(RepoBranchState {
 				repo_root: operation.repo_root,
@@ -128,11 +129,18 @@ fn has_staged_changes(repo_root: &str) -> Result<bool> {
 	Ok(!run_git(repo_root, &["diff", "--cached", "--quiet", "--exit-code"] )?.success)
 }
 
-fn staged_paths(repo_root: &str) -> Result<Vec<String>> {
-	Ok(split_output_lines(&run_git_checked(repo_root, &["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?))
+fn staged_paths_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<Vec<String>> {
+	Ok(split_output_lines(&run_git_checked_with_cancel(
+		repo_root,
+		&["diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+		cancel,
+	)?))
 }
 
-pub(super) fn collect_unexpected_staged_paths(operations: &[RepoBumpOperation]) -> Result<Vec<UnexpectedStagedRepo>> {
+pub(super) fn collect_unexpected_staged_paths_with_cancel(
+	operations: &[RepoBumpOperation],
+	cancel: Option<GitCancellation>,
+) -> Result<Vec<UnexpectedStagedRepo>> {
 	let mut warnings = Vec::new();
 
 	for operation in operations {
@@ -141,7 +149,7 @@ pub(super) fn collect_unexpected_staged_paths(operations: &[RepoBumpOperation]) 
 			.iter()
 			.map(|path| comparable_git_path(path))
 			.collect::<HashSet<_>>();
-		let extra_paths = staged_paths(&operation.repo_root)?
+		let extra_paths = staged_paths_with_cancel(&operation.repo_root, cancel.clone())?
 			.into_iter()
 			.filter(|path| !expected.contains(&comparable_git_path(path)))
 			.collect::<Vec<_>>();
