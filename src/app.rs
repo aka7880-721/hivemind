@@ -1109,9 +1109,6 @@ impl App {
             HitAction::ResetOverviewPendingVersion(scope_index) => {
                 return self.reset_overview_pending_version(scope_index)
             }
-            HitAction::ApplyOverviewVersionAndTag(scope_index) => {
-                return self.apply_overview_pending_version(scope_index, true)
-            }
             HitAction::OpenOverviewTagDialog(scope_index) => return self.open_overview_tag_dialog(scope_index),
             HitAction::OpenProjectEdit => return self.open_project_edit_dialog(),
             HitAction::EditProjectField(field) => {
@@ -2608,7 +2605,6 @@ pub(crate) enum HitAction {
     ScrollChangelogPreview(i16),
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
     ResetOverviewPendingVersion(usize),
-    ApplyOverviewVersionAndTag(usize),
     OpenOverviewTagDialog(usize),
     OpenProjectEdit,
     EditProjectField(ProjectEditFocus),
