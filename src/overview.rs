@@ -411,7 +411,7 @@ pub(super) fn render_dashboard_tiles(
 			app.hit_targets.push(HitTarget::new(hotspots.title_rect, HitAction::SelectOverviewScope(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::OpenOverviewRecentChanges(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::BeginOverviewBump(scope_index)));
-			app.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::ApplyOverviewVersionAndTag(scope_index)));
+			app.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::OpenOverviewTagDialog(scope_index)));
 			if let Some(rect) = hotspots.reset_rect {
 				app.hit_targets.push(HitTarget::new(rect, HitAction::ResetOverviewPendingVersion(scope_index)));
 			}
