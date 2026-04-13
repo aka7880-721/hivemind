@@ -197,7 +197,7 @@ impl ProjectEditDialog {
 			ProjectEditFocus::MoveScopeDown => ("Move scope down", HitAction::ProjectEditScopeAction(ScopeAction::MoveDown)),
 			ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
 			ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
-			ProjectEditFocus::ChangelogEnabled => ("Generate changelog", HitAction::EditProjectField(field)),
+			ProjectEditFocus::ChangelogEnabled => ("Changelog generation", HitAction::EditProjectField(field)),
 			ProjectEditFocus::ChangelogPath => ("Changelog path", HitAction::EditProjectField(field)),
 			ProjectEditFocus::Save => ("Save", HitAction::SaveProjectEdit),
 			ProjectEditFocus::Remove => ("Remove", HitAction::RemoveProject),
@@ -807,5 +807,44 @@ mod tests {
 			.expect("repo root field should exist");
 
 		assert!(changelog_index < repo_root_index);
+	}
+
+	#[test]
+	fn branched_projects_still_surface_changelog_generation_field() {
+		let dialog = ProjectEditDialog::from_project(
+			0,
+			&ProjectConfig {
+				name: "demo".to_string(),
+				project_type: ProjectType::Branched,
+				version_scheme: VersionScheme::SemVer,
+				unified_versioning: false,
+				integration_mode: IntegrationMode::GitHubEnabled,
+				targets: vec![],
+				branches: vec![BranchConfig {
+					name: "core".to_string(),
+					label: "Core".to_string(),
+					scope_kind: BranchScopeKind::Branch,
+					repo: None,
+					version_scheme: VersionScheme::SemVer,
+					targets: vec![TargetSpec {
+						label: "Version".to_string(),
+						path: "C:/repo/Cargo.toml".to_string(),
+						key_path: "package.version".to_string(),
+						format: crate::config::TargetFormat::Toml,
+					}],
+				}],
+				repo: Some(RepoConfig {
+					local_root: "C:/repo".to_string(),
+					remote_url: Some("https://example.test/repo.git".to_string()),
+				}),
+				changelog: ChangelogSettings {
+					enabled: true,
+					file_path: "CHANGELOG.md".to_string(),
+				},
+			},
+		)
+		.expect("dialog should build");
+
+		assert!(dialog.visible_fields().contains(&ProjectEditFocus::ChangelogEnabled));
 	}
 }
