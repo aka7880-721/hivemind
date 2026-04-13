@@ -11,7 +11,7 @@ use crate::{
 	},
 	config::{
 		BranchConfig, BranchScopeKind, ChangelogSettings, IntegrationMode, ProjectConfig,
-		ProjectType, RepoConfig, DEFAULT_CHANGELOG_PATH,
+		ProjectType, ReleaseNowSettings, RepoConfig, DEFAULT_CHANGELOG_PATH,
 		TargetFormat, TargetSpec,
 	},
 	dialogs::TextInput,
@@ -73,7 +73,6 @@ impl ProjectWizard {
 				| WizardField::TargetPath
 				| WizardField::RepoRoot
 				| WizardField::RemoteUrl
-				| WizardField::ChangelogPath
 		) || (self.focus == WizardField::TargetKey && self.target_key_accepts_text())
 	}
 
@@ -107,7 +106,6 @@ impl ProjectWizard {
 		if self.integration_mode.requires_remote() {
 			fields.push(WizardField::RemoteUrl);
 		}
-		fields.push(WizardField::ChangelogPath);
 		fields.extend([WizardField::Validate, WizardField::Save, WizardField::Cancel]);
 		fields
 	}
@@ -151,7 +149,6 @@ impl ProjectWizard {
 			WizardField::MoveScopeDown => ("Move scope down", HitAction::WizardScopeAction(ScopeAction::MoveDown)),
 			WizardField::RepoRoot => ("Repo root", HitAction::WizardField(field)),
 			WizardField::RemoteUrl => ("Remote URL", HitAction::WizardField(field)),
-			WizardField::ChangelogPath => ("Changelog path", HitAction::WizardField(field)),
 			WizardField::Validate => ("Read", HitAction::ValidateWizard),
 			WizardField::Save => ("Save", HitAction::SaveWizard),
 			WizardField::Cancel => ("Cancel", HitAction::CancelWizard),
@@ -212,7 +209,6 @@ impl ProjectWizard {
 			WizardField::MoveScopeDown => "Move the selected scope later".to_string(),
 			WizardField::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
 			WizardField::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
-			WizardField::ChangelogPath => self.changelog_path.display_value_with_width(focused, max_width),
 			WizardField::Validate => "Validate target".to_string(),
 			WizardField::Save => "Persist project".to_string(),
 			WizardField::Cancel => "Discard changes".to_string(),
@@ -301,7 +297,6 @@ impl ProjectWizard {
 			}
 			WizardField::RepoRoot => Some(&mut self.repo_root),
 			WizardField::RemoteUrl => Some(&mut self.remote_url),
-			WizardField::ChangelogPath => Some(&mut self.changelog_path),
 			_ => None,
 		}
 	}
@@ -517,6 +512,7 @@ impl ProjectWizard {
 				unified_versioning: true,
 				version_scheme: self.version_scheme,
 				changelog: self.build_changelog_settings(false),
+				release_now: ReleaseNowSettings::default(),
 				targets: vec![target],
 				branches: Vec::new(),
 				repo,
@@ -529,6 +525,7 @@ impl ProjectWizard {
 				unified_versioning: self.unified_versioning,
 				version_scheme: self.version_scheme,
 				changelog: self.build_changelog_settings(false),
+				release_now: ReleaseNowSettings::default(),
 				targets: Vec::new(),
 				branches: self.build_branches(true)?,
 				repo,
@@ -704,7 +701,6 @@ pub(crate) enum WizardField {
 	MoveScopeDown,
 	RepoRoot,
 	RemoteUrl,
-	ChangelogPath,
 	Validate,
 	Save,
 	Cancel,
