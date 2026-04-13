@@ -926,24 +926,29 @@ fn should_open_overview_changelog_preview(
 }
 
 fn collect_preview_contexts(
+	project: &ProjectConfig,
 	git_contexts: &[crate::git::GitScopeContext],
 	affected_scope_indexes: &[usize],
-) -> Result<Vec<crate::git::GitScopeContext>> {
-	let mut merged_contexts = Vec::<crate::git::GitScopeContext>::new();
+) -> Result<Vec<(crate::git::GitScopeContext, String)>> {
+	let mut merged_contexts = Vec::<(crate::git::GitScopeContext, String)>::new();
 	for scope_index in affected_scope_indexes {
 		let context = git_contexts
 			.get(*scope_index)
 			.or_else(|| git_contexts.first())
 			.ok_or_else(|| anyhow!("git scope metadata is unavailable for changelog preview"))?;
+		let changelog_path = project.changelog_path_for_scope(*scope_index).to_string();
 
-		if let Some(existing) = merged_contexts.iter_mut().find(|existing| existing.repo_root == context.repo_root) {
+		if let Some((existing, _)) = merged_contexts
+			.iter_mut()
+			.find(|(existing, existing_path)| existing.repo_root == context.repo_root && *existing_path == changelog_path)
+		{
 			for path in &context.path_filters {
 				if !existing.path_filters.iter().any(|candidate| candidate == path) {
 					existing.path_filters.push(path.clone());
 				}
 			}
 		} else {
-			merged_contexts.push(context.clone());
+			merged_contexts.push((context.clone(), changelog_path));
 		}
 	}
 
@@ -957,13 +962,12 @@ async fn collect_preview_entries_async(
 	next_version: &str,
 	cancel: Option<GitCancellation>,
 ) -> Result<Vec<ChangelogPreviewEntry>> {
-	let merged_contexts = collect_preview_contexts(git_contexts, affected_scope_indexes)?;
+	let merged_contexts = collect_preview_contexts(project, git_contexts, affected_scope_indexes)?;
 	let semaphore = Arc::new(Semaphore::new(BACKGROUND_MAX_PARALLEL_REPO_JOBS.max(1)));
 	let mut tasks = JoinSet::new();
 
-	for context in merged_contexts {
+	for (context, changelog_path) in merged_contexts {
 		let semaphore = Arc::clone(&semaphore);
-		let changelog_path = project.changelog.effective_path().to_string();
 		let next_version = next_version.to_string();
 		let cancel = cancel.clone();
 		tasks.spawn(async move {
