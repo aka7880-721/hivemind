@@ -9,8 +9,6 @@ use super::*;
 
 impl App {
 	pub(crate) fn draw(&mut self, frame: &mut Frame) {
-		self.transient_toaster.tick();
-		self.sticky_toaster.tick();
 		self.sync_status_toasts();
 		self.hit_targets.clear();
 		self.overview_tile_viewport = None;
@@ -69,6 +67,9 @@ impl App {
 		if self.browser_dialog.is_some() {
 			self.render_browser_dialog(frame, frame.area());
 		}
+		if self.progress_dialog.is_some() {
+			self.render_progress_dialog(frame, frame.area());
+		}
 
 		if !self.config.ui.hide_footer {
 			self.render_footer(frame, root[3]);
@@ -82,6 +83,35 @@ impl App {
 		}
 		frame.render_widget(&self.transient_toaster, frame.area());
 		frame.render_widget(&self.sticky_toaster, frame.area());
+	}
+
+	fn render_progress_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.progress_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 54, 22);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(dialog.title.as_str())
+			.border_style(Style::default().fg(Color::Yellow));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let lines = vec![
+			Line::from("Working...").bold(),
+			Line::raw(""),
+			Line::from(dialog.message.clone()),
+			Line::raw(""),
+			Line::from("The interface will update when this step completes.").style(Style::default().fg(Color::Gray)),
+		];
+		frame.render_widget(
+			Paragraph::new(lines)
+				.alignment(Alignment::Center)
+				.wrap(Wrap { trim: false }),
+			inner,
+		);
 	}
 
 	fn render_header(&mut self, frame: &mut Frame, area: Rect) {
@@ -778,9 +808,9 @@ impl App {
 			Line::from(format!("Repo: {}", dialog.active_scope().repo_root)),
 			Line::from(format!("View: {}", dialog.current_range().label)),
 			Line::from(if dialog.can_select_scope() {
-				"Tab switches view. Left/Right changes scope only on Recent. In History, Left/Right browses tag windows. [ and ] still change scope."
+				"Tab switches view. Left/Right changes scope only on Recent. In History, Left/Right browses tag windows. [ and ] still change scope. R refreshes the current scope."
 			} else {
-				"Tab switches view. Left/Right moves history when History is active."
+				"Tab switches view. Left/Right moves history when History is active. R refreshes the current scope."
 			}),
 		];
 		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
@@ -1474,7 +1504,7 @@ impl App {
 		} else if self.tag_dialog.is_some() {
 			Line::from("Type tag name | [ ] scope | A annotation | Left/Right action | Enter run | Esc cancel")
 		} else if self.recent_changes_dialog.is_some() {
-			Line::from("1/2 switch tabs | [ ] scope | Left/Right history | Up/Down scroll | T create tag | Esc close")
+			Line::from("1/2 switch tabs | [ ] scope | Left/Right history | Up/Down scroll | R reload | T create tag | Esc close")
 		} else if self.bump_dialog.is_some() {
 			Line::from("Up/Down scope | Left/Right change bump action | Enter apply | Esc cancel")
 		} else if self.overview_bump_workflow_dialog.is_some() {
@@ -1588,6 +1618,8 @@ impl App {
 		spans.extend(shortcut_key_label("C", "hangelog"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("T", " Create Tag"));
+		spans.push(Span::raw(" | "));
+		spans.extend(shortcut_key_label("R", " Reload"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("H", "ide Footer"));
 		spans.push(Span::raw(" | "));

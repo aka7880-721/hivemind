@@ -13,7 +13,8 @@ use crate::{
     config::{IntegrationMode, ProjectConfig},
     git::{
         GitScopeContext, collect_all_branch_git_scope_contexts, collect_git_scope_contexts,
-        ensure_git_repo, run_git, run_git_checked,
+        GitCancellation, ensure_git_repo_with_cancel, run_git_checked_with_cancel,
+        run_git_with_cancel,
         split_output_lines,
     },
     targets::{BumpScope, BumpTarget, collect_bump_scopes, shared_bump_version},
@@ -27,9 +28,12 @@ pub(crate) struct RecentChangesDialog {
     pub(crate) selected_scope: usize,
     pub(crate) recent_range: ChangeRange,
     pub(crate) history_ranges: Vec<ChangeRange>,
+    pub(crate) history_loaded: bool,
     pub(crate) active_tab: RecentChangesTab,
     pub(crate) history_index: usize,
     pub(crate) scroll: u16,
+    pub(crate) prefetched_recent_ranges: Vec<Option<ChangeRange>>,
+    pub(crate) prefetched_history_ranges: Vec<Option<Vec<ChangeRange>>>,
 }
 
 #[derive(Clone)]
@@ -44,19 +48,23 @@ pub(crate) enum RecentChangesTab {
     History,
 }
 
-fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<ChangeRange>)> {
+pub(crate) fn load_recent_change_range_with_cancel(
+    scope: &GitScopeContext,
+    cancel: Option<GitCancellation>,
+) -> Result<ChangeRange> {
     let repo_root = &scope.repo_root;
     let pathspecs = scope.git_pathspecs();
 
-    ensure_git_repo(repo_root)?;
+    ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
 
-    let describe = run_git(repo_root, &["describe", "--tags", "--abbrev=0"])?;
+    let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel.clone())?;
     let recent_range = if describe.success {
         let tag = describe.stdout.trim().to_string();
         let range = format!("{}..HEAD", tag);
         let output = run_git_checked_owned(
             repo_root,
             build_log_args(["log", "--oneline", "--graph", range.as_str()], &pathspecs),
+            cancel.clone(),
         )?;
         let lines = split_output_lines(&output);
         ChangeRange { label: range, lines }
@@ -64,6 +72,7 @@ fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<Chang
         let output = run_git_checked_owned(
             repo_root,
             build_log_args(["log", "--oneline", "--graph", "-n", "60"], &pathspecs),
+            cancel,
         )?;
         ChangeRange {
             label: "no tags found; showing the latest 60 commits".to_string(),
@@ -71,25 +80,31 @@ fn load_change_ranges(scope: &GitScopeContext) -> Result<(ChangeRange, Vec<Chang
         }
     };
 
-    let tags = split_output_lines(&run_git_checked(repo_root, &["tag", "--sort=-creatordate"])?);
+    Ok(recent_range)
+}
+
+pub(crate) fn load_history_ranges_with_cancel(
+    scope: &GitScopeContext,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<ChangeRange>> {
+    let repo_root = &scope.repo_root;
+
+    ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
+
+    let tags = split_output_lines(&run_git_checked_with_cancel(repo_root, &["tag", "--sort=-creatordate"], cancel.clone())?);
     let mut history_ranges = Vec::new();
     for window in tags.windows(2) {
         let newer = &window[0];
         let older = &window[1];
         let range = format!("{}..{}", older, newer);
-        let output = run_git_checked(repo_root, &["log", "--oneline", "--graph", range.as_str()])?;
+        let output = run_git_checked_with_cancel(repo_root, &["log", "--oneline", "--graph", range.as_str()], cancel.clone())?;
         history_ranges.push(ChangeRange {
             label: range,
             lines: split_output_lines(&output),
         });
     }
 
-    Ok((recent_range, history_ranges))
-}
-
-pub(crate) fn load_recent_change_range(scope: &GitScopeContext) -> Result<ChangeRange> {
-    let (recent_range, _) = load_change_ranges(scope)?;
-    Ok(recent_range)
+    Ok(history_ranges)
 }
 
 fn build_log_args<const N: usize>(base: [&str; N], pathspecs: &[String]) -> Vec<String> {
@@ -101,9 +116,9 @@ fn build_log_args<const N: usize>(base: [&str; N], pathspecs: &[String]) -> Vec<
     args
 }
 
-fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
+fn run_git_checked_owned(repo_root: &str, args: Vec<String>, cancel: Option<GitCancellation>) -> Result<String> {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_checked(repo_root, &arg_refs)
+    run_git_checked_with_cancel(repo_root, &arg_refs, cancel)
 }
 
 impl RecentChangesDialog {
@@ -112,19 +127,31 @@ impl RecentChangesDialog {
     }
 
     pub(crate) fn from_project_with_scope(project: &ProjectConfig, preferred_scope: usize) -> Result<Self> {
+        Self::from_project_with_scope_cancellable(project, preferred_scope, None)
+    }
+
+    pub(crate) fn from_project_with_scope_cancellable(
+        project: &ProjectConfig,
+        preferred_scope: usize,
+        cancel: Option<GitCancellation>,
+    ) -> Result<Self> {
         let scopes = collect_all_branch_git_scope_contexts(project)?;
         let selected_scope = preferred_scope.min(scopes.len().saturating_sub(1));
-        let (recent_range, history_ranges) = load_change_ranges(&scopes[selected_scope])?;
+        let recent_range = load_recent_change_range_with_cancel(&scopes[selected_scope], cancel)?;
+        let scope_count = scopes.len();
 
         Ok(Self {
             project_name: project.name.clone(),
             scopes,
             selected_scope,
             recent_range,
-            history_ranges,
+            history_ranges: Vec::new(),
+            history_loaded: false,
             active_tab: RecentChangesTab::Recent,
             history_index: 0,
             scroll: 0,
+            prefetched_recent_ranges: vec![None; scope_count],
+            prefetched_history_ranges: vec![None; scope_count],
         })
     }
 
@@ -136,15 +163,15 @@ impl RecentChangesDialog {
         &self.scopes[self.selected_scope.min(self.scopes.len().saturating_sub(1))]
     }
 
-    pub(crate) fn refresh_current_scope(&mut self) -> Result<()> {
+    pub(crate) fn refresh_current_scope_cancellable(&mut self, cancel: Option<GitCancellation>) -> Result<()> {
         let previous_scroll = self.scroll;
-        self.reload_selected_scope(false)?;
+        self.reload_selected_scope(false, cancel)?;
         let max_scroll = self.current_range().lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
         self.scroll = previous_scroll.min(max_scroll);
         Ok(())
     }
 
-    pub(crate) fn rotate_scope(&mut self, delta: isize) -> Result<()> {
+    pub(crate) fn rotate_scope_cancellable(&mut self, delta: isize, cancel: Option<GitCancellation>) -> Result<()> {
         if !self.can_select_scope() {
             self.selected_scope = 0;
             return Ok(());
@@ -152,7 +179,7 @@ impl RecentChangesDialog {
 
         let len = self.scopes.len() as isize;
         self.selected_scope = (self.selected_scope as isize + delta).rem_euclid(len) as usize;
-        self.reload_selected_scope(true)
+        self.reload_selected_scope(true, cancel)
     }
 
     pub(crate) fn select_scope(&mut self, scope_index: usize) -> Result<()> {
@@ -167,26 +194,69 @@ impl RecentChangesDialog {
         }
 
         self.selected_scope = next_scope;
-        self.reload_selected_scope(true)
+        self.reload_selected_scope(true, None)
     }
 
-    fn reload_selected_scope(&mut self, reset_navigation: bool) -> Result<()> {
+    fn reload_selected_scope(&mut self, reset_navigation: bool, cancel: Option<GitCancellation>) -> Result<()> {
         let previous_tab = self.active_tab;
         let previous_history_label = self.history_ranges.get(self.history_index).map(|range| range.label.clone());
-        let (recent_range, history_ranges) = load_change_ranges(self.active_scope())?;
-        self.recent_range = recent_range;
-        self.history_ranges = history_ranges;
+        let history_loaded = self.history_loaded;
+        if let Some(prefetched) = self
+            .prefetched_recent_ranges
+            .get_mut(self.selected_scope)
+            .and_then(Option::take)
+        {
+            self.recent_range = prefetched;
+        } else {
+            self.recent_range = load_recent_change_range_with_cancel(self.active_scope(), cancel.clone())?;
+        }
         if reset_navigation {
+            self.history_ranges.clear();
+            self.history_loaded = false;
             self.active_tab = RecentChangesTab::Recent;
             self.history_index = 0;
         } else {
             self.active_tab = previous_tab;
-            self.history_index = previous_history_label
-                .as_ref()
-                .and_then(|label| self.history_ranges.iter().position(|range| &range.label == label))
-                .unwrap_or_else(|| self.history_index.min(self.history_ranges.len().saturating_sub(1)));
+            self.history_loaded = history_loaded;
+            if self.history_loaded {
+                if let Some(prefetched) = self
+                    .prefetched_history_ranges
+                    .get_mut(self.selected_scope)
+                    .and_then(Option::take)
+                {
+                    self.history_ranges = prefetched;
+                } else {
+                    self.history_ranges = load_history_ranges_with_cancel(self.active_scope(), cancel)?;
+                }
+                self.history_index = previous_history_label
+                    .as_ref()
+                    .and_then(|label| self.history_ranges.iter().position(|range| &range.label == label))
+                    .unwrap_or_else(|| self.history_index.min(self.history_ranges.len().saturating_sub(1)));
+            } else {
+                self.history_ranges.clear();
+                self.history_index = 0;
+            }
         }
         self.scroll = 0;
+        Ok(())
+    }
+
+    fn ensure_history_loaded_cancellable(&mut self, cancel: Option<GitCancellation>) -> Result<()> {
+        if self.history_loaded {
+            return Ok(());
+        }
+
+        if let Some(prefetched) = self
+            .prefetched_history_ranges
+            .get_mut(self.selected_scope)
+            .and_then(Option::take)
+        {
+            self.history_ranges = prefetched;
+        } else {
+            self.history_ranges = load_history_ranges_with_cancel(self.active_scope(), cancel)?;
+        }
+        self.history_loaded = true;
+        self.history_index = self.history_index.min(self.history_ranges.len().saturating_sub(1));
         Ok(())
     }
 
@@ -200,19 +270,39 @@ impl RecentChangesDialog {
         }
     }
 
-    pub(crate) fn switch_tab(&mut self, tab: RecentChangesTab) {
-        self.active_tab = tab;
-        self.scroll = 0;
+    pub(crate) fn switch_tab(&mut self, tab: RecentChangesTab) -> Result<()> {
+        self.switch_tab_cancellable(tab, None)
     }
 
-    pub(crate) fn cycle_tab(&mut self, delta: isize) {
+    pub(crate) fn switch_tab_cancellable(&mut self, tab: RecentChangesTab, cancel: Option<GitCancellation>) -> Result<()> {
+        if tab == RecentChangesTab::History {
+            self.ensure_history_loaded_cancellable(cancel)?;
+        }
+        self.active_tab = tab;
+        self.scroll = 0;
+        Ok(())
+    }
+
+    pub(crate) fn cycle_tab(&mut self, delta: isize) -> Result<()> {
         let tabs = [RecentChangesTab::Recent, RecentChangesTab::History];
         let current = match self.active_tab {
             RecentChangesTab::Recent => 0,
             RecentChangesTab::History => 1,
         } as isize;
         let next = (current + delta).rem_euclid(tabs.len() as isize) as usize;
-        self.switch_tab(tabs[next]);
+        self.switch_tab(tabs[next])
+    }
+
+    pub(crate) fn apply_prefetched_recent_range(&mut self, scope_index: usize, range: ChangeRange) {
+        if let Some(slot) = self.prefetched_recent_ranges.get_mut(scope_index) {
+            *slot = Some(range);
+        }
+    }
+
+    pub(crate) fn apply_prefetched_history_ranges(&mut self, scope_index: usize, ranges: Vec<ChangeRange>) {
+        if let Some(slot) = self.prefetched_history_ranges.get_mut(scope_index) {
+            *slot = Some(ranges);
+        }
     }
 
     pub(crate) fn navigate_history(&mut self, delta: isize) {
@@ -258,7 +348,7 @@ impl TagDialog {
     ) -> Result<Self> {
         let scopes = collect_git_scope_contexts(project)?;
         let selected_scope = preferred_scope.unwrap_or(0).min(scopes.len().saturating_sub(1));
-        ensure_git_repo(&scopes[selected_scope].repo_root)?;
+        ensure_git_repo_with_cancel(&scopes[selected_scope].repo_root, None)?;
         let actions = available_tag_actions(project.integration_mode, scopes[selected_scope].remote_spec.is_some())?;
         let action_index = preferred_action
             .and_then(|action| actions.iter().position(|candidate| *candidate == action))

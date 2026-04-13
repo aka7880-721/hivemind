@@ -3,14 +3,14 @@
 //
 // Licensed under the ComfyVersionBumper License v1.2
 //
-pub(crate) fn current_branch(repo_root: &str) -> Result<String> {
-    let branch = run_git_checked(repo_root, &["branch", "--show-current"])?;
+pub(crate) fn current_branch_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<String> {
+    let branch = run_git_checked_with_cancel(repo_root, &["branch", "--show-current"], cancel.clone())?;
     let branch = branch.trim();
     if !branch.is_empty() {
         return Ok(branch.to_string());
     }
 
-    let head = run_git_checked(repo_root, &["rev-parse", "--short", "HEAD"])?;
+    let head = run_git_checked_with_cancel(repo_root, &["rev-parse", "--short", "HEAD"], cancel)?;
     Ok(format!("detached ({})", head.trim()))
 }
 
@@ -31,7 +31,12 @@ pub(crate) fn switch_to_main_branch(repo_root: &str, remote_spec: Option<&str>, 
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
 
-use std::{path::Path, process::Command};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Local, TimeZone};
@@ -45,6 +50,25 @@ pub(crate) struct GitOutput {
     pub(crate) success: bool,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct GitCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl GitCancellation {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
 }
 
 #[derive(Clone)]
@@ -81,11 +105,6 @@ fn build_git_args(base: &[&str], pathspecs: &[String]) -> Vec<String> {
         args.extend(pathspecs.iter().cloned());
     }
     args
-}
-
-fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_checked(repo_root, &arg_refs)
 }
 
 fn derive_repo_root_from_targets(specs: &[TargetSpec]) -> Option<String> {
@@ -302,8 +321,8 @@ fn slugify(value: &str) -> String {
         .to_string()
 }
 
-pub(crate) fn ensure_git_repo(repo_root: &str) -> Result<()> {
-    let output = run_git_checked(repo_root, &["rev-parse", "--is-inside-work-tree"])?;
+pub(crate) fn ensure_git_repo_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
+    let output = run_git_checked_with_cancel(repo_root, &["rev-parse", "--is-inside-work-tree"], cancel)?;
     if output.trim() == "true" {
         Ok(())
     } else {
@@ -338,22 +357,55 @@ pub(crate) fn ensure_gh_available() -> Result<()> {
 }
 
 pub(crate) fn run_git(repo_root: &str, args: &[&str]) -> Result<GitOutput> {
-    let output = Command::new("git")
+    run_git_with_cancel(repo_root, args, None)
+}
+
+pub(crate) fn run_git_with_cancel(
+    repo_root: &str,
+    args: &[&str],
+    cancel: Option<GitCancellation>,
+) -> Result<GitOutput> {
+    let mut child = Command::new("git")
         .arg("-C")
         .arg(repo_root)
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .with_context(|| format!("failed to run git in {}", repo_root))?;
 
-    Ok(GitOutput {
-        success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    })
+    loop {
+        if cancel.as_ref().is_some_and(GitCancellation::is_cancelled) {
+            let _ = child.kill();
+            let _ = child.wait_with_output();
+            bail!("git {:?} cancelled in {}", args, repo_root);
+        }
+
+        if let Some(status) = child.try_wait().with_context(|| format!("failed to poll git in {}", repo_root))? {
+            let output = child
+                .wait_with_output()
+                .with_context(|| format!("failed to collect git output in {}", repo_root))?;
+            return Ok(GitOutput {
+                success: status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 pub(crate) fn run_git_checked(repo_root: &str, args: &[&str]) -> Result<String> {
-    let output = run_git(repo_root, args)?;
+    run_git_checked_with_cancel(repo_root, args, None)
+}
+
+pub(crate) fn run_git_checked_with_cancel(
+    repo_root: &str,
+    args: &[&str],
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let output = run_git_with_cancel(repo_root, args, cancel)?;
     if output.success {
         Ok(output.stdout)
     } else {
@@ -362,24 +414,6 @@ pub(crate) fn run_git_checked(repo_root: &str, args: &[&str]) -> Result<String> 
             bail!("git {:?} failed in {}", args, repo_root)
         } else {
             bail!("git {:?} failed in {}: {}", args, repo_root, details)
-        }
-    }
-}
-
-pub(crate) fn run_gh_checked(repo_root: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run gh in {}", repo_root))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if details.is_empty() {
-            bail!("gh {:?} failed in {}", args, repo_root)
-        } else {
-            bail!("gh {:?} failed in {}: {}", args, repo_root, details)
         }
     }
 }
@@ -393,22 +427,26 @@ pub(crate) fn split_output_lines(output: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn load_scope_activity_summary(scope: &GitScopeContext) -> Result<RepoActivitySummary> {
+pub(crate) fn load_scope_activity_summary_with_cancel(
+    scope: &GitScopeContext,
+    cancel: Option<GitCancellation>,
+) -> Result<RepoActivitySummary> {
     let repo_root = &scope.repo_root;
     let pathspecs = scope.git_pathspecs();
-    ensure_git_repo(repo_root)?;
+    ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
 
-    let describe = run_git(repo_root, &["describe", "--tags", "--abbrev=0"])?;
+    let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel.clone())?;
     let (commits_since_tag_label, last_bump_label) = if describe.success {
         let tag = describe.stdout.trim().to_string();
         let range = format!("{}..HEAD", tag);
-        let count = run_git_checked_owned(
+        let count = run_git_checked_owned_with_cancel(
             repo_root,
             build_git_args(&["rev-list", "--count", range.as_str()], &pathspecs),
+            cancel.clone(),
         )?
         .trim()
         .to_string();
-        let tag_timestamp = run_git_checked(repo_root, &["log", "-1", "--format=%ct", &tag])?;
+        let tag_timestamp = run_git_checked_with_cancel(repo_root, &["log", "-1", "--format=%ct", &tag], cancel.clone())?;
         (
             format!("{}c ahd", count),
             format_relative_git_timestamp(tag_timestamp.trim()).unwrap_or_else(|| "n/a".to_string()),
@@ -417,9 +455,10 @@ pub(crate) fn load_scope_activity_summary(scope: &GitScopeContext) -> Result<Rep
         ("no tags".to_string(), "n/a".to_string())
     };
 
-    let last_commit_timestamp = run_git_checked_owned(
+    let last_commit_timestamp = run_git_checked_owned_with_cancel(
         repo_root,
         build_git_args(&["log", "-1", "--format=%ct", "HEAD"], &pathspecs),
+        cancel,
     )?;
     let last_commit_label = format_relative_git_timestamp(last_commit_timestamp.trim())
         .unwrap_or_else(|| "n/a".to_string());
@@ -633,4 +672,13 @@ mod tests {
 
         assert_eq!(formatted, "2d ago");
     }
+}
+
+fn run_git_checked_owned_with_cancel(
+    repo_root: &str,
+    args: Vec<String>,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_checked_with_cancel(repo_root, &arg_refs, cancel)
 }
