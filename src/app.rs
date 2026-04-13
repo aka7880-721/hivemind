@@ -63,11 +63,11 @@ use crate::{
     },
     dialogs::{
         BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput,
-        load_recent_change_range,
+        ChangeRange, load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
     },
     git::{
-        collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
-        RepoActivitySummary, load_scope_activity_summary, run_git, run_git_checked,
+        GitCancellation, collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
+        RepoActivitySummary, load_scope_activity_summary_with_cancel, run_git, run_git_checked,
         split_output_lines,
     },
     overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
@@ -234,8 +234,13 @@ struct App {
     next_background_job_id: u64,
     active_foreground_job_id: Option<u64>,
     current_recent_changes_job_id: Option<u64>,
+    current_recent_changes_prefetch_job_id: Option<u64>,
     current_changelog_preview_job_id: Option<u64>,
     current_overview_activity_job_id: Option<u64>,
+    current_recent_changes_cancel: Option<GitCancellation>,
+    current_recent_changes_prefetch_cancel: Option<GitCancellation>,
+    current_changelog_preview_cancel: Option<GitCancellation>,
+    current_overview_activity_cancel: Option<GitCancellation>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
@@ -302,8 +307,13 @@ impl App {
             next_background_job_id: 1,
             active_foreground_job_id: None,
             current_recent_changes_job_id: None,
+            current_recent_changes_prefetch_job_id: None,
             current_changelog_preview_job_id: None,
             current_overview_activity_job_id: None,
+            current_recent_changes_cancel: None,
+            current_recent_changes_prefetch_cancel: None,
+            current_changelog_preview_cancel: None,
+            current_overview_activity_cancel: None,
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
@@ -616,6 +626,8 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.recent_changes_dialog = None;
+                self.cancel_background_job_kind(BackgroundJobKind::RecentChanges);
+                self.cancel_background_job_kind(BackgroundJobKind::RecentChangesPrefetch);
                 self.current_recent_changes_job_id = None;
                 self.status = StatusMessage::info("Git log closed.");
             }
@@ -1228,6 +1240,8 @@ impl App {
             }
             HitAction::CloseRecentChanges => {
                 self.recent_changes_dialog = None;
+                self.cancel_background_job_kind(BackgroundJobKind::RecentChanges);
+                self.cancel_background_job_kind(BackgroundJobKind::RecentChangesPrefetch);
                 self.current_recent_changes_job_id = None;
                 self.status = StatusMessage::info("Git log closed.");
             }
@@ -1352,6 +1366,7 @@ impl App {
         match output {
             BackgroundJobOutput::OpenRecentChanges(dialog) => {
                 self.recent_changes_dialog = Some(dialog);
+                let _ = self.schedule_recent_changes_prefetch();
                 self.status = StatusMessage::info("Showing git log for the selected project.");
             }
             BackgroundJobOutput::RecentChanges {
@@ -1359,8 +1374,27 @@ impl App {
                 status_message,
             } => {
                 self.recent_changes_dialog = Some(dialog);
+                let _ = self.schedule_recent_changes_prefetch();
                 if let Some(message) = status_message {
                     self.status = StatusMessage::info(message);
+                }
+            }
+            BackgroundJobOutput::RecentChangesPrefetch {
+                project_name,
+                next_scope_index,
+                prefetched_recent_range,
+                history_scope_index,
+                prefetched_history_ranges,
+            } => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    if dialog.project_name == project_name {
+                        if let (Some(scope_index), Some(range)) = (next_scope_index, prefetched_recent_range) {
+                            dialog.apply_prefetched_recent_range(scope_index, range);
+                        }
+                        if let (Some(scope_index), Some(ranges)) = (history_scope_index, prefetched_history_ranges) {
+                            dialog.apply_prefetched_history_ranges(scope_index, ranges);
+                        }
+                    }
                 }
             }
             BackgroundJobOutput::OpenChangelogPreview(dialog) => self.open_changelog_preview(dialog),
@@ -1714,6 +1748,7 @@ impl App {
 
     fn cancel_changelog_preview(&mut self) {
         self.changelog_preview_dialog = None;
+        self.cancel_background_job_kind(BackgroundJobKind::ChangelogPreview);
         self.current_changelog_preview_job_id = None;
         self.pending_changelog_write = None;
         self.status = StatusMessage::info("Changelog preview closed.");
@@ -1770,6 +1805,7 @@ impl App {
 
         if dialog.workflow.is_none() {
             self.changelog_preview_dialog = None;
+            self.cancel_background_job_kind(BackgroundJobKind::ChangelogPreview);
             self.current_changelog_preview_job_id = None;
             self.status = StatusMessage::info("Changelog preview closed.");
             return Ok(());
@@ -1777,6 +1813,7 @@ impl App {
 
         self.pending_changelog_write = Some(dialog.prepare_pending_write());
         self.changelog_preview_dialog = None;
+        self.cancel_background_job_kind(BackgroundJobKind::ChangelogPreview);
         self.current_changelog_preview_job_id = None;
         overview::execute_overview_bump_workflow(
             self,
@@ -2006,6 +2043,8 @@ impl App {
         let project = self.selected_project()?;
         let dialog = BumpDialog::from_project(project)?;
         self.recent_changes_dialog = None;
+        self.cancel_background_job_kind(BackgroundJobKind::RecentChanges);
+        self.cancel_background_job_kind(BackgroundJobKind::RecentChangesPrefetch);
         self.current_recent_changes_job_id = None;
         self.tag_dialog = None;
         self.project_edit_dialog = None;
@@ -2824,6 +2863,9 @@ enum BackgroundJobRequest {
         project_index: usize,
         project: ProjectConfig,
     },
+    PrefetchRecentChanges {
+        dialog: RecentChangesDialog,
+    },
     CreateTag {
         dialog: TagDialog,
         changelog_enabled: bool,
@@ -2835,6 +2877,13 @@ enum BackgroundJobOutput {
     RecentChanges {
         dialog: RecentChangesDialog,
         status_message: Option<String>,
+    },
+    RecentChangesPrefetch {
+        project_name: String,
+        next_scope_index: Option<usize>,
+        prefetched_recent_range: Option<ChangeRange>,
+        history_scope_index: Option<usize>,
+        prefetched_history_ranges: Option<Vec<ChangeRange>>,
     },
     OpenChangelogPreview(ChangelogPreviewDialog),
     OverviewActivityCache {
@@ -2851,6 +2900,7 @@ type BackgroundJobResult = std::result::Result<BackgroundJobOutput, String>;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BackgroundJobKind {
     RecentChanges,
+    RecentChangesPrefetch,
     ChangelogPreview,
     OverviewActivity,
     TagAction,
@@ -2867,6 +2917,7 @@ struct BackgroundJobRequestMessage {
     id: u64,
     kind: BackgroundJobKind,
     request: BackgroundJobRequest,
+    cancel: GitCancellation,
 }
 
 struct BackgroundJobResultMessage {
@@ -2879,6 +2930,7 @@ impl BackgroundJobRequest {
     fn kind(&self) -> BackgroundJobKind {
         match self {
             Self::OpenRecentChanges { .. } | Self::RecentChanges { .. } => BackgroundJobKind::RecentChanges,
+            Self::PrefetchRecentChanges { .. } => BackgroundJobKind::RecentChangesPrefetch,
             Self::OpenDashboardChangelogPreview { .. } | Self::OpenOverviewWorkflowChangelog { .. } => {
                 BackgroundJobKind::ChangelogPreview
             }
@@ -3359,7 +3411,7 @@ fn spawn_background_job_task(
     result_tx: UnboundedSender<BackgroundJobResultMessage>,
 ) {
     tokio::spawn(async move {
-        let result = run_background_job(request.request).await.map_err(|error| error.to_string());
+        let result = run_background_job(request.request, request.cancel).await.map_err(|error| error.to_string());
         let _ = result_tx.send(BackgroundJobResultMessage {
             id: request.id,
             kind: request.kind,
@@ -3378,16 +3430,16 @@ where
         .map_err(|error| anyhow!("background task failed: {error}"))?
 }
 
-async fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJobOutput> {
+async fn run_background_job(request: BackgroundJobRequest, cancel: GitCancellation) -> Result<BackgroundJobOutput> {
     match request {
         BackgroundJobRequest::OpenRecentChanges {
             project,
             preferred_scope,
         } => Ok(BackgroundJobOutput::OpenRecentChanges(
-            run_blocking_job(move || RecentChangesDialog::from_project_with_scope(&project, preferred_scope.unwrap_or(0))).await?,
+            run_blocking_job(move || RecentChangesDialog::from_project_with_scope_cancellable(&project, preferred_scope.unwrap_or(0), Some(cancel))).await?,
         )),
         BackgroundJobRequest::RecentChanges { dialog, action } => {
-            let (dialog, status_message) = run_blocking_job(move || apply_recent_changes_background_action(dialog, action)).await?;
+            let (dialog, status_message) = run_blocking_job(move || apply_recent_changes_background_action(dialog, action, Some(cancel))).await?;
             Ok(BackgroundJobOutput::RecentChanges {
                 dialog,
                 status_message,
@@ -3402,6 +3454,7 @@ async fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJ
                 &project,
                 scope_index,
                 &pending_versions,
+                Some(cancel),
             ).await?,
         )),
         BackgroundJobRequest::OpenOverviewWorkflowChangelog {
@@ -3415,6 +3468,7 @@ async fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJ
                 scope_index,
                 workflow,
                 &pending_versions,
+                Some(cancel),
             ).await?,
         )),
         BackgroundJobRequest::RefreshOverviewActivity {
@@ -3422,8 +3476,20 @@ async fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJ
             project,
         } => Ok(BackgroundJobOutput::OverviewActivityCache {
             project_index,
-            summaries: load_overview_activity_summaries_async(project).await?,
+            summaries: load_overview_activity_summaries_async(project, Some(cancel)).await?,
         }),
+        BackgroundJobRequest::PrefetchRecentChanges { dialog } => {
+            let project_name = dialog.project_name.clone();
+            let (next_scope_index, prefetched_recent_range, history_scope_index, prefetched_history_ranges) =
+                run_blocking_job(move || prefetch_recent_changes(dialog, Some(cancel))).await?;
+            Ok(BackgroundJobOutput::RecentChangesPrefetch {
+                project_name,
+                next_scope_index,
+                prefetched_recent_range,
+                history_scope_index,
+                prefetched_history_ranges,
+            })
+        }
         BackgroundJobRequest::CreateTag {
             dialog,
             changelog_enabled,
@@ -3436,19 +3502,23 @@ async fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJ
     }
 }
 
-async fn load_overview_activity_summaries_async(project: ProjectConfig) -> Result<Vec<Option<RepoActivitySummary>>> {
+async fn load_overview_activity_summaries_async(
+    project: ProjectConfig,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<Option<RepoActivitySummary>>> {
     let contexts = collect_all_branch_git_scope_contexts(&project)?;
     let semaphore = std::sync::Arc::new(Semaphore::new(BACKGROUND_MAX_PARALLEL_REPO_JOBS.max(1)));
     let mut tasks = JoinSet::new();
 
     for (index, context) in contexts.into_iter().enumerate() {
         let semaphore = semaphore.clone();
+        let cancel = cancel.clone();
         tasks.spawn(async move {
             let _permit = semaphore
                 .acquire_owned()
                 .await
                 .map_err(|_| anyhow!("activity summary worker pool is unavailable"))?;
-            let summary = run_blocking_job(move || Ok(load_scope_activity_summary(&context).ok())).await?;
+            let summary = run_blocking_job(move || Ok(load_scope_activity_summary_with_cancel(&context, cancel).ok())).await?;
             Ok::<_, anyhow::Error>((index, summary))
         });
     }
@@ -3469,23 +3539,51 @@ async fn load_overview_activity_summaries_async(project: ProjectConfig) -> Resul
 fn apply_recent_changes_background_action(
     mut dialog: RecentChangesDialog,
     action: RecentChangesLoadAction,
+    cancel: Option<GitCancellation>,
 ) -> Result<(RecentChangesDialog, Option<String>)> {
     let status_message = match action {
         RecentChangesLoadAction::RefreshCurrentScope => {
-            dialog.refresh_current_scope()?;
+            dialog.refresh_current_scope_cancellable(cancel)?;
             Some("Refreshed git history for the current scope.".to_string())
         }
         RecentChangesLoadAction::RotateScope(delta) => {
-            dialog.rotate_scope(delta)?;
+            dialog.rotate_scope_cancellable(delta, cancel)?;
             None
         }
         RecentChangesLoadAction::SwitchTab(tab) => {
-            dialog.switch_tab(tab)?;
+            dialog.switch_tab_cancellable(tab, cancel)?;
             None
         }
     };
 
     Ok((dialog, status_message))
+}
+
+fn prefetch_recent_changes(
+    dialog: RecentChangesDialog,
+    cancel: Option<GitCancellation>,
+) -> Result<(Option<usize>, Option<ChangeRange>, Option<usize>, Option<Vec<ChangeRange>>)> {
+    let next_scope_index = if dialog.can_select_scope() {
+        Some((dialog.selected_scope + 1) % dialog.scopes.len())
+    } else {
+        None
+    };
+    let prefetched_recent_range = next_scope_index
+        .filter(|index| dialog.prefetched_recent_ranges.get(*index).and_then(|entry| entry.as_ref()).is_none())
+        .map(|index| load_recent_change_range_with_cancel(&dialog.scopes[index], cancel.clone()))
+        .transpose()?;
+    let history_scope_index = (!dialog.history_loaded
+        && dialog
+            .prefetched_history_ranges
+            .get(dialog.selected_scope)
+            .and_then(|entry| entry.as_ref())
+            .is_none())
+        .then_some(dialog.selected_scope);
+    let prefetched_history_ranges = history_scope_index
+        .map(|index| load_history_ranges_with_cancel(&dialog.scopes[index], cancel))
+        .transpose()?;
+
+    Ok((next_scope_index, prefetched_recent_range, history_scope_index, prefetched_history_ranges))
 }
 
 struct BackgroundTagOutcome {
@@ -3567,7 +3665,7 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
 }
 
 fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeContext) -> Result<String> {
-    let recent_range = load_recent_change_range(scope)?;
+    let recent_range = load_recent_change_range_with_cancel(scope, None)?;
     Ok(build_document_from_git_log(tag_name.to_string(), &recent_range.lines)
         .render_markdown()
         .markdown)
@@ -3686,13 +3784,28 @@ fn run_command_checked_with_timeout(
 
 impl App {
     fn register_background_job(&mut self, kind: BackgroundJobKind) -> u64 {
+        self.cancel_background_job_kind(kind);
         let id = self.next_background_job_id;
         self.next_background_job_id += 1;
         self.background_jobs_inflight += 1;
+        let cancel = GitCancellation::new();
         match kind {
-            BackgroundJobKind::RecentChanges => self.current_recent_changes_job_id = Some(id),
-            BackgroundJobKind::ChangelogPreview => self.current_changelog_preview_job_id = Some(id),
-            BackgroundJobKind::OverviewActivity => self.current_overview_activity_job_id = Some(id),
+            BackgroundJobKind::RecentChanges => {
+                self.current_recent_changes_job_id = Some(id);
+                self.current_recent_changes_cancel = Some(cancel);
+            }
+            BackgroundJobKind::RecentChangesPrefetch => {
+                self.current_recent_changes_prefetch_job_id = Some(id);
+                self.current_recent_changes_prefetch_cancel = Some(cancel);
+            }
+            BackgroundJobKind::ChangelogPreview => {
+                self.current_changelog_preview_job_id = Some(id);
+                self.current_changelog_preview_cancel = Some(cancel);
+            }
+            BackgroundJobKind::OverviewActivity => {
+                self.current_overview_activity_job_id = Some(id);
+                self.current_overview_activity_cancel = Some(cancel);
+            }
             BackgroundJobKind::TagAction => {}
         }
         id
@@ -3702,12 +3815,19 @@ impl App {
         match kind {
             BackgroundJobKind::RecentChanges if self.current_recent_changes_job_id == Some(id) => {
                 self.current_recent_changes_job_id = None;
+                self.current_recent_changes_cancel = None;
+            }
+            BackgroundJobKind::RecentChangesPrefetch if self.current_recent_changes_prefetch_job_id == Some(id) => {
+                self.current_recent_changes_prefetch_job_id = None;
+                self.current_recent_changes_prefetch_cancel = None;
             }
             BackgroundJobKind::ChangelogPreview if self.current_changelog_preview_job_id == Some(id) => {
                 self.current_changelog_preview_job_id = None;
+                self.current_changelog_preview_cancel = None;
             }
             BackgroundJobKind::OverviewActivity if self.current_overview_activity_job_id == Some(id) => {
                 self.current_overview_activity_job_id = None;
+                self.current_overview_activity_cancel = None;
             }
             _ => {}
         }
@@ -3716,6 +3836,7 @@ impl App {
     fn is_background_result_stale(&self, message: &BackgroundJobResultMessage) -> bool {
         match message.kind {
             BackgroundJobKind::RecentChanges => self.current_recent_changes_job_id != Some(message.id),
+            BackgroundJobKind::RecentChangesPrefetch => self.current_recent_changes_prefetch_job_id != Some(message.id),
             BackgroundJobKind::ChangelogPreview => self.current_changelog_preview_job_id != Some(message.id),
             BackgroundJobKind::OverviewActivity => self.current_overview_activity_job_id != Some(message.id),
             BackgroundJobKind::TagAction => false,
@@ -3729,10 +3850,12 @@ impl App {
     ) -> Result<u64> {
         let kind = request.kind();
         let request_id = self.register_background_job(kind);
+        let cancel = self.background_job_cancel(kind, request_id);
         let message = BackgroundJobRequestMessage {
             id: request_id,
             kind,
             request,
+            cancel,
         };
 
         let send_result = match priority {
@@ -3748,6 +3871,87 @@ impl App {
         }
 
         Ok(request_id)
+    }
+
+    fn schedule_recent_changes_prefetch(&mut self) -> Result<()> {
+        let Some(dialog) = self.recent_changes_dialog.clone() else {
+            return Ok(());
+        };
+
+        let should_prefetch_next_scope = dialog.can_select_scope()
+            && dialog
+                .prefetched_recent_ranges
+                .get((dialog.selected_scope + 1) % dialog.scopes.len())
+                .and_then(|entry| entry.as_ref())
+                .is_none();
+        let should_prefetch_history = !dialog.history_loaded
+            && dialog
+                .prefetched_history_ranges
+                .get(dialog.selected_scope)
+                .and_then(|entry| entry.as_ref())
+                .is_none();
+
+        if !should_prefetch_next_scope && !should_prefetch_history {
+            return Ok(());
+        }
+
+        let _ = self.schedule_background_job(
+            BackgroundJobPriority::Prefetch,
+            BackgroundJobRequest::PrefetchRecentChanges { dialog },
+        )?;
+        Ok(())
+    }
+
+    fn cancel_background_job_kind(&mut self, kind: BackgroundJobKind) {
+        match kind {
+            BackgroundJobKind::RecentChanges => {
+                if let Some(cancel) = self.current_recent_changes_cancel.take() {
+                    cancel.cancel();
+                }
+            }
+            BackgroundJobKind::RecentChangesPrefetch => {
+                if let Some(cancel) = self.current_recent_changes_prefetch_cancel.take() {
+                    cancel.cancel();
+                }
+            }
+            BackgroundJobKind::ChangelogPreview => {
+                if let Some(cancel) = self.current_changelog_preview_cancel.take() {
+                    cancel.cancel();
+                }
+            }
+            BackgroundJobKind::OverviewActivity => {
+                if let Some(cancel) = self.current_overview_activity_cancel.take() {
+                    cancel.cancel();
+                }
+            }
+            BackgroundJobKind::TagAction => {}
+        }
+    }
+
+    fn background_job_cancel(&self, kind: BackgroundJobKind, id: u64) -> GitCancellation {
+        match kind {
+            BackgroundJobKind::RecentChanges => self
+                .current_recent_changes_cancel
+                .clone()
+                .filter(|_| self.current_recent_changes_job_id == Some(id))
+                .unwrap_or_default(),
+            BackgroundJobKind::RecentChangesPrefetch => self
+                .current_recent_changes_prefetch_cancel
+                .clone()
+                .filter(|_| self.current_recent_changes_prefetch_job_id == Some(id))
+                .unwrap_or_default(),
+            BackgroundJobKind::ChangelogPreview => self
+                .current_changelog_preview_cancel
+                .clone()
+                .filter(|_| self.current_changelog_preview_job_id == Some(id))
+                .unwrap_or_default(),
+            BackgroundJobKind::OverviewActivity => self
+                .current_overview_activity_cancel
+                .clone()
+                .filter(|_| self.current_overview_activity_job_id == Some(id))
+                .unwrap_or_default(),
+            BackgroundJobKind::TagAction => GitCancellation::default(),
+        }
     }
 
     fn schedule_prefetch_overview_activity_cache(&mut self) -> Result<()> {
