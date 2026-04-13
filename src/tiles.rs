@@ -204,9 +204,9 @@ fn styled_row_with_highlights(row: &str, border_style: Style, highlights: &[Styl
 
 fn border_style(selected: bool) -> Style {
 	if selected {
-		Style::default().fg(Color::Cyan)
+		Style::default().fg(Color::Cyan).bg(Color::Black)
 	} else {
-		Style::default().fg(Color::LightCyan)
+		Style::default().fg(Color::DarkGray)
 	}
 }
 
