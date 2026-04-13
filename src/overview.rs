@@ -6,6 +6,8 @@
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
+use std::sync::Arc;
+use tokio::{sync::Semaphore, task::JoinSet};
 use crate::changelog::{archive_changelog_markdown, build_document_from_git_log};
 use crate::dialogs::load_recent_change_range;
 use super::git_flow::{
@@ -189,33 +191,6 @@ pub(super) fn invalidate_overview_cache(app: &mut App) {
 	app.overview_tile_project = None;
 	app.overview_activity_project = None;
 	app.overview_activity_summaries.clear();
-}
-
-pub(super) fn ensure_overview_activity_cache(app: &mut App) -> Result<()> {
-	if app.overview_activity_project == Some(app.selected_project) {
-		return Ok(());
-	}
-	reload_overview_activity_cache(app)
-}
-
-pub(super) fn reload_overview_activity_cache(app: &mut App) -> Result<()> {
-	app.overview_activity_project = None;
-	app.overview_activity_summaries.clear();
-
-	let Some(project) = app.config.projects.get(app.selected_project) else {
-		return Ok(());
-	};
-	if !project.integration_mode.requires_repo() {
-		return Ok(());
-	}
-
-	let contexts = collect_all_branch_git_scope_contexts(project)?;
-	app.overview_activity_summaries = contexts
-		.iter()
-		.map(|context| load_scope_activity_summary(context).ok())
-		.collect();
-	app.overview_activity_project = Some(app.selected_project);
-	Ok(())
 }
 
 pub(super) fn reorder_dashboard_tile_scope(app: &mut App, from_scope: usize, to_scope: usize) {
@@ -612,7 +587,7 @@ pub(super) fn reset_overview_pending_version(app: &mut App, scope_index: usize) 
 	Ok(())
 }
 
-pub(super) fn build_dashboard_changelog_preview_dialog(
+pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 	project: &ProjectConfig,
 	focused_scope: usize,
 	pending_versions: &[String],
@@ -642,7 +617,7 @@ pub(super) fn build_dashboard_changelog_preview_dialog(
 		.unwrap_or_else(|| scopes[scope_index].version_label().to_string());
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries(project, &git_contexts, &affected_scope_indexes, &next_version)?;
+	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -854,7 +829,7 @@ pub(super) fn execute_overview_bump_workflow(
 	Ok(())
 }
 
-pub(super) fn build_overview_workflow_changelog_preview_dialog(
+pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 	project: &ProjectConfig,
 	scope_index: usize,
 	workflow: OverviewBumpWorkflow,
@@ -885,7 +860,7 @@ pub(super) fn build_overview_workflow_changelog_preview_dialog(
 		.ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries(project, &git_contexts, &affected_scope_indexes, &next_version)?;
+	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -901,7 +876,7 @@ pub(super) fn build_overview_workflow_changelog_preview_dialog(
 
 fn should_open_overview_changelog_preview(
 	app: &mut App,
-	scope_index: usize,
+	_scope_index: usize,
 	workflow: OverviewBumpWorkflow,
 ) -> Result<bool> {
 	if workflow == OverviewBumpWorkflow::JustBump {
@@ -912,31 +887,13 @@ fn should_open_overview_changelog_preview(
 	if !project.changelog.enabled || !project.integration_mode.requires_repo() {
 		return Ok(false);
 	}
-
-	let scopes = collect_bump_scopes(&project)?;
-	let affected_scope_indexes = if project.unified_versioning {
-		(0..scopes.len()).collect::<Vec<_>>()
-	} else {
-		vec![scope_index]
-	};
-	let next_version = app
-		.overview_pending_versions
-		.get(scope_index)
-		.cloned()
-		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
-		.ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
-
-	let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-	let changelog_entries = collect_preview_entries(&project, &git_contexts, &affected_scope_indexes, &next_version)?;
-	Ok(!changelog_entries.is_empty())
+	Ok(true)
 }
 
-fn collect_preview_entries(
-	project: &ProjectConfig,
+fn collect_preview_contexts(
 	git_contexts: &[crate::git::GitScopeContext],
 	affected_scope_indexes: &[usize],
-	next_version: &str,
-) -> Result<Vec<ChangelogPreviewEntry>> {
+) -> Result<Vec<crate::git::GitScopeContext>> {
 	let mut merged_contexts = Vec::<crate::git::GitScopeContext>::new();
 	for scope_index in affected_scope_indexes {
 		let context = git_contexts
@@ -955,17 +912,45 @@ fn collect_preview_entries(
 		}
 	}
 
-	merged_contexts
-		.into_iter()
-		.map(|context| {
-			let recent_range = load_recent_change_range(&context)?;
-			let changelog_path = project.changelog.effective_path().to_string();
-			Ok(ChangelogPreviewEntry {
-				repo_root: context.repo_root.clone(),
-				changelog_path: changelog_path.clone(),
-				stage_path: stage_path_for_file(&context.repo_root, &changelog_path),
-				document: build_document_from_git_log(next_version.to_string(), &recent_range.lines),
+	Ok(merged_contexts)
+}
+
+async fn collect_preview_entries_async(
+	project: &ProjectConfig,
+	git_contexts: &[crate::git::GitScopeContext],
+	affected_scope_indexes: &[usize],
+	next_version: &str,
+) -> Result<Vec<ChangelogPreviewEntry>> {
+	let merged_contexts = collect_preview_contexts(git_contexts, affected_scope_indexes)?;
+	let semaphore = Arc::new(Semaphore::new(BACKGROUND_MAX_PARALLEL_REPO_JOBS.max(1)));
+	let mut tasks = JoinSet::new();
+
+	for context in merged_contexts {
+		let semaphore = Arc::clone(&semaphore);
+		let changelog_path = project.changelog.effective_path().to_string();
+		let next_version = next_version.to_string();
+		tasks.spawn(async move {
+			let _permit = semaphore
+				.acquire_owned()
+				.await
+				.map_err(|_| anyhow!("preview worker pool is unavailable"))?;
+			run_blocking_job(move || {
+				let recent_range = load_recent_change_range(&context)?;
+				Ok(ChangelogPreviewEntry {
+					repo_root: context.repo_root.clone(),
+					changelog_path: changelog_path.clone(),
+					stage_path: stage_path_for_file(&context.repo_root, &changelog_path),
+					document: build_document_from_git_log(next_version, &recent_range.lines),
+				})
 			})
-		})
-		.collect()
+			.await
+		});
+	}
+
+	let mut entries = Vec::new();
+	while let Some(result) = tasks.join_next().await {
+		entries.push(result.map_err(|error| anyhow!("preview task failed: {error}"))??);
+	}
+
+	Ok(entries)
 }
