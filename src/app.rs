@@ -10,9 +10,9 @@ use std::{
     fs,
     io,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -41,7 +41,12 @@ use ratatui_comfy_toaster::{
 use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Input as ExplorerInput};
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
-    sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError, unbounded_channel},
+    sync::{
+        Semaphore,
+        mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError, unbounded_channel},
+    },
+    task::JoinSet,
+    time::sleep,
 };
 use tui_tabs::TabNav;
 use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTextArea};
@@ -62,7 +67,7 @@ use crate::{
     },
     git::{
         collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
-        RepoActivitySummary, load_scope_activity_summary, run_gh_checked, run_git, run_git_checked,
+        RepoActivitySummary, load_scope_activity_summary, run_git, run_git_checked,
         split_output_lines,
     },
     overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
@@ -93,6 +98,11 @@ const BUTTON_GAP_HEIGHT: u16 = 3;
 const SHORTCUT_HINT_COLOR: Color = Color::Yellow;
 const ACTIVE_UI_TICK_INTERVAL: Duration = Duration::from_millis(100);
 const IDLE_UI_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const BACKGROUND_MAX_PARALLEL_REPO_JOBS: usize = 4;
+const NETWORK_RETRY_ATTEMPTS: usize = 2;
+const NETWORK_RETRY_DELAY: Duration = Duration::from_millis(750);
+const GIT_PUSH_TIMEOUT: Duration = Duration::from_secs(20);
+const GH_RELEASE_TIMEOUT: Duration = Duration::from_secs(45);
 const GIT_BRANCH_COLORS: [Color; 6] = [
     Color::Green,
     Color::Cyan,
@@ -214,10 +224,18 @@ struct App {
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
     progress_dialog: Option<ProgressDialog>,
-    background_request_tx: UnboundedSender<BackgroundJobRequest>,
-    background_result_rx: UnboundedReceiver<BackgroundJobResult>,
+    foreground_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
+    refresh_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
+    prefetch_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
+    background_result_rx: UnboundedReceiver<BackgroundJobResultMessage>,
     _background_runtime: TokioRuntime,
     background_job_active: bool,
+    background_jobs_inflight: usize,
+    next_background_job_id: u64,
+    active_foreground_job_id: Option<u64>,
+    current_recent_changes_job_id: Option<u64>,
+    current_changelog_preview_job_id: Option<u64>,
+    current_overview_activity_job_id: Option<u64>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
@@ -235,7 +253,13 @@ impl App {
         let config_store = ConfigStore::locate()?;
         let config = config_store.load()?;
         let status = StatusMessage::info("Press N to create your first project, or Q to quit.");
-        let (background_runtime, background_request_tx, background_result_rx) = spawn_background_worker()?;
+        let (
+            background_runtime,
+            foreground_request_tx,
+            refresh_request_tx,
+            prefetch_request_tx,
+            background_result_rx,
+        ) = spawn_background_worker()?;
         Ok(Self {
             config_store,
             config,
@@ -268,10 +292,18 @@ impl App {
             tag_dialog: None,
             tag_annotation_dialog: None,
             progress_dialog: None,
-            background_request_tx,
+            foreground_request_tx,
+            refresh_request_tx,
+            prefetch_request_tx,
             background_result_rx,
             _background_runtime: background_runtime,
             background_job_active: false,
+            background_jobs_inflight: 0,
+            next_background_job_id: 1,
+            active_foreground_job_id: None,
+            current_recent_changes_job_id: None,
+            current_changelog_preview_job_id: None,
+            current_overview_activity_job_id: None,
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
@@ -584,6 +616,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.recent_changes_dialog = None;
+                self.current_recent_changes_job_id = None;
                 self.status = StatusMessage::info("Git log closed.");
             }
             KeyCode::Up => self.scroll_recent_changes(-1),
@@ -1195,6 +1228,7 @@ impl App {
             }
             HitAction::CloseRecentChanges => {
                 self.recent_changes_dialog = None;
+                self.current_recent_changes_job_id = None;
                 self.status = StatusMessage::info("Git log closed.");
             }
             HitAction::ScrollRecentChanges(delta) => self.scroll_recent_changes(delta),
@@ -1266,44 +1300,51 @@ impl App {
             bail!("another background job is already running");
         }
 
+        let request_id = self.schedule_background_job(BackgroundJobPriority::Foreground, request)?;
+
         self.progress_dialog = Some(ProgressDialog {
             title: title.into(),
             message: message.into(),
         });
         self.background_job_active = true;
-
-        if let Err(error) = self.background_request_tx.send(request) {
-            self.progress_dialog = None;
-            self.background_job_active = false;
-            return Err(anyhow!("failed to start background job: {error}"));
-        }
+        self.active_foreground_job_id = Some(request_id);
 
         Ok(())
     }
 
     fn try_finish_background_job(&mut self) -> Result<bool> {
-        if !self.background_job_active {
+        if self.background_jobs_inflight == 0 {
             return Ok(false);
         }
 
-        let result = match self.background_result_rx.try_recv() {
-            Ok(result) => result,
+        let message = match self.background_result_rx.try_recv() {
+            Ok(message) => message,
             Err(TryRecvError::Empty) => return Ok(false),
             Err(TryRecvError::Disconnected) => {
                 self.progress_dialog = None;
                 self.background_job_active = false;
+                self.active_foreground_job_id = None;
+                self.background_jobs_inflight = 0;
                 bail!("background worker stopped unexpectedly");
             }
         };
 
-        self.progress_dialog = None;
+        self.background_jobs_inflight = self.background_jobs_inflight.saturating_sub(1);
+        if self.active_foreground_job_id == Some(message.id) {
+            self.progress_dialog = None;
+            self.background_job_active = false;
+            self.active_foreground_job_id = None;
+        }
 
-        match result {
+        if self.is_background_result_stale(&message) {
+            return Ok(true);
+        }
+
+        match message.result {
             Ok(output) => self.apply_background_job_output(output)?,
             Err(message) => self.status = StatusMessage::error(message),
         }
 
-        self.background_job_active = false;
         Ok(true)
     }
 
@@ -1323,6 +1364,15 @@ impl App {
                 }
             }
             BackgroundJobOutput::OpenChangelogPreview(dialog) => self.open_changelog_preview(dialog),
+            BackgroundJobOutput::OverviewActivityCache {
+                project_index,
+                summaries,
+            } => {
+                if self.selected_project == project_index {
+                    self.overview_activity_summaries = summaries;
+                    self.overview_activity_project = Some(project_index);
+                }
+            }
             BackgroundJobOutput::CreateTag { summary } => {
                 self.sync_dashboard_overview_after_repo_change();
                 self.tag_dialog = None;
@@ -1396,25 +1446,17 @@ impl App {
         overview::ensure_dashboard_recent_changes(self);
     }
 
-    fn ensure_overview_activity_cache(&mut self) -> Result<()> {
-        overview::ensure_overview_activity_cache(self)
-    }
-
-    fn reload_overview_activity_cache(&mut self) -> Result<()> {
-        overview::reload_overview_activity_cache(self)
-    }
-
     fn invalidate_overview_cache(&mut self) {
         overview::invalidate_overview_cache(self);
     }
 
     fn prime_selected_project_dashboard_data(&mut self) {
         self.ensure_dashboard_recent_changes();
-        let _ = self.ensure_overview_activity_cache();
+        let _ = self.schedule_prefetch_overview_activity_cache();
     }
 
     fn next_poll_timeout(&self) -> Duration {
-        if self.background_job_active || self.transient_toaster.has_toast() {
+        if self.background_jobs_inflight > 0 || self.transient_toaster.has_toast() {
             ACTIVE_UI_TICK_INTERVAL
         } else {
             IDLE_UI_POLL_INTERVAL
@@ -1435,7 +1477,7 @@ impl App {
     fn sync_dashboard_overview_after_repo_change(&mut self) {
         self.invalidate_overview_cache();
         self.ensure_dashboard_recent_changes();
-        let _ = self.reload_overview_activity_cache();
+        let _ = self.schedule_refresh_overview_activity_cache();
     }
 
     fn reload_dashboard_overview_data(&mut self) -> Result<()> {
@@ -1459,8 +1501,8 @@ impl App {
                 dialog.select_scope(scope_index)?;
             }
         }
-        self.reload_overview_activity_cache()?;
-        self.status = StatusMessage::info("Reloaded dashboard repo data for the selected project.");
+        self.schedule_refresh_overview_activity_cache()?;
+        self.status = StatusMessage::info("Refreshing dashboard repo data for the selected project.");
         Ok(())
     }
 
@@ -1672,6 +1714,7 @@ impl App {
 
     fn cancel_changelog_preview(&mut self) {
         self.changelog_preview_dialog = None;
+        self.current_changelog_preview_job_id = None;
         self.pending_changelog_write = None;
         self.status = StatusMessage::info("Changelog preview closed.");
     }
@@ -1727,12 +1770,14 @@ impl App {
 
         if dialog.workflow.is_none() {
             self.changelog_preview_dialog = None;
+            self.current_changelog_preview_job_id = None;
             self.status = StatusMessage::info("Changelog preview closed.");
             return Ok(());
         }
 
         self.pending_changelog_write = Some(dialog.prepare_pending_write());
         self.changelog_preview_dialog = None;
+        self.current_changelog_preview_job_id = None;
         overview::execute_overview_bump_workflow(
             self,
             dialog.scope_index,
@@ -1961,6 +2006,7 @@ impl App {
         let project = self.selected_project()?;
         let dialog = BumpDialog::from_project(project)?;
         self.recent_changes_dialog = None;
+        self.current_recent_changes_job_id = None;
         self.tag_dialog = None;
         self.project_edit_dialog = None;
         self.browser_dialog = None;
@@ -2774,6 +2820,10 @@ enum BackgroundJobRequest {
         workflow: OverviewBumpWorkflow,
         pending_versions: Vec<String>,
     },
+    RefreshOverviewActivity {
+        project_index: usize,
+        project: ProjectConfig,
+    },
     CreateTag {
         dialog: TagDialog,
         changelog_enabled: bool,
@@ -2787,12 +2837,56 @@ enum BackgroundJobOutput {
         status_message: Option<String>,
     },
     OpenChangelogPreview(ChangelogPreviewDialog),
+    OverviewActivityCache {
+        project_index: usize,
+        summaries: Vec<Option<RepoActivitySummary>>,
+    },
     CreateTag {
         summary: String,
     },
 }
 
 type BackgroundJobResult = std::result::Result<BackgroundJobOutput, String>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackgroundJobKind {
+    RecentChanges,
+    ChangelogPreview,
+    OverviewActivity,
+    TagAction,
+}
+
+#[derive(Clone, Copy)]
+enum BackgroundJobPriority {
+    Foreground,
+    Refresh,
+    Prefetch,
+}
+
+struct BackgroundJobRequestMessage {
+    id: u64,
+    kind: BackgroundJobKind,
+    request: BackgroundJobRequest,
+}
+
+struct BackgroundJobResultMessage {
+    id: u64,
+    kind: BackgroundJobKind,
+    result: BackgroundJobResult,
+}
+
+impl BackgroundJobRequest {
+    fn kind(&self) -> BackgroundJobKind {
+        match self {
+            Self::OpenRecentChanges { .. } | Self::RecentChanges { .. } => BackgroundJobKind::RecentChanges,
+            Self::OpenDashboardChangelogPreview { .. } | Self::OpenOverviewWorkflowChangelog { .. } => {
+                BackgroundJobKind::ChangelogPreview
+            }
+            Self::RefreshOverviewActivity { .. } => BackgroundJobKind::OverviewActivity,
+            Self::CreateTag { .. } => BackgroundJobKind::TagAction,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum RecentChangesLoadAction {
@@ -3223,8 +3317,10 @@ enum StatusKind {
 fn spawn_background_worker(
 ) -> Result<(
     TokioRuntime,
-    UnboundedSender<BackgroundJobRequest>,
-    UnboundedReceiver<BackgroundJobResult>,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedReceiver<BackgroundJobResultMessage>,
 )> {
     let runtime = TokioRuntimeBuilder::new_multi_thread()
         .worker_threads(2)
@@ -3232,35 +3328,66 @@ fn spawn_background_worker(
         .enable_all()
         .build()
         .context("failed to create tokio runtime for background jobs")?;
-    let (request_tx, mut request_rx) = unbounded_channel::<BackgroundJobRequest>();
-    let (result_tx, result_rx) = unbounded_channel::<BackgroundJobResult>();
+    let (foreground_tx, mut foreground_rx) = unbounded_channel::<BackgroundJobRequestMessage>();
+    let (refresh_tx, mut refresh_rx) = unbounded_channel::<BackgroundJobRequestMessage>();
+    let (prefetch_tx, mut prefetch_rx) = unbounded_channel::<BackgroundJobRequestMessage>();
+    let (result_tx, result_rx) = unbounded_channel::<BackgroundJobResultMessage>();
 
     runtime.spawn(async move {
-        while let Some(request) = request_rx.recv().await {
-            let result = match tokio::task::spawn_blocking(move || run_background_job(request)).await {
-                Ok(result) => result.map_err(|error| error.to_string()),
-                Err(error) => Err(format!("background task failed: {error}")),
-            };
-
-            if result_tx.send(result).is_err() {
-                break;
+        loop {
+            tokio::select! {
+                biased;
+                Some(request) = foreground_rx.recv() => {
+                    spawn_background_job_task(request, result_tx.clone());
+                }
+                Some(request) = refresh_rx.recv() => {
+                    spawn_background_job_task(request, result_tx.clone());
+                }
+                Some(request) = prefetch_rx.recv() => {
+                    spawn_background_job_task(request, result_tx.clone());
+                }
+                else => break,
             }
         }
     });
 
-    Ok((runtime, request_tx, result_rx))
+    Ok((runtime, foreground_tx, refresh_tx, prefetch_tx, result_rx))
 }
 
-fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJobOutput> {
+fn spawn_background_job_task(
+    request: BackgroundJobRequestMessage,
+    result_tx: UnboundedSender<BackgroundJobResultMessage>,
+) {
+    tokio::spawn(async move {
+        let result = run_background_job(request.request).await.map_err(|error| error.to_string());
+        let _ = result_tx.send(BackgroundJobResultMessage {
+            id: request.id,
+            kind: request.kind,
+            result,
+        });
+    });
+}
+
+async fn run_blocking_job<T, F>(operation: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| anyhow!("background task failed: {error}"))?
+}
+
+async fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJobOutput> {
     match request {
         BackgroundJobRequest::OpenRecentChanges {
             project,
             preferred_scope,
         } => Ok(BackgroundJobOutput::OpenRecentChanges(
-            RecentChangesDialog::from_project_with_scope(&project, preferred_scope.unwrap_or(0))?,
+            run_blocking_job(move || RecentChangesDialog::from_project_with_scope(&project, preferred_scope.unwrap_or(0))).await?,
         )),
         BackgroundJobRequest::RecentChanges { dialog, action } => {
-            let (dialog, status_message) = apply_recent_changes_background_action(dialog, action)?;
+            let (dialog, status_message) = run_blocking_job(move || apply_recent_changes_background_action(dialog, action)).await?;
             Ok(BackgroundJobOutput::RecentChanges {
                 dialog,
                 status_message,
@@ -3271,11 +3398,11 @@ fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJobOutp
             scope_index,
             pending_versions,
         } => Ok(BackgroundJobOutput::OpenChangelogPreview(
-            overview::build_dashboard_changelog_preview_dialog(
+            overview::build_dashboard_changelog_preview_dialog_async(
                 &project,
                 scope_index,
                 &pending_versions,
-            )?,
+            ).await?,
         )),
         BackgroundJobRequest::OpenOverviewWorkflowChangelog {
             project,
@@ -3283,23 +3410,60 @@ fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJobOutp
             workflow,
             pending_versions,
         } => Ok(BackgroundJobOutput::OpenChangelogPreview(
-            overview::build_overview_workflow_changelog_preview_dialog(
+            overview::build_overview_workflow_changelog_preview_dialog_async(
                 &project,
                 scope_index,
                 workflow,
                 &pending_versions,
-            )?,
+            ).await?,
         )),
+        BackgroundJobRequest::RefreshOverviewActivity {
+            project_index,
+            project,
+        } => Ok(BackgroundJobOutput::OverviewActivityCache {
+            project_index,
+            summaries: load_overview_activity_summaries_async(project).await?,
+        }),
         BackgroundJobRequest::CreateTag {
             dialog,
             changelog_enabled,
         } => {
-            let outcome = run_create_tag_job(dialog, changelog_enabled)?;
+            let outcome = run_create_tag_job_async(dialog, changelog_enabled).await?;
             Ok(BackgroundJobOutput::CreateTag {
                 summary: outcome.summary,
             })
         }
     }
+}
+
+async fn load_overview_activity_summaries_async(project: ProjectConfig) -> Result<Vec<Option<RepoActivitySummary>>> {
+    let contexts = collect_all_branch_git_scope_contexts(&project)?;
+    let semaphore = std::sync::Arc::new(Semaphore::new(BACKGROUND_MAX_PARALLEL_REPO_JOBS.max(1)));
+    let mut tasks = JoinSet::new();
+
+    for (index, context) in contexts.into_iter().enumerate() {
+        let semaphore = semaphore.clone();
+        tasks.spawn(async move {
+            let _permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|_| anyhow!("activity summary worker pool is unavailable"))?;
+            let summary = run_blocking_job(move || Ok(load_scope_activity_summary(&context).ok())).await?;
+            Ok::<_, anyhow::Error>((index, summary))
+        });
+    }
+
+    let mut summaries = Vec::new();
+    summaries.resize_with(tasks.len(), || None);
+
+    while let Some(result) = tasks.join_next().await {
+        let (index, summary) = result.map_err(|error| anyhow!("activity summary task failed: {error}"))??;
+        if let Some(slot) = summaries.get_mut(index) {
+            *slot = summary;
+        }
+    }
+
+    Ok(summaries)
 }
 
 fn apply_recent_changes_background_action(
@@ -3328,7 +3492,7 @@ struct BackgroundTagOutcome {
     summary: String,
 }
 
-fn run_create_tag_job(dialog: TagDialog, changelog_enabled: bool) -> Result<BackgroundTagOutcome> {
+async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) -> Result<BackgroundTagOutcome> {
     let active_scope = dialog.active_scope().clone();
     let repo_root = active_scope.repo_root.clone();
     let project_name = dialog.project_name.clone();
@@ -3336,39 +3500,49 @@ fn run_create_tag_job(dialog: TagDialog, changelog_enabled: bool) -> Result<Back
     let remote_spec = active_scope.remote_spec.clone();
     let annotation = dialog.annotation.trim().to_string();
     let tag_name = dialog.tag_name.value.trim().to_string();
-    let created = ensure_local_tag(
-        &repo_root,
-        &tag_name,
-        if annotation.is_empty() {
-            None
-        } else {
-            Some(annotation.as_str())
-        },
-    )?;
+    let active_scope_for_notes = active_scope.clone();
+    let tag_name_for_create = tag_name.clone();
+    let annotation_for_create = annotation.clone();
+    let repo_root_for_create = repo_root.clone();
+    let created = run_blocking_job(move || {
+        ensure_local_tag(
+            &repo_root_for_create,
+            &tag_name_for_create,
+            if annotation_for_create.is_empty() {
+                None
+            } else {
+                Some(annotation_for_create.as_str())
+            },
+        )
+    }).await?;
 
     let generated_changelog = if created || matches!(action, TagAction::CreatePushAndRelease) {
-        Some(build_release_notes_markdown(&tag_name, &active_scope)?)
+        let tag_name_for_notes = tag_name.clone();
+        Some(run_blocking_job(move || build_release_notes_markdown(&tag_name_for_notes, &active_scope_for_notes)).await?)
     } else {
         None
     };
 
     if changelog_enabled {
         if let Some(markdown) = generated_changelog.as_deref() {
-            archive_changelog_markdown(&repo_root, &tag_name, markdown)?;
+            let repo_root_for_archive = repo_root.clone();
+            let tag_name_for_archive = tag_name.clone();
+            let markdown_for_archive = markdown.to_string();
+            run_blocking_job(move || archive_changelog_markdown(&repo_root_for_archive, &tag_name_for_archive, &markdown_for_archive).map(|_| ())).await?;
         }
     }
 
     if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
         let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
-        run_git_checked(&repo_root, &["push", &remote_spec, &tag_name])?;
+        run_git_push_with_retry_async(repo_root.clone(), remote_spec, tag_name.clone()).await?;
     }
 
     if matches!(action, TagAction::CreatePushAndRelease) {
-        ensure_gh_available()?;
+        run_blocking_job(ensure_gh_available).await?;
         let release_notes = generated_changelog
             .as_deref()
             .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
-        create_github_release(&repo_root, &tag_name, release_notes)?;
+        create_github_release_with_retry_async(repo_root.clone(), tag_name.clone(), release_notes.to_string()).await?;
     }
 
     let scope_notice = if active_scope.scope_kind.is_some() {
@@ -3399,25 +3573,218 @@ fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeCont
         .markdown)
 }
 
-fn create_github_release(repo_root: &str, tag_name: &str, release_notes: &str) -> Result<()> {
+async fn run_git_push_with_retry_async(repo_root: String, remote_spec: String, tag_name: String) -> Result<()> {
+    let args = vec!["push".to_string(), remote_spec, tag_name];
+    run_command_with_retry_async(repo_root, "git", args, GIT_PUSH_TIMEOUT, NETWORK_RETRY_ATTEMPTS, "git push").await
+}
+
+async fn create_github_release_with_retry_async(repo_root: String, tag_name: String, release_notes: String) -> Result<()> {
     let notes_file = std::env::temp_dir().join(format!(
         "cvb-release-notes-{}-{}.md",
         std::process::id(),
-        sanitize_tag_fragment(tag_name)
+        sanitize_tag_fragment(&tag_name)
     ));
-    fs::write(&notes_file, release_notes)
+    fs::write(&notes_file, &release_notes)
         .with_context(|| format!("failed to write release notes to '{}'", notes_file.display()))?;
 
     let notes_file_string = notes_file.to_string_lossy().into_owned();
-    let release_result = run_gh_checked(
+    let args = vec![
+        "release".to_string(),
+        "create".to_string(),
+        tag_name,
+        "--notes-file".to_string(),
+        notes_file_string,
+    ];
+    let release_result = run_command_with_retry_async(
         repo_root,
-        &["release", "create", tag_name, "--notes-file", notes_file_string.as_str()],
-    );
+        "gh",
+        args,
+        GH_RELEASE_TIMEOUT,
+        NETWORK_RETRY_ATTEMPTS,
+        "gh release create",
+    ).await;
     let cleanup_result = fs::remove_file(&notes_file);
 
     release_result?;
     cleanup_result.with_context(|| format!("failed to remove temporary release notes file '{}'", notes_file.display()))?;
     Ok(())
+}
+
+async fn run_command_with_retry_async(
+    repo_root: String,
+    program: &'static str,
+    args: Vec<String>,
+    timeout: Duration,
+    attempts: usize,
+    action: &'static str,
+) -> Result<()> {
+    let total_attempts = attempts.max(1);
+    let mut last_error = None;
+
+    for attempt in 1..=total_attempts {
+        let repo_root_for_attempt = repo_root.clone();
+        let args_for_attempt = args.clone();
+        match run_blocking_job(move || {
+            run_command_checked_with_timeout(&repo_root_for_attempt, program, &args_for_attempt, timeout, action)
+        }).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < total_attempts {
+                    sleep(NETWORK_RETRY_DELAY).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("{action} failed")))
+}
+
+fn run_command_checked_with_timeout(
+    repo_root: &str,
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+    action: &str,
+) -> Result<()> {
+    let mut command = Command::new(program);
+    command
+        .current_dir(repo_root)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to start {action} in '{}'", repo_root))?;
+    let started_at = Instant::now();
+
+    loop {
+        if let Some(status) = child.try_wait().with_context(|| format!("failed to poll {action}"))? {
+            let output = child
+                .wait_with_output()
+                .with_context(|| format!("failed to collect output for {action}"))?;
+            if status.success() {
+                return Ok(());
+            }
+
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let detail = if stderr.is_empty() { stdout } else { stderr };
+            bail!("{action} failed: {detail}");
+        }
+
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait_with_output();
+            bail!("{action} timed out after {}s", timeout.as_secs());
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+impl App {
+    fn register_background_job(&mut self, kind: BackgroundJobKind) -> u64 {
+        let id = self.next_background_job_id;
+        self.next_background_job_id += 1;
+        self.background_jobs_inflight += 1;
+        match kind {
+            BackgroundJobKind::RecentChanges => self.current_recent_changes_job_id = Some(id),
+            BackgroundJobKind::ChangelogPreview => self.current_changelog_preview_job_id = Some(id),
+            BackgroundJobKind::OverviewActivity => self.current_overview_activity_job_id = Some(id),
+            BackgroundJobKind::TagAction => {}
+        }
+        id
+    }
+
+    fn clear_registered_background_job(&mut self, kind: BackgroundJobKind, id: u64) {
+        match kind {
+            BackgroundJobKind::RecentChanges if self.current_recent_changes_job_id == Some(id) => {
+                self.current_recent_changes_job_id = None;
+            }
+            BackgroundJobKind::ChangelogPreview if self.current_changelog_preview_job_id == Some(id) => {
+                self.current_changelog_preview_job_id = None;
+            }
+            BackgroundJobKind::OverviewActivity if self.current_overview_activity_job_id == Some(id) => {
+                self.current_overview_activity_job_id = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn is_background_result_stale(&self, message: &BackgroundJobResultMessage) -> bool {
+        match message.kind {
+            BackgroundJobKind::RecentChanges => self.current_recent_changes_job_id != Some(message.id),
+            BackgroundJobKind::ChangelogPreview => self.current_changelog_preview_job_id != Some(message.id),
+            BackgroundJobKind::OverviewActivity => self.current_overview_activity_job_id != Some(message.id),
+            BackgroundJobKind::TagAction => false,
+        }
+    }
+
+    fn schedule_background_job(
+        &mut self,
+        priority: BackgroundJobPriority,
+        request: BackgroundJobRequest,
+    ) -> Result<u64> {
+        let kind = request.kind();
+        let request_id = self.register_background_job(kind);
+        let message = BackgroundJobRequestMessage {
+            id: request_id,
+            kind,
+            request,
+        };
+
+        let send_result = match priority {
+            BackgroundJobPriority::Foreground => self.foreground_request_tx.send(message),
+            BackgroundJobPriority::Refresh => self.refresh_request_tx.send(message),
+            BackgroundJobPriority::Prefetch => self.prefetch_request_tx.send(message),
+        };
+
+        if let Err(error) = send_result {
+            self.background_jobs_inflight = self.background_jobs_inflight.saturating_sub(1);
+            self.clear_registered_background_job(kind, request_id);
+            bail!("failed to queue background job: {error}");
+        }
+
+        Ok(request_id)
+    }
+
+    fn schedule_prefetch_overview_activity_cache(&mut self) -> Result<()> {
+        let Some(project) = self.config.projects.get(self.selected_project).cloned() else {
+            return Ok(());
+        };
+        if !project.integration_mode.requires_repo() || self.overview_activity_project == Some(self.selected_project) {
+            return Ok(());
+        }
+
+        let _ = self.schedule_background_job(
+            BackgroundJobPriority::Prefetch,
+            BackgroundJobRequest::RefreshOverviewActivity {
+                project_index: self.selected_project,
+                project,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn schedule_refresh_overview_activity_cache(&mut self) -> Result<()> {
+        let Some(project) = self.config.projects.get(self.selected_project).cloned() else {
+            return Ok(());
+        };
+        if !project.integration_mode.requires_repo() {
+            return Ok(());
+        }
+
+        let _ = self.schedule_background_job(
+            BackgroundJobPriority::Refresh,
+            BackgroundJobRequest::RefreshOverviewActivity {
+                project_index: self.selected_project,
+                project,
+            },
+        )?;
+        Ok(())
+    }
 }
 
 fn sanitize_pasted_text(text: &str) -> String {
