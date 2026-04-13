@@ -11,7 +11,9 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
+    sync::mpsc::{self, Receiver, Sender, TryRecvError},
     sync::atomic::{AtomicU64, Ordering},
+    thread,
     time::Duration,
 };
 
@@ -137,12 +139,17 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
             needs_draw = false;
         }
 
-        if app.has_pending_ui_job() {
-            if let Err(error) = app.run_pending_ui_job() {
-                app.status = StatusMessage::error(error.to_string());
+        match app.try_finish_background_job() {
+            Ok(true) => {
+                needs_draw = true;
+                continue;
             }
-            needs_draw = true;
-            continue;
+            Ok(false) => {}
+            Err(error) => {
+                app.status = StatusMessage::error(error.to_string());
+                needs_draw = true;
+                continue;
+            }
         }
 
         if event::poll(app.next_poll_timeout()).context("event polling failed")? {
@@ -205,7 +212,9 @@ struct App {
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
     progress_dialog: Option<ProgressDialog>,
-    pending_ui_job: Option<PendingUiJob>,
+    background_request_tx: Sender<BackgroundJobRequest>,
+    background_result_rx: Receiver<BackgroundJobResult>,
+    background_job_active: bool,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
@@ -223,6 +232,7 @@ impl App {
         let config_store = ConfigStore::locate()?;
         let config = config_store.load()?;
         let status = StatusMessage::info("Press N to create your first project, or Q to quit.");
+        let (background_request_tx, background_result_rx) = spawn_background_worker();
         Ok(Self {
             config_store,
             config,
@@ -255,7 +265,9 @@ impl App {
             tag_dialog: None,
             tag_annotation_dialog: None,
             progress_dialog: None,
-            pending_ui_job: None,
+            background_request_tx,
+            background_result_rx,
+            background_job_active: false,
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
@@ -273,7 +285,6 @@ impl App {
         })
     }
 
-
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
             self.paste_from_clipboard();
@@ -281,6 +292,10 @@ impl App {
         }
 
         if self.try_handle_toast_shortcut(key) {
+            return Ok(());
+        }
+
+        if self.progress_dialog.is_some() {
             return Ok(());
         }
 
@@ -577,7 +592,7 @@ impl App {
                         self.schedule_recent_changes_action(
                             "Loading tag history for the selected scope.",
                             RecentChangesLoadAction::SwitchTab(RecentChangesTab::History),
-                        );
+                        )?;
                     } else {
                         dialog.cycle_tab(1)?;
                     }
@@ -601,7 +616,7 @@ impl App {
                         self.schedule_recent_changes_action(
                             "Loading tag history for the selected scope.",
                             RecentChangesLoadAction::SwitchTab(RecentChangesTab::History),
-                        );
+                        )?;
                     }
                 }
             }
@@ -610,7 +625,7 @@ impl App {
                     self.schedule_recent_changes_action(
                         "Loading git history for the previous scope.",
                         RecentChangesLoadAction::RotateScope(-1),
-                    );
+                    )?;
                 }
             }
             KeyCode::Char(']') => {
@@ -618,7 +633,7 @@ impl App {
                     self.schedule_recent_changes_action(
                         "Loading git history for the next scope.",
                         RecentChangesLoadAction::RotateScope(1),
-                    );
+                    )?;
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
@@ -626,7 +641,7 @@ impl App {
                     self.schedule_recent_changes_action(
                         "Refreshing git history for the current scope.",
                         RecentChangesLoadAction::RefreshCurrentScope,
-                    );
+                    )?;
                 }
             }
             KeyCode::Left => {
@@ -635,7 +650,7 @@ impl App {
                         self.schedule_recent_changes_action(
                             "Loading git history for the previous scope.",
                             RecentChangesLoadAction::RotateScope(-1),
-                        );
+                        )?;
                     } else if dialog.active_tab == RecentChangesTab::History {
                         dialog.navigate_history(1);
                     }
@@ -647,7 +662,7 @@ impl App {
                         self.schedule_recent_changes_action(
                             "Loading git history for the next scope.",
                             RecentChangesLoadAction::RotateScope(1),
-                        );
+                        )?;
                     } else if dialog.active_tab == RecentChangesTab::History {
                         dialog.navigate_history(-1);
                     }
@@ -822,6 +837,10 @@ impl App {
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         if self.handle_toast_mouse(mouse) {
+            return;
+        }
+
+        if self.progress_dialog.is_some() {
             return;
         }
 
@@ -1147,7 +1166,7 @@ impl App {
                         self.schedule_recent_changes_action(
                             "Loading tag history for the selected scope.",
                             RecentChangesLoadAction::SwitchTab(RecentChangesTab::History),
-                        );
+                        )?;
                     } else {
                         dialog.switch_tab(tab)?;
                     }
@@ -1160,7 +1179,7 @@ impl App {
                     } else {
                         "Loading git history for the next scope."
                     };
-                    self.schedule_recent_changes_action(message, RecentChangesLoadAction::RotateScope(delta));
+                    self.schedule_recent_changes_action(message, RecentChangesLoadAction::RotateScope(delta))?;
                 }
             }
             HitAction::CycleBumpScope(delta) => self.rotate_bump_scope(delta),
@@ -1224,78 +1243,108 @@ impl App {
         self.schedule_progress_job(
             " Loading Git Commits ",
             format!("Loading git history for {}.", project.name),
-            PendingUiJob::OpenRecentChanges { preferred_scope },
-        );
+            BackgroundJobRequest::OpenRecentChanges {
+                project,
+                preferred_scope,
+            },
+        )?;
         self.status = StatusMessage::info("Loading git history for the selected project.");
         Ok(())
     }
 
-    fn open_recent_changes_with_scope_now(&mut self, preferred_scope: Option<usize>) -> Result<()> {
-        let project = self.selected_project()?.clone();
-        let dialog = RecentChangesDialog::from_project_with_scope(&project, preferred_scope.unwrap_or(0))?;
-        self.bump_dialog = None;
-        self.tag_dialog = None;
-        self.project_edit_dialog = None;
-        self.recent_changes_dialog = Some(dialog);
-        self.status = StatusMessage::info("Showing git log for the selected project.");
-        Ok(())
-    }
+    fn schedule_progress_job(
+        &mut self,
+        title: impl Into<String>,
+        message: impl Into<String>,
+        request: BackgroundJobRequest,
+    ) -> Result<()> {
+        if self.background_job_active {
+            bail!("another background job is already running");
+        }
 
-    fn schedule_progress_job(&mut self, title: impl Into<String>, message: impl Into<String>, job: PendingUiJob) {
         self.progress_dialog = Some(ProgressDialog {
             title: title.into(),
             message: message.into(),
         });
-        self.pending_ui_job = Some(job);
+        self.background_job_active = true;
+
+        if let Err(error) = self.background_request_tx.send(request) {
+            self.progress_dialog = None;
+            self.background_job_active = false;
+            return Err(anyhow!("failed to start background job: {error}"));
+        }
+
+        Ok(())
     }
 
-    fn has_pending_ui_job(&self) -> bool {
-        self.pending_ui_job.is_some()
-    }
-
-    fn run_pending_ui_job(&mut self) -> Result<bool> {
-        let Some(job) = self.pending_ui_job.take() else {
+    fn try_finish_background_job(&mut self) -> Result<bool> {
+        if !self.background_job_active {
             return Ok(false);
-        };
+        }
 
-        let result = match job {
-            PendingUiJob::OpenRecentChanges { preferred_scope } => {
-                self.open_recent_changes_with_scope_now(preferred_scope)
-            }
-            PendingUiJob::RecentChanges(action) => self.execute_recent_changes_action(action),
-            PendingUiJob::OpenDashboardChangelogPreview => self.open_dashboard_changelog_preview_now(),
-            PendingUiJob::OpenOverviewWorkflowChangelog { scope_index, workflow } => {
-                overview::open_overview_changelog_preview_if_enabled(self, scope_index, workflow)?;
-                Ok(())
-            }
-            PendingUiJob::CreateTag { dialog, changelog_enabled } => {
-                self.execute_create_local_tag(dialog, changelog_enabled)
+        let result = match self.background_result_rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return Ok(false),
+            Err(TryRecvError::Disconnected) => {
+                self.progress_dialog = None;
+                self.background_job_active = false;
+                bail!("background worker stopped unexpectedly");
             }
         };
 
         self.progress_dialog = None;
-        result?;
+
+        match result {
+            Ok(output) => self.apply_background_job_output(output)?,
+            Err(message) => self.status = StatusMessage::error(message),
+        }
+
+        self.background_job_active = false;
         Ok(true)
     }
 
-    fn schedule_recent_changes_action(&mut self, message: impl Into<String>, action: RecentChangesLoadAction) {
-        self.schedule_progress_job(" Loading Git Commits ", message, PendingUiJob::RecentChanges(action));
+    fn apply_background_job_output(&mut self, output: BackgroundJobOutput) -> Result<()> {
+        match output {
+            BackgroundJobOutput::OpenRecentChanges(dialog) => {
+                self.recent_changes_dialog = Some(dialog);
+                self.status = StatusMessage::info("Showing git log for the selected project.");
+            }
+            BackgroundJobOutput::RecentChanges {
+                dialog,
+                status_message,
+            } => {
+                self.recent_changes_dialog = Some(dialog);
+                if let Some(message) = status_message {
+                    self.status = StatusMessage::info(message);
+                }
+            }
+            BackgroundJobOutput::OpenChangelogPreview(dialog) => self.open_changelog_preview(dialog),
+            BackgroundJobOutput::CreateTag { summary } => {
+                self.sync_dashboard_overview_after_repo_change();
+                self.tag_dialog = None;
+                self.tag_annotation_dialog = None;
+                self.status = StatusMessage::success(summary);
+            }
+        }
+
+        Ok(())
     }
 
-    fn execute_recent_changes_action(&mut self, action: RecentChangesLoadAction) -> Result<()> {
+    fn schedule_recent_changes_action(
+        &mut self,
+        message: impl Into<String>,
+        action: RecentChangesLoadAction,
+    ) -> Result<()> {
         let dialog = self
             .recent_changes_dialog
-            .as_mut()
+            .clone()
             .ok_or_else(|| anyhow!("git log is not open"))?;
-        match action {
-            RecentChangesLoadAction::RefreshCurrentScope => {
-                dialog.refresh_current_scope()?;
-                self.status = StatusMessage::info("Refreshed git history for the current scope.");
-            }
-            RecentChangesLoadAction::RotateScope(delta) => dialog.rotate_scope(delta)?,
-            RecentChangesLoadAction::SwitchTab(tab) => dialog.switch_tab(tab)?,
-        }
-        Ok(())
+
+        self.schedule_progress_job(
+            " Loading Git Commits ",
+            message,
+            BackgroundJobRequest::RecentChanges { dialog, action },
+        )
     }
 
     fn resolve_hit_action(&self, column: u16, row: u16, right_click: bool) -> Option<HitAction> {
@@ -1319,13 +1368,24 @@ impl App {
             .map(|(_, _, action)| action)
     }
 
-    fn schedule_overview_workflow_changelog_preview(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) {
+    fn schedule_overview_workflow_changelog_preview(
+        &mut self,
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+    ) -> Result<()> {
+        let project = self.selected_project()?.clone();
         self.schedule_progress_job(
             " Generating Changelog ",
             "Building changelog preview from current git history.",
-            PendingUiJob::OpenOverviewWorkflowChangelog { scope_index, workflow },
-        );
+            BackgroundJobRequest::OpenOverviewWorkflowChangelog {
+                project,
+                scope_index,
+                workflow,
+                pending_versions: self.overview_pending_versions.clone(),
+            },
+        )?;
         self.status = StatusMessage::info("Generating changelog preview from current git history.");
+        Ok(())
     }
 
     fn ensure_dashboard_recent_changes(&mut self) {
@@ -1350,7 +1410,7 @@ impl App {
     }
 
     fn next_poll_timeout(&self) -> Duration {
-        if self.transient_toaster.has_toast() {
+        if self.background_job_active || self.transient_toaster.has_toast() {
             ACTIVE_UI_TICK_INTERVAL
         } else {
             IDLE_UI_POLL_INTERVAL
@@ -1459,10 +1519,6 @@ impl App {
         overview::adjust_overview_pending_version(self, scope_index, control, delta)
     }
 
-    fn apply_overview_pending_version(&mut self, scope_index: usize, open_tag_after: bool) -> Result<()> {
-        overview::apply_overview_pending_version(self, scope_index, open_tag_after)
-    }
-
     fn reset_overview_pending_version(&mut self, scope_index: usize) -> Result<()> {
         overview::reset_overview_pending_version(self, scope_index)
     }
@@ -1479,14 +1535,14 @@ impl App {
         self.schedule_progress_job(
             " Generating Changelog ",
             "Building changelog preview from current git history.",
-            PendingUiJob::OpenDashboardChangelogPreview,
-        );
+            BackgroundJobRequest::OpenDashboardChangelogPreview {
+                project,
+                scope_index: self.overview_focused_scope,
+                pending_versions: self.overview_pending_versions.clone(),
+            },
+        )?;
         self.status = StatusMessage::info("Generating changelog preview from current git history.");
         Ok(())
-    }
-
-    fn open_dashboard_changelog_preview_now(&mut self) -> Result<()> {
-        overview::open_dashboard_changelog_preview(self)
     }
 
     fn request_confirm_overview_bump_workflow(&mut self) -> Result<()> {
@@ -1854,103 +1910,12 @@ impl App {
         self.schedule_progress_job(
             " Running Tag Action ",
             message.clone(),
-            PendingUiJob::CreateTag {
+            BackgroundJobRequest::CreateTag {
                 dialog,
                 changelog_enabled,
             },
-        );
-        self.status = StatusMessage::info(message);
-        Ok(())
-    }
-
-    fn execute_create_local_tag(&mut self, dialog: TagDialog, changelog_enabled: bool) -> Result<()> {
-
-        let active_scope = dialog.active_scope().clone();
-        let repo_root = active_scope.repo_root.clone();
-        let project_name = dialog.project_name.clone();
-        let action = dialog.selected_action();
-        let remote_spec = active_scope.remote_spec.clone();
-        let annotation = dialog.annotation.trim().to_string();
-        let tag_name = dialog.tag_name.value.trim();
-        let tag_name = tag_name.to_string();
-        let created = ensure_local_tag(
-            &repo_root,
-            &tag_name,
-            if annotation.is_empty() { None } else { Some(annotation.as_str()) },
         )?;
-
-        let generated_changelog = if created || matches!(action, TagAction::CreatePushAndRelease) {
-            Some(self.build_release_notes_markdown(&tag_name, &active_scope)?)
-        } else {
-            None
-        };
-
-        if changelog_enabled {
-            if let Some(markdown) = generated_changelog.as_deref() {
-                archive_changelog_markdown(&repo_root, &tag_name, markdown)?;
-            }
-        }
-
-        if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
-            let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
-            run_git_checked(&repo_root, &["push", &remote_spec, &tag_name])?;
-        }
-
-        if matches!(action, TagAction::CreatePushAndRelease) {
-            ensure_gh_available()?;
-            let release_notes = generated_changelog
-                .as_deref()
-                .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
-            self.create_github_release(&repo_root, &tag_name, &release_notes)?;
-        }
-
-        self.sync_dashboard_overview_after_repo_change();
-        self.tag_dialog = None;
-        self.tag_annotation_dialog = None;
-        let scope_notice = if active_scope.scope_kind.is_some() {
-            format!(" for {}", active_scope.display_name)
-        } else {
-            String::new()
-        };
-        let summary = match action {
-            TagAction::CreateLocal if created => format!("Created local tag '{}' in {}{}.", tag_name, project_name, scope_notice),
-            TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}{}.", tag_name, project_name, scope_notice),
-            TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}{}.", tag_name, project_name, scope_notice),
-            TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}{}.", tag_name, project_name, scope_notice),
-        };
-        self.status = StatusMessage::success(if annotation.is_empty() {
-            summary
-        } else {
-            format!("{} Annotation included.", summary)
-        });
-        Ok(())
-    }
-
-    fn build_release_notes_markdown(&self, tag_name: &str, scope: &crate::git::GitScopeContext) -> Result<String> {
-        let recent_range = load_recent_change_range(scope)?;
-        Ok(build_document_from_git_log(tag_name.to_string(), &recent_range.lines)
-            .render_markdown()
-            .markdown)
-    }
-
-    fn create_github_release(&self, repo_root: &str, tag_name: &str, release_notes: &str) -> Result<()> {
-        let notes_file = std::env::temp_dir().join(format!(
-            "cvb-release-notes-{}-{}.md",
-            std::process::id(),
-            sanitize_tag_fragment(tag_name)
-        ));
-        fs::write(&notes_file, release_notes)
-            .with_context(|| format!("failed to write release notes to '{}'", notes_file.display()))?;
-
-        let notes_file_string = notes_file.to_string_lossy().into_owned();
-        let release_result = run_gh_checked(
-            repo_root,
-            &["release", "create", tag_name, "--notes-file", notes_file_string.as_str()],
-        );
-        let cleanup_result = fs::remove_file(&notes_file);
-
-        release_result?;
-        cleanup_result.with_context(|| format!("failed to remove temporary release notes file '{}'", notes_file.display()))?;
+        self.status = StatusMessage::info(message);
         Ok(())
     }
 
@@ -2785,15 +2750,25 @@ struct ProgressDialog {
     message: String,
 }
 
-enum PendingUiJob {
+enum BackgroundJobRequest {
     OpenRecentChanges {
+        project: ProjectConfig,
         preferred_scope: Option<usize>,
     },
-    RecentChanges(RecentChangesLoadAction),
-    OpenDashboardChangelogPreview,
+    RecentChanges {
+        dialog: RecentChangesDialog,
+        action: RecentChangesLoadAction,
+    },
+    OpenDashboardChangelogPreview {
+        project: ProjectConfig,
+        scope_index: usize,
+        pending_versions: Vec<String>,
+    },
     OpenOverviewWorkflowChangelog {
+        project: ProjectConfig,
         scope_index: usize,
         workflow: OverviewBumpWorkflow,
+        pending_versions: Vec<String>,
     },
     CreateTag {
         dialog: TagDialog,
@@ -2801,6 +2776,21 @@ enum PendingUiJob {
     },
 }
 
+enum BackgroundJobOutput {
+    OpenRecentChanges(RecentChangesDialog),
+    RecentChanges {
+        dialog: RecentChangesDialog,
+        status_message: Option<String>,
+    },
+    OpenChangelogPreview(ChangelogPreviewDialog),
+    CreateTag {
+        summary: String,
+    },
+}
+
+type BackgroundJobResult = std::result::Result<BackgroundJobOutput, String>;
+
+#[derive(Clone, Copy)]
 enum RecentChangesLoadAction {
     RefreshCurrentScope,
     RotateScope(isize),
@@ -3224,6 +3214,191 @@ enum StatusKind {
     Success,
     Warning,
     Error,
+}
+
+fn spawn_background_worker() -> (Sender<BackgroundJobRequest>, Receiver<BackgroundJobResult>) {
+    let (request_tx, request_rx) = mpsc::channel::<BackgroundJobRequest>();
+    let (result_tx, result_rx) = mpsc::channel::<BackgroundJobResult>();
+
+    thread::spawn(move || {
+        while let Ok(request) = request_rx.recv() {
+            let result = run_background_job(request).map_err(|error| error.to_string());
+            if result_tx.send(result).is_err() {
+                break;
+            }
+        }
+    });
+
+    (request_tx, result_rx)
+}
+
+fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJobOutput> {
+    match request {
+        BackgroundJobRequest::OpenRecentChanges {
+            project,
+            preferred_scope,
+        } => Ok(BackgroundJobOutput::OpenRecentChanges(
+            RecentChangesDialog::from_project_with_scope(&project, preferred_scope.unwrap_or(0))?,
+        )),
+        BackgroundJobRequest::RecentChanges { dialog, action } => {
+            let (dialog, status_message) = apply_recent_changes_background_action(dialog, action)?;
+            Ok(BackgroundJobOutput::RecentChanges {
+                dialog,
+                status_message,
+            })
+        }
+        BackgroundJobRequest::OpenDashboardChangelogPreview {
+            project,
+            scope_index,
+            pending_versions,
+        } => Ok(BackgroundJobOutput::OpenChangelogPreview(
+            overview::build_dashboard_changelog_preview_dialog(
+                &project,
+                scope_index,
+                &pending_versions,
+            )?,
+        )),
+        BackgroundJobRequest::OpenOverviewWorkflowChangelog {
+            project,
+            scope_index,
+            workflow,
+            pending_versions,
+        } => Ok(BackgroundJobOutput::OpenChangelogPreview(
+            overview::build_overview_workflow_changelog_preview_dialog(
+                &project,
+                scope_index,
+                workflow,
+                &pending_versions,
+            )?,
+        )),
+        BackgroundJobRequest::CreateTag {
+            dialog,
+            changelog_enabled,
+        } => {
+            let outcome = run_create_tag_job(dialog, changelog_enabled)?;
+            Ok(BackgroundJobOutput::CreateTag {
+                summary: outcome.summary,
+            })
+        }
+    }
+}
+
+fn apply_recent_changes_background_action(
+    mut dialog: RecentChangesDialog,
+    action: RecentChangesLoadAction,
+) -> Result<(RecentChangesDialog, Option<String>)> {
+    let status_message = match action {
+        RecentChangesLoadAction::RefreshCurrentScope => {
+            dialog.refresh_current_scope()?;
+            Some("Refreshed git history for the current scope.".to_string())
+        }
+        RecentChangesLoadAction::RotateScope(delta) => {
+            dialog.rotate_scope(delta)?;
+            None
+        }
+        RecentChangesLoadAction::SwitchTab(tab) => {
+            dialog.switch_tab(tab)?;
+            None
+        }
+    };
+
+    Ok((dialog, status_message))
+}
+
+struct BackgroundTagOutcome {
+    summary: String,
+}
+
+fn run_create_tag_job(dialog: TagDialog, changelog_enabled: bool) -> Result<BackgroundTagOutcome> {
+    let active_scope = dialog.active_scope().clone();
+    let repo_root = active_scope.repo_root.clone();
+    let project_name = dialog.project_name.clone();
+    let action = dialog.selected_action();
+    let remote_spec = active_scope.remote_spec.clone();
+    let annotation = dialog.annotation.trim().to_string();
+    let tag_name = dialog.tag_name.value.trim().to_string();
+    let created = ensure_local_tag(
+        &repo_root,
+        &tag_name,
+        if annotation.is_empty() {
+            None
+        } else {
+            Some(annotation.as_str())
+        },
+    )?;
+
+    let generated_changelog = if created || matches!(action, TagAction::CreatePushAndRelease) {
+        Some(build_release_notes_markdown(&tag_name, &active_scope)?)
+    } else {
+        None
+    };
+
+    if changelog_enabled {
+        if let Some(markdown) = generated_changelog.as_deref() {
+            archive_changelog_markdown(&repo_root, &tag_name, markdown)?;
+        }
+    }
+
+    if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
+        let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+        run_git_checked(&repo_root, &["push", &remote_spec, &tag_name])?;
+    }
+
+    if matches!(action, TagAction::CreatePushAndRelease) {
+        ensure_gh_available()?;
+        let release_notes = generated_changelog
+            .as_deref()
+            .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
+        create_github_release(&repo_root, &tag_name, release_notes)?;
+    }
+
+    let scope_notice = if active_scope.scope_kind.is_some() {
+        format!(" for {}", active_scope.display_name)
+    } else {
+        String::new()
+    };
+    let summary = match action {
+        TagAction::CreateLocal if created => format!("Created local tag '{}' in {}{}.", tag_name, project_name, scope_notice),
+        TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}{}.", tag_name, project_name, scope_notice),
+        TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}{}.", tag_name, project_name, scope_notice),
+        TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}{}.", tag_name, project_name, scope_notice),
+    };
+
+    Ok(BackgroundTagOutcome {
+        summary: if annotation.is_empty() {
+            summary
+        } else {
+            format!("{} Annotation included.", summary)
+        },
+    })
+}
+
+fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeContext) -> Result<String> {
+    let recent_range = load_recent_change_range(scope)?;
+    Ok(build_document_from_git_log(tag_name.to_string(), &recent_range.lines)
+        .render_markdown()
+        .markdown)
+}
+
+fn create_github_release(repo_root: &str, tag_name: &str, release_notes: &str) -> Result<()> {
+    let notes_file = std::env::temp_dir().join(format!(
+        "cvb-release-notes-{}-{}.md",
+        std::process::id(),
+        sanitize_tag_fragment(tag_name)
+    ));
+    fs::write(&notes_file, release_notes)
+        .with_context(|| format!("failed to write release notes to '{}'", notes_file.display()))?;
+
+    let notes_file_string = notes_file.to_string_lossy().into_owned();
+    let release_result = run_gh_checked(
+        repo_root,
+        &["release", "create", tag_name, "--notes-file", notes_file_string.as_str()],
+    );
+    let cleanup_result = fs::remove_file(&notes_file);
+
+    release_result?;
+    cleanup_result.with_context(|| format!("failed to remove temporary release notes file '{}'", notes_file.display()))?;
+    Ok(())
 }
 
 fn sanitize_pasted_text(text: &str) -> String {
