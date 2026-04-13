@@ -137,6 +137,14 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
             needs_draw = false;
         }
 
+        if app.has_pending_ui_job() {
+            if let Err(error) = app.run_pending_ui_job() {
+                app.status = StatusMessage::error(error.to_string());
+            }
+            needs_draw = true;
+            continue;
+        }
+
         if event::poll(app.next_poll_timeout()).context("event polling failed")? {
             match event::read().context("event read failed")? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -196,6 +204,8 @@ struct App {
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
+    progress_dialog: Option<ProgressDialog>,
+    pending_ui_job: Option<PendingUiJob>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
@@ -244,6 +254,8 @@ impl App {
             recent_changes_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
+            progress_dialog: None,
+            pending_ui_job: None,
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
@@ -561,7 +573,14 @@ impl App {
             KeyCode::PageDown => self.scroll_recent_changes(8),
             KeyCode::Tab => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.cycle_tab(1)?;
+                    if dialog.active_tab == RecentChangesTab::Recent && !dialog.history_loaded {
+                        self.schedule_recent_changes_action(
+                            "Loading tag history for the selected scope.",
+                            RecentChangesLoadAction::SwitchTab(RecentChangesTab::History),
+                        );
+                    } else {
+                        dialog.cycle_tab(1)?;
+                    }
                 }
             }
             KeyCode::BackTab => {
@@ -576,29 +595,47 @@ impl App {
             }
             KeyCode::Char('2') => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.switch_tab(RecentChangesTab::History)?;
+                    if dialog.history_loaded {
+                        dialog.switch_tab(RecentChangesTab::History)?;
+                    } else {
+                        self.schedule_recent_changes_action(
+                            "Loading tag history for the selected scope.",
+                            RecentChangesLoadAction::SwitchTab(RecentChangesTab::History),
+                        );
+                    }
                 }
             }
             KeyCode::Char('[') => {
-                if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.rotate_scope(-1)?;
+                if self.recent_changes_dialog.is_some() {
+                    self.schedule_recent_changes_action(
+                        "Loading git history for the previous scope.",
+                        RecentChangesLoadAction::RotateScope(-1),
+                    );
                 }
             }
             KeyCode::Char(']') => {
-                if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.rotate_scope(1)?;
+                if self.recent_changes_dialog.is_some() {
+                    self.schedule_recent_changes_action(
+                        "Loading git history for the next scope.",
+                        RecentChangesLoadAction::RotateScope(1),
+                    );
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.refresh_current_scope()?;
-                    self.status = StatusMessage::info("Refreshed git history for the current scope.");
+                if self.recent_changes_dialog.is_some() {
+                    self.schedule_recent_changes_action(
+                        "Refreshing git history for the current scope.",
+                        RecentChangesLoadAction::RefreshCurrentScope,
+                    );
                 }
             }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
                     if dialog.active_tab == RecentChangesTab::Recent && dialog.can_select_scope() {
-                        dialog.rotate_scope(-1)?;
+                        self.schedule_recent_changes_action(
+                            "Loading git history for the previous scope.",
+                            RecentChangesLoadAction::RotateScope(-1),
+                        );
                     } else if dialog.active_tab == RecentChangesTab::History {
                         dialog.navigate_history(1);
                     }
@@ -607,7 +644,10 @@ impl App {
             KeyCode::Right => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
                     if dialog.active_tab == RecentChangesTab::Recent && dialog.can_select_scope() {
-                        dialog.rotate_scope(1)?;
+                        self.schedule_recent_changes_action(
+                            "Loading git history for the next scope.",
+                            RecentChangesLoadAction::RotateScope(1),
+                        );
                     } else if dialog.active_tab == RecentChangesTab::History {
                         dialog.navigate_history(-1);
                     }
@@ -1117,12 +1157,24 @@ impl App {
             HitAction::BrowserSelect(index) => self.select_browser_index(index),
             HitAction::SelectRecentChangesTab(tab) => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.switch_tab(tab)?;
+                    if tab == RecentChangesTab::History && !dialog.history_loaded {
+                        self.schedule_recent_changes_action(
+                            "Loading tag history for the selected scope.",
+                            RecentChangesLoadAction::SwitchTab(RecentChangesTab::History),
+                        );
+                    } else {
+                        dialog.switch_tab(tab)?;
+                    }
                 }
             }
             HitAction::CycleRecentChangesScope(delta) => {
-                if let Some(dialog) = &mut self.recent_changes_dialog {
-                    dialog.rotate_scope(delta)?;
+                if self.recent_changes_dialog.is_some() {
+                    let message = if delta.is_negative() {
+                        "Loading git history for the previous scope."
+                    } else {
+                        "Loading git history for the next scope."
+                    };
+                    self.schedule_recent_changes_action(message, RecentChangesLoadAction::RotateScope(delta));
                 }
             }
             HitAction::CycleBumpScope(delta) => self.rotate_bump_scope(delta),
@@ -1170,6 +1222,24 @@ impl App {
 
     fn open_recent_changes_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
         let project = self.selected_project()?.clone();
+        if !project.integration_mode.requires_repo() {
+            bail!("git log requires a git-backed project");
+        }
+
+        self.bump_dialog = None;
+        self.tag_dialog = None;
+        self.project_edit_dialog = None;
+        self.schedule_progress_job(
+            " Loading Git Commits ",
+            format!("Loading git history for {}.", project.name),
+            PendingUiJob::OpenRecentChanges { preferred_scope },
+        );
+        self.status = StatusMessage::info("Loading git history for the selected project.");
+        Ok(())
+    }
+
+    fn open_recent_changes_with_scope_now(&mut self, preferred_scope: Option<usize>) -> Result<()> {
+        let project = self.selected_project()?.clone();
         let dialog = RecentChangesDialog::from_project_with_scope(&project, preferred_scope.unwrap_or(0))?;
         self.bump_dialog = None;
         self.tag_dialog = None;
@@ -1177,6 +1247,72 @@ impl App {
         self.recent_changes_dialog = Some(dialog);
         self.status = StatusMessage::info("Showing git log for the selected project.");
         Ok(())
+    }
+
+    fn schedule_progress_job(&mut self, title: impl Into<String>, message: impl Into<String>, job: PendingUiJob) {
+        self.progress_dialog = Some(ProgressDialog {
+            title: title.into(),
+            message: message.into(),
+        });
+        self.pending_ui_job = Some(job);
+    }
+
+    fn has_pending_ui_job(&self) -> bool {
+        self.pending_ui_job.is_some()
+    }
+
+    fn run_pending_ui_job(&mut self) -> Result<bool> {
+        let Some(job) = self.pending_ui_job.take() else {
+            return Ok(false);
+        };
+
+        let result = match job {
+            PendingUiJob::OpenRecentChanges { preferred_scope } => {
+                self.open_recent_changes_with_scope_now(preferred_scope)
+            }
+            PendingUiJob::RecentChanges(action) => self.execute_recent_changes_action(action),
+            PendingUiJob::OpenDashboardChangelogPreview => self.open_dashboard_changelog_preview_now(),
+            PendingUiJob::OpenOverviewWorkflowChangelog { scope_index, workflow } => {
+                overview::open_overview_changelog_preview_if_enabled(self, scope_index, workflow)?;
+                Ok(())
+            }
+            PendingUiJob::CreateTag { dialog, changelog_enabled } => {
+                self.execute_create_local_tag(dialog, changelog_enabled)
+            }
+        };
+
+        self.progress_dialog = None;
+        result?;
+        Ok(true)
+    }
+
+    fn schedule_recent_changes_action(&mut self, message: impl Into<String>, action: RecentChangesLoadAction) {
+        self.schedule_progress_job(" Loading Git Commits ", message, PendingUiJob::RecentChanges(action));
+    }
+
+    fn execute_recent_changes_action(&mut self, action: RecentChangesLoadAction) -> Result<()> {
+        let dialog = self
+            .recent_changes_dialog
+            .as_mut()
+            .ok_or_else(|| anyhow!("git log is not open"))?;
+        match action {
+            RecentChangesLoadAction::RefreshCurrentScope => {
+                dialog.refresh_current_scope()?;
+                self.status = StatusMessage::info("Refreshed git history for the current scope.");
+            }
+            RecentChangesLoadAction::RotateScope(delta) => dialog.rotate_scope(delta)?,
+            RecentChangesLoadAction::SwitchTab(tab) => dialog.switch_tab(tab)?,
+        }
+        Ok(())
+    }
+
+    fn schedule_overview_workflow_changelog_preview(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) {
+        self.schedule_progress_job(
+            " Generating Changelog ",
+            "Building changelog preview from current git history.",
+            PendingUiJob::OpenOverviewWorkflowChangelog { scope_index, workflow },
+        );
+        self.status = StatusMessage::info("Generating changelog preview from current git history.");
     }
 
     fn ensure_dashboard_recent_changes(&mut self) {
@@ -1319,6 +1455,24 @@ impl App {
     }
 
     fn open_dashboard_changelog_preview(&mut self) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        if !project.integration_mode.requires_repo() {
+            bail!("changelog preview requires a git-backed project");
+        }
+        if !project.changelog.enabled {
+            bail!("changelog generation is disabled for this project");
+        }
+
+        self.schedule_progress_job(
+            " Generating Changelog ",
+            "Building changelog preview from current git history.",
+            PendingUiJob::OpenDashboardChangelogPreview,
+        );
+        self.status = StatusMessage::info("Generating changelog preview from current git history.");
+        Ok(())
+    }
+
+    fn open_dashboard_changelog_preview_now(&mut self) -> Result<()> {
         overview::open_dashboard_changelog_preview(self)
     }
 
@@ -1670,7 +1824,7 @@ impl App {
 
     fn create_local_tag(&mut self) -> Result<()> {
         let changelog_enabled = self.selected_project()?.changelog.enabled;
-        let Some(dialog) = &self.tag_dialog else {
+        let Some(dialog) = self.tag_dialog.clone() else {
             return Ok(());
         };
 
@@ -1679,12 +1833,32 @@ impl App {
             bail!("tag name cannot be empty");
         }
 
+        let message = match dialog.selected_action() {
+            TagAction::CreateLocal => format!("Creating local tag '{}' and generating release notes if needed.", tag_name),
+            TagAction::CreateAndPush => format!("Creating and pushing tag '{}' for the selected scope.", tag_name),
+            TagAction::CreatePushAndRelease => format!("Creating, pushing, and publishing tag '{}' with generated release notes.", tag_name),
+        };
+        self.schedule_progress_job(
+            " Running Tag Action ",
+            message.clone(),
+            PendingUiJob::CreateTag {
+                dialog,
+                changelog_enabled,
+            },
+        );
+        self.status = StatusMessage::info(message);
+        Ok(())
+    }
+
+    fn execute_create_local_tag(&mut self, dialog: TagDialog, changelog_enabled: bool) -> Result<()> {
+
         let active_scope = dialog.active_scope().clone();
         let repo_root = active_scope.repo_root.clone();
         let project_name = dialog.project_name.clone();
         let action = dialog.selected_action();
         let remote_spec = active_scope.remote_spec.clone();
         let annotation = dialog.annotation.trim().to_string();
+        let tag_name = dialog.tag_name.value.trim();
         let tag_name = tag_name.to_string();
         let created = ensure_local_tag(
             &repo_root,
@@ -2591,6 +2765,33 @@ struct PendingChangelogWrite {
     scope_index: usize,
     workflow: OverviewBumpWorkflow,
     entries: Vec<PreparedChangelogEntry>,
+}
+
+struct ProgressDialog {
+    title: String,
+    message: String,
+}
+
+enum PendingUiJob {
+    OpenRecentChanges {
+        preferred_scope: Option<usize>,
+    },
+    RecentChanges(RecentChangesLoadAction),
+    OpenDashboardChangelogPreview,
+    OpenOverviewWorkflowChangelog {
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+    },
+    CreateTag {
+        dialog: TagDialog,
+        changelog_enabled: bool,
+    },
+}
+
+enum RecentChangesLoadAction {
+    RefreshCurrentScope,
+    RotateScope(isize),
+    SwitchTab(RecentChangesTab),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
