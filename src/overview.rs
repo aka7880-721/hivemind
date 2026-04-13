@@ -596,9 +596,6 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 	if !project.integration_mode.requires_repo() {
 		bail!("changelog preview requires a git-backed project");
 	}
-	if !project.changelog.enabled {
-		bail!("changelog generation is disabled for this project");
-	}
 
 	let scopes = collect_bump_scopes(project)?;
 	if scopes.is_empty() {
@@ -606,19 +603,30 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 	}
 
 	let scope_index = focused_scope.min(scopes.len().saturating_sub(1));
+	if !project.changelog_enabled_for_scope(scope_index) {
+		bail!("changelog generation is disabled for the selected scope");
+	}
 	let affected_scope_indexes = if project.unified_versioning {
 		(0..scopes.len()).collect::<Vec<_>>()
 	} else {
 		vec![scope_index]
 	};
+	let enabled_scope_indexes = affected_scope_indexes
+		.iter()
+		.copied()
+		.filter(|index| project.changelog_enabled_for_scope(*index))
+		.collect::<Vec<_>>();
 	let next_version = pending_versions
 		.get(scope_index)
 		.cloned()
 		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
 		.unwrap_or_else(|| scopes[scope_index].version_label().to_string());
+	if enabled_scope_indexes.is_empty() {
+		bail!("changelog generation is disabled for the affected scope set");
+	}
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version, cancel).await?;
+	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &enabled_scope_indexes, &next_version, cancel).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -854,7 +862,7 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 	if workflow == OverviewBumpWorkflow::JustBump {
 		bail!("the selected workflow does not require changelog generation");
 	}
-	if !project.changelog.enabled || !project.integration_mode.requires_repo() {
+	if !project.integration_mode.requires_repo() {
 		bail!("changelog generation is not available for this project");
 	}
 
@@ -864,19 +872,30 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 	}
 
 	let scope_index = scope_index.min(scopes.len().saturating_sub(1));
+	if !project.changelog_enabled_for_scope(scope_index) {
+		bail!("changelog generation is disabled for the selected scope");
+	}
 	let affected_scope_indexes = if project.unified_versioning {
 		(0..scopes.len()).collect::<Vec<_>>()
 	} else {
 		vec![scope_index]
 	};
+	let enabled_scope_indexes = affected_scope_indexes
+		.iter()
+		.copied()
+		.filter(|index| project.changelog_enabled_for_scope(*index))
+		.collect::<Vec<_>>();
 	let next_version = pending_versions
 		.get(scope_index)
 		.cloned()
 		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
 		.ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
+	if enabled_scope_indexes.is_empty() {
+		bail!("changelog generation is disabled for the affected scope set");
+	}
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version, cancel).await?;
+	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &enabled_scope_indexes, &next_version, cancel).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -892,7 +911,7 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 
 fn should_open_overview_changelog_preview(
 	app: &mut App,
-	_scope_index: usize,
+	scope_index: usize,
 	workflow: OverviewBumpWorkflow,
 ) -> Result<bool> {
 	if workflow == OverviewBumpWorkflow::JustBump {
@@ -900,7 +919,7 @@ fn should_open_overview_changelog_preview(
 	}
 
 	let project = app.selected_project()?.clone();
-	if !project.changelog.enabled || !project.integration_mode.requires_repo() {
+	if !project.integration_mode.requires_repo() || !project.changelog_enabled_for_scope(scope_index) {
 		return Ok(false);
 	}
 	Ok(true)
