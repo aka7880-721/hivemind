@@ -236,6 +236,7 @@ dependencies = [
  "ratatui-explorer",
  "serde",
  "serde_json",
+ "tokio",
  "toml",
  "toml_edit",
  "tui-overlay",
