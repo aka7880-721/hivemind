@@ -5,18 +5,27 @@
 //
 // For details, see the LICENSE file in the repository root.
 
+use anyhow::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
 	Frame,
-	layout::{Constraint, Direction, Layout, Rect},
+	layout::{Alignment, Constraint, Direction, Layout, Rect},
 	style::{Color, Style, Stylize},
-	text::Line,
-	widgets::{Paragraph, Wrap},
+	text::{Line, Span},
+	widgets::{Block, Borders, Paragraph, Wrap},
 };
 use tui_checkbox::Checkbox;
 use tui_tabs::TabNav;
 
-use super::{App, HitAction, HitTarget};
-use crate::config::{ProjectConfig, ProjectType};
+use super::{
+	App, BrowseTarget, FormRowButton, HitAction, HitTarget, BROWSE_BUTTON_WIDTH,
+	FORM_LABEL_WIDTH, visible_field_width,
+};
+use crate::{
+	config::{ProjectConfig, ProjectType, DEFAULT_CHANGELOG_PATH},
+	dialogs::TextInput,
+	ui::center_vertically,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectSettingsTab {
@@ -32,7 +41,180 @@ impl ProjectSettingsTab {
 	}
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectSettingsFocus {
+	ChangelogEnabled,
+	ChangelogPath,
+	ReleaseNowEnabled,
+	ReleaseNowWindows,
+	ReleaseNowLinuxArm,
+	ReleaseNowLinuxAmd,
+	ReleaseNowMacOs,
+}
+
+#[derive(Clone)]
+pub(crate) struct ProjectSettingsState {
+	pub(crate) binding: Option<(usize, usize)>,
+	pub(crate) focus: ProjectSettingsFocus,
+	pub(crate) changelog_path: TextInput,
+	pub(crate) release_now_windows: TextInput,
+	pub(crate) release_now_linux_arm: TextInput,
+	pub(crate) release_now_linux_amd: TextInput,
+	pub(crate) release_now_macos: TextInput,
+}
+
+impl Default for ProjectSettingsState {
+	fn default() -> Self {
+		Self {
+			binding: None,
+			focus: ProjectSettingsFocus::ChangelogEnabled,
+			changelog_path: TextInput::with_value(DEFAULT_CHANGELOG_PATH),
+			release_now_windows: TextInput::with_value(""),
+			release_now_linux_arm: TextInput::with_value(""),
+			release_now_linux_amd: TextInput::with_value(""),
+			release_now_macos: TextInput::with_value(""),
+		}
+	}
+}
+
+impl ProjectSettingsState {
+	fn sync_from_project(
+		&mut self,
+		project_index: usize,
+		tab: ProjectSettingsTab,
+		project: &ProjectConfig,
+		scope_index: usize,
+	) {
+		if self.binding == Some((project_index, scope_index)) {
+			return;
+		}
+
+		let release_now = project.release_now_for_scope(scope_index);
+		self.binding = Some((project_index, scope_index));
+		self.changelog_path.set_value(project.changelog_path_for_scope(scope_index).to_string());
+		self.release_now_windows.set_value(release_now.windows_script.clone());
+		self.release_now_linux_arm.set_value(release_now.linux_arm_script.clone());
+		self.release_now_linux_amd.set_value(release_now.linux_amd_script.clone());
+		self.release_now_macos.set_value(release_now.macos_script.clone());
+		self.ensure_focus_visible(tab, project, scope_index);
+	}
+
+	fn visible_fields(
+		&self,
+		tab: ProjectSettingsTab,
+		project: &ProjectConfig,
+		scope_index: usize,
+	) -> Vec<ProjectSettingsFocus> {
+		match tab {
+			ProjectSettingsTab::General => {
+				let mut fields = vec![ProjectSettingsFocus::ChangelogEnabled];
+				if project.changelog_enabled_for_scope(scope_index) {
+					fields.push(ProjectSettingsFocus::ChangelogPath);
+				}
+				fields
+			}
+			ProjectSettingsTab::Distro => {
+				let mut fields = vec![ProjectSettingsFocus::ReleaseNowEnabled];
+				if project.release_now_for_scope(scope_index).enabled {
+					fields.extend([
+						ProjectSettingsFocus::ReleaseNowWindows,
+						ProjectSettingsFocus::ReleaseNowLinuxArm,
+						ProjectSettingsFocus::ReleaseNowLinuxAmd,
+						ProjectSettingsFocus::ReleaseNowMacOs,
+					]);
+				}
+				fields
+			}
+		}
+	}
+
+	fn ensure_focus_visible(
+		&mut self,
+		tab: ProjectSettingsTab,
+		project: &ProjectConfig,
+		scope_index: usize,
+	) {
+		let fields = self.visible_fields(tab, project, scope_index);
+		if !fields.contains(&self.focus) {
+			self.focus = *fields.first().unwrap_or(&ProjectSettingsFocus::ChangelogEnabled);
+		}
+	}
+
+	fn focus_next(&mut self, tab: ProjectSettingsTab, project: &ProjectConfig, scope_index: usize) {
+		let fields = self.visible_fields(tab, project, scope_index);
+		let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
+		self.focus = fields[(index + 1) % fields.len()];
+	}
+
+	fn focus_previous(&mut self, tab: ProjectSettingsTab, project: &ProjectConfig, scope_index: usize) {
+		let fields = self.visible_fields(tab, project, scope_index);
+		let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
+		self.focus = fields[(index + fields.len() - 1) % fields.len()];
+	}
+
+	fn focus_accepts_text(&self, tab: ProjectSettingsTab, project: &ProjectConfig, scope_index: usize) -> bool {
+		self.visible_fields(tab, project, scope_index).contains(&self.focus)
+			&& matches!(
+				self.focus,
+				ProjectSettingsFocus::ChangelogPath
+					| ProjectSettingsFocus::ReleaseNowWindows
+					| ProjectSettingsFocus::ReleaseNowLinuxArm
+					| ProjectSettingsFocus::ReleaseNowLinuxAmd
+					| ProjectSettingsFocus::ReleaseNowMacOs
+			)
+	}
+
+	fn active_input_mut(&mut self) -> Option<&mut TextInput> {
+		match self.focus {
+			ProjectSettingsFocus::ChangelogPath => Some(&mut self.changelog_path),
+			ProjectSettingsFocus::ReleaseNowWindows => Some(&mut self.release_now_windows),
+			ProjectSettingsFocus::ReleaseNowLinuxArm => Some(&mut self.release_now_linux_arm),
+			ProjectSettingsFocus::ReleaseNowLinuxAmd => Some(&mut self.release_now_linux_amd),
+			ProjectSettingsFocus::ReleaseNowMacOs => Some(&mut self.release_now_macos),
+			_ => None,
+		}
+	}
+
+	fn handle_text_input(&mut self, key: KeyEvent) {
+		if let Some(input) = self.active_input_mut() {
+			input.handle_key(key);
+		}
+	}
+
+	fn insert_text(&mut self, text: &str) -> bool {
+		if let Some(input) = self.active_input_mut() {
+			input.insert_str(text);
+			return true;
+		}
+		false
+	}
+
+	fn display_value_for_field(&self, field: ProjectSettingsFocus, focused: bool, max_width: usize) -> String {
+		match field {
+			ProjectSettingsFocus::ChangelogPath => self.changelog_path.display_value_with_width(focused, max_width),
+			ProjectSettingsFocus::ReleaseNowWindows => self.release_now_windows.display_value_with_width(focused, max_width),
+			ProjectSettingsFocus::ReleaseNowLinuxArm => self.release_now_linux_arm.display_value_with_width(focused, max_width),
+			ProjectSettingsFocus::ReleaseNowLinuxAmd => self.release_now_linux_amd.display_value_with_width(focused, max_width),
+			ProjectSettingsFocus::ReleaseNowMacOs => self.release_now_macos.display_value_with_width(focused, max_width),
+			_ => String::new(),
+		}
+	}
+
+	fn set_value_from_browse(&mut self, field: ProjectSettingsFocus, value: String) {
+		match field {
+			ProjectSettingsFocus::ChangelogPath => self.changelog_path.set_value(value),
+			ProjectSettingsFocus::ReleaseNowWindows => self.release_now_windows.set_value(value),
+			ProjectSettingsFocus::ReleaseNowLinuxArm => self.release_now_linux_arm.set_value(value),
+			ProjectSettingsFocus::ReleaseNowLinuxAmd => self.release_now_linux_amd.set_value(value),
+			ProjectSettingsFocus::ReleaseNowMacOs => self.release_now_macos.set_value(value),
+			_ => {}
+		}
+	}
+}
+
 pub(crate) fn render_project_settings(app: &mut App, frame: &mut Frame, area: Rect) {
+	sync_project_settings_state(app);
+
 	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
 		frame.render_widget(Paragraph::new("Select a project to manage per-scope settings."), area);
 		return;
@@ -48,8 +230,162 @@ pub(crate) fn render_project_settings(app: &mut App, frame: &mut Frame, area: Re
 	let scope_index = active_scope_index(&project, app.overview_focused_scope);
 	match app.project_settings_tab {
 		ProjectSettingsTab::General => render_general_settings(app, frame, sections[1], &project, scope_index),
-		ProjectSettingsTab::Distro => render_distro_settings(frame, sections[1], &project, scope_index),
+		ProjectSettingsTab::Distro => render_distro_settings(app, frame, sections[1], &project, scope_index),
 	}
+}
+
+pub(crate) fn sync_project_settings_state(app: &mut App) {
+	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+		return;
+	};
+	let scope_index = active_scope_index(&project, app.overview_focused_scope);
+	app.project_settings_state
+		.sync_from_project(app.selected_project, app.project_settings_tab, &project, scope_index);
+}
+
+pub(crate) fn invalidate_project_settings_state(app: &mut App) {
+	app.project_settings_state.binding = None;
+}
+
+pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
+	app.project_settings_tab = app.project_settings_tab.step(delta);
+	sync_project_settings_state(app);
+	if let Some(project) = app.config.projects.get(app.selected_project).cloned() {
+		let scope_index = active_scope_index(&project, app.overview_focused_scope);
+		app.project_settings_state
+			.ensure_focus_visible(app.project_settings_tab, &project, scope_index);
+	}
+}
+
+pub(crate) fn try_handle_project_settings_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+	if app.dashboard_focus != super::DashboardPane::Overview || app.overview_tab != super::OverviewTab::ProjectSettings {
+		return Ok(false);
+	}
+
+	sync_project_settings_state(app);
+	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+		return Ok(false);
+	};
+	let scope_index = active_scope_index(&project, app.overview_focused_scope);
+
+	if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+		return open_browser_for_project_settings_focus(app).map(|_| true);
+	}
+
+	if matches!(key.code, KeyCode::Char('[') | KeyCode::Char(']')) {
+		step_project_settings_tab(app, if matches!(key.code, KeyCode::Char('[')) { -1 } else { 1 });
+		return Ok(true);
+	}
+
+	if app
+		.project_settings_state
+		.focus_accepts_text(app.project_settings_tab, &project, scope_index)
+	{
+		match key.code {
+			KeyCode::Tab | KeyCode::Down => {
+				app.project_settings_state
+					.focus_next(app.project_settings_tab, &project, scope_index);
+				return Ok(true);
+			}
+			KeyCode::BackTab | KeyCode::Up => {
+				app.project_settings_state
+					.focus_previous(app.project_settings_tab, &project, scope_index);
+				return Ok(true);
+			}
+			KeyCode::Enter => {
+				app.project_settings_state
+					.focus_next(app.project_settings_tab, &project, scope_index);
+				return Ok(true);
+			}
+			_ => {
+				app.project_settings_state.handle_text_input(key);
+				persist_project_settings_inputs(app)?;
+				return Ok(true);
+			}
+		}
+	}
+
+	match key.code {
+		KeyCode::Tab | KeyCode::Down => {
+			app.project_settings_state
+				.focus_next(app.project_settings_tab, &project, scope_index);
+			Ok(true)
+		}
+		KeyCode::BackTab | KeyCode::Up => {
+			app.project_settings_state
+				.focus_previous(app.project_settings_tab, &project, scope_index);
+			Ok(true)
+		}
+		KeyCode::Enter | KeyCode::Char(' ') => {
+			toggle_focused_project_settings_control(app)?;
+			Ok(true)
+		}
+		_ => Ok(false),
+	}
+}
+
+pub(crate) fn insert_project_settings_text(app: &mut App, text: &str) -> bool {
+	sync_project_settings_state(app);
+	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+		return false;
+	};
+	let scope_index = active_scope_index(&project, app.overview_focused_scope);
+	if !app
+		.project_settings_state
+		.focus_accepts_text(app.project_settings_tab, &project, scope_index)
+	{
+		return false;
+	}
+	let inserted = app.project_settings_state.insert_text(text);
+	if inserted {
+		let _ = persist_project_settings_inputs(app);
+	}
+	inserted
+}
+
+pub(crate) fn set_project_settings_focus(app: &mut App, focus: ProjectSettingsFocus) {
+	sync_project_settings_state(app);
+	app.project_settings_state.focus = focus;
+}
+
+pub(crate) fn open_browser_for_project_settings_focus(app: &mut App) -> Result<()> {
+	sync_project_settings_state(app);
+	let target = match app.project_settings_state.focus {
+		ProjectSettingsFocus::ChangelogPath => BrowseTarget::ProjectSettingsChangelogPath,
+		ProjectSettingsFocus::ReleaseNowWindows => BrowseTarget::ProjectSettingsReleaseNowWindows,
+		ProjectSettingsFocus::ReleaseNowLinuxArm => BrowseTarget::ProjectSettingsReleaseNowLinuxArm,
+		ProjectSettingsFocus::ReleaseNowLinuxAmd => BrowseTarget::ProjectSettingsReleaseNowLinuxAmd,
+		ProjectSettingsFocus::ReleaseNowMacOs => BrowseTarget::ProjectSettingsReleaseNowMacOs,
+		_ => return Ok(()),
+	};
+	app.open_browser(target)
+}
+
+pub(crate) fn initial_browser_path(app: &App, target: BrowseTarget) -> Option<String> {
+	match target {
+		BrowseTarget::ProjectSettingsChangelogPath => Some(app.project_settings_state.changelog_path.value().to_string()),
+		BrowseTarget::ProjectSettingsReleaseNowWindows => Some(app.project_settings_state.release_now_windows.value().to_string()),
+		BrowseTarget::ProjectSettingsReleaseNowLinuxArm => Some(app.project_settings_state.release_now_linux_arm.value().to_string()),
+		BrowseTarget::ProjectSettingsReleaseNowLinuxAmd => Some(app.project_settings_state.release_now_linux_amd.value().to_string()),
+		BrowseTarget::ProjectSettingsReleaseNowMacOs => Some(app.project_settings_state.release_now_macos.value().to_string()),
+		_ => None,
+	}
+}
+
+pub(crate) fn apply_browser_selection(app: &mut App, target: BrowseTarget, value: String) -> Result<bool> {
+	let field = match target {
+		BrowseTarget::ProjectSettingsChangelogPath => ProjectSettingsFocus::ChangelogPath,
+		BrowseTarget::ProjectSettingsReleaseNowWindows => ProjectSettingsFocus::ReleaseNowWindows,
+		BrowseTarget::ProjectSettingsReleaseNowLinuxArm => ProjectSettingsFocus::ReleaseNowLinuxArm,
+		BrowseTarget::ProjectSettingsReleaseNowLinuxAmd => ProjectSettingsFocus::ReleaseNowLinuxAmd,
+		BrowseTarget::ProjectSettingsReleaseNowMacOs => ProjectSettingsFocus::ReleaseNowMacOs,
+		_ => return Ok(false),
+	};
+	sync_project_settings_state(app);
+	app.project_settings_state.focus = field;
+	app.project_settings_state.set_value_from_browse(field, value);
+	persist_project_settings_inputs(app)?;
+	Ok(true)
 }
 
 fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -90,17 +426,11 @@ fn render_general_settings(
 	let header = vec![
 		Line::from(format!("Selected scope: {}", scope_name)).bold(),
 		Line::from(format!("Scope type: {}", scope_kind)),
-		Line::from(format!("Changelog path: {}", project.changelog.effective_path())),
+		Line::from(format!("Project: {}", project.name)),
 	];
 	frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
-	let enabled = project.changelog_enabled_for_scope(scope_index);
-	let checkbox = Checkbox::new(" Changelog Generation", enabled)
-		.style(Style::default().fg(Color::White))
-		.checkbox_style(Style::default().fg(if enabled { Color::Green } else { Color::DarkGray }))
-		.label_style(Style::default().fg(Color::White));
-	frame.render_widget(checkbox, sections[1]);
-	app.hit_targets.push(HitTarget::new(sections[1], HitAction::ToggleProjectScopeChangelog));
+	render_controls(app, frame, sections[1], project, scope_index);
 
 	let body = vec![
 		Line::from("This toggle now lives at the scope level.".yellow()),
@@ -109,20 +439,287 @@ fn render_general_settings(
 		} else {
 			"All-in-one projects apply this setting to the single project scope."
 		}),
-		Line::from("Edit Project stays on E. The changelog path is still managed in project setup/edit dialogs."),
-		Line::from("Press Space or Enter to toggle the selected checkbox. Use [ and ] to switch General/Distro."),
+		Line::from("Press Space or Enter to toggle the selected checkbox. Ctrl+O opens Browse on path fields."),
+		Line::from("Up/Down or Tab/Shift+Tab moves between PSS fields. Use [ and ] to switch General/Distro."),
 	];
 	frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), sections[2]);
 }
 
-fn render_distro_settings(frame: &mut Frame, area: Rect, project: &ProjectConfig, scope_index: usize) {
+
+fn render_distro_settings(app: &mut App, frame: &mut Frame, area: Rect, project: &ProjectConfig, scope_index: usize) {
+	let sections = Layout::default()
+		.direction(Direction::Vertical)
+		.constraints([
+			Constraint::Length(4),
+			Constraint::Length(control_section_height(app.project_settings_state.visible_fields(ProjectSettingsTab::Distro, project, scope_index).len())),
+			Constraint::Min(4),
+		])
+		.split(area);
+
 	let lines = vec![
 		Line::from(format!("Scope: {}", active_scope_name(project, scope_index))).bold(),
+		Line::from(format!("Scope type: {}", active_scope_kind(project, scope_index))),
 		Line::raw(""),
-		Line::from("Distro-specific scope settings will land here next."),
-		Line::from("The first migrated setting is under General: changelog generation."),
+		Line::from("Configure release-now script paths per scope. The feature is not wired into release execution yet."),
 	];
-	frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+	frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sections[0]);
+
+	render_controls(app, frame, sections[1], project, scope_index);
+
+	let info = vec![
+		Line::from("When enabled, each platform path can point to a script or command wrapper.".yellow()),
+		Line::from("Browse selects a file path only; no validation or execution is performed yet."),
+	];
+	frame.render_widget(Paragraph::new(info).wrap(Wrap { trim: false }), sections[2]);
+}
+
+fn render_controls(app: &mut App, frame: &mut Frame, area: Rect, project: &ProjectConfig, scope_index: usize) {
+	let fields = app
+		.project_settings_state
+		.visible_fields(app.project_settings_tab, project, scope_index);
+	if fields.is_empty() {
+		return;
+	}
+
+	let rows = Layout::default()
+		.direction(Direction::Vertical)
+		.constraints(vec![Constraint::Length(3); fields.len()])
+		.split(area);
+
+	for (field, row) in fields.into_iter().zip(rows.iter().copied()) {
+		let focused = field == app.project_settings_state.focus;
+		if is_checkbox_field(field) {
+			render_checkbox_row(app, frame, row, field, project, scope_index, focused);
+		} else {
+			render_path_row(app, frame, row, field, focused);
+		}
+	}
+}
+
+fn render_checkbox_row(
+	app: &mut App,
+	frame: &mut Frame,
+	area: Rect,
+	field: ProjectSettingsFocus,
+	project: &ProjectConfig,
+	scope_index: usize,
+	focused: bool,
+) {
+	let inset = control_inset(area);
+	let enabled = match field {
+		ProjectSettingsFocus::ChangelogEnabled => project.changelog_enabled_for_scope(scope_index),
+		ProjectSettingsFocus::ReleaseNowEnabled => project.release_now_for_scope(scope_index).enabled,
+		_ => false,
+	};
+	let checkbox = Checkbox::new(checkbox_label(field), enabled)
+		.checked_symbol("✅ ")
+		.unchecked_symbol("❌ ")
+		.style(if focused {
+			Style::default().fg(Color::Cyan)
+		} else {
+			Style::default().fg(Color::White)
+		})
+		.checkbox_style(Style::default().fg(if enabled { Color::Green } else { Color::Red }))
+		.label_style(if focused {
+			Style::default().fg(Color::Cyan)
+		} else {
+			Style::default().fg(Color::White)
+		});
+	frame.render_widget(checkbox, inset);
+	app.hit_targets.push(HitTarget::new(inset, HitAction::SelectProjectSettingsField(field)));
+}
+
+fn render_path_form_row(
+	frame: &mut Frame,
+	area: Rect,
+	label: &'static str,
+	value: String,
+	focused: bool,
+	side_button: Option<FormRowButton>,
+) -> Option<Rect> {
+	let label_area = center_vertically(
+		Rect {
+			x: area.x,
+			y: area.y,
+			width: FORM_LABEL_WIDTH,
+			height: area.height,
+		},
+		1,
+	);
+	frame.render_widget(
+		Paragraph::new(Line::from(Span::styled(
+			label,
+			Style::default().fg(Color::Rgb(220, 220, 220)),
+		))),
+		label_area,
+	);
+
+	let row = if side_button.is_some() {
+		Layout::default()
+			.direction(Direction::Horizontal)
+			.constraints([
+				Constraint::Length(FORM_LABEL_WIDTH),
+				Constraint::Min(10),
+				Constraint::Length(1),
+				Constraint::Length(BROWSE_BUTTON_WIDTH),
+			])
+			.split(area)
+	} else {
+		Layout::default()
+			.direction(Direction::Horizontal)
+			.constraints([Constraint::Length(FORM_LABEL_WIDTH), Constraint::Min(10)])
+			.split(area)
+	};
+
+	let field_area = center_vertically(row[1], area.height.min(3));
+	let block = if focused {
+		Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan))
+	} else {
+		Block::default().borders(Borders::ALL)
+	};
+	frame.render_widget(
+		Paragraph::new(Line::from(Span::styled(value, Style::default().fg(Color::Rgb(235, 235, 235))))).block(block),
+		field_area,
+	);
+
+	if let Some(button) = side_button {
+		let button_area = center_vertically(row[3], area.height.min(3));
+		frame.render_widget(
+			Paragraph::new(button.label)
+				.alignment(Alignment::Center)
+				.style(Style::default().fg(Color::Black).bg(Color::Cyan))
+				.block(Block::default().borders(Borders::ALL)),
+			button_area,
+		);
+		Some(button_area)
+	} else {
+		None
+	}
+}
+
+fn render_path_row(app: &mut App, frame: &mut Frame, area: Rect, field: ProjectSettingsFocus, focused: bool) {
+	let inset = control_inset(area);
+	let side_button = Some(FormRowButton::new("Browse", HitAction::BrowseProjectSettingsField(field)));
+	let value = app.project_settings_state.display_value_for_field(
+		field,
+		focused,
+		visible_field_width(inset.width, true),
+	);
+	let button_rect = render_path_form_row(
+		frame,
+		inset,
+		field_label(field),
+		value,
+		focused,
+		side_button.clone(),
+	);
+	app.hit_targets.push(HitTarget::new(inset, HitAction::SelectProjectSettingsField(field)));
+	if let (Some(rect), Some(button)) = (button_rect, side_button) {
+		app.hit_targets.push(HitTarget::new(rect, button.action));
+	}
+}
+
+fn control_inset(area: Rect) -> Rect {
+	Rect {
+		x: area.x.saturating_add(2),
+		y: area.y,
+		width: area.width.saturating_sub(2),
+		height: area.height,
+	}
+}
+
+fn control_section_height(field_count: usize) -> u16 {
+	(field_count.max(1) as u16) * 3
+}
+
+fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
+	match field {
+		ProjectSettingsFocus::ChangelogEnabled => "Changelog Generation",
+		ProjectSettingsFocus::ReleaseNowEnabled => "Enable Release-NOW capabilities for this project/scope",
+		_ => "",
+	}
+}
+
+fn field_label(field: ProjectSettingsFocus) -> &'static str {
+	match field {
+		ProjectSettingsFocus::ChangelogPath => "Changelog path",
+		ProjectSettingsFocus::ReleaseNowWindows => "Windows",
+		ProjectSettingsFocus::ReleaseNowLinuxArm => "Linux ARM",
+		ProjectSettingsFocus::ReleaseNowLinuxAmd => "Linux AMD",
+		ProjectSettingsFocus::ReleaseNowMacOs => "MacOS",
+		_ => "",
+	}
+}
+
+fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
+	matches!(field, ProjectSettingsFocus::ChangelogEnabled | ProjectSettingsFocus::ReleaseNowEnabled)
+}
+
+fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
+	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+		return Ok(());
+	};
+	let scope_index = active_scope_index(&project, app.overview_focused_scope);
+	let scope_name = active_scope_name(&project, scope_index);
+	let active_project = app
+		.config
+		.projects
+		.get_mut(app.selected_project)
+		.expect("selected project checked above");
+
+	match app.project_settings_state.focus {
+		ProjectSettingsFocus::ChangelogEnabled => {
+			let next_enabled = !active_project.changelog_enabled_for_scope(scope_index);
+			active_project.set_changelog_enabled_for_scope(scope_index, next_enabled);
+			app.status = super::StatusMessage::success(format!(
+				"Changelog generation {} for {}.",
+				if next_enabled { "enabled" } else { "disabled" },
+				scope_name
+			));
+		}
+		ProjectSettingsFocus::ReleaseNowEnabled => {
+			let settings = active_project.release_now_for_scope_mut(scope_index);
+			settings.enabled = !settings.enabled;
+			app.status = super::StatusMessage::success(format!(
+				"Release-NOW capabilities {} for {}.",
+				if settings.enabled { "enabled" } else { "disabled" },
+				scope_name
+			));
+		}
+		_ => return Ok(()),
+	}
+
+	app.config_store.save(&app.config)?;
+	let updated_project = app.config.projects.get(app.selected_project).cloned().expect("selected project present");
+	app.project_settings_state
+		.ensure_focus_visible(app.project_settings_tab, &updated_project, scope_index);
+	Ok(())
+}
+
+fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
+	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+		return Ok(());
+	};
+	let scope_index = active_scope_index(&project, app.overview_focused_scope);
+	let changelog_path = app.project_settings_state.changelog_path.value().to_string();
+	let windows_script = app.project_settings_state.release_now_windows.value().to_string();
+	let linux_arm_script = app.project_settings_state.release_now_linux_arm.value().to_string();
+	let linux_amd_script = app.project_settings_state.release_now_linux_amd.value().to_string();
+	let macos_script = app.project_settings_state.release_now_macos.value().to_string();
+
+	let active_project = app
+		.config
+		.projects
+		.get_mut(app.selected_project)
+		.expect("selected project checked above");
+	active_project.set_changelog_path_for_scope(scope_index, changelog_path);
+	let release_now = active_project.release_now_for_scope_mut(scope_index);
+	release_now.windows_script = windows_script;
+	release_now.linux_arm_script = linux_arm_script;
+	release_now.linux_amd_script = linux_amd_script;
+	release_now.macos_script = macos_script;
+	app.config_store.save(&app.config)?;
+	Ok(())
 }
 
 fn active_scope_index(project: &ProjectConfig, focused_scope: usize) -> usize {
