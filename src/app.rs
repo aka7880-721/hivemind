@@ -1327,7 +1327,11 @@ impl App {
     }
 
     fn open_recent_changes(&mut self) -> Result<()> {
-        self.open_recent_changes_with_scope(None)
+        let preferred_scope = self
+            .selected_project()
+            .ok()
+            .and_then(|project| (!project.unified_versioning).then_some(self.overview_focused_scope));
+        self.open_recent_changes_with_scope(preferred_scope)
     }
 
     fn open_overview_tag_dialog(&mut self, scope_index: usize) -> Result<()> {
@@ -1655,11 +1659,7 @@ impl App {
     }
 
     fn select_dashboard_overview_scope(&mut self, scope_index: usize) -> Result<()> {
-        self.ensure_dashboard_recent_changes();
-        if let Some(dialog) = &mut self.overview_recent_changes {
-            dialog.select_scope(scope_index)?;
-        }
-        Ok(())
+        overview::select_dashboard_overview_scope(self, scope_index)
     }
 
     fn begin_overview_bump(&mut self, scope_index: usize) -> Result<()> {
