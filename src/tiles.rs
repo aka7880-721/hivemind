@@ -59,6 +59,7 @@ pub(crate) fn render_overview_tile(frame: &mut Frame, area: Rect, tile: &Overvie
 
 fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) -> OverviewTileHotspots {
 	let border_style = border_style(tile.selected);
+	let tile_style = tile_style(tile.selected);
 	let content_width = area.width.saturating_sub(2) as usize;
 	let right_width = content_width.saturating_sub(SEMVER_LEFT_WIDTH + 1);
 	let parts = split_semver(&tile.preview_version);
@@ -77,12 +78,13 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		format!("║{:^5}│{}║", parts[2], button_line),
 		border_bottom_semver(right_width),
 	];
-	render_rows(frame, area, &rows, border_style);
+	render_rows(frame, area, &rows, border_style, tile_style);
 	render_highlighted_row(
 		frame,
 		Rect::new(area.x, area.y + 7, area.width, 1),
 		&rows[7],
 		border_style,
+		tile_style,
 		&[
 			StyledRange::new(7 + button_slots[0], 6, VIEW_BUTTON_STYLE),
 			StyledRange::new(7 + button_slots[1], 6, BUMP_BUTTON_STYLE),
@@ -108,6 +110,7 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 
 fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) -> OverviewTileHotspots {
 	let border_style = border_style(tile.selected);
+	let tile_style = tile_style(tile.selected);
 	let content_width = area.width.saturating_sub(2) as usize;
 	let detail_width = content_width.saturating_sub(CALVER_ACTION_WIDTH + 1);
 
@@ -122,7 +125,7 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		format!("║{:^content_width$}║", spaced_version(&tile.preview_version), content_width = content_width),
 		format!("╚{}╝", "═".repeat(content_width)),
 	];
-	render_rows(frame, area, &rows, border_style);
+	render_rows(frame, area, &rows, border_style, tile_style);
 	for (row_offset, label) in [(3_u16, "bump"), (4, "view"), (5, "tag")].into_iter() {
 		let action_start = 1 + detail_width + 1;
 		let action_style = match label {
@@ -135,6 +138,7 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 			Rect::new(area.x, area.y + row_offset, area.width, 1),
 			&rows[row_offset as usize],
 			border_style,
+			tile_style,
 			&[StyledRange::new(action_start, CALVER_ACTION_WIDTH, action_style)],
 		);
 	}
@@ -155,7 +159,7 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	}
 }
 
-fn render_rows(frame: &mut Frame, area: Rect, rows: &[String], border_style: Style) {
+fn render_rows(frame: &mut Frame, area: Rect, rows: &[String], border_style: Style, tile_style: Style) {
 	for (index, row) in rows.iter().enumerate() {
 		if index as u16 >= area.height {
 			break;
@@ -164,22 +168,41 @@ fn render_rows(frame: &mut Frame, area: Rect, rows: &[String], border_style: Sty
 			continue;
 		}
 		let row_rect = Rect::new(area.x, area.y + index as u16, area.width, 1);
-		frame.render_widget(Paragraph::new(styled_row(row, border_style)).alignment(Alignment::Left), row_rect);
+		frame.render_widget(
+			Paragraph::new(styled_row(row, border_style, tile_style))
+				.style(tile_style)
+				.alignment(Alignment::Left),
+			row_rect,
+		);
 	}
 }
 
-fn render_highlighted_row(frame: &mut Frame, area: Rect, row: &str, border_style: Style, highlights: &[StyledRange]) {
+fn render_highlighted_row(
+	frame: &mut Frame,
+	area: Rect,
+	row: &str,
+	border_style: Style,
+	tile_style: Style,
+	highlights: &[StyledRange],
+) {
 	frame.render_widget(
-		Paragraph::new(styled_row_with_highlights(row, border_style, highlights)).alignment(Alignment::Left),
+		Paragraph::new(styled_row_with_highlights(row, border_style, tile_style, highlights))
+			.style(tile_style)
+			.alignment(Alignment::Left),
 		area,
 	);
 }
 
-fn styled_row(row: &str, border_style: Style) -> Line<'static> {
-	styled_row_with_highlights(row, border_style, &[])
+fn styled_row(row: &str, border_style: Style, tile_style: Style) -> Line<'static> {
+	styled_row_with_highlights(row, border_style, tile_style, &[])
 }
 
-fn styled_row_with_highlights(row: &str, border_style: Style, highlights: &[StyledRange]) -> Line<'static> {
+fn styled_row_with_highlights(
+	row: &str,
+	border_style: Style,
+	tile_style: Style,
+	highlights: &[StyledRange],
+) -> Line<'static> {
 	let border_chars = ['╔', '╗', '╚', '╝', '║', '═', '│', '╤', '╧', '╟', '╢', '├', '┴', '─'];
 	let spans = row
 		.chars()
@@ -193,13 +216,21 @@ fn styled_row_with_highlights(row: &str, border_style: Style, highlights: &[Styl
 					if border_chars.contains(&character) || character == '·' {
 						border_style
 					} else {
-						Style::default().fg(Color::White)
+						tile_style.fg(Color::White)
 					}
 				});
 			Span::styled(character.to_string(), style)
 		})
 		.collect::<Vec<_>>();
 	Line::from(spans)
+}
+
+fn tile_style(selected: bool) -> Style {
+	if selected {
+		Style::default().bg(Color::Black)
+	} else {
+		Style::default()
+	}
 }
 
 fn border_style(selected: bool) -> Style {
