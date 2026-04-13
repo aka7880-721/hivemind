@@ -93,6 +93,8 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub changelog: ChangelogSettings,
     #[serde(default)]
+    pub release_now: ReleaseNowSettings,
+    #[serde(default)]
     pub targets: Vec<TargetSpec>,
     #[serde(default)]
     pub branches: Vec<BranchConfig>,
@@ -185,6 +187,36 @@ impl ProjectConfig {
         lines
     }
 
+    pub fn changelog_path_for_scope(&self, scope_index: usize) -> &str {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.effective_path(),
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .and_then(|branch| branch.changelog_path.as_deref())
+                .filter(|path| !path.trim().is_empty())
+                .unwrap_or_else(|| self.changelog.effective_path()),
+        }
+    }
+
+    pub fn set_changelog_path_for_scope(&mut self, scope_index: usize, file_path: String) {
+        let normalized = if file_path.trim().is_empty() {
+            DEFAULT_CHANGELOG_PATH.to_string()
+        } else {
+            file_path.trim().to_string()
+        };
+
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.file_path = normalized,
+            ProjectType::Branched => {
+                if let Some(branch) = self.branches.get_mut(scope_index) {
+                    branch.changelog_path = Some(normalized.clone());
+                }
+                self.changelog.file_path = normalized;
+            }
+        }
+    }
+
     pub fn changelog_enabled_for_scope(&self, scope_index: usize) -> bool {
         match self.project_type {
             ProjectType::AllInOne => self.changelog.enabled,
@@ -205,6 +237,33 @@ impl ProjectConfig {
                     branch.changelog_enabled = enabled;
                 }
                 self.changelog.enabled = self.branches.first().map(|branch| branch.changelog_enabled).unwrap_or(false);
+            }
+        }
+    }
+
+    pub fn release_now_for_scope(&self, scope_index: usize) -> &ReleaseNowSettings {
+        match self.project_type {
+            ProjectType::AllInOne => &self.release_now,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .map(|branch| &branch.release_now)
+                .or_else(|| self.branches.first().map(|branch| &branch.release_now))
+                .unwrap_or(&self.release_now),
+        }
+    }
+
+    pub fn release_now_for_scope_mut(&mut self, scope_index: usize) -> &mut ReleaseNowSettings {
+        match self.project_type {
+            ProjectType::AllInOne => &mut self.release_now,
+            ProjectType::Branched => {
+                if self.branches.is_empty() {
+                    &mut self.release_now
+                } else if scope_index < self.branches.len() {
+                    &mut self.branches[scope_index].release_now
+                } else {
+                    &mut self.branches[0].release_now
+                }
             }
         }
     }
@@ -235,6 +294,16 @@ impl ChangelogSettings {
             trimmed
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ReleaseNowSettings {
+    pub enabled: bool,
+    pub windows_script: String,
+    pub linux_arm_script: String,
+    pub linux_amd_script: String,
+    pub macos_script: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -319,6 +388,10 @@ pub struct BranchConfig {
     pub repo: Option<RepoConfig>,
     #[serde(default)]
     pub changelog_enabled: bool,
+    #[serde(default)]
+    pub changelog_path: Option<String>,
+    #[serde(default)]
+    pub release_now: ReleaseNowSettings,
     pub version_scheme: VersionScheme,
     #[serde(default)]
     pub targets: Vec<TargetSpec>,
@@ -452,6 +525,8 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
                 scope_kind: BranchScopeKind::Branch,
                 repo: None,
                 changelog_enabled: project.changelog.enabled,
+                changelog_path: Some(project.changelog.effective_path().to_string()),
+                release_now: project.release_now.clone(),
                 version_scheme: project.version_scheme,
                 targets,
             });
@@ -465,6 +540,8 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
             }
             if original_schema_version < 4 {
                 branch.changelog_enabled = project.changelog.enabled;
+                branch.changelog_path = Some(project.changelog.effective_path().to_string());
+                branch.release_now = project.release_now.clone();
                 changed = true;
             }
         }
@@ -490,6 +567,8 @@ mod tests {
             scope_kind: BranchScopeKind::Branch,
             repo: None,
             changelog_enabled: false,
+			changelog_path: None,
+			release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
             targets: Vec::new(),
         };
@@ -588,6 +667,7 @@ format = "json"
                 unified_versioning: true,
                 version_scheme: VersionScheme::SemVer,
                 changelog: ChangelogSettings::default(),
+				release_now: ReleaseNowSettings::default(),
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),
                     path: "package.json".to_string(),
@@ -618,6 +698,7 @@ format = "json"
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
+			release_now: ReleaseNowSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
@@ -625,6 +706,8 @@ format = "json"
                 scope_kind: BranchScopeKind::Branch,
                 repo: None,
                 changelog_enabled: false,
+				changelog_path: None,
+				release_now: ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: Vec::new(),
             }],
@@ -643,6 +726,8 @@ format = "json"
                     scope_kind: BranchScopeKind::Service,
                     repo: None,
                     changelog_enabled: false,
+					changelog_path: None,
+					release_now: ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::CalVerYearMonthMicro,
                     targets: Vec::new(),
                 },
