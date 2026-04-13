@@ -719,7 +719,7 @@ impl App {
 		let sections = Layout::default()
 			.direction(Direction::Vertical)
 			.constraints(if dialog.workflow.is_some() {
-				[Constraint::Length(4), Constraint::Length(3), Constraint::Min(12), Constraint::Length(BUTTON_ROW_HEIGHT)]
+				[Constraint::Length(4), Constraint::Length(8), Constraint::Min(8), Constraint::Length(BUTTON_ROW_HEIGHT)]
 			} else {
 				[Constraint::Length(4), Constraint::Length(0), Constraint::Min(15), Constraint::Length(BUTTON_ROW_HEIGHT)]
 			})
@@ -731,39 +731,28 @@ impl App {
 		];
 		if let Some(workflow) = dialog.workflow {
 			header.push(Line::from(format!("Workflow: {}", workflow.display_name())));
-			header.push(Line::from("Review the generated changelog below. Edit the optional release message, Save to repo root if needed, then confirm to write and stage the changelog file."));
+			header.push(Line::from("Review the generated changelog below. Edit the optional multi-line release notes in Markdown, save to repo root if needed, then confirm to write and stage the changelog file."));
 		} else {
 			header.push(Line::from("Preview mode: current git history rendered as the changelog."));
-			header.push(Line::from("Press S or Save to write changelog_temp.md in each repo root, or Enter/Close to dismiss this preview."));
+			header.push(Line::from("Press Ctrl+S or Save to write changelog_temp.md in each repo root, or Enter/F2/Close to dismiss this preview."));
 		}
 		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
 		if dialog.workflow.is_some() {
-			let input_row = Layout::default()
-				.direction(Direction::Horizontal)
-				.constraints([Constraint::Length(20), Constraint::Min(10)])
-				.split(sections[1]);
-			frame.render_widget(Paragraph::new("Release message"), input_row[0]);
-			let input_block = Block::default()
-				.borders(Borders::ALL)
-				.title(" optional ")
-				.border_style(Style::default().fg(Color::Cyan));
-			frame.render_widget(
-				Paragraph::new(dialog.release_message.display_value(true))
-					.block(input_block)
-					.style(Style::default().fg(Color::White)),
-				input_row[1],
+			self.render_textarea_editor(
+				frame,
+				sections[1],
+				" Release Notes ",
+				dialog.release_message_placeholder.as_str(),
+				&dialog.release_message,
 			);
 		}
 
 		let body_block = Block::default().borders(Borders::ALL).title(" Preview ");
 		let body_inner = body_block.inner(sections[2]);
 		frame.render_widget(body_block, sections[2]);
-		let body = dialog
-			.combined_preview_lines()
-			.into_iter()
-			.map(Line::from)
-			.collect::<Vec<_>>();
+		let preview_markdown = dialog.combined_preview_markdown();
+		let body = tui_markdown::from_str(&preview_markdown);
 		frame.render_widget(
 			Paragraph::new(body)
 				.wrap(Wrap { trim: false })
@@ -1455,15 +1444,26 @@ impl App {
 	}
 
 	fn render_tag_annotation_editor(&self, frame: &mut Frame, area: Rect, dialog: &TagAnnotationDialog) {
+		self.render_textarea_editor(frame, area, " Annotation ", dialog.placeholder.as_str(), &dialog.editor);
+	}
+
+	fn render_textarea_editor(
+		&self,
+		frame: &mut Frame,
+		area: Rect,
+		title: &str,
+		placeholder: &str,
+		editor: &TuiTextArea<'_>,
+	) {
 		let block = Block::default()
 			.borders(Borders::ALL)
-			.title(" Annotation ")
+			.title(title)
 			.border_style(Style::default().fg(Color::Cyan));
 		let inner = block.inner(area);
 		frame.render_widget(block, area);
 
-		let lines = dialog.editor.lines();
-		let (cursor_row, cursor_col) = dialog.editor.cursor();
+		let lines = editor.lines();
+		let (cursor_row, cursor_col) = editor.cursor();
 		let visible_height = inner.height.max(1) as usize;
 		let start_row = cursor_row.saturating_sub(visible_height / 2).min(lines.len().saturating_sub(visible_height));
 		let end_row = (start_row + visible_height).min(lines.len());
@@ -1472,7 +1472,7 @@ impl App {
 
 		let body = if lines.len() == 1 && lines[0].is_empty() {
 			vec![Line::from(Span::styled(
-				dialog.placeholder.as_str(),
+				placeholder,
 				Style::default().fg(Color::DarkGray),
 			))]
 		} else {
@@ -1501,6 +1501,8 @@ impl App {
 			Line::from("Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F2 save | Del remove | Esc cancel")
 		} else if self.tag_annotation_dialog.is_some() {
 			Line::from("Type annotation | Enter newline | F2 or Ctrl+S save | Esc cancel")
+		} else if self.changelog_preview_dialog.is_some() {
+			Line::from("Type release notes | Ctrl+S save preview | F2 continue/close | PgUp/PgDn or wheel scroll preview | Esc cancel")
 		} else if self.tag_dialog.is_some() {
 			Line::from("Type tag name | [ ] scope | A annotation | Left/Right action | Enter run | Esc cancel")
 		} else if self.recent_changes_dialog.is_some() {
