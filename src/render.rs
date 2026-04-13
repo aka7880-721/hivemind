@@ -33,7 +33,6 @@ impl App {
 		match self.screen {
 			Screen::Dashboard => self.render_dashboard(frame, root[2]),
 			Screen::Wizard => self.render_wizard(frame, root[2]),
-			Screen::Settings => self.render_settings(frame, root[2]),
 			Screen::UiSettings => self.render_ui_settings(frame, root[2]),
 		}
 
@@ -83,35 +82,6 @@ impl App {
 		}
 		frame.render_widget(&self.transient_toaster, frame.area());
 		frame.render_widget(&self.sticky_toaster, frame.area());
-	}
-
-	fn render_progress_dialog(&mut self, frame: &mut Frame, area: Rect) {
-		let Some(dialog) = &self.progress_dialog else {
-			return;
-		};
-
-		let popup = centered_rect(area, 54, 22);
-		frame.render_widget(Clear, popup);
-		let block = Block::default()
-			.borders(Borders::ALL)
-			.title(dialog.title.as_str())
-			.border_style(Style::default().fg(Color::Yellow));
-		let inner = block.inner(popup);
-		frame.render_widget(block, popup);
-
-		let lines = vec![
-			Line::from("Working...").bold(),
-			Line::raw(""),
-			Line::from(dialog.message.clone()),
-			Line::raw(""),
-			Line::from("The interface will update when this step completes.").style(Style::default().fg(Color::Gray)),
-		];
-		frame.render_widget(
-			Paragraph::new(lines)
-				.alignment(Alignment::Center)
-				.wrap(Wrap { trim: false }),
-			inner,
-		);
 	}
 
 	fn render_header(&mut self, frame: &mut Frame, area: Rect) {
@@ -363,7 +333,7 @@ impl App {
 				lines.push(Line::from("- B opens a bump preview for the selected project"));
 				if project.integration_mode.requires_repo() {
 					lines.push(Line::from("- G opens the git log from the configured repo"));
-					if project.changelog.enabled {
+					if project.changelog_enabled_for_scope(self.overview_focused_scope) {
 						lines.push(Line::from("- C opens a changelog preview using the current commit history"));
 					}
 					lines.push(Line::from("- T creates a local tag in the configured repo"));
@@ -384,10 +354,14 @@ impl App {
 				]
 			};
 			frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), overview_inner);
+		} else if self.overview_tab == OverviewTab::ProjectSettings {
+			super::p_s_s::render_project_settings(self, frame, overview_inner);
 		} else {
 			self.render_dashboard_overview(frame, overview_inner);
 		}
 	}
+
+	#[allow(dead_code)]
 
 	fn render_dashboard_overview(&mut self, frame: &mut Frame, area: Rect) {
 		overview::render_dashboard_overview(self, frame, area);
@@ -954,97 +928,6 @@ impl App {
 		self.render_button_row(frame, sections[3], &buttons);
 	}
 
-	fn render_settings(&mut self, frame: &mut Frame, area: Rect) {
-		let columns = Layout::default()
-			.direction(Direction::Horizontal)
-			.constraints([Constraint::Length(38), Constraint::Min(40)])
-			.split(area);
-
-		let left_block = Block::default().borders(Borders::ALL).title(" Projects ");
-		let left_inner = left_block.inner(columns[0]);
-		frame.render_widget(left_block, columns[0]);
-
-		if self.config.projects.is_empty() {
-			let lines = vec![
-				Line::from("No saved projects yet.".bold()),
-				Line::from("Press N to create one before editing settings."),
-			];
-			frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), left_inner);
-		} else {
-			let items = self
-				.config
-				.projects
-				.iter()
-				.map(|project| ListItem::new(vec![
-					Line::from(project.name.clone()).style(Style::default().add_modifier(Modifier::BOLD)),
-					Line::from(project.integration_mode.display_name()).style(Style::default().fg(Color::Gray)),
-				]))
-				.collect::<Vec<_>>();
-			let mut state = ListState::default();
-			state.select(Some(self.selected_project.min(self.config.projects.len().saturating_sub(1))));
-			let list = List::new(items)
-				.highlight_style(Style::default().bg(Color::Blue).fg(Color::Black))
-				.highlight_symbol("> ");
-			frame.render_stateful_widget(list, left_inner, &mut state);
-
-			let row_height = 2_u16;
-			for (index, _) in self.config.projects.iter().enumerate() {
-				let rect = Rect {
-					x: left_inner.x,
-					y: left_inner.y + index as u16 * row_height,
-					width: left_inner.width,
-					height: row_height,
-				};
-				if rect.y < left_inner.y + left_inner.height {
-					self.hit_targets.push(HitTarget::new(rect, HitAction::SelectProject(index)));
-				}
-			}
-		}
-
-		let right_block = Block::default().borders(Borders::ALL).title(" Settings ");
-		let right_inner = right_block.inner(columns[1]);
-		frame.render_widget(right_block, columns[1]);
-
-		let rows = Layout::default()
-			.direction(Direction::Vertical)
-			.constraints([Constraint::Min(8), Constraint::Length(3)])
-			.split(right_inner);
-
-		let mut lines = vec![
-			Line::from(format!("Config file: {}", self.config_store.path().display())).bold(),
-			Line::from(format!("Schema version: {}", self.config.schema_version)),
-			Line::from(format!("Saved projects: {}", self.config.projects.len())),
-			Line::from(format!("Mouse hints: {}", if self.config.ui.show_mouse_hints { "on" } else { "off" })),
-			Line::from(format!("Tab hints: {}", if self.config.ui.show_tab_hints { "on" } else { "off" })),
-			Line::raw(""),
-		];
-		if let Some(project) = self.config.projects.get(self.selected_project) {
-			lines.push(Line::from(format!("Selected project: {}", project.name)).yellow().bold());
-			lines.extend(project.detail_lines().into_iter().map(Line::from));
-			lines.push(Line::raw(""));
-			lines.push(Line::from("Press E to amend repo roots, remotes, and target paths."));
-			lines.push(Line::from("Up/Down switches the selected project."));
-		} else {
-			lines.push(Line::from("Select a project here once you have saved one."));
-		}
-		frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
-
-		let buttons = Layout::default()
-			.direction(Direction::Horizontal)
-			.constraints([Constraint::Length(20), Constraint::Length(18), Constraint::Min(10)])
-			.split(rows[1]);
-		frame.render_widget(
-			Paragraph::new(" Edit Project ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Green)),
-			buttons[0],
-		);
-		frame.render_widget(
-			Paragraph::new(" Dashboard ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Yellow)),
-			buttons[1],
-		);
-		self.hit_targets.push(HitTarget::new(buttons[0], HitAction::OpenProjectEdit));
-		self.hit_targets.push(HitTarget::new(buttons[1], HitAction::Switch(Screen::Dashboard)));
-	}
-
 	fn render_ui_settings(&mut self, frame: &mut Frame, area: Rect) {
 		let block = Block::default().borders(Borders::ALL).title(" UI Settings ");
 		let inner = block.inner(area);
@@ -1098,6 +981,34 @@ impl App {
 					Style::default().fg(Color::Black).bg(Color::Yellow),
 				),
 			],
+		);
+	}
+
+	fn render_progress_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.progress_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 56, 18);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(format!(" {} ", dialog.title))
+			.border_style(Style::default().fg(Color::Yellow));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let lines = vec![
+			Line::from(dialog.message.clone()).bold(),
+			Line::raw(""),
+			Line::from("The interface will update when this step completes.")
+				.style(Style::default().fg(Color::Gray)),
+		];
+		frame.render_widget(
+			Paragraph::new(lines)
+				.alignment(Alignment::Center)
+				.wrap(Wrap { trim: false }),
+			inner,
 		);
 	}
 
@@ -1516,7 +1427,6 @@ impl App {
 		} else {
 			match self.screen {
 				Screen::Dashboard => self.dashboard_footer_line(),
-				Screen::Settings => settings_footer_line(),
 				Screen::UiSettings => ui_settings_footer_line(),
 				Screen::Wizard => Line::from("Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F5 read target | F2 save | Esc cancel"),
 			}
@@ -1611,6 +1521,8 @@ impl App {
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("N", "ew Project"));
 		spans.push(Span::raw(" | "));
+		spans.extend(shortcut_key_label("E", "dit Project"));
+		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("G", "itlog"));
 		spans.push(Span::raw(" / "));
 		spans.extend(shortcut_key_label("C", "hangelog"));
@@ -1621,6 +1533,12 @@ impl App {
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("R", "eload"));
 		spans.push(Span::raw(" | "));
+		if self.overview_tab == OverviewTab::ProjectSettings {
+			spans.extend(shortcut_token("[ ]"));
+			spans.push(Span::raw(" sub-tabs | "));
+			spans.extend(shortcut_key_label("Space", " Toggle Changelog"));
+			spans.push(Span::raw(" | "));
+		}
 		spans.extend(shortcut_key_label("H", "ide Footer"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("Q", "uit"));
