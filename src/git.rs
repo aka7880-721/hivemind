@@ -509,6 +509,7 @@ mod tests {
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
+			release_now: crate::config::ReleaseNowSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -520,6 +521,8 @@ mod tests {
                         remote_url: Some("origin-core".to_string()),
                     }),
                     changelog_enabled: false,
+					changelog_path: None,
+					release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -534,6 +537,8 @@ mod tests {
                     scope_kind: BranchScopeKind::Service,
                     repo: None,
                     changelog_enabled: false,
+					changelog_path: None,
+					release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -570,6 +575,7 @@ mod tests {
             unified_versioning: true,
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
+			release_now: crate::config::ReleaseNowSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -581,6 +587,8 @@ mod tests {
                         remote_url: None,
                     }),
                     changelog_enabled: false,
+					changelog_path: None,
+					release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -598,6 +606,8 @@ mod tests {
                         remote_url: None,
                     }),
                     changelog_enabled: false,
+					changelog_path: None,
+					release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -642,6 +652,7 @@ mod tests {
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
+			release_now: crate::config::ReleaseNowSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
@@ -649,6 +660,8 @@ mod tests {
                 scope_kind: BranchScopeKind::Branch,
                 repo: None,
                 changelog_enabled: false,
+				changelog_path: None,
+				release_now: crate::config::ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),
