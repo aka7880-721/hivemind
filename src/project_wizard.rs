@@ -36,7 +36,6 @@ pub(crate) struct ProjectWizard {
 	pub(crate) unified_versioning: bool,
 	pub(crate) integration_mode: IntegrationMode,
 	pub(crate) version_scheme: VersionScheme,
-	pub(crate) changelog_enabled: bool,
 	pub(crate) focus: WizardField,
 	pub(crate) last_probe: Option<TargetProbe>,
 }
@@ -59,7 +58,6 @@ impl Default for ProjectWizard {
 			unified_versioning: false,
 			integration_mode: IntegrationMode::LocalOnly,
 			version_scheme: VersionScheme::SemVer,
-			changelog_enabled: false,
 			focus: WizardField::ProjectType,
 			last_probe: None,
 		}
@@ -73,9 +71,9 @@ impl ProjectWizard {
 			WizardField::Name
 				| WizardField::ScopeName
 				| WizardField::TargetPath
-				| WizardField::ChangelogPath
 				| WizardField::RepoRoot
 				| WizardField::RemoteUrl
+				| WizardField::ChangelogPath
 		) || (self.focus == WizardField::TargetKey && self.target_key_accepts_text())
 	}
 
@@ -109,10 +107,7 @@ impl ProjectWizard {
 		if self.integration_mode.requires_remote() {
 			fields.push(WizardField::RemoteUrl);
 		}
-		fields.push(WizardField::ChangelogEnabled);
-		if self.changelog_enabled {
-			fields.push(WizardField::ChangelogPath);
-		}
+		fields.push(WizardField::ChangelogPath);
 		fields.extend([WizardField::Validate, WizardField::Save, WizardField::Cancel]);
 		fields
 	}
@@ -156,7 +151,6 @@ impl ProjectWizard {
 			WizardField::MoveScopeDown => ("Move scope down", HitAction::WizardScopeAction(ScopeAction::MoveDown)),
 			WizardField::RepoRoot => ("Repo root", HitAction::WizardField(field)),
 			WizardField::RemoteUrl => ("Remote URL", HitAction::WizardField(field)),
-			WizardField::ChangelogEnabled => ("Generate changelog", HitAction::WizardField(field)),
 			WizardField::ChangelogPath => ("Changelog path", HitAction::WizardField(field)),
 			WizardField::Validate => ("Read", HitAction::ValidateWizard),
 			WizardField::Save => ("Save", HitAction::SaveWizard),
@@ -218,7 +212,6 @@ impl ProjectWizard {
 			WizardField::MoveScopeDown => "Move the selected scope later".to_string(),
 			WizardField::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
 			WizardField::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
-			WizardField::ChangelogEnabled => format!("< {} >", if self.changelog_enabled { "Yes" } else { "No" }),
 			WizardField::ChangelogPath => self.changelog_path.display_value_with_width(focused, max_width),
 			WizardField::Validate => "Validate target".to_string(),
 			WizardField::Save => "Persist project".to_string(),
@@ -254,9 +247,6 @@ impl ProjectWizard {
 			}
 			WizardField::IntegrationMode => {
 				self.integration_mode = if delta >= 0 { self.integration_mode.next() } else { self.integration_mode.previous() };
-			}
-			WizardField::ChangelogEnabled => {
-				self.changelog_enabled = !self.changelog_enabled;
 			}
 			_ => {}
 		}
@@ -526,7 +516,7 @@ impl ProjectWizard {
 				integration_mode: self.integration_mode,
 				unified_versioning: true,
 				version_scheme: self.version_scheme,
-				changelog: self.build_changelog_settings(),
+				changelog: self.build_changelog_settings(false),
 				targets: vec![target],
 				branches: Vec::new(),
 				repo,
@@ -538,7 +528,7 @@ impl ProjectWizard {
 				integration_mode: self.integration_mode,
 				unified_versioning: self.unified_versioning,
 				version_scheme: self.version_scheme,
-				changelog: self.build_changelog_settings(),
+				changelog: self.build_changelog_settings(false),
 				targets: Vec::new(),
 				branches: self.build_branches(true)?,
 				repo,
@@ -548,9 +538,9 @@ impl ProjectWizard {
 		Ok(project)
 	}
 
-	fn build_changelog_settings(&self) -> ChangelogSettings {
+	fn build_changelog_settings(&self, enabled: bool) -> ChangelogSettings {
 		ChangelogSettings {
-			enabled: self.changelog_enabled,
+			enabled,
 			file_path: if self.changelog_path.value.trim().is_empty() {
 				DEFAULT_CHANGELOG_PATH.to_string()
 			} else {
@@ -714,7 +704,6 @@ pub(crate) enum WizardField {
 	MoveScopeDown,
 	RepoRoot,
 	RemoteUrl,
-	ChangelogEnabled,
 	ChangelogPath,
 	Validate,
 	Save,
@@ -726,7 +715,7 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn build_project_persists_changelog_settings() {
+	fn build_project_keeps_changelog_disabled_until_scope_settings_change_it() {
 		let mut wizard = ProjectWizard::default();
 		wizard.name.set_value("Example".to_string());
 		wizard.target_path.set_value("Cargo.toml".to_string());
@@ -737,12 +726,11 @@ mod tests {
 			version: Some("0.1.0".to_string()),
 			format: Some(TargetFormat::Toml),
 		});
-		wizard.changelog_enabled = true;
 		wizard.changelog_path.set_value("docs/CHANGELOG.md".to_string());
 
 		let project = wizard.build_project().expect("project should build");
 
-		assert!(project.changelog.enabled);
+		assert!(!project.changelog.enabled);
 		assert_eq!(project.changelog.file_path, "docs/CHANGELOG.md");
 	}
 }
