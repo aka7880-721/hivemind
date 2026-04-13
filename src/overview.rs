@@ -12,7 +12,7 @@ use crate::changelog::{archive_changelog_markdown, build_document_from_git_log};
 use crate::{dialogs::load_recent_change_range_with_cancel, git::GitCancellation};
 use super::git_flow::{
 	append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
-	collect_unexpected_staged_paths, refresh_target_artifacts, stage_path_for_file,
+	collect_unexpected_staged_paths_with_cancel, refresh_target_artifacts, stage_path_for_file,
 	unstage_paths,
 };
 
@@ -683,25 +683,21 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
 	};
 
 	if dialog.selected_workflow() != OverviewBumpWorkflow::JustBump {
-		let warnings = collect_overview_bump_warnings(app, dialog.scope_index)?;
-		if !warnings.is_empty() {
-			app.overview_bump_warning_dialog = Some(OverviewBumpWarningDialog::new(
-				dialog.scope_index,
-				dialog.selected_workflow(),
-				warnings,
-			));
-			app.status = StatusMessage::warning("Previously staged files were found. Review them before committing the bump.");
-			return Ok(());
-		}
-	}
-
-	if should_open_overview_changelog_preview(app, dialog.scope_index, dialog.selected_workflow())? {
-		app.schedule_overview_workflow_changelog_preview(dialog.scope_index, dialog.selected_workflow())?;
+		let project = app.selected_project()?.clone();
+		app.schedule_progress_job(
+			" Checking Staged Files ",
+			"Checking repositories for previously staged files before committing the bump.",
+			BackgroundJobRequest::CheckOverviewBumpWarnings {
+				project,
+				scope_index: dialog.scope_index,
+				workflow: dialog.selected_workflow(),
+			},
+		)?;
+		app.status = StatusMessage::info("Checking repositories for previously staged files before committing the bump.");
 		return Ok(());
 	}
-	execute_overview_bump_workflow(app, dialog.scope_index, dialog.selected_workflow())?;
-	app.overview_bump_workflow_dialog = None;
-	Ok(())
+
+	continue_overview_bump_workflow_confirmation(app, dialog.scope_index, dialog.selected_workflow())
 }
 
 pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
@@ -738,17 +734,35 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
 	Ok(())
 }
 
-pub(super) fn collect_overview_bump_warnings(app: &App, scope_index: usize) -> Result<Vec<UnexpectedStagedRepo>> {
-	let project = app.selected_project()?.clone();
-	let scopes = collect_bump_scopes(&project)?;
+pub(super) fn collect_overview_bump_warnings(
+	project: &ProjectConfig,
+	scope_index: usize,
+	cancel: Option<GitCancellation>,
+) -> Result<Vec<UnexpectedStagedRepo>> {
+	let scopes = collect_bump_scopes(project)?;
 	let affected_scope_indexes = if project.unified_versioning {
 		(0..scopes.len()).collect::<Vec<_>>()
 	} else {
 		vec![scope_index]
 	};
-	let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-	let repo_operations = collect_repo_bump_operations(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
-	collect_unexpected_staged_paths(&repo_operations)
+	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
+	let repo_operations = collect_repo_bump_operations(project, &scopes, &git_contexts, &affected_scope_indexes)?;
+	collect_unexpected_staged_paths_with_cancel(&repo_operations, cancel)
+}
+
+pub(super) fn continue_overview_bump_workflow_confirmation(
+	app: &mut App,
+	scope_index: usize,
+	workflow: OverviewBumpWorkflow,
+) -> Result<()> {
+	if should_open_overview_changelog_preview(app, scope_index, workflow)? {
+		app.schedule_overview_workflow_changelog_preview(scope_index, workflow)?;
+		return Ok(());
+	}
+
+	execute_overview_bump_workflow(app, scope_index, workflow)?;
+	app.overview_bump_workflow_dialog = None;
+	Ok(())
 }
 
 pub(super) fn execute_overview_bump_workflow(
