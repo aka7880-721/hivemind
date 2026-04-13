@@ -9,7 +9,7 @@ use super::*;
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
 use crate::changelog::{archive_changelog_markdown, build_document_from_git_log};
-use crate::dialogs::load_recent_change_range;
+use crate::{dialogs::load_recent_change_range_with_cancel, git::GitCancellation};
 use super::git_flow::{
 	append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
 	collect_unexpected_staged_paths, refresh_target_artifacts, stage_path_for_file,
@@ -591,6 +591,7 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 	project: &ProjectConfig,
 	focused_scope: usize,
 	pending_versions: &[String],
+	cancel: Option<GitCancellation>,
 ) -> Result<ChangelogPreviewDialog> {
 	if !project.integration_mode.requires_repo() {
 		bail!("changelog preview requires a git-backed project");
@@ -617,7 +618,7 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 		.unwrap_or_else(|| scopes[scope_index].version_label().to_string());
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version).await?;
+	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version, cancel).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -834,6 +835,7 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 	scope_index: usize,
 	workflow: OverviewBumpWorkflow,
 	pending_versions: &[String],
+	cancel: Option<GitCancellation>,
 ) -> Result<ChangelogPreviewDialog> {
 	if workflow == OverviewBumpWorkflow::JustBump {
 		bail!("the selected workflow does not require changelog generation");
@@ -860,7 +862,7 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 		.ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version).await?;
+	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version, cancel).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -920,6 +922,7 @@ async fn collect_preview_entries_async(
 	git_contexts: &[crate::git::GitScopeContext],
 	affected_scope_indexes: &[usize],
 	next_version: &str,
+	cancel: Option<GitCancellation>,
 ) -> Result<Vec<ChangelogPreviewEntry>> {
 	let merged_contexts = collect_preview_contexts(git_contexts, affected_scope_indexes)?;
 	let semaphore = Arc::new(Semaphore::new(BACKGROUND_MAX_PARALLEL_REPO_JOBS.max(1)));
@@ -929,13 +932,14 @@ async fn collect_preview_entries_async(
 		let semaphore = Arc::clone(&semaphore);
 		let changelog_path = project.changelog.effective_path().to_string();
 		let next_version = next_version.to_string();
+		let cancel = cancel.clone();
 		tasks.spawn(async move {
 			let _permit = semaphore
 				.acquire_owned()
 				.await
 				.map_err(|_| anyhow!("preview worker pool is unavailable"))?;
 			run_blocking_job(move || {
-				let recent_range = load_recent_change_range(&context)?;
+				let recent_range = load_recent_change_range_with_cancel(&context, cancel)?;
 				Ok(ChangelogPreviewEntry {
 					repo_root: context.repo_root.clone(),
 					changelog_path: changelog_path.clone(),
