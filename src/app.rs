@@ -947,13 +947,7 @@ impl App {
                         }
                     });
                 }
-                if let Some(action) = self.hit_targets.iter().rev().find_map(|target| {
-                    if target.contains(mouse.column, mouse.row) {
-                        Some(target.action.clone())
-                    } else {
-                        None
-                    }
-                }) {
+                if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
                     }
@@ -980,13 +974,7 @@ impl App {
                 self.overview_drag_scope = None;
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                if let Some(action) = self.hit_targets.iter().rev().find_map(|target| {
-                    if target.contains(mouse.column, mouse.row) {
-                        target.right_action.clone()
-                    } else {
-                        None
-                    }
-                }) {
+                if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, true) {
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
                     }
@@ -1124,6 +1112,7 @@ impl App {
             HitAction::ApplyOverviewVersionAndTag(scope_index) => {
                 return self.apply_overview_pending_version(scope_index, true)
             }
+            HitAction::OpenOverviewTagDialog(scope_index) => return self.open_overview_tag_dialog(scope_index),
             HitAction::OpenProjectEdit => return self.open_project_edit_dialog(),
             HitAction::EditProjectField(field) => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
@@ -1220,6 +1209,12 @@ impl App {
         self.open_recent_changes_with_scope(None)
     }
 
+    fn open_overview_tag_dialog(&mut self, scope_index: usize) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        let preferred_scope = if project.unified_versioning { None } else { Some(scope_index) };
+        self.open_tag_dialog_with_scope(preferred_scope, None)
+    }
+
     fn open_recent_changes_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
         let project = self.selected_project()?.clone();
         if !project.integration_mode.requires_repo() {
@@ -1304,6 +1299,27 @@ impl App {
             RecentChangesLoadAction::SwitchTab(tab) => dialog.switch_tab(tab)?,
         }
         Ok(())
+    }
+
+    fn resolve_hit_action(&self, column: u16, row: u16, right_click: bool) -> Option<HitAction> {
+        self.hit_targets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, target)| {
+                if !target.contains(column, row) {
+                    return None;
+                }
+
+                let action = if right_click {
+                    target.right_action.clone()
+                } else {
+                    Some(target.action.clone())
+                }?;
+
+                Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action))
+            })
+            .min_by_key(|(area, reverse_index, _)| (*area, *reverse_index))
+            .map(|(_, _, action)| action)
     }
 
     fn schedule_overview_workflow_changelog_preview(&mut self, scope_index: usize, workflow: OverviewBumpWorkflow) {
@@ -2593,6 +2609,7 @@ pub(crate) enum HitAction {
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
     ResetOverviewPendingVersion(usize),
     ApplyOverviewVersionAndTag(usize),
+    OpenOverviewTagDialog(usize),
     OpenProjectEdit,
     EditProjectField(ProjectEditFocus),
     ProjectEditScopeAction(ScopeAction),
