@@ -67,6 +67,9 @@ impl App {
 		if self.browser_dialog.is_some() {
 			self.render_browser_dialog(frame, frame.area());
 		}
+		if self.progress_dialog.is_some() {
+			self.render_progress_dialog(frame, frame.area());
+		}
 
 		if !self.config.ui.hide_footer {
 			self.render_footer(frame, root[3]);
@@ -80,6 +83,35 @@ impl App {
 		}
 		frame.render_widget(&self.transient_toaster, frame.area());
 		frame.render_widget(&self.sticky_toaster, frame.area());
+	}
+
+	fn render_progress_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.progress_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 54, 22);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(dialog.title.as_str())
+			.border_style(Style::default().fg(Color::Yellow));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let lines = vec![
+			Line::from("Working...").bold(),
+			Line::raw(""),
+			Line::from(dialog.message.clone()),
+			Line::raw(""),
+			Line::from("The interface will update when this step completes.").style(Style::default().fg(Color::Gray)),
+		];
+		frame.render_widget(
+			Paragraph::new(lines)
+				.alignment(Alignment::Center)
+				.wrap(Wrap { trim: false }),
+			inner,
+		);
 	}
 
 	fn render_header(&mut self, frame: &mut Frame, area: Rect) {
