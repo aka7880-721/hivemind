@@ -91,7 +91,7 @@ mod p_s_s;
 #[path = "render.rs"]
 mod render;
 
-use self::p_s_s::ProjectSettingsTab;
+use self::p_s_s::{ProjectSettingsFocus, ProjectSettingsState, ProjectSettingsTab};
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SUPPORT_EMAIL: &str = " dev@comfyhome.io ";
@@ -205,6 +205,7 @@ struct App {
     overview_tab: OverviewTab,
     overview_show_recent_tab: bool,
     project_settings_tab: ProjectSettingsTab,
+    project_settings_state: ProjectSettingsState,
     overview_focused_scope: usize,
     overview_recent_changes: Option<RecentChangesDialog>,
     overview_recent_project: Option<usize>,
@@ -282,6 +283,7 @@ impl App {
             overview_tab: OverviewTab::Overview,
             overview_show_recent_tab: false,
             project_settings_tab: ProjectSettingsTab::General,
+            project_settings_state: ProjectSettingsState::default(),
             overview_focused_scope: 0,
             overview_recent_changes: None,
             overview_recent_project: None,
@@ -418,6 +420,10 @@ impl App {
     }
 
     fn handle_dashboard_key(&mut self, key: KeyEvent) -> Result<()> {
+        if p_s_s::try_handle_project_settings_key(self, key)? {
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Char('n') => self.open_wizard(),
             KeyCode::Char('e') => self.open_project_edit_dialog()?,
@@ -426,21 +432,6 @@ impl App {
             KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
             KeyCode::Char('t') => self.open_tag_dialog()?,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reload_dashboard_overview_data()?,
-            KeyCode::Char('[')
-                if self.dashboard_focus == DashboardPane::Overview && self.overview_tab == OverviewTab::ProjectSettings =>
-            {
-                self.project_settings_tab = self.project_settings_tab.step(-1);
-            }
-            KeyCode::Char(']')
-                if self.dashboard_focus == DashboardPane::Overview && self.overview_tab == OverviewTab::ProjectSettings =>
-            {
-                self.project_settings_tab = self.project_settings_tab.step(1);
-            }
-            KeyCode::Enter | KeyCode::Char(' ')
-                if self.dashboard_focus == DashboardPane::Overview && self.overview_tab == OverviewTab::ProjectSettings =>
-            {
-                self.toggle_selected_scope_changelog_enabled()?;
-            }
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
             KeyCode::Up => {
                 if self.dashboard_focus == DashboardPane::Overview {
@@ -1185,6 +1176,12 @@ impl App {
             return true;
         }
 
+        if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+            if p_s_s::insert_project_settings_text(self, text) {
+                return true;
+            }
+        }
+
         if self.screen == Screen::Wizard {
             if self.wizard.insert_text(text) {
                 return true;
@@ -1213,8 +1210,13 @@ impl App {
                 self.overview_tab = OverviewTab::ProjectSettings;
                 self.project_settings_tab = tab;
                 self.dashboard_focus = DashboardPane::Overview;
+                p_s_s::sync_project_settings_state(self);
             }
-            HitAction::ToggleProjectScopeChangelog => return self.toggle_selected_scope_changelog_enabled(),
+            HitAction::SelectProjectSettingsField(field) => p_s_s::set_project_settings_focus(self, field),
+            HitAction::BrowseProjectSettingsField(field) => {
+                p_s_s::set_project_settings_focus(self, field);
+                return p_s_s::open_browser_for_project_settings_focus(self);
+            }
             HitAction::SelectProject(index) => {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
                 self.prime_selected_project_dashboard_data();
@@ -2038,6 +2040,7 @@ impl App {
         self.config_store.save(&self.config)?;
         self.invalidate_overview_cache();
         self.prime_selected_project_dashboard_data();
+        p_s_s::invalidate_project_settings_state(self);
         self.project_edit_dialog = None;
         self.status = StatusMessage::success("Project settings updated.");
         Ok(())
@@ -2425,6 +2428,11 @@ impl App {
                 .as_ref()
                 .map(|dialog| dialog.repo_root.value().to_string())
                 .unwrap_or_default(),
+            BrowseTarget::ProjectSettingsChangelogPath
+            | BrowseTarget::ProjectSettingsReleaseNowWindows
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => p_s_s::initial_browser_path(self, target).unwrap_or_default(),
         }
     }
 
@@ -2472,6 +2480,17 @@ impl App {
             BrowseTarget::ProjectEditRepoRoot => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.set_repo_root_from_browse(selected);
+                }
+            }
+            BrowseTarget::ProjectSettingsChangelogPath
+            | BrowseTarget::ProjectSettingsReleaseNowWindows
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+                if p_s_s::apply_browser_selection(self, target, selected)? {
+                    self.browser_dialog = None;
+                    self.status = StatusMessage::success("Selection applied.");
+                    return Ok(());
                 }
             }
         }
@@ -2600,37 +2619,6 @@ impl App {
             return Ok(true);
         }
         Ok(false)
-    }
-
-    fn toggle_selected_scope_changelog_enabled(&mut self) -> Result<()> {
-        let project = self
-            .config
-            .projects
-            .get_mut(self.selected_project)
-            .ok_or_else(|| anyhow!("no project is selected"))?;
-        let scope_index = if project.project_type == ProjectType::Branched {
-            self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
-        } else {
-            0
-        };
-        let next_enabled = !project.changelog_enabled_for_scope(scope_index);
-        let scope_label = if project.project_type == ProjectType::Branched {
-            project
-                .branches
-                .get(scope_index)
-                .map(|branch| branch.display_name().to_string())
-                .unwrap_or_else(|| "selected scope".to_string())
-        } else {
-            project.name.clone()
-        };
-        project.set_changelog_enabled_for_scope(scope_index, next_enabled);
-        self.config_store.save(&self.config)?;
-        self.status = StatusMessage::success(format!(
-            "Changelog generation {} for {}.",
-            if next_enabled { "enabled" } else { "disabled" },
-            scope_label
-        ));
-        Ok(())
     }
 
     fn toggle_dashboard_focus(&mut self) {
@@ -2777,9 +2765,10 @@ pub(crate) enum HitAction {
     Switch(Screen),
     SelectOverviewTab(OverviewTab),
     SelectProjectSettingsTab(ProjectSettingsTab),
+    SelectProjectSettingsField(ProjectSettingsFocus),
     SelectProject(usize),
     SelectOverviewScope(usize),
-    ToggleProjectScopeChangelog,
+    BrowseProjectSettingsField(ProjectSettingsFocus),
     OpenOverviewRecentChanges(usize),
     BeginOverviewBump(usize),
     SelectOverviewBumpWorkflow(usize),
@@ -3501,6 +3490,8 @@ impl ScopeDraft {
             scope_kind: self.scope_kind,
             repo: self.repo.clone(),
             changelog_enabled: self.changelog_enabled,
+            changelog_path: None,
+            release_now: crate::config::ReleaseNowSettings::default(),
             version_scheme,
             targets: vec![TargetSpec {
                 label: self.target_label.clone(),
@@ -4306,6 +4297,11 @@ enum BrowseTarget {
     WizardRepoRoot,
     ProjectEditTargetPath,
     ProjectEditRepoRoot,
+    ProjectSettingsChangelogPath,
+    ProjectSettingsReleaseNowWindows,
+    ProjectSettingsReleaseNowLinuxArm,
+    ProjectSettingsReleaseNowLinuxAmd,
+    ProjectSettingsReleaseNowMacOs,
 }
 
 struct FileBrowserDialog {
@@ -4322,10 +4318,14 @@ impl FileBrowserDialog {
             BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot
         );
         let explorer = configure_file_explorer(FileExplorerBuilder::default(), &initial_path, select_directories)?;
-        let title = if select_directories {
-            "Browse Repo Root"
-        } else {
-            "Browse Target Path"
+        let title = match target {
+            BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot => "Browse Repo Root",
+            BrowseTarget::ProjectSettingsChangelogPath => "Browse Changelog Path",
+            BrowseTarget::ProjectSettingsReleaseNowWindows
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => "Browse Release Script",
+            _ => "Browse Target Path",
         };
 
         Ok(Self {
@@ -5002,12 +5002,12 @@ mod tests {
         let mut wizard = ProjectWizard::default();
         wizard.project_type = ProjectType::Branched;
         wizard.integration_mode = IntegrationMode::GitHubEnabled;
-        wizard.focus = WizardField::ChangelogPath;
+        wizard.focus = WizardField::RemoteUrl;
 
         let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
 
         assert_eq!(row_height, 2);
-        assert!(visible_fields.contains(&WizardField::ChangelogPath));
+        assert!(visible_fields.contains(&WizardField::RemoteUrl));
         assert!(show_above);
         assert!(!show_below);
     }
