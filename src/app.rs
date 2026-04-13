@@ -70,7 +70,7 @@ use crate::{
         RepoActivitySummary, load_scope_activity_summary_with_cancel, run_git, run_git_checked,
         split_output_lines,
     },
-    overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
+    overview_pg::{OverviewTab, overview_tab_rects, overview_tabs, render_overview_tabs},
     project_edit::{ProjectEditDialog, ProjectEditFocus},
     project_wizard::{ProjectWizard, WizardField},
     targets::{
@@ -86,8 +86,12 @@ use crate::{
 mod git_flow;
 #[path = "overview.rs"]
 mod overview;
+#[path = "p-s-s.rs"]
+mod p_s_s;
 #[path = "render.rs"]
 mod render;
+
+use self::p_s_s::ProjectSettingsTab;
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SUPPORT_EMAIL: &str = " dev@comfyhome.io ";
@@ -200,6 +204,7 @@ struct App {
     dashboard_focus: DashboardPane,
     overview_tab: OverviewTab,
     overview_show_recent_tab: bool,
+    project_settings_tab: ProjectSettingsTab,
     overview_focused_scope: usize,
     overview_recent_changes: Option<RecentChangesDialog>,
     overview_recent_project: Option<usize>,
@@ -276,6 +281,7 @@ impl App {
             dashboard_focus: DashboardPane::Projects,
             overview_tab: OverviewTab::Overview,
             overview_show_recent_tab: false,
+            project_settings_tab: ProjectSettingsTab::General,
             overview_focused_scope: 0,
             overview_recent_changes: None,
             overview_recent_project: None,
@@ -406,7 +412,6 @@ impl App {
 
         match self.screen {
             Screen::Dashboard => self.handle_dashboard_key(key),
-            Screen::Settings => self.handle_settings_key(key),
             Screen::UiSettings => self.handle_ui_settings_key(key),
             Screen::Wizard => self.handle_wizard_key(key),
         }
@@ -415,12 +420,27 @@ impl App {
     fn handle_dashboard_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Char('n') => self.open_wizard(),
+            KeyCode::Char('e') => self.open_project_edit_dialog()?,
             KeyCode::Char('b') => self.open_bump_dialog()?,
             KeyCode::Char('g') => self.open_recent_changes()?,
             KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
             KeyCode::Char('t') => self.open_tag_dialog()?,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reload_dashboard_overview_data()?,
-            KeyCode::Char('s') => self.screen = Screen::Settings,
+            KeyCode::Char('[')
+                if self.dashboard_focus == DashboardPane::Overview && self.overview_tab == OverviewTab::ProjectSettings =>
+            {
+                self.project_settings_tab = self.project_settings_tab.step(-1);
+            }
+            KeyCode::Char(']')
+                if self.dashboard_focus == DashboardPane::Overview && self.overview_tab == OverviewTab::ProjectSettings =>
+            {
+                self.project_settings_tab = self.project_settings_tab.step(1);
+            }
+            KeyCode::Enter | KeyCode::Char(' ')
+                if self.dashboard_focus == DashboardPane::Overview && self.overview_tab == OverviewTab::ProjectSettings =>
+            {
+                self.toggle_selected_scope_changelog_enabled()?;
+            }
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
             KeyCode::Up => {
                 if self.dashboard_focus == DashboardPane::Overview {
@@ -464,18 +484,6 @@ impl App {
                     }
                 }
             }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_settings_key(&mut self, key: KeyEvent) -> Result<()> {
-        match key.code {
-            KeyCode::Char('d') => self.screen = Screen::Dashboard,
-            KeyCode::Char('n') => self.open_wizard(),
-            KeyCode::Char('e') => self.open_project_edit_dialog()?,
-            KeyCode::Up => self.move_project_selection(-1),
-            KeyCode::Down => self.move_project_selection(1),
             _ => {}
         }
         Ok(())
@@ -965,7 +973,7 @@ impl App {
                     if let Some(dialog) = &mut self.overview_recent_changes {
                         dialog.scroll_by(-2);
                     }
-                } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
+                } else if self.screen == Screen::Dashboard {
                     self.move_project_selection(-1);
                 }
             }
@@ -1010,7 +1018,7 @@ impl App {
                     if let Some(dialog) = &mut self.overview_recent_changes {
                         dialog.scroll_by(2);
                     }
-                } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
+                } else if self.screen == Screen::Dashboard {
                     self.move_project_selection(1);
                 }
             }
@@ -1201,6 +1209,12 @@ impl App {
                 self.overview_tab = tab;
                 self.dashboard_focus = DashboardPane::Overview;
             }
+            HitAction::SelectProjectSettingsTab(tab) => {
+                self.overview_tab = OverviewTab::ProjectSettings;
+                self.project_settings_tab = tab;
+                self.dashboard_focus = DashboardPane::Overview;
+            }
+            HitAction::ToggleProjectScopeChangelog => return self.toggle_selected_scope_changelog_enabled(),
             HitAction::SelectProject(index) => {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
                 self.prime_selected_project_dashboard_data();
@@ -1231,7 +1245,6 @@ impl App {
                 return self.reset_overview_pending_version(scope_index)
             }
             HitAction::OpenOverviewTagDialog(scope_index) => return self.open_overview_tag_dialog(scope_index),
-            HitAction::OpenProjectEdit => return self.open_project_edit_dialog(),
             HitAction::EditProjectField(field) => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.focus = field;
@@ -1707,11 +1720,16 @@ impl App {
 
     fn open_dashboard_changelog_preview(&mut self) -> Result<()> {
         let project = self.selected_project()?.clone();
+        let scope_index = if project.project_type == ProjectType::Branched {
+            self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
+        } else {
+            0
+        };
         if !project.integration_mode.requires_repo() {
             bail!("changelog preview requires a git-backed project");
         }
-        if !project.changelog.enabled {
-            bail!("changelog generation is disabled for this project");
+        if !project.changelog_enabled_for_scope(scope_index) {
+            bail!("changelog generation is disabled for the selected scope");
         }
 
         self.schedule_progress_job(
@@ -1719,7 +1737,7 @@ impl App {
             "Building changelog preview from current git history.",
             BackgroundJobRequest::OpenDashboardChangelogPreview {
                 project,
-                scope_index: self.overview_focused_scope,
+                scope_index,
                 pending_versions: self.overview_pending_versions.clone(),
             },
         )?;
@@ -2069,10 +2087,10 @@ impl App {
     }
 
     fn create_local_tag(&mut self) -> Result<()> {
-        let changelog_enabled = self.selected_project()?.changelog.enabled;
         let Some(dialog) = self.tag_dialog.clone() else {
             return Ok(());
         };
+        let changelog_enabled = self.selected_project()?.changelog_enabled_for_scope(dialog.selected_scope);
 
         let tag_name = dialog.tag_name.value.trim();
         if tag_name.is_empty() {
@@ -2542,17 +2560,11 @@ impl App {
         }
 
         if self.screen == Screen::Dashboard && self.dashboard_focus == DashboardPane::Overview {
-            let target = match key.code {
-                KeyCode::Char('1') => Some(OverviewTab::Overview),
-                KeyCode::Char('2') => {
-                    if self.overview_show_recent_tab {
-                        Some(OverviewTab::RecentChanges)
-                    } else {
-                        Some(OverviewTab::ProjectDetail)
-                    }
-                }
-                KeyCode::Char('3') if self.overview_show_recent_tab => Some(OverviewTab::ProjectDetail),
-                _ => None,
+            let target = if let KeyCode::Char(digit @ '1'..='4') = key.code {
+                let index = (digit as u8 - b'1') as usize;
+                overview_tabs(self.overview_show_recent_tab).get(index).copied()
+            } else {
+                None
             };
             if let Some(target) = target {
                 self.overview_tab = target;
@@ -2563,8 +2575,7 @@ impl App {
         let target = match key.code {
             KeyCode::Char('1') => Some(Screen::Dashboard),
             KeyCode::Char('2') => Some(Screen::Wizard),
-            KeyCode::Char('3') => Some(Screen::Settings),
-            KeyCode::Char('4') => Some(Screen::UiSettings),
+            KeyCode::Char('3') => Some(Screen::UiSettings),
             _ => None,
         };
 
@@ -2589,6 +2600,37 @@ impl App {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    fn toggle_selected_scope_changelog_enabled(&mut self) -> Result<()> {
+        let project = self
+            .config
+            .projects
+            .get_mut(self.selected_project)
+            .ok_or_else(|| anyhow!("no project is selected"))?;
+        let scope_index = if project.project_type == ProjectType::Branched {
+            self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
+        } else {
+            0
+        };
+        let next_enabled = !project.changelog_enabled_for_scope(scope_index);
+        let scope_label = if project.project_type == ProjectType::Branched {
+            project
+                .branches
+                .get(scope_index)
+                .map(|branch| branch.display_name().to_string())
+                .unwrap_or_else(|| "selected scope".to_string())
+        } else {
+            project.name.clone()
+        };
+        project.set_changelog_enabled_for_scope(scope_index, next_enabled);
+        self.config_store.save(&self.config)?;
+        self.status = StatusMessage::success(format!(
+            "Changelog generation {} for {}.",
+            if next_enabled { "enabled" } else { "disabled" },
+            scope_label
+        ));
+        Ok(())
     }
 
     fn toggle_dashboard_focus(&mut self) {
@@ -2689,7 +2731,6 @@ impl App {
 pub(crate) enum Screen {
     Dashboard,
     Wizard,
-    Settings,
     UiSettings,
 }
 
@@ -2735,8 +2776,10 @@ impl HitTarget {
 pub(crate) enum HitAction {
     Switch(Screen),
     SelectOverviewTab(OverviewTab),
+    SelectProjectSettingsTab(ProjectSettingsTab),
     SelectProject(usize),
     SelectOverviewScope(usize),
+    ToggleProjectScopeChangelog,
     OpenOverviewRecentChanges(usize),
     BeginOverviewBump(usize),
     SelectOverviewBumpWorkflow(usize),
@@ -2751,7 +2794,6 @@ pub(crate) enum HitAction {
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
     ResetOverviewPendingVersion(usize),
     OpenOverviewTagDialog(usize),
-    OpenProjectEdit,
     EditProjectField(ProjectEditFocus),
     ProjectEditScopeAction(ScopeAction),
     SaveProjectEdit,
@@ -3341,6 +3383,7 @@ pub(crate) struct ScopeDraft {
     pub(crate) name: TextInput,
     pub(crate) label: String,
     pub(crate) label_follows_name: bool,
+    pub(crate) changelog_enabled: bool,
     pub(crate) target_label: String,
     pub(crate) target_path: TextInput,
     pub(crate) target_key: TextInput,
@@ -3358,6 +3401,7 @@ impl ScopeDraft {
             name: TextInput::with_value(name.clone()),
             label: name.clone(),
             label_follows_name: true,
+            changelog_enabled: false,
             target_label: "Version".to_string(),
             target_path: TextInput::with_value(""),
             target_key: TextInput::with_value("version"),
@@ -3393,6 +3437,7 @@ impl ScopeDraft {
             name: TextInput::with_value(branch.name.clone()),
             label,
             label_follows_name: branch.label.trim().is_empty() || branch.label == branch.name,
+            changelog_enabled: branch.changelog_enabled,
             target_label: target.label.clone(),
             target_path: TextInput::with_value(target.path.clone()),
             target_key: TextInput::with_value(target.key_path.clone()),
@@ -3455,6 +3500,7 @@ impl ScopeDraft {
             },
             scope_kind: self.scope_kind,
             repo: self.repo.clone(),
+            changelog_enabled: self.changelog_enabled,
             version_scheme,
             targets: vec![TargetSpec {
                 label: self.target_label.clone(),
@@ -4719,8 +4765,7 @@ fn browser_visible_range(total: usize, selected: usize, height: usize) -> (usize
 fn main_screen_from_index(index: usize) -> Screen {
     match index {
         1 => Screen::Wizard,
-        2 => Screen::Settings,
-        3 => Screen::UiSettings,
+        2 => Screen::UiSettings,
         _ => Screen::Dashboard,
     }
 }
@@ -4735,21 +4780,6 @@ fn should_use_recent_changes_tab(area_height: u16, max_tile_height: u16) -> bool
 
 fn main_tabs_shortcut_spans() -> Vec<Span<'static>> {
     shortcut_key_label("NUM", " Tabs")
-}
-
-fn settings_footer_line() -> Line<'static> {
-    let mut spans = main_tabs_shortcut_spans();
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_token("↑/↓"));
-    spans.push(Span::raw(" projects | "));
-    spans.extend(shortcut_key_label("E", "dit Selected"));
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("N", "ew Project"));
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("H", "ide Footer"));
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("Q", "uit"));
-    Line::from(spans)
 }
 
 fn ui_settings_footer_line() -> Line<'static> {
@@ -4782,7 +4812,7 @@ fn shortcut_key_label(key: &str, rest: &str) -> Vec<Span<'static>> {
 
 impl App {
     fn main_tab_labels(&self) -> Vec<String> {
-        ["Dashboard", "New Project", "Settings", "UI Settings"]
+        ["Dashboard", "New Project", "UI Settings"]
             .into_iter()
             .enumerate()
             .map(|(index, label)| {
@@ -4799,8 +4829,7 @@ impl App {
         match self.screen {
             Screen::Dashboard => 0,
             Screen::Wizard => 1,
-            Screen::Settings => 2,
-            Screen::UiSettings => 3,
+            Screen::UiSettings => 2,
         }
     }
 }
@@ -4973,7 +5002,6 @@ mod tests {
         let mut wizard = ProjectWizard::default();
         wizard.project_type = ProjectType::Branched;
         wizard.integration_mode = IntegrationMode::GitHubEnabled;
-        wizard.changelog_enabled = true;
         wizard.focus = WizardField::ChangelogPath;
 
         let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
