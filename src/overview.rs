@@ -612,8 +612,11 @@ pub(super) fn reset_overview_pending_version(app: &mut App, scope_index: usize) 
 	Ok(())
 }
 
-pub(super) fn open_dashboard_changelog_preview(app: &mut App) -> Result<()> {
-	let project = app.selected_project()?.clone();
+pub(super) fn build_dashboard_changelog_preview_dialog(
+	project: &ProjectConfig,
+	focused_scope: usize,
+	pending_versions: &[String],
+) -> Result<ChangelogPreviewDialog> {
 	if !project.integration_mode.requires_repo() {
 		bail!("changelog preview requires a git-backed project");
 	}
@@ -621,38 +624,35 @@ pub(super) fn open_dashboard_changelog_preview(app: &mut App) -> Result<()> {
 		bail!("changelog generation is disabled for this project");
 	}
 
-	let scopes = collect_bump_scopes(&project)?;
-	ensure_dashboard_tile_state(app, &scopes);
+	let scopes = collect_bump_scopes(project)?;
 	if scopes.is_empty() {
-		return Ok(());
+		bail!("no changelog preview is available because the project has no version scopes");
 	}
 
-	let scope_index = app.overview_focused_scope.min(scopes.len().saturating_sub(1));
+	let scope_index = focused_scope.min(scopes.len().saturating_sub(1));
 	let affected_scope_indexes = if project.unified_versioning {
 		(0..scopes.len()).collect::<Vec<_>>()
 	} else {
 		vec![scope_index]
 	};
-	let next_version = app
-		.overview_pending_versions
+	let next_version = pending_versions
 		.get(scope_index)
 		.cloned()
 		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
 		.unwrap_or_else(|| scopes[scope_index].version_label().to_string());
 
-	let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-	let changelog_entries = collect_preview_entries(&project, &git_contexts, &affected_scope_indexes, &next_version)?;
+	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
+	let changelog_entries = collect_preview_entries(project, &git_contexts, &affected_scope_indexes, &next_version)?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
 
-	app.open_changelog_preview(ChangelogPreviewDialog::preview_only(
+	Ok(ChangelogPreviewDialog::preview_only(
 		project.name.clone(),
 		next_version,
 		scope_index,
 		changelog_entries,
-	));
-	Ok(())
+	))
 }
 
 pub(super) fn apply_overview_pending_version(app: &mut App, scope_index: usize, open_tag_after: bool) -> Result<()> {
@@ -720,7 +720,7 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
 	}
 
 	if should_open_overview_changelog_preview(app, dialog.scope_index, dialog.selected_workflow())? {
-		app.schedule_overview_workflow_changelog_preview(dialog.scope_index, dialog.selected_workflow());
+		app.schedule_overview_workflow_changelog_preview(dialog.scope_index, dialog.selected_workflow())?;
 		return Ok(());
 	}
 	execute_overview_bump_workflow(app, dialog.scope_index, dialog.selected_workflow())?;
@@ -736,7 +736,7 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
 	match dialog.selected_choice() {
 		OverviewBumpWarningChoice::Continue => {
 			if should_open_overview_changelog_preview(app, dialog.scope_index, dialog.workflow)? {
-				app.schedule_overview_workflow_changelog_preview(dialog.scope_index, dialog.workflow);
+				app.schedule_overview_workflow_changelog_preview(dialog.scope_index, dialog.workflow)?;
 				app.overview_bump_warning_dialog = None;
 				return Ok(());
 			}
@@ -749,7 +749,7 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
 				unstage_paths(&repo.repo_root, &repo.extra_paths)?;
 			}
 			if should_open_overview_changelog_preview(app, dialog.scope_index, dialog.workflow)? {
-				app.schedule_overview_workflow_changelog_preview(dialog.scope_index, dialog.workflow);
+				app.schedule_overview_workflow_changelog_preview(dialog.scope_index, dialog.workflow)?;
 				app.overview_bump_warning_dialog = None;
 				return Ok(());
 			}
@@ -854,43 +854,49 @@ pub(super) fn execute_overview_bump_workflow(
 	Ok(())
 }
 
-pub(super) fn open_overview_changelog_preview_if_enabled(
-	app: &mut App,
+pub(super) fn build_overview_workflow_changelog_preview_dialog(
+	project: &ProjectConfig,
 	scope_index: usize,
 	workflow: OverviewBumpWorkflow,
-) -> Result<bool> {
-	if !should_open_overview_changelog_preview(app, scope_index, workflow)? {
-		return Ok(false);
+	pending_versions: &[String],
+) -> Result<ChangelogPreviewDialog> {
+	if workflow == OverviewBumpWorkflow::JustBump {
+		bail!("the selected workflow does not require changelog generation");
+	}
+	if !project.changelog.enabled || !project.integration_mode.requires_repo() {
+		bail!("changelog generation is not available for this project");
 	}
 
-	let project = app.selected_project()?.clone();
-	let scopes = collect_bump_scopes(&project)?;
+	let scopes = collect_bump_scopes(project)?;
+	if scopes.is_empty() {
+		bail!("no changelog preview is available because the project has no version scopes");
+	}
+
+	let scope_index = scope_index.min(scopes.len().saturating_sub(1));
 	let affected_scope_indexes = if project.unified_versioning {
 		(0..scopes.len()).collect::<Vec<_>>()
 	} else {
 		vec![scope_index]
 	};
-	let next_version = app
-		.overview_pending_versions
+	let next_version = pending_versions
 		.get(scope_index)
 		.cloned()
 		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
 		.ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
 
-	let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-	let changelog_entries = collect_preview_entries(&project, &git_contexts, &affected_scope_indexes, &next_version)?;
+	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
+	let changelog_entries = collect_preview_entries(project, &git_contexts, &affected_scope_indexes, &next_version)?;
 	if changelog_entries.is_empty() {
-		return Ok(false);
+		bail!("no changelog content was generated from the current git history");
 	}
 
-	app.open_changelog_preview(ChangelogPreviewDialog::new(
+	Ok(ChangelogPreviewDialog::new(
 		project.name.clone(),
 		next_version,
 		scope_index,
 		workflow,
 		changelog_entries,
-	));
-	Ok(true)
+	))
 }
 
 fn should_open_overview_changelog_preview(
