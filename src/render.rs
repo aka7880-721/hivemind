@@ -1602,8 +1602,6 @@ impl App {
 				spans.push(Span::raw(" projects"));
 			}
 			DashboardPane::Overview => {
-				spans.extend(shortcut_token("1-3"));
-				spans.push(Span::raw(" overview tabs | "));
 				spans.extend(shortcut_token("←/→"));
 				spans.push(Span::raw(" tile focus | "));
 				spans.extend(shortcut_token("↑/↓"));
@@ -1613,15 +1611,15 @@ impl App {
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("N", "ew Project"));
 		spans.push(Span::raw(" | "));
-		spans.extend(shortcut_key_label("B", "ump"));
-		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("G", "itlog"));
 		spans.push(Span::raw(" / "));
 		spans.extend(shortcut_key_label("C", "hangelog"));
 		spans.push(Span::raw(" | "));
-		spans.extend(shortcut_key_label("T", " Create Tag"));
+		spans.extend(shortcut_key_label("B", "ump"));
+		spans.push(Span::raw(" | "));		
+		spans.extend(shortcut_key_label("T", "ag"));
 		spans.push(Span::raw(" | "));
-		spans.extend(shortcut_key_label("R", " Reload"));
+		spans.extend(shortcut_key_label("R", "eload"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("H", "ide Footer"));
 		spans.push(Span::raw(" | "));
