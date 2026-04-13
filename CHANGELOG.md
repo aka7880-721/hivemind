@@ -1,3 +1,51 @@
+## Changelog 0.6.1
+2026-04-13
+
+#### What's changed:
+
+### Changed in Tiles
+
+#### 🐛 Fix(es)
+
+* fixes visual indication bug for the focused tile when changed via mouse event in Branched project   _(56dcce1)_
+
+---
+
+### General Improvements:
+
+### 🐛 Fix(es)
+
+* fixes ordering bug in gitlog history   _(9e98e17)_
+
+* update licensing statement in COPYRIGHT file to remove version reference   _(e2fa12d)_
+
+### 💎 Enhancements
+
+* implement tag sorting functionality for history   _(9e98e17)_
+
+* add tests for semantic versioning order   _(9e98e17)_
+
+* improve changelog rendering to include general improvements after specific sections   _(f995eaf)_
+
+* adds `---` separator after Specific section   _(f995eaf)_
+
+* G/C shorcut handling in Branched projects   _(56dcce1)_
+
+* update changelog preview dialog for multi-line release notes and improve layout constraints   _(e271165)_
+
+* improve changelog preview functionality with tui-markdown   _(b17078e)_
+
+* Release Notes with multi-line markdown support   _(b17078e)_
+
+* add new dependencies to Cargo.lock and update Cargo.toml for tui-markdown   _(ea01edb)_
+
+* update changelog for 0.6.0 with major performance refactor details   _(bd6cb68)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
+
 ## Changelog 0.6.0
 2026-04-13
 
