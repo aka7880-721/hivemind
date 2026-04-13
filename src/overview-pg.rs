@@ -10,6 +10,28 @@ pub(crate) enum OverviewTab {
 	Overview,
 	RecentChanges,
 	ProjectDetail,
+	ProjectSettings,
+}
+
+const OVERVIEW_TABS_WITH_RECENT: [OverviewTab; 4] = [
+	OverviewTab::Overview,
+	OverviewTab::RecentChanges,
+	OverviewTab::ProjectDetail,
+	OverviewTab::ProjectSettings,
+];
+
+const OVERVIEW_TABS_WITHOUT_RECENT: [OverviewTab; 3] = [
+	OverviewTab::Overview,
+	OverviewTab::ProjectDetail,
+	OverviewTab::ProjectSettings,
+];
+
+pub(crate) fn overview_tabs(include_recent_changes: bool) -> &'static [OverviewTab] {
+	if include_recent_changes {
+		&OVERVIEW_TABS_WITH_RECENT
+	} else {
+		&OVERVIEW_TABS_WITHOUT_RECENT
+	}
 }
 
 
@@ -50,11 +72,13 @@ fn overview_tab_specs(include_recent_changes: bool) -> &'static [(OverviewTab, &
 			(OverviewTab::Overview, "Overview", 16),
 			(OverviewTab::RecentChanges, "Recent Changes", 22),
 			(OverviewTab::ProjectDetail, "Project Detail", 22),
+			(OverviewTab::ProjectSettings, "Project Settings", 24),
 		]
 	} else {
 		&[
 			(OverviewTab::Overview, "Overview", 16),
 			(OverviewTab::ProjectDetail, "Project Detail", 22),
+			(OverviewTab::ProjectSettings, "Project Settings", 24),
 		]
 	}
 }
@@ -66,7 +90,8 @@ mod tests {
 	#[test]
 	fn overview_tab_rects_include_recent_tab_when_requested() {
 		let rects = overview_tab_rects(Rect::new(0, 0, 80, 3), true);
-		assert_eq!(rects.len(), 3);
+		assert_eq!(rects.len(), 4);
 		assert_eq!(rects[1].0, OverviewTab::RecentChanges);
+		assert_eq!(rects[3].0, OverviewTab::ProjectSettings);
 	}
 }
