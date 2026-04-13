@@ -519,6 +519,7 @@ mod tests {
                         local_root: "C:/repo/core".to_string(),
                         remote_url: Some("origin-core".to_string()),
                     }),
+                    changelog_enabled: false,
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -532,6 +533,7 @@ mod tests {
                     label: "API".to_string(),
                     scope_kind: BranchScopeKind::Service,
                     repo: None,
+                    changelog_enabled: false,
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -578,6 +580,7 @@ mod tests {
                         local_root: "C:/repo/core".to_string(),
                         remote_url: None,
                     }),
+                    changelog_enabled: false,
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -594,6 +597,7 @@ mod tests {
                         local_root: "C:/repo/api".to_string(),
                         remote_url: None,
                     }),
+                    changelog_enabled: false,
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -644,6 +648,7 @@ mod tests {
                 label: "Core".to_string(),
                 scope_kind: BranchScopeKind::Branch,
                 repo: None,
+                changelog_enabled: false,
                 version_scheme: VersionScheme::SemVer,
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),
