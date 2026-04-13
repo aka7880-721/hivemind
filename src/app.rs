@@ -11,9 +11,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
-    sync::mpsc::{self, Receiver, Sender, TryRecvError},
     sync::atomic::{AtomicU64, Ordering},
-    thread,
     time::Duration,
 };
 
@@ -41,6 +39,10 @@ use ratatui_comfy_toaster::{
     ToastShortcut, ToastType,
 };
 use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Input as ExplorerInput};
+use tokio::{
+    runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
+    sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError, unbounded_channel},
+};
 use tui_tabs::TabNav;
 use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTextArea};
 
@@ -212,8 +214,9 @@ struct App {
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
     progress_dialog: Option<ProgressDialog>,
-    background_request_tx: Sender<BackgroundJobRequest>,
-    background_result_rx: Receiver<BackgroundJobResult>,
+    background_request_tx: UnboundedSender<BackgroundJobRequest>,
+    background_result_rx: UnboundedReceiver<BackgroundJobResult>,
+    _background_runtime: TokioRuntime,
     background_job_active: bool,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
@@ -232,7 +235,7 @@ impl App {
         let config_store = ConfigStore::locate()?;
         let config = config_store.load()?;
         let status = StatusMessage::info("Press N to create your first project, or Q to quit.");
-        let (background_request_tx, background_result_rx) = spawn_background_worker();
+        let (background_runtime, background_request_tx, background_result_rx) = spawn_background_worker()?;
         Ok(Self {
             config_store,
             config,
@@ -267,6 +270,7 @@ impl App {
             progress_dialog: None,
             background_request_tx,
             background_result_rx,
+            _background_runtime: background_runtime,
             background_job_active: false,
             project_edit_dialog: None,
             browser_dialog: None,
@@ -3216,20 +3220,35 @@ enum StatusKind {
     Error,
 }
 
-fn spawn_background_worker() -> (Sender<BackgroundJobRequest>, Receiver<BackgroundJobResult>) {
-    let (request_tx, request_rx) = mpsc::channel::<BackgroundJobRequest>();
-    let (result_tx, result_rx) = mpsc::channel::<BackgroundJobResult>();
+fn spawn_background_worker(
+) -> Result<(
+    TokioRuntime,
+    UnboundedSender<BackgroundJobRequest>,
+    UnboundedReceiver<BackgroundJobResult>,
+)> {
+    let runtime = TokioRuntimeBuilder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("cvb-bg")
+        .enable_all()
+        .build()
+        .context("failed to create tokio runtime for background jobs")?;
+    let (request_tx, mut request_rx) = unbounded_channel::<BackgroundJobRequest>();
+    let (result_tx, result_rx) = unbounded_channel::<BackgroundJobResult>();
 
-    thread::spawn(move || {
-        while let Ok(request) = request_rx.recv() {
-            let result = run_background_job(request).map_err(|error| error.to_string());
+    runtime.spawn(async move {
+        while let Some(request) = request_rx.recv().await {
+            let result = match tokio::task::spawn_blocking(move || run_background_job(request)).await {
+                Ok(result) => result.map_err(|error| error.to_string()),
+                Err(error) => Err(format!("background task failed: {error}")),
+            };
+
             if result_tx.send(result).is_err() {
                 break;
             }
         }
     });
 
-    (request_tx, result_rx)
+    Ok((runtime, request_tx, result_rx))
 }
 
 fn run_background_job(request: BackgroundJobRequest) -> Result<BackgroundJobOutput> {
