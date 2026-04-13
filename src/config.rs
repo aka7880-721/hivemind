@@ -5,7 +5,7 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use std::{fs, path::{Path, PathBuf}};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::versioning::VersionScheme;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 pub const DEFAULT_CHANGELOG_PATH: &str = "CHANGELOG.md";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,13 +141,25 @@ impl ProjectConfig {
             for target in &self.targets {
                 lines.push(format!("Target: {} -> {} [{}]", target.path, target.key_path, target.format.display_name()));
             }
+            lines.push(format!(
+                "Changelog: {}",
+                if self.changelog.enabled { "Enabled" } else { "Disabled" }
+            ));
         } else {
-            for branch in &self.branches {
+            for (scope_index, branch) in self.branches.iter().enumerate() {
                 lines.push(format!(
                     "{}: {} ({})",
                     branch.scope_kind.display_name(),
                     branch.display_name(),
                     branch.version_scheme.display_name()
+                ));
+                lines.push(format!(
+                    "  Changelog generation: {}",
+                    if self.changelog_enabled_for_scope(scope_index) {
+                        "Enabled"
+                    } else {
+                        "Disabled"
+                    }
                 ));
                 if let Some(repo) = &branch.repo {
                     lines.push(format!("  Scope repo override: {}", repo.local_root));
@@ -168,13 +180,33 @@ impl ProjectConfig {
             }
         }
 
-        lines.push(format!(
-            "Changelog: {}",
-            if self.changelog.enabled { "Enabled" } else { "Disabled" }
-        ));
         lines.push(format!("Changelog path: {}", self.changelog.effective_path()));
 
         lines
+    }
+
+    pub fn changelog_enabled_for_scope(&self, scope_index: usize) -> bool {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.enabled,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .map(|branch| branch.changelog_enabled)
+                .or_else(|| self.branches.first().map(|branch| branch.changelog_enabled))
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn set_changelog_enabled_for_scope(&mut self, scope_index: usize, enabled: bool) {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.enabled = enabled,
+            ProjectType::Branched => {
+                if let Some(branch) = self.branches.get_mut(scope_index) {
+                    branch.changelog_enabled = enabled;
+                }
+                self.changelog.enabled = self.branches.first().map(|branch| branch.changelog_enabled).unwrap_or(false);
+            }
+        }
     }
 }
 
@@ -285,6 +317,8 @@ pub struct BranchConfig {
     pub scope_kind: BranchScopeKind,
     #[serde(default)]
     pub repo: Option<RepoConfig>,
+    #[serde(default)]
+    pub changelog_enabled: bool,
     pub version_scheme: VersionScheme,
     #[serde(default)]
     pub targets: Vec<TargetSpec>,
@@ -395,13 +429,10 @@ impl ConfigStore {
             .with_context(|| format!("failed to write {}", self.path.display()))?;
         Ok(())
     }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
+    let original_schema_version = config.schema_version;
     if config.schema_version > SCHEMA_VERSION {
         bail!("unsupported config schema version {}", config.schema_version);
     }
@@ -420,6 +451,7 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
                 label: "core".to_string(),
                 scope_kind: BranchScopeKind::Branch,
                 repo: None,
+                changelog_enabled: project.changelog.enabled,
                 version_scheme: project.version_scheme,
                 targets,
             });
@@ -429,6 +461,10 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
         for branch in &mut project.branches {
             if branch.label.trim().is_empty() {
                 branch.label = branch.name.clone();
+                changed = true;
+            }
+            if original_schema_version < 4 {
+                branch.changelog_enabled = project.changelog.enabled;
                 changed = true;
             }
         }
@@ -453,6 +489,7 @@ mod tests {
             label: String::new(),
             scope_kind: BranchScopeKind::Branch,
             repo: None,
+            changelog_enabled: false,
             version_scheme: VersionScheme::SemVer,
             targets: Vec::new(),
         };
@@ -496,6 +533,7 @@ format = "json"
         assert_eq!(branch.display_name(), "core");
         assert_eq!(branch.scope_kind, BranchScopeKind::Branch);
         assert!(branch.repo.is_none());
+        assert!(!branch.changelog_enabled);
         assert_eq!(branch.targets.len(), 1);
         assert!(!config.projects[0].changelog.enabled);
         assert_eq!(config.projects[0].changelog.effective_path(), DEFAULT_CHANGELOG_PATH);
@@ -536,6 +574,7 @@ format = "json"
         assert!(changed);
         assert_eq!(migrated.schema_version, SCHEMA_VERSION);
         assert_eq!(migrated.projects[0].branches[0].label, "core");
+        assert!(!migrated.projects[0].branches[0].changelog_enabled);
     }
 
     #[test]
@@ -585,6 +624,7 @@ format = "json"
                 label: "core".to_string(),
                 scope_kind: BranchScopeKind::Branch,
                 repo: None,
+                changelog_enabled: false,
                 version_scheme: VersionScheme::SemVer,
                 targets: Vec::new(),
             }],
@@ -602,6 +642,7 @@ format = "json"
                     label: "api".to_string(),
                     scope_kind: BranchScopeKind::Service,
                     repo: None,
+                    changelog_enabled: false,
                     version_scheme: VersionScheme::CalVerYearMonthMicro,
                     targets: Vec::new(),
                 },
