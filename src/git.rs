@@ -366,24 +366,6 @@ pub(crate) fn run_git_checked(repo_root: &str, args: &[&str]) -> Result<String> 
     }
 }
 
-pub(crate) fn run_gh_checked(repo_root: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run gh in {}", repo_root))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if details.is_empty() {
-            bail!("gh {:?} failed in {}", args, repo_root)
-        } else {
-            bail!("gh {:?} failed in {}: {}", args, repo_root, details)
-        }
-    }
-}
-
 pub(crate) fn split_output_lines(output: &str) -> Vec<String> {
     output
         .lines()
