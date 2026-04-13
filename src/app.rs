@@ -237,6 +237,9 @@ struct App {
     current_recent_changes_prefetch_job_id: Option<u64>,
     current_changelog_preview_job_id: Option<u64>,
     current_overview_activity_job_id: Option<u64>,
+    overview_activity_job_inflight: bool,
+    overview_activity_refresh_inflight: bool,
+    overview_activity_refresh_pending: bool,
     current_recent_changes_cancel: Option<GitCancellation>,
     current_recent_changes_prefetch_cancel: Option<GitCancellation>,
     current_changelog_preview_cancel: Option<GitCancellation>,
@@ -310,6 +313,9 @@ impl App {
             current_recent_changes_prefetch_job_id: None,
             current_changelog_preview_job_id: None,
             current_overview_activity_job_id: None,
+            overview_activity_job_inflight: false,
+            overview_activity_refresh_inflight: false,
+            overview_activity_refresh_pending: false,
             current_recent_changes_cancel: None,
             current_recent_changes_prefetch_cancel: None,
             current_changelog_preview_cancel: None,
@@ -1350,6 +1356,19 @@ impl App {
             self.active_foreground_job_id = None;
         }
 
+        if self.current_overview_activity_job_id == Some(message.id)
+            && message.kind == BackgroundJobKind::OverviewActivity
+        {
+            self.overview_activity_job_inflight = false;
+            if self.overview_activity_refresh_inflight {
+                self.overview_activity_refresh_inflight = false;
+                if self.overview_activity_refresh_pending {
+                    self.overview_activity_refresh_pending = false;
+                    self.schedule_refresh_overview_activity_cache()?;
+                }
+            }
+        }
+
         if self.is_background_result_stale(&message) {
             return Ok(true);
         }
@@ -1368,6 +1387,42 @@ impl App {
                 self.recent_changes_dialog = Some(dialog);
                 let _ = self.schedule_recent_changes_prefetch();
                 self.status = StatusMessage::info("Showing git log for the selected project.");
+            }
+            BackgroundJobOutput::PendingBumpMainBranch {
+                integration_mode,
+                repos,
+                pending_action,
+            } => {
+                if repos.is_empty() {
+                    self.resume_pending_bump_action(pending_action)?;
+                } else {
+                    self.main_branch_warning_dialog = Some(MainBranchWarningDialog::new(
+                        integration_mode,
+                        repos,
+                        pending_action,
+                    ));
+                    self.status = StatusMessage::warning(
+                        "It seems like you are not on main branch. Please, choose what would you like to do...",
+                    );
+                }
+            }
+            BackgroundJobOutput::OverviewBumpWarnings {
+                scope_index,
+                workflow,
+                warnings,
+            } => {
+                if warnings.is_empty() {
+                    overview::continue_overview_bump_workflow_confirmation(self, scope_index, workflow)?;
+                } else {
+                    self.overview_bump_warning_dialog = Some(OverviewBumpWarningDialog::new(
+                        scope_index,
+                        workflow,
+                        warnings,
+                    ));
+                    self.status = StatusMessage::warning(
+                        "Previously staged files were found. Review them before committing the bump.",
+                    );
+                }
             }
             BackgroundJobOutput::RecentChanges {
                 dialog,
@@ -1656,21 +1711,16 @@ impl App {
             return Ok(true);
         }
 
-        let scopes = collect_bump_scopes(&project)?;
-        let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
-        let repos = git_flow::collect_non_main_repo_states(&project, &scopes, &git_contexts, &affected_scope_indexes)?;
-        if repos.is_empty() {
-            return Ok(true);
-        }
-
-        self.main_branch_warning_dialog = Some(MainBranchWarningDialog::new(
-            project.integration_mode,
-            repos,
-            pending_action,
-        ));
-        self.status = StatusMessage::warning(
-            "It seems like you are not on main branch. Please, choose what would you like to do...",
-        );
+        self.schedule_progress_job(
+            " Checking Branch State ",
+            "Checking repositories for non-main branches before continuing.",
+            BackgroundJobRequest::CheckPendingBumpMainBranch {
+                project,
+                affected_scope_indexes,
+                pending_action,
+            },
+        )?;
+        self.status = StatusMessage::info("Checking repositories for non-main branches before continuing.");
         Ok(false)
     }
 
@@ -2844,6 +2894,16 @@ enum BackgroundJobRequest {
         project: ProjectConfig,
         preferred_scope: Option<usize>,
     },
+    CheckPendingBumpMainBranch {
+        project: ProjectConfig,
+        affected_scope_indexes: Vec<usize>,
+        pending_action: PendingBumpAction,
+    },
+    CheckOverviewBumpWarnings {
+        project: ProjectConfig,
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+    },
     RecentChanges {
         dialog: RecentChangesDialog,
         action: RecentChangesLoadAction,
@@ -2874,6 +2934,16 @@ enum BackgroundJobRequest {
 
 enum BackgroundJobOutput {
     OpenRecentChanges(RecentChangesDialog),
+    PendingBumpMainBranch {
+        integration_mode: IntegrationMode,
+        repos: Vec<git_flow::RepoBranchState>,
+        pending_action: PendingBumpAction,
+    },
+    OverviewBumpWarnings {
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+        warnings: Vec<UnexpectedStagedRepo>,
+    },
     RecentChanges {
         dialog: RecentChangesDialog,
         status_message: Option<String>,
@@ -2900,6 +2970,7 @@ type BackgroundJobResult = std::result::Result<BackgroundJobOutput, String>;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BackgroundJobKind {
     RecentChanges,
+    RepoScan,
     RecentChangesPrefetch,
     ChangelogPreview,
     OverviewActivity,
@@ -2930,6 +3001,9 @@ impl BackgroundJobRequest {
     fn kind(&self) -> BackgroundJobKind {
         match self {
             Self::OpenRecentChanges { .. } | Self::RecentChanges { .. } => BackgroundJobKind::RecentChanges,
+            Self::CheckPendingBumpMainBranch { .. } | Self::CheckOverviewBumpWarnings { .. } => {
+                BackgroundJobKind::RepoScan
+            }
             Self::PrefetchRecentChanges { .. } => BackgroundJobKind::RecentChangesPrefetch,
             Self::OpenDashboardChangelogPreview { .. } | Self::OpenOverviewWorkflowChangelog { .. } => {
                 BackgroundJobKind::ChangelogPreview
@@ -3438,6 +3512,45 @@ async fn run_background_job(request: BackgroundJobRequest, cancel: GitCancellati
         } => Ok(BackgroundJobOutput::OpenRecentChanges(
             run_blocking_job(move || RecentChangesDialog::from_project_with_scope_cancellable(&project, preferred_scope.unwrap_or(0), Some(cancel))).await?,
         )),
+        BackgroundJobRequest::CheckPendingBumpMainBranch {
+            project,
+            affected_scope_indexes,
+            pending_action,
+        } => {
+            let integration_mode = project.integration_mode;
+            let repos = run_blocking_job(move || {
+                let scopes = collect_bump_scopes(&project)?;
+                let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+                git_flow::collect_non_main_repo_states_with_cancel(
+                    &project,
+                    &scopes,
+                    &git_contexts,
+                    &affected_scope_indexes,
+                    Some(cancel),
+                )
+            })
+            .await?;
+            Ok(BackgroundJobOutput::PendingBumpMainBranch {
+                integration_mode,
+                repos,
+                pending_action,
+            })
+        }
+        BackgroundJobRequest::CheckOverviewBumpWarnings {
+            project,
+            scope_index,
+            workflow,
+        } => {
+            let warnings = run_blocking_job(move || {
+                overview::collect_overview_bump_warnings(&project, scope_index, Some(cancel))
+            })
+            .await?;
+            Ok(BackgroundJobOutput::OverviewBumpWarnings {
+                scope_index,
+                workflow,
+                warnings,
+            })
+        }
         BackgroundJobRequest::RecentChanges { dialog, action } => {
             let (dialog, status_message) = run_blocking_job(move || apply_recent_changes_background_action(dialog, action, Some(cancel))).await?;
             Ok(BackgroundJobOutput::RecentChanges {
@@ -3794,6 +3907,7 @@ impl App {
                 self.current_recent_changes_job_id = Some(id);
                 self.current_recent_changes_cancel = Some(cancel);
             }
+            BackgroundJobKind::RepoScan => {}
             BackgroundJobKind::RecentChangesPrefetch => {
                 self.current_recent_changes_prefetch_job_id = Some(id);
                 self.current_recent_changes_prefetch_cancel = Some(cancel);
@@ -3817,6 +3931,7 @@ impl App {
                 self.current_recent_changes_job_id = None;
                 self.current_recent_changes_cancel = None;
             }
+            BackgroundJobKind::RepoScan => {}
             BackgroundJobKind::RecentChangesPrefetch if self.current_recent_changes_prefetch_job_id == Some(id) => {
                 self.current_recent_changes_prefetch_job_id = None;
                 self.current_recent_changes_prefetch_cancel = None;
@@ -3836,6 +3951,7 @@ impl App {
     fn is_background_result_stale(&self, message: &BackgroundJobResultMessage) -> bool {
         match message.kind {
             BackgroundJobKind::RecentChanges => self.current_recent_changes_job_id != Some(message.id),
+            BackgroundJobKind::RepoScan => false,
             BackgroundJobKind::RecentChangesPrefetch => self.current_recent_changes_prefetch_job_id != Some(message.id),
             BackgroundJobKind::ChangelogPreview => self.current_changelog_preview_job_id != Some(message.id),
             BackgroundJobKind::OverviewActivity => self.current_overview_activity_job_id != Some(message.id),
@@ -3909,6 +4025,7 @@ impl App {
                     cancel.cancel();
                 }
             }
+            BackgroundJobKind::RepoScan => {}
             BackgroundJobKind::RecentChangesPrefetch => {
                 if let Some(cancel) = self.current_recent_changes_prefetch_cancel.take() {
                     cancel.cancel();
@@ -3935,6 +4052,7 @@ impl App {
                 .clone()
                 .filter(|_| self.current_recent_changes_job_id == Some(id))
                 .unwrap_or_default(),
+            BackgroundJobKind::RepoScan => GitCancellation::default(),
             BackgroundJobKind::RecentChangesPrefetch => self
                 .current_recent_changes_prefetch_cancel
                 .clone()
@@ -3958,7 +4076,10 @@ impl App {
         let Some(project) = self.config.projects.get(self.selected_project).cloned() else {
             return Ok(());
         };
-        if !project.integration_mode.requires_repo() || self.overview_activity_project == Some(self.selected_project) {
+        if !project.integration_mode.requires_repo()
+            || self.overview_activity_project == Some(self.selected_project)
+            || self.overview_activity_job_inflight
+        {
             return Ok(());
         }
 
@@ -3969,6 +4090,7 @@ impl App {
                 project,
             },
         )?;
+        self.overview_activity_job_inflight = true;
         Ok(())
     }
 
@@ -3980,6 +4102,11 @@ impl App {
             return Ok(());
         }
 
+        if self.overview_activity_refresh_inflight {
+            self.overview_activity_refresh_pending = true;
+            return Ok(());
+        }
+
         let _ = self.schedule_background_job(
             BackgroundJobPriority::Refresh,
             BackgroundJobRequest::RefreshOverviewActivity {
@@ -3987,6 +4114,9 @@ impl App {
                 project,
             },
         )?;
+        self.overview_activity_job_inflight = true;
+        self.overview_activity_refresh_inflight = true;
+        self.overview_activity_refresh_pending = false;
         Ok(())
     }
 }
