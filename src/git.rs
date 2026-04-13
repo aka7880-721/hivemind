@@ -3,14 +3,14 @@
 //
 // Licensed under the ComfyVersionBumper License v1.2
 //
-pub(crate) fn current_branch(repo_root: &str) -> Result<String> {
-    let branch = run_git_checked(repo_root, &["branch", "--show-current"])?;
+pub(crate) fn current_branch_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<String> {
+    let branch = run_git_checked_with_cancel(repo_root, &["branch", "--show-current"], cancel.clone())?;
     let branch = branch.trim();
     if !branch.is_empty() {
         return Ok(branch.to_string());
     }
 
-    let head = run_git_checked(repo_root, &["rev-parse", "--short", "HEAD"])?;
+    let head = run_git_checked_with_cancel(repo_root, &["rev-parse", "--short", "HEAD"], cancel)?;
     Ok(format!("detached ({})", head.trim()))
 }
 
