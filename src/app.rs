@@ -55,6 +55,7 @@ use crate::{
     branding::{PixelLogo, choose_header_content},
     changelog::{
         ChangelogDocument, archive_changelog_markdown, build_document_from_git_log,
+        find_archived_changelog_markdown,
         write_changelog_markdown, write_temp_changelog_markdown,
     },
     config::{
@@ -2543,7 +2544,7 @@ impl App {
     }
 
     fn select_browser_index(&mut self, index: usize) {
-        let mut confirm_file = false;
+        let mut confirm_selection = false;
         if let Some(dialog) = &mut self.browser_dialog {
             let len = dialog.explorer.files().len();
             if len == 0 || index >= len {
@@ -2551,11 +2552,11 @@ impl App {
             }
             let already_selected = dialog.explorer.selected_idx() == index;
             dialog.explorer.set_selected_idx(index);
-            if already_selected && !dialog.select_directories && dialog.explorer.current().path.is_file() {
-                confirm_file = true;
+            if already_selected {
+                confirm_selection = true;
             }
         }
-        if confirm_file {
+        if confirm_selection {
             let _ = self.confirm_browser_selection();
         }
     }
@@ -4721,6 +4722,10 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
 }
 
 fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeContext) -> Result<String> {
+    if let Some(markdown) = find_archived_changelog_markdown(&scope.repo_root, tag_name)? {
+        return Ok(markdown);
+    }
+
     let recent_range = load_recent_change_range_with_cancel(scope, None)?;
     Ok(build_document_from_git_log(tag_name.to_string(), &recent_range.lines)
         .render_markdown()
