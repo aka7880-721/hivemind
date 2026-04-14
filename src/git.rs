@@ -301,16 +301,30 @@ fn activity_filter_for_target(path: &str) -> Option<String> {
 }
 
 fn normalize_pathspec(repo_root: &Path, path: &str) -> Option<String> {
-    let candidate = Path::new(path);
-    let relative = if candidate.is_absolute() {
-        candidate.strip_prefix(repo_root).ok()?
+    let normalized = path.replace('\\', "/");
+    let repo_root_str = repo_root.display().to_string().replace('\\', "/").trim_end_matches('/').to_string();
+
+    let relative = if Path::new(&normalized).is_absolute() {
+        if let Ok(stripped) = Path::new(&normalized).strip_prefix(repo_root) {
+            stripped.to_string_lossy().replace('\\', "/")
+        } else if normalized == repo_root_str {
+            String::new()
+        } else if let Some(stripped) = normalized.strip_prefix(&(repo_root_str.clone() + "/")) {
+            stripped.to_string()
+        } else {
+            normalized.clone()
+        }
+    } else if normalized == repo_root_str {
+        String::new()
+    } else if let Some(stripped) = normalized.strip_prefix(&(repo_root_str.clone() + "/")) {
+        stripped.to_string()
     } else {
-        candidate
+        normalized.clone()
     };
 
-    let rendered = relative.to_string_lossy().replace('\\', "/");
-    (!rendered.is_empty()).then_some(rendered)
+    (!relative.is_empty()).then_some(relative)
 }
+
 
 fn slugify(value: &str) -> String {
     value
@@ -509,6 +523,7 @@ mod tests {
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
+			release_now: crate::config::ReleaseNowSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -519,6 +534,9 @@ mod tests {
                         local_root: "C:/repo/core".to_string(),
                         remote_url: Some("origin-core".to_string()),
                     }),
+                    changelog_enabled: false,
+					changelog_path: None,
+					release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -532,6 +550,9 @@ mod tests {
                     label: "API".to_string(),
                     scope_kind: BranchScopeKind::Service,
                     repo: None,
+                    changelog_enabled: false,
+					changelog_path: None,
+					release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -568,6 +589,7 @@ mod tests {
             unified_versioning: true,
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
+			release_now: crate::config::ReleaseNowSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -578,6 +600,9 @@ mod tests {
                         local_root: "C:/repo/core".to_string(),
                         remote_url: None,
                     }),
+                    changelog_enabled: false,
+					changelog_path: None,
+					release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -594,6 +619,9 @@ mod tests {
                         local_root: "C:/repo/api".to_string(),
                         remote_url: None,
                     }),
+                    changelog_enabled: false,
+					changelog_path: None,
+					release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
                         label: "Version".to_string(),
@@ -638,12 +666,16 @@ mod tests {
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
+			release_now: crate::config::ReleaseNowSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
                 label: "Core".to_string(),
                 scope_kind: BranchScopeKind::Branch,
                 repo: None,
+                changelog_enabled: false,
+				changelog_path: None,
+				release_now: crate::config::ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),

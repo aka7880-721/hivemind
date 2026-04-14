@@ -33,7 +33,6 @@ impl App {
 		match self.screen {
 			Screen::Dashboard => self.render_dashboard(frame, root[2]),
 			Screen::Wizard => self.render_wizard(frame, root[2]),
-			Screen::Settings => self.render_settings(frame, root[2]),
 			Screen::UiSettings => self.render_ui_settings(frame, root[2]),
 		}
 
@@ -64,6 +63,15 @@ impl App {
 		if self.project_edit_dialog.is_some() {
 			self.render_project_edit_dialog(frame, frame.area());
 		}
+		if self.release_now_dialog.is_some() {
+			self.render_release_now_dialog(frame, frame.area());
+		}
+		if self.release_now_notes_dialog.is_some() {
+			self.render_release_now_notes_dialog(frame, frame.area());
+		}
+		if self.delete_confirmation_dialog.is_some() {
+			self.render_delete_confirmation_dialog(frame, frame.area());
+		}
 		if self.browser_dialog.is_some() {
 			self.render_browser_dialog(frame, frame.area());
 		}
@@ -83,35 +91,6 @@ impl App {
 		}
 		frame.render_widget(&self.transient_toaster, frame.area());
 		frame.render_widget(&self.sticky_toaster, frame.area());
-	}
-
-	fn render_progress_dialog(&mut self, frame: &mut Frame, area: Rect) {
-		let Some(dialog) = &self.progress_dialog else {
-			return;
-		};
-
-		let popup = centered_rect(area, 54, 22);
-		frame.render_widget(Clear, popup);
-		let block = Block::default()
-			.borders(Borders::ALL)
-			.title(dialog.title.as_str())
-			.border_style(Style::default().fg(Color::Yellow));
-		let inner = block.inner(popup);
-		frame.render_widget(block, popup);
-
-		let lines = vec![
-			Line::from("Working...").bold(),
-			Line::raw(""),
-			Line::from(dialog.message.clone()),
-			Line::raw(""),
-			Line::from("The interface will update when this step completes.").style(Style::default().fg(Color::Gray)),
-		];
-		frame.render_widget(
-			Paragraph::new(lines)
-				.alignment(Alignment::Center)
-				.wrap(Wrap { trim: false }),
-			inner,
-		);
 	}
 
 	fn render_header(&mut self, frame: &mut Frame, area: Rect) {
@@ -363,7 +342,7 @@ impl App {
 				lines.push(Line::from("- B opens a bump preview for the selected project"));
 				if project.integration_mode.requires_repo() {
 					lines.push(Line::from("- G opens the git log from the configured repo"));
-					if project.changelog.enabled {
+					if project.changelog_enabled_for_scope(self.overview_focused_scope) {
 						lines.push(Line::from("- C opens a changelog preview using the current commit history"));
 					}
 					lines.push(Line::from("- T creates a local tag in the configured repo"));
@@ -384,10 +363,14 @@ impl App {
 				]
 			};
 			frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), overview_inner);
+		} else if self.overview_tab == OverviewTab::ProjectSettings {
+			super::p_s_s::render_project_settings(self, frame, overview_inner);
 		} else {
 			self.render_dashboard_overview(frame, overview_inner);
 		}
 	}
+
+	#[allow(dead_code)]
 
 	fn render_dashboard_overview(&mut self, frame: &mut Frame, area: Rect) {
 		overview::render_dashboard_overview(self, frame, area);
@@ -954,97 +937,6 @@ impl App {
 		self.render_button_row(frame, sections[3], &buttons);
 	}
 
-	fn render_settings(&mut self, frame: &mut Frame, area: Rect) {
-		let columns = Layout::default()
-			.direction(Direction::Horizontal)
-			.constraints([Constraint::Length(38), Constraint::Min(40)])
-			.split(area);
-
-		let left_block = Block::default().borders(Borders::ALL).title(" Projects ");
-		let left_inner = left_block.inner(columns[0]);
-		frame.render_widget(left_block, columns[0]);
-
-		if self.config.projects.is_empty() {
-			let lines = vec![
-				Line::from("No saved projects yet.".bold()),
-				Line::from("Press N to create one before editing settings."),
-			];
-			frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), left_inner);
-		} else {
-			let items = self
-				.config
-				.projects
-				.iter()
-				.map(|project| ListItem::new(vec![
-					Line::from(project.name.clone()).style(Style::default().add_modifier(Modifier::BOLD)),
-					Line::from(project.integration_mode.display_name()).style(Style::default().fg(Color::Gray)),
-				]))
-				.collect::<Vec<_>>();
-			let mut state = ListState::default();
-			state.select(Some(self.selected_project.min(self.config.projects.len().saturating_sub(1))));
-			let list = List::new(items)
-				.highlight_style(Style::default().bg(Color::Blue).fg(Color::Black))
-				.highlight_symbol("> ");
-			frame.render_stateful_widget(list, left_inner, &mut state);
-
-			let row_height = 2_u16;
-			for (index, _) in self.config.projects.iter().enumerate() {
-				let rect = Rect {
-					x: left_inner.x,
-					y: left_inner.y + index as u16 * row_height,
-					width: left_inner.width,
-					height: row_height,
-				};
-				if rect.y < left_inner.y + left_inner.height {
-					self.hit_targets.push(HitTarget::new(rect, HitAction::SelectProject(index)));
-				}
-			}
-		}
-
-		let right_block = Block::default().borders(Borders::ALL).title(" Settings ");
-		let right_inner = right_block.inner(columns[1]);
-		frame.render_widget(right_block, columns[1]);
-
-		let rows = Layout::default()
-			.direction(Direction::Vertical)
-			.constraints([Constraint::Min(8), Constraint::Length(3)])
-			.split(right_inner);
-
-		let mut lines = vec![
-			Line::from(format!("Config file: {}", self.config_store.path().display())).bold(),
-			Line::from(format!("Schema version: {}", self.config.schema_version)),
-			Line::from(format!("Saved projects: {}", self.config.projects.len())),
-			Line::from(format!("Mouse hints: {}", if self.config.ui.show_mouse_hints { "on" } else { "off" })),
-			Line::from(format!("Tab hints: {}", if self.config.ui.show_tab_hints { "on" } else { "off" })),
-			Line::raw(""),
-		];
-		if let Some(project) = self.config.projects.get(self.selected_project) {
-			lines.push(Line::from(format!("Selected project: {}", project.name)).yellow().bold());
-			lines.extend(project.detail_lines().into_iter().map(Line::from));
-			lines.push(Line::raw(""));
-			lines.push(Line::from("Press E to amend repo roots, remotes, and target paths."));
-			lines.push(Line::from("Up/Down switches the selected project."));
-		} else {
-			lines.push(Line::from("Select a project here once you have saved one."));
-		}
-		frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
-
-		let buttons = Layout::default()
-			.direction(Direction::Horizontal)
-			.constraints([Constraint::Length(20), Constraint::Length(18), Constraint::Min(10)])
-			.split(rows[1]);
-		frame.render_widget(
-			Paragraph::new(" Edit Project ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Green)),
-			buttons[0],
-		);
-		frame.render_widget(
-			Paragraph::new(" Dashboard ").block(Block::default().borders(Borders::ALL).title(" action ")).style(Style::default().fg(Color::Yellow)),
-			buttons[1],
-		);
-		self.hit_targets.push(HitTarget::new(buttons[0], HitAction::OpenProjectEdit));
-		self.hit_targets.push(HitTarget::new(buttons[1], HitAction::Switch(Screen::Dashboard)));
-	}
-
 	fn render_ui_settings(&mut self, frame: &mut Frame, area: Rect) {
 		let block = Block::default().borders(Borders::ALL).title(" UI Settings ");
 		let inner = block.inner(area);
@@ -1098,6 +990,34 @@ impl App {
 					Style::default().fg(Color::Black).bg(Color::Yellow),
 				),
 			],
+		);
+	}
+
+	fn render_progress_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.progress_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 56, 18);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(format!(" {} ", dialog.title))
+			.border_style(Style::default().fg(Color::Yellow));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let lines = vec![
+			Line::from(dialog.message.clone()).bold(),
+			Line::raw(""),
+			Line::from("The interface will update when this step completes.")
+				.style(Style::default().fg(Color::Gray)),
+		];
+		frame.render_widget(
+			Paragraph::new(lines)
+				.alignment(Alignment::Center)
+				.wrap(Wrap { trim: false }),
+			inner,
 		);
 	}
 
@@ -1175,6 +1095,272 @@ impl App {
 				DialogButton::new("Save", save_focused, HitAction::SaveProjectEdit, Style::default().fg(Color::Black).bg(Color::Green)),
 				DialogButton::new("Remove", remove_focused, HitAction::RemoveProject, Style::default().fg(Color::White).bg(Color::Red)),
 				DialogButton::new("Cancel", cancel_focused, HitAction::CancelProjectEdit, Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90))),
+			],
+		);
+	}
+
+	fn render_delete_confirmation_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.delete_confirmation_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 60, 28);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(" Confirm Delete ")
+			.border_style(Style::default().fg(Color::Yellow));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let sections = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Min(6), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.split(inner);
+
+		let lines = match &dialog.target {
+			DeleteConfirmationTarget::Project { project_name, .. } => vec![
+				Line::from("Are you sure?".yellow().bold()),
+				Line::from(format!("Project: {}", project_name)).bold(),
+				Line::from("This removes the project from the saved config."),
+				Line::from("Files, tags, and repositories on disk are not deleted."),
+				Line::from("Use Left/Right or Tab to pick an option. Y confirms, N cancels."),
+			],
+			DeleteConfirmationTarget::Scope {
+				project_name,
+				scope_name,
+				scope_kind,
+				removes_project,
+				..
+			} => {
+				let mut lines = vec![
+					Line::from("Are you sure?".yellow().bold()),
+					Line::from(format!("Project: {}", project_name)).bold(),
+					Line::from(format!("Scope: {} ({})", scope_name, scope_kind.display_name())),
+					Line::from("This removes the scope from the saved config."),
+				];
+				if *removes_project {
+					lines.push(Line::from("It is the last remaining scope, so the whole project will also be removed.").style(Style::default().fg(Color::Yellow)));
+				} else {
+					lines.push(Line::from("Files, tags, and repositories on disk are not deleted."));
+				}
+				lines.push(Line::from("Use Left/Right or Tab to pick an option. Y confirms, N cancels."));
+				lines
+			}
+		};
+		frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sections[0]);
+
+		self.render_button_row(
+			frame,
+			sections[1],
+			&[
+				DialogButton::new(
+					"Delete",
+					dialog.confirm_selected,
+					HitAction::ConfirmDeleteRequest,
+					Style::default().fg(Color::White).bg(Color::Red),
+				),
+				DialogButton::new(
+					"Cancel",
+					!dialog.confirm_selected,
+					HitAction::CancelDeleteRequest,
+					Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90)),
+				),
+			],
+		);
+	}
+
+	fn render_release_now_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.release_now_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 88, 76);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(" ReleaseNOW ")
+			.border_style(Style::default().fg(Color::Cyan));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let sections = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Length(6), Constraint::Length(3), Constraint::Min(10), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.split(inner);
+
+		let mut header = vec![
+			Line::from(format!("Project: {}", dialog.project_name)).bold(),
+			Line::from(format!("Scope: {}", dialog.scope_label)),
+			Line::from(format!("Repo: {}", dialog.repo_root)),
+			Line::from(format!("Tag: {}", dialog.tag_name)).style(Style::default().fg(Color::Yellow)),
+		];
+		if dialog.is_warning_mode() {
+			header.push(Line::from("The most recent bump does not look fresh enough for a confident release."));
+			header.push(Line::from("Choose whether to continue anyway or cancel this release."));
+		} else if dialog.is_running() {
+			header.push(Line::from("ReleaseNOW is running now. Live stdout/stderr is streaming into the log pane below."));
+			header.push(Line::from("Use the mouse wheel or PgUp/PgDn to review output. F toggles follow mode and X cancels the run."));
+		} else if dialog.is_completed() {
+			header.push(Line::from("ReleaseNOW finished. Review artifacts and logs below."));
+			header.push(Line::from("Esc or Enter closes this dialog. Mouse wheel and PgUp/PgDn scroll the log."));
+		} else {
+			header.push(Line::from(format!(
+				"Build: < {} > | Changelog: {}",
+				dialog.selected_option().label,
+				if dialog.attach_changelog { "Yes" } else { "No" }
+			)));
+			header.push(Line::from("Left/Right cycles build options. C toggles changelog. E edits notes. Enter or F2 runs ReleaseNOW."));
+		}
+		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
+
+		if !dialog.is_warning_mode() {
+			let config_line = if dialog.is_running() {
+				format!(
+					"Running: {} | Follow: {} | Cancel: {} | Live log lines: {}",
+					dialog.selected_option().label,
+					if dialog.auto_follow() { "On" } else { "Off" },
+					if dialog.cancel_requested() { "requested" } else { "ready" },
+					dialog.log_lines.len()
+				)
+			} else if dialog.is_completed() {
+				format!("Artifacts: {}", dialog.artifact_files.len())
+			} else {
+				format!(
+					"Selected: {} | Notes: {}",
+					dialog.selected_option().label,
+					if dialog.attach_changelog { "attached" } else { "disabled" }
+				)
+			};
+			frame.render_widget(
+				Paragraph::new(config_line)
+					.alignment(Alignment::Center)
+					.style(Style::default().fg(Color::Gray)),
+				sections[1],
+			);
+		}
+
+		let body_block = Block::default().borders(Borders::ALL).title(dialog.body_title());
+		let body_inner = body_block.inner(sections[2]);
+		frame.render_widget(body_block, sections[2]);
+		frame.render_widget(
+			Paragraph::new(dialog.rendered_body_lines())
+				.wrap(Wrap { trim: false })
+				.scroll((dialog.scroll, 0)),
+			body_inner,
+		);
+
+		if dialog.is_warning_mode() {
+			self.render_button_row(
+				frame,
+				sections[3],
+				&[
+					DialogButton::new(
+						"Yes, I'm ready",
+						dialog.warning_confirm_selected,
+						HitAction::ContinueReleaseNowWarning,
+						Style::default().fg(Color::Black).bg(Color::Yellow),
+					),
+					DialogButton::new(
+						"OMG, no, cancel!",
+						!dialog.warning_confirm_selected,
+						HitAction::CloseReleaseNow,
+						Style::default().fg(Color::White).bg(Color::Red),
+					),
+				],
+			);
+		} else if dialog.is_running() {
+			self.render_button_row(
+				frame,
+				sections[3],
+				&[
+					DialogButton::new(
+						format!("Follow: {}", if dialog.auto_follow() { "On" } else { "Off" }),
+						false,
+						HitAction::ToggleReleaseNowAutoFollow,
+						Style::default().fg(Color::Black).bg(Color::Rgb(180, 205, 255)),
+					),
+					DialogButton::new("Scroll", false, HitAction::ScrollReleaseNow(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
+					DialogButton::new(
+						if dialog.cancel_requested() { "Cancelling..." } else { "Cancel Run" },
+						false,
+						HitAction::CancelReleaseNowRun,
+						Style::default().fg(Color::White).bg(Color::Red),
+					),
+				],
+			);
+		} else if dialog.is_completed() {
+			self.render_button_row(
+				frame,
+				sections[3],
+				&[
+					DialogButton::new("Scroll", false, HitAction::ScrollReleaseNow(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
+					DialogButton::new("Close", true, HitAction::CloseReleaseNow, Style::default().fg(Color::White).bg(Color::Red)),
+				],
+			);
+		} else {
+			let mut buttons = vec![
+				DialogButton::new(
+					format!("Build: < {} >", dialog.selected_option().label),
+					false,
+					HitAction::CycleReleaseNowOption(1),
+					Style::default().fg(Color::Black).bg(Color::Rgb(180, 205, 255)),
+				),
+				DialogButton::new(
+					format!("Changelog: {}", if dialog.attach_changelog { "On" } else { "Off" }),
+					false,
+					HitAction::ToggleReleaseNowChangelog,
+					Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+				),
+			];
+			if dialog.attach_changelog {
+				buttons.push(DialogButton::new(
+					"Edit Notes",
+					false,
+					HitAction::EditReleaseNowNotes,
+					Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90)),
+				));
+			}
+			buttons.push(DialogButton::new("Run", false, HitAction::RunReleaseNow, Style::default().fg(Color::Black).bg(Color::Green)));
+			buttons.push(DialogButton::new("Cancel", false, HitAction::CloseReleaseNow, Style::default().fg(Color::White).bg(Color::Red)));
+			self.render_button_row(frame, sections[3], &buttons);
+		}
+	}
+
+	fn render_release_now_notes_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.release_now_notes_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 84, 62);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(" Edit Release Notes ")
+			.border_style(Style::default().fg(Color::Cyan));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let sections = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.split(inner);
+
+		frame.render_widget(
+			Paragraph::new(vec![
+				Line::from("Edit the Markdown that will be attached to the GitHub release.").bold(),
+				Line::from("Ctrl+S or F2 saves. Esc closes without saving."),
+			])
+			.wrap(Wrap { trim: false }),
+			sections[0],
+		);
+		self.render_textarea_editor(frame, sections[1], " Release Notes ", dialog.placeholder.as_str(), &dialog.editor);
+		self.render_button_row(
+			frame,
+			sections[2],
+			&[
+				DialogButton::new("Save", false, HitAction::SaveReleaseNowNotes, Style::default().fg(Color::Black).bg(Color::Green)),
+				DialogButton::new("Cancel", false, HitAction::CancelReleaseNowNotes, Style::default().fg(Color::White).bg(Color::Red)),
 			],
 		);
 	}
@@ -1516,7 +1702,6 @@ impl App {
 		} else {
 			match self.screen {
 				Screen::Dashboard => self.dashboard_footer_line(),
-				Screen::Settings => settings_footer_line(),
 				Screen::UiSettings => ui_settings_footer_line(),
 				Screen::Wizard => Line::from("Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F5 read target | F2 save | Esc cancel"),
 			}
@@ -1611,6 +1796,12 @@ impl App {
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("N", "ew Project"));
 		spans.push(Span::raw(" | "));
+		spans.extend(shortcut_key_label("E", "dit Project"));
+		spans.push(Span::raw(" | "));
+		spans.extend(shortcut_key_label("D", "elete"));
+		spans.push(Span::raw(" | "));
+		spans.extend(shortcut_key_label("L", " ReleaseNOW"));
+		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("G", "itlog"));
 		spans.push(Span::raw(" / "));
 		spans.extend(shortcut_key_label("C", "hangelog"));
@@ -1621,6 +1812,12 @@ impl App {
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("R", "eload"));
 		spans.push(Span::raw(" | "));
+		if self.overview_tab == OverviewTab::ProjectSettings {
+			spans.extend(shortcut_token("[ ]"));
+			spans.push(Span::raw(" sub-tabs | "));
+			spans.extend(shortcut_key_label("Space", " Toggle Changelog"));
+			spans.push(Span::raw(" | "));
+		}
 		spans.extend(shortcut_key_label("H", "ide Footer"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("Q", "uit"));

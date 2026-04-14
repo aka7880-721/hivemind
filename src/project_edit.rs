@@ -43,7 +43,6 @@ pub(crate) struct ProjectEditDialog {
 	pub(crate) unified_versioning: bool,
 	pub(crate) integration_mode: IntegrationMode,
 	pub(crate) version_scheme: VersionScheme,
-	pub(crate) changelog_enabled: bool,
 	pub(crate) focus: ProjectEditFocus,
 }
 
@@ -91,7 +90,6 @@ impl ProjectEditDialog {
 			unified_versioning: project.unified_versioning,
 			integration_mode: project.integration_mode,
 			version_scheme: project.version_scheme,
-			changelog_enabled: project.changelog.enabled,
 			focus: ProjectEditFocus::Name,
 		})
 	}
@@ -128,7 +126,6 @@ impl ProjectEditDialog {
 			ProjectEditFocus::Name
 				| ProjectEditFocus::ScopeName
 				| ProjectEditFocus::TargetPath
-				| ProjectEditFocus::ChangelogPath
 				| ProjectEditFocus::RepoRoot
 				| ProjectEditFocus::RemoteUrl
 		) || (self.focus == ProjectEditFocus::TargetKey && self.target_key_accepts_text())
@@ -147,13 +144,9 @@ impl ProjectEditDialog {
 		fields.extend([
 			ProjectEditFocus::VersionScheme,
 			ProjectEditFocus::IntegrationMode,
-			ProjectEditFocus::ChangelogEnabled,
 			ProjectEditFocus::TargetPath,
 			ProjectEditFocus::TargetKey,
 		]);
-		if self.changelog_enabled {
-			fields.push(ProjectEditFocus::ChangelogPath);
-		}
 		if self.project_type == ProjectType::Branched {
 			fields.extend([
 				ProjectEditFocus::AddScope,
@@ -197,8 +190,6 @@ impl ProjectEditDialog {
 			ProjectEditFocus::MoveScopeDown => ("Move scope down", HitAction::ProjectEditScopeAction(ScopeAction::MoveDown)),
 			ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
 			ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
-			ProjectEditFocus::ChangelogEnabled => ("Changelog generation", HitAction::EditProjectField(field)),
-			ProjectEditFocus::ChangelogPath => ("Changelog path", HitAction::EditProjectField(field)),
 			ProjectEditFocus::Save => ("Save", HitAction::SaveProjectEdit),
 			ProjectEditFocus::Remove => ("Remove", HitAction::RemoveProject),
 			ProjectEditFocus::Cancel => ("Cancel", HitAction::CancelProjectEdit),
@@ -259,10 +250,6 @@ impl ProjectEditDialog {
 			ProjectEditFocus::MoveScopeDown => "Move the selected scope later".to_string(),
 			ProjectEditFocus::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
 			ProjectEditFocus::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
-			ProjectEditFocus::ChangelogEnabled => {
-				format!("< {} >", if self.changelog_enabled { "Yes" } else { "No" })
-			}
-			ProjectEditFocus::ChangelogPath => self.changelog_path.display_value_with_width(focused, max_width),
 			ProjectEditFocus::Save => "Persist project".to_string(),
 			ProjectEditFocus::Remove => "Delete project".to_string(),
 			ProjectEditFocus::Cancel => "Discard changes".to_string(),
@@ -296,9 +283,6 @@ impl ProjectEditDialog {
 			}
 			ProjectEditFocus::IntegrationMode => {
 				self.integration_mode = if delta >= 0 { self.integration_mode.next() } else { self.integration_mode.previous() };
-			}
-			ProjectEditFocus::ChangelogEnabled => {
-				self.changelog_enabled = !self.changelog_enabled;
 			}
 			_ => {}
 		}
@@ -364,7 +348,6 @@ impl ProjectEditDialog {
 			}
 			ProjectEditFocus::RepoRoot => Some(&mut self.repo_root),
 			ProjectEditFocus::RemoteUrl => Some(&mut self.remote_url),
-			ProjectEditFocus::ChangelogPath => Some(&mut self.changelog_path),
 			_ => None,
 		}
 	}
@@ -514,7 +497,13 @@ impl ProjectEditDialog {
 		project.integration_mode = self.integration_mode;
 		project.unified_versioning = self.project_type == ProjectType::AllInOne || self.unified_versioning;
 		project.version_scheme = self.version_scheme;
-		project.changelog = self.build_changelog_settings();
+		let preserved_all_in_one_changelog_enabled = project.changelog.enabled;
+		let preserved_branch_changelog_enabled = project
+			.branches
+			.iter()
+			.map(|branch| branch.changelog_enabled)
+			.collect::<Vec<_>>();
+		project.changelog = self.build_changelog_settings(preserved_all_in_one_changelog_enabled);
 
 		if self.project_type == ProjectType::AllInOne {
 			let target_path = self.target_path.value.trim();
@@ -538,6 +527,15 @@ impl ProjectEditDialog {
 		} else {
 			project.targets.clear();
 			project.branches = self.build_branches(false)?;
+			for (branch, enabled) in project.branches.iter_mut().zip(preserved_branch_changelog_enabled.into_iter()) {
+				branch.changelog_enabled = enabled;
+			}
+		}
+
+		if self.project_type == ProjectType::AllInOne {
+			project.changelog.enabled = preserved_all_in_one_changelog_enabled;
+		} else if let Some(first_branch) = project.branches.first() {
+			project.changelog.enabled = first_branch.changelog_enabled;
 		}
 
 		if self.integration_mode.requires_repo() {
@@ -570,9 +568,9 @@ impl ProjectEditDialog {
 		Ok(())
 	}
 
-	fn build_changelog_settings(&self) -> ChangelogSettings {
+	fn build_changelog_settings(&self, enabled: bool) -> ChangelogSettings {
 		ChangelogSettings {
-			enabled: self.changelog_enabled,
+			enabled,
 			file_path: if self.changelog_path.value.trim().is_empty() {
 				DEFAULT_CHANGELOG_PATH.to_string()
 			} else {
@@ -726,8 +724,6 @@ pub(crate) enum ProjectEditFocus {
 	MoveScopeDown,
 	RepoRoot,
 	RemoteUrl,
-	ChangelogEnabled,
-	ChangelogPath,
 	Save,
 	Remove,
 	Cancel,
@@ -739,7 +735,7 @@ mod tests {
 	use crate::config::{TargetFormat, TargetSpec};
 
 	#[test]
-	fn apply_updates_changelog_settings() {
+	fn apply_updates_changelog_path_without_overwriting_enabled_state() {
 		let mut project = ProjectConfig {
 			name: "Example".to_string(),
 			project_type: ProjectType::AllInOne,
@@ -747,6 +743,7 @@ mod tests {
 			unified_versioning: true,
 			version_scheme: VersionScheme::SemVer,
 			changelog: ChangelogSettings::default(),
+			release_now: crate::config::ReleaseNowSettings::default(),
 			targets: vec![TargetSpec {
 				label: "Version".to_string(),
 				path: "Cargo.toml".to_string(),
@@ -758,17 +755,16 @@ mod tests {
 		};
 
 		let mut dialog = ProjectEditDialog::from_project(0, &project).expect("dialog should build");
-		dialog.changelog_enabled = true;
 		dialog.changelog_path.set_value("notes/CHANGELOG.md".to_string());
 
 		dialog.apply(&mut project).expect("apply should succeed");
 
-		assert!(project.changelog.enabled);
+		assert!(!project.changelog.enabled);
 		assert_eq!(project.changelog.file_path, "notes/CHANGELOG.md");
 	}
 
 	#[test]
-	fn visible_fields_surface_changelog_before_repo_fields() {
+	fn visible_fields_hide_changelog_path_in_project_edit() {
 		let dialog = ProjectEditDialog::from_project(
 			0,
 			&ProjectConfig {
@@ -777,6 +773,7 @@ mod tests {
 				version_scheme: VersionScheme::SemVer,
 				unified_versioning: true,
 				integration_mode: IntegrationMode::GitHubEnabled,
+				release_now: crate::config::ReleaseNowSettings::default(),
 				targets: vec![TargetSpec {
 					label: "Version".to_string(),
 					path: "C:/repo/Cargo.toml".to_string(),
@@ -797,20 +794,13 @@ mod tests {
 		.expect("dialog should build");
 
 		let fields = dialog.visible_fields();
-		let changelog_index = fields
-			.iter()
-			.position(|field| *field == ProjectEditFocus::ChangelogEnabled)
-			.expect("changelog field should exist");
-		let repo_root_index = fields
-			.iter()
-			.position(|field| *field == ProjectEditFocus::RepoRoot)
-			.expect("repo root field should exist");
-
-		assert!(changelog_index < repo_root_index);
+		let labels: Vec<_> = fields.iter().map(|field| dialog.render_field(*field).0).collect();
+		assert!(!labels.contains(&"Changelog path"));
+		assert!(fields.contains(&ProjectEditFocus::RepoRoot));
 	}
 
 	#[test]
-	fn branched_projects_still_surface_changelog_generation_field() {
+	fn branched_projects_hide_changelog_path_field() {
 		let dialog = ProjectEditDialog::from_project(
 			0,
 			&ProjectConfig {
@@ -819,12 +809,16 @@ mod tests {
 				version_scheme: VersionScheme::SemVer,
 				unified_versioning: false,
 				integration_mode: IntegrationMode::GitHubEnabled,
+				release_now: crate::config::ReleaseNowSettings::default(),
 				targets: vec![],
 				branches: vec![BranchConfig {
 					name: "core".to_string(),
 					label: "Core".to_string(),
 					scope_kind: BranchScopeKind::Branch,
 					repo: None,
+					changelog_enabled: true,
+					changelog_path: Some("CHANGELOG.md".to_string()),
+					release_now: crate::config::ReleaseNowSettings::default(),
 					version_scheme: VersionScheme::SemVer,
 					targets: vec![TargetSpec {
 						label: "Version".to_string(),
@@ -845,6 +839,11 @@ mod tests {
 		)
 		.expect("dialog should build");
 
-		assert!(dialog.visible_fields().contains(&ProjectEditFocus::ChangelogEnabled));
+		let labels: Vec<_> = dialog
+			.visible_fields()
+			.iter()
+			.map(|field| dialog.render_field(*field).0)
+			.collect();
+		assert!(!labels.contains(&"Changelog path"));
 	}
 }

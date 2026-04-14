@@ -261,6 +261,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "tui-checkbox",
  "tui-markdown",
  "tui-overlay",
  "tui-tabs",
@@ -2455,6 +2456,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "tui-checkbox"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c01f910e39898ee1ce7fd9194dd161d0af20c9270ee3470a2b64f0a6619c226d"
+dependencies = [
+ "ratatui 0.30.0",
 ]
 
 [[package]]

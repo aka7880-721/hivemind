@@ -16,11 +16,15 @@ use super::git_flow::{
 	unstage_paths,
 };
 
+const PLACEHOLDER_VERSION: &str = "1.2.3";
+const PLACEHOLDER_COMMITS_AHEAD: &str = "7 ahead";
+const PLACEHOLDER_LAST_BUMP: &str = "2 days";
+const PLACEHOLDER_LAST_COMMIT: &str = "14 min";
+
 pub(super) fn render_dashboard_overview(app: &mut App, frame: &mut Frame, area: Rect) {
 	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
 		frame.render_widget(
 			Paragraph::new(vec![
-				Line::from("Overview".bold()),
 				Line::from("Select or create a project to populate the overview page."),
 			])
 			.wrap(Wrap { trim: false }),
@@ -34,7 +38,6 @@ pub(super) fn render_dashboard_overview(app: &mut App, frame: &mut Frame, area: 
 		Err(error) => {
 			frame.render_widget(
 				Paragraph::new(vec![
-					Line::from("Overview".bold()),
 					Line::from(error.to_string()).style(Style::default().fg(Color::Red)),
 				])
 				.wrap(Wrap { trim: false }),
@@ -112,6 +115,12 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
 			Line::from("Recent changes are unavailable.").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
 			Line::from(error.clone()),
 		]
+	} else if let Some(project) = app.config.projects.get(app.selected_project) {
+		if uses_dashboard_placeholder(project) {
+			placeholder_recent_changes_lines(project)
+		} else {
+			vec![Line::from("Recent changes are not available for local-only projects.")]
+		}
 	} else {
 		vec![Line::from("Recent changes are not available for local-only projects.")]
 	};
@@ -178,9 +187,15 @@ pub(super) fn ensure_dashboard_tile_state(app: &mut App, scopes: &[BumpScope]) {
 
 	app.overview_tile_project = Some(app.selected_project);
 	app.overview_scope_order = (0..scopes.len()).collect();
+	let use_placeholder = app
+		.config
+		.projects
+		.get(app.selected_project)
+		.map(uses_dashboard_placeholder)
+		.unwrap_or(false);
 	app.overview_pending_versions = scopes
 		.iter()
-		.map(|scope| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string()))
+		.map(|scope| resolved_scope_preview_version(scope, use_placeholder))
 		.collect();
 	app.overview_tile_scroll = 0;
 	app.overview_focused_scope = 0;
@@ -284,7 +299,7 @@ pub(super) fn render_dashboard_tiles(
 	app: &mut App,
 	frame: &mut Frame,
 	area: Rect,
-	_project: &ProjectConfig,
+	project: &ProjectConfig,
 	scopes: &[BumpScope],
 ) {
 	app.overview_tile_viewport = Some(area);
@@ -358,6 +373,7 @@ pub(super) fn render_dashboard_tiles(
 				None
 			};
 			let selected = scope_index == app.overview_focused_scope;
+			let placeholder = placeholder_activity(scope, project);
 			let tile = OverviewTileData {
 				name: scope.display_name.clone(),
 				scheme: scope.scheme,
@@ -365,18 +381,21 @@ pub(super) fn render_dashboard_tiles(
 					.overview_pending_versions
 					.get(scope_index)
 					.cloned()
-					.unwrap_or_else(|| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string())),
+					.unwrap_or_else(|| resolved_scope_preview_version(scope, uses_dashboard_placeholder(project))),
 				commits_since_tag_label: activity
 					.as_ref()
 					.map(|summary| summary.commits_since_tag_label.clone())
+					.or_else(|| placeholder.as_ref().map(|data| data.commits_since_tag_label.to_string()))
 					.unwrap_or_else(|| "n/a".to_string()),
 				last_bump_label: activity
 					.as_ref()
 					.map(|summary| summary.last_bump_label.clone())
+					.or_else(|| placeholder.as_ref().map(|data| data.last_bump_label.to_string()))
 					.unwrap_or_else(|| "n/a".to_string()),
 				last_commit_label: activity
 					.as_ref()
 					.map(|summary| summary.last_commit_label.clone())
+					.or_else(|| placeholder.as_ref().map(|data| data.last_commit_label.to_string()))
 					.unwrap_or_else(|| "n/a".to_string()),
 				selected,
 			};
@@ -384,7 +403,7 @@ pub(super) fn render_dashboard_tiles(
 			app.overview_tile_rects.push((hotspots.tile_rect, scope_index));
 
 			app.hit_targets.push(HitTarget::new(hotspots.title_rect, HitAction::SelectOverviewScope(scope_index)));
-			app.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::OpenOverviewRecentChanges(scope_index)));
+			app.hit_targets.push(HitTarget::new(hotspots.view_rect, HitAction::OpenOverviewReleaseNow(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.bump_rect, HitAction::BeginOverviewBump(scope_index)));
 			app.hit_targets.push(HitTarget::new(hotspots.tag_rect, HitAction::OpenOverviewTagDialog(scope_index)));
 			if let Some(rect) = hotspots.reset_rect {
@@ -456,6 +475,143 @@ pub(super) fn select_dashboard_overview_scope(app: &mut App, scope_index: usize)
 		dialog.select_scope(scope_index)?;
 	}
 	Ok(())
+}
+
+fn resolved_scope_preview_version(scope: &BumpScope, use_placeholder: bool) -> String {
+	scope
+		.current_version
+		.clone()
+		.or_else(|| (use_placeholder && scope.targets.is_empty()).then(|| PLACEHOLDER_VERSION.to_string()))
+		.unwrap_or_else(|| scope.version_label().to_string())
+}
+
+fn uses_dashboard_placeholder(project: &ProjectConfig) -> bool {
+	project.integration_mode == IntegrationMode::LocalOnly
+		&& match project.project_type {
+			ProjectType::AllInOne => project.targets.is_empty(),
+			ProjectType::Branched => !project.branches.is_empty() && project.branches.iter().all(|branch| branch.targets.is_empty()),
+		}
+}
+
+fn placeholder_activity(scope: &BumpScope, project: &ProjectConfig) -> Option<OverviewPlaceholderData> {
+	if !uses_dashboard_placeholder(project) || !scope.targets.is_empty() {
+		return None;
+	}
+
+	Some(OverviewPlaceholderData {
+		commits_since_tag_label: PLACEHOLDER_COMMITS_AHEAD,
+		last_bump_label: PLACEHOLDER_LAST_BUMP,
+		last_commit_label: PLACEHOLDER_LAST_COMMIT,
+	})
+}
+
+fn placeholder_recent_changes_lines(project: &ProjectConfig) -> Vec<Line<'static>> {
+	let scope_label = if project.project_type == ProjectType::Branched {
+		project
+			.branches
+			.first()
+			.map(|branch| format!("{} ({})", branch.display_name(), branch.scope_kind.display_name()))
+			.unwrap_or_else(|| format!("{} (Project)", project.name))
+	} else {
+		format!("{} (Project)", project.name)
+	};
+
+	vec![
+		Line::from(format!("Scope: {}", scope_label)).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+		Line::from("View: Example history").style(Style::default().fg(Color::Gray)),
+		Line::raw(""),
+		Line::from("* 9f4c2d1 chore(release): prepare 1.2.3"),
+		Line::from("* 4b871aa feat(ui): polish overview placeholders"),
+		Line::from("* 8c02e6d fix(versioning): keep scope bump previews in sync"),
+	]
+}
+
+struct OverviewPlaceholderData {
+	commits_since_tag_label: &'static str,
+	last_bump_label: &'static str,
+	last_commit_label: &'static str,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::config::{BranchConfig, ChangelogSettings, ReleaseNowSettings};
+
+	#[test]
+	fn empty_local_only_project_uses_dashboard_placeholders() {
+		let project = ProjectConfig {
+			name: "demo".to_string(),
+			project_type: ProjectType::AllInOne,
+			integration_mode: IntegrationMode::LocalOnly,
+			unified_versioning: true,
+			version_scheme: VersionScheme::SemVer,
+			changelog: ChangelogSettings::default(),
+			release_now: ReleaseNowSettings::default(),
+			targets: Vec::new(),
+			branches: Vec::new(),
+			repo: None,
+		};
+		let scope = BumpScope {
+			display_name: "demo".to_string(),
+			scope_kind: None,
+			scheme: VersionScheme::SemVer,
+			current_version: None,
+			targets: Vec::new(),
+		};
+
+		assert!(uses_dashboard_placeholder(&project));
+		assert_eq!(resolved_scope_preview_version(&scope, true), PLACEHOLDER_VERSION);
+		let placeholder = placeholder_activity(&scope, &project).expect("placeholder data should exist");
+		assert_eq!(placeholder.commits_since_tag_label, PLACEHOLDER_COMMITS_AHEAD);
+	}
+
+	#[test]
+	fn configured_branched_project_keeps_real_scope_versions() {
+		let project = ProjectConfig {
+			name: "demo".to_string(),
+			project_type: ProjectType::Branched,
+			integration_mode: IntegrationMode::GitLocalOnly,
+			unified_versioning: false,
+			version_scheme: VersionScheme::SemVer,
+			changelog: ChangelogSettings::default(),
+			release_now: ReleaseNowSettings::default(),
+			targets: Vec::new(),
+			branches: vec![BranchConfig {
+				name: "core".to_string(),
+				label: String::new(),
+				scope_kind: BranchScopeKind::Branch,
+				repo: None,
+				changelog_enabled: false,
+				changelog_path: None,
+				release_now: ReleaseNowSettings::default(),
+				version_scheme: VersionScheme::SemVer,
+				targets: vec![TargetSpec {
+					label: "Cargo".to_string(),
+					path: "Cargo.toml".to_string(),
+					key_path: "package.version".to_string(),
+					format: TargetFormat::Toml,
+				}],
+			}],
+			repo: None,
+		};
+		let scope = BumpScope {
+			display_name: "core".to_string(),
+			scope_kind: Some(BranchScopeKind::Branch),
+			scheme: VersionScheme::SemVer,
+			current_version: Some("2.4.6".to_string()),
+			targets: vec![BumpTarget {
+				label: "Cargo".to_string(),
+				path: "Cargo.toml".to_string(),
+				key_path: "package.version".to_string(),
+				format: TargetFormat::Toml,
+				current_version: "2.4.6".to_string(),
+			}],
+		};
+
+		assert!(!uses_dashboard_placeholder(&project));
+		assert_eq!(resolved_scope_preview_version(&scope, false), "2.4.6");
+		assert!(placeholder_activity(&scope, &project).is_none());
+	}
 }
 
 pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<()> {
@@ -556,7 +712,7 @@ pub(super) fn adjust_overview_pending_version(
 		.overview_pending_versions
 		.get(scope_index)
 		.cloned()
-		.unwrap_or_else(|| scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string()));
+		.unwrap_or_else(|| resolved_scope_preview_version(scope, uses_dashboard_placeholder(&project)));
 	let next = adjust_pending_version_value(scope.scheme, &current, control, delta)?;
 	if project.unified_versioning {
 		for pending in &mut app.overview_pending_versions {
@@ -575,7 +731,7 @@ pub(super) fn reset_overview_pending_version(app: &mut App, scope_index: usize) 
 	let Some(scope) = scopes.get(scope_index) else {
 		return Ok(());
 	};
-	let restored = scope.current_version.clone().unwrap_or_else(|| scope.version_label().to_string());
+	let restored = resolved_scope_preview_version(scope, uses_dashboard_placeholder(&project));
 	if project.unified_versioning {
 		for pending in &mut app.overview_pending_versions {
 			*pending = restored.clone();
@@ -596,9 +752,6 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 	if !project.integration_mode.requires_repo() {
 		bail!("changelog preview requires a git-backed project");
 	}
-	if !project.changelog.enabled {
-		bail!("changelog generation is disabled for this project");
-	}
 
 	let scopes = collect_bump_scopes(project)?;
 	if scopes.is_empty() {
@@ -606,19 +759,30 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 	}
 
 	let scope_index = focused_scope.min(scopes.len().saturating_sub(1));
+	if !project.changelog_enabled_for_scope(scope_index) {
+		bail!("changelog generation is disabled for the selected scope");
+	}
 	let affected_scope_indexes = if project.unified_versioning {
 		(0..scopes.len()).collect::<Vec<_>>()
 	} else {
 		vec![scope_index]
 	};
+	let enabled_scope_indexes = affected_scope_indexes
+		.iter()
+		.copied()
+		.filter(|index| project.changelog_enabled_for_scope(*index))
+		.collect::<Vec<_>>();
 	let next_version = pending_versions
 		.get(scope_index)
 		.cloned()
 		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
 		.unwrap_or_else(|| scopes[scope_index].version_label().to_string());
+	if enabled_scope_indexes.is_empty() {
+		bail!("changelog generation is disabled for the affected scope set");
+	}
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version, cancel).await?;
+	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &enabled_scope_indexes, &next_version, cancel).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -854,7 +1018,7 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 	if workflow == OverviewBumpWorkflow::JustBump {
 		bail!("the selected workflow does not require changelog generation");
 	}
-	if !project.changelog.enabled || !project.integration_mode.requires_repo() {
+	if !project.integration_mode.requires_repo() {
 		bail!("changelog generation is not available for this project");
 	}
 
@@ -864,19 +1028,30 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 	}
 
 	let scope_index = scope_index.min(scopes.len().saturating_sub(1));
+	if !project.changelog_enabled_for_scope(scope_index) {
+		bail!("changelog generation is disabled for the selected scope");
+	}
 	let affected_scope_indexes = if project.unified_versioning {
 		(0..scopes.len()).collect::<Vec<_>>()
 	} else {
 		vec![scope_index]
 	};
+	let enabled_scope_indexes = affected_scope_indexes
+		.iter()
+		.copied()
+		.filter(|index| project.changelog_enabled_for_scope(*index))
+		.collect::<Vec<_>>();
 	let next_version = pending_versions
 		.get(scope_index)
 		.cloned()
 		.or_else(|| scopes.get(scope_index).and_then(|scope| scope.current_version.clone()))
 		.ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
+	if enabled_scope_indexes.is_empty() {
+		bail!("changelog generation is disabled for the affected scope set");
+	}
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &affected_scope_indexes, &next_version, cancel).await?;
+	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &enabled_scope_indexes, &next_version, cancel).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -892,7 +1067,7 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 
 fn should_open_overview_changelog_preview(
 	app: &mut App,
-	_scope_index: usize,
+	scope_index: usize,
 	workflow: OverviewBumpWorkflow,
 ) -> Result<bool> {
 	if workflow == OverviewBumpWorkflow::JustBump {
@@ -900,31 +1075,36 @@ fn should_open_overview_changelog_preview(
 	}
 
 	let project = app.selected_project()?.clone();
-	if !project.changelog.enabled || !project.integration_mode.requires_repo() {
+	if !project.integration_mode.requires_repo() || !project.changelog_enabled_for_scope(scope_index) {
 		return Ok(false);
 	}
 	Ok(true)
 }
 
 fn collect_preview_contexts(
+	project: &ProjectConfig,
 	git_contexts: &[crate::git::GitScopeContext],
 	affected_scope_indexes: &[usize],
-) -> Result<Vec<crate::git::GitScopeContext>> {
-	let mut merged_contexts = Vec::<crate::git::GitScopeContext>::new();
+) -> Result<Vec<(crate::git::GitScopeContext, String)>> {
+	let mut merged_contexts = Vec::<(crate::git::GitScopeContext, String)>::new();
 	for scope_index in affected_scope_indexes {
 		let context = git_contexts
 			.get(*scope_index)
 			.or_else(|| git_contexts.first())
 			.ok_or_else(|| anyhow!("git scope metadata is unavailable for changelog preview"))?;
+		let changelog_path = project.changelog_path_for_scope(*scope_index).to_string();
 
-		if let Some(existing) = merged_contexts.iter_mut().find(|existing| existing.repo_root == context.repo_root) {
+		if let Some((existing, _)) = merged_contexts
+			.iter_mut()
+			.find(|(existing, existing_path)| existing.repo_root == context.repo_root && *existing_path == changelog_path)
+		{
 			for path in &context.path_filters {
 				if !existing.path_filters.iter().any(|candidate| candidate == path) {
 					existing.path_filters.push(path.clone());
 				}
 			}
 		} else {
-			merged_contexts.push(context.clone());
+			merged_contexts.push((context.clone(), changelog_path));
 		}
 	}
 
@@ -938,13 +1118,12 @@ async fn collect_preview_entries_async(
 	next_version: &str,
 	cancel: Option<GitCancellation>,
 ) -> Result<Vec<ChangelogPreviewEntry>> {
-	let merged_contexts = collect_preview_contexts(git_contexts, affected_scope_indexes)?;
+	let merged_contexts = collect_preview_contexts(project, git_contexts, affected_scope_indexes)?;
 	let semaphore = Arc::new(Semaphore::new(BACKGROUND_MAX_PARALLEL_REPO_JOBS.max(1)));
 	let mut tasks = JoinSet::new();
 
-	for context in merged_contexts {
+	for (context, changelog_path) in merged_contexts {
 		let semaphore = Arc::clone(&semaphore);
-		let changelog_path = project.changelog.effective_path().to_string();
 		let next_version = next_version.to_string();
 		let cancel = cancel.clone();
 		tasks.spawn(async move {

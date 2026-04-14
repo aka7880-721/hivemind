@@ -70,7 +70,7 @@ use crate::{
         RepoActivitySummary, load_scope_activity_summary_with_cancel, run_git, run_git_checked,
         split_output_lines,
     },
-    overview_pg::{OverviewTab, overview_tab_rects, render_overview_tabs},
+    overview_pg::{OverviewTab, overview_tab_rects, overview_tabs, render_overview_tabs},
     project_edit::{ProjectEditDialog, ProjectEditFocus},
     project_wizard::{ProjectWizard, WizardField},
     targets::{
@@ -86,8 +86,14 @@ use crate::{
 mod git_flow;
 #[path = "overview.rs"]
 mod overview;
+#[path = "p-s-s.rs"]
+mod p_s_s;
+#[path = "rls-now.rs"]
+mod rls_now;
 #[path = "render.rs"]
 mod render;
+
+use self::p_s_s::{ProjectSettingsFocus, ProjectSettingsState, ProjectSettingsTab};
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SUPPORT_EMAIL: &str = " dev@comfyhome.io ";
@@ -200,6 +206,8 @@ struct App {
     dashboard_focus: DashboardPane,
     overview_tab: OverviewTab,
     overview_show_recent_tab: bool,
+    project_settings_tab: ProjectSettingsTab,
+    project_settings_state: ProjectSettingsState,
     overview_focused_scope: usize,
     overview_recent_changes: Option<RecentChangesDialog>,
     overview_recent_project: Option<usize>,
@@ -223,6 +231,9 @@ struct App {
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
+    release_now_dialog: Option<rls_now::ReleaseNowDialog>,
+    release_now_notes_dialog: Option<TagAnnotationDialog>,
+    delete_confirmation_dialog: Option<DeleteConfirmationDialog>,
     progress_dialog: Option<ProgressDialog>,
     foreground_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
     refresh_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
@@ -237,6 +248,7 @@ struct App {
     current_recent_changes_prefetch_job_id: Option<u64>,
     current_changelog_preview_job_id: Option<u64>,
     current_overview_activity_job_id: Option<u64>,
+    current_release_now_job_id: Option<u64>,
     overview_activity_job_inflight: bool,
     overview_activity_refresh_inflight: bool,
     overview_activity_refresh_pending: bool,
@@ -244,6 +256,7 @@ struct App {
     current_recent_changes_prefetch_cancel: Option<GitCancellation>,
     current_changelog_preview_cancel: Option<GitCancellation>,
     current_overview_activity_cancel: Option<GitCancellation>,
+    current_release_now_cancel: Option<GitCancellation>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
@@ -259,6 +272,10 @@ struct App {
 impl App {
     fn new() -> Result<Self> {
         let config_store = ConfigStore::locate()?;
+        Self::new_with_config_store(config_store)
+    }
+
+    fn new_with_config_store(config_store: ConfigStore) -> Result<Self> {
         let config = config_store.load()?;
         let status = StatusMessage::info("Press N to create your first project, or Q to quit.");
         let (
@@ -276,6 +293,8 @@ impl App {
             dashboard_focus: DashboardPane::Projects,
             overview_tab: OverviewTab::Overview,
             overview_show_recent_tab: false,
+            project_settings_tab: ProjectSettingsTab::General,
+            project_settings_state: ProjectSettingsState::default(),
             overview_focused_scope: 0,
             overview_recent_changes: None,
             overview_recent_project: None,
@@ -299,6 +318,9 @@ impl App {
             recent_changes_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
+            release_now_dialog: None,
+            release_now_notes_dialog: None,
+            delete_confirmation_dialog: None,
             progress_dialog: None,
             foreground_request_tx,
             refresh_request_tx,
@@ -313,6 +335,7 @@ impl App {
             current_recent_changes_prefetch_job_id: None,
             current_changelog_preview_job_id: None,
             current_overview_activity_job_id: None,
+            current_release_now_job_id: None,
             overview_activity_job_inflight: false,
             overview_activity_refresh_inflight: false,
             overview_activity_refresh_pending: false,
@@ -320,6 +343,7 @@ impl App {
             current_recent_changes_prefetch_cancel: None,
             current_changelog_preview_cancel: None,
             current_overview_activity_cancel: None,
+            current_release_now_cancel: None,
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
@@ -335,6 +359,19 @@ impl App {
             pending_changelog_write: None,
             should_quit: false,
         })
+    }
+
+    #[cfg(test)]
+    fn new_for_tests() -> Result<Self> {
+        let unique = format!(
+            "cvb-test-config-{}.toml",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        Self::new_with_config_store(ConfigStore::with_path(path))
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -353,6 +390,18 @@ impl App {
 
         if self.browser_dialog.is_some() {
             return self.handle_browser_key(key);
+        }
+
+        if self.release_now_notes_dialog.is_some() {
+            return self.handle_release_now_notes_key(key);
+        }
+
+        if self.release_now_dialog.is_some() {
+            return self.handle_release_now_key(key);
+        }
+
+        if self.delete_confirmation_dialog.is_some() {
+            return self.handle_delete_confirmation_key(key);
         }
 
         if self.project_edit_dialog.is_some() {
@@ -391,6 +440,13 @@ impl App {
             return self.handle_bump_key(key);
         }
 
+        if self.screen == Screen::Dashboard
+            && self.overview_tab == OverviewTab::ProjectSettings
+            && p_s_s::captures_text_input(self)
+        {
+            return self.handle_dashboard_key(key);
+        }
+
         if self.handle_tab_shortcut(key) {
             return Ok(());
         }
@@ -406,21 +462,26 @@ impl App {
 
         match self.screen {
             Screen::Dashboard => self.handle_dashboard_key(key),
-            Screen::Settings => self.handle_settings_key(key),
             Screen::UiSettings => self.handle_ui_settings_key(key),
             Screen::Wizard => self.handle_wizard_key(key),
         }
     }
 
     fn handle_dashboard_key(&mut self, key: KeyEvent) -> Result<()> {
+        if p_s_s::try_handle_project_settings_key(self, key)? {
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Char('n') => self.open_wizard(),
+            KeyCode::Char('e') => self.open_project_edit_dialog()?,
+            KeyCode::Char('d') | KeyCode::Char('D') => self.request_dashboard_delete()?,
+            KeyCode::Char('l') | KeyCode::Char('L') => self.open_release_now_with_scope(None)?,
             KeyCode::Char('b') => self.open_bump_dialog()?,
             KeyCode::Char('g') => self.open_recent_changes()?,
             KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
             KeyCode::Char('t') => self.open_tag_dialog()?,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reload_dashboard_overview_data()?,
-            KeyCode::Char('s') => self.screen = Screen::Settings,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
             KeyCode::Up => {
                 if self.dashboard_focus == DashboardPane::Overview {
@@ -469,15 +530,158 @@ impl App {
         Ok(())
     }
 
-    fn handle_settings_key(&mut self, key: KeyEvent) -> Result<()> {
+    fn handle_delete_confirmation_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Char('d') => self.screen = Screen::Dashboard,
-            KeyCode::Char('n') => self.open_wizard(),
-            KeyCode::Char('e') => self.open_project_edit_dialog()?,
-            KeyCode::Up => self.move_project_selection(-1),
-            KeyCode::Down => self.move_project_selection(1),
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                if let Some(dialog) = &mut self.delete_confirmation_dialog {
+                    dialog.toggle_selection();
+                }
+            }
+            KeyCode::Enter => {
+                if self
+                    .delete_confirmation_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.confirm_selected)
+                    .unwrap_or(false)
+                {
+                    return self.confirm_delete_request();
+                }
+                self.cancel_delete_request();
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => return self.confirm_delete_request(),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.cancel_delete_request(),
             _ => {}
         }
+        Ok(())
+    }
+
+    fn handle_release_now_key(&mut self, key: KeyEvent) -> Result<()> {
+        let warning_mode = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_warning_mode)
+            .unwrap_or(false);
+        let running = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_running)
+            .unwrap_or(false);
+        let completed = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_completed)
+            .unwrap_or(false);
+
+        if warning_mode {
+            match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.toggle_warning_selection();
+                    }
+                }
+                KeyCode::Enter => {
+                    let proceed = self
+                        .release_now_dialog
+                        .as_ref()
+                        .map(|dialog| dialog.warning_confirm_selected)
+                        .unwrap_or(false);
+                    if proceed {
+                        if let Some(dialog) = &mut self.release_now_dialog {
+                            dialog.proceed_past_warning();
+                        }
+                    } else {
+                        self.close_release_now_dialog();
+                    }
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.proceed_past_warning();
+                    }
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.close_release_now_dialog(),
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if running {
+            match key.code {
+                KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::End => self.toggle_release_now_auto_follow(),
+                KeyCode::Char('x') | KeyCode::Char('X') => self.request_cancel_release_now(),
+                KeyCode::Up => self.scroll_release_now(-1),
+                KeyCode::Down => self.scroll_release_now(1),
+                KeyCode::PageUp => self.scroll_release_now(-6),
+                KeyCode::PageDown => self.scroll_release_now(6),
+                KeyCode::Esc => {
+                    self.status = StatusMessage::warning(
+                        "ReleaseNOW is still running. Wait for it to finish before closing the dialog.",
+                    );
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if completed {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => self.close_release_now_dialog(),
+                KeyCode::Up => self.scroll_release_now(-1),
+                KeyCode::Down => self.scroll_release_now(1),
+                KeyCode::PageUp => self.scroll_release_now(-6),
+                KeyCode::PageDown => self.scroll_release_now(6),
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        match key.code {
+            KeyCode::Esc => self.close_release_now_dialog(),
+            KeyCode::Left => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.cycle_option(-1);
+                }
+            }
+            KeyCode::Right => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.cycle_option(1);
+                }
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.toggle_attach_changelog();
+                }
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => self.open_release_now_notes_dialog()?,
+            KeyCode::Enter | KeyCode::F(2) => return self.request_run_release_now(),
+            KeyCode::Up => self.scroll_release_now(-1),
+            KeyCode::Down => self.scroll_release_now(1),
+            KeyCode::PageUp => self.scroll_release_now(-6),
+            KeyCode::PageDown => self.scroll_release_now(6),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_release_now_notes_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            return self.save_release_now_notes();
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.release_now_notes_dialog = None;
+                self.status = StatusMessage::info("Release notes editor closed.");
+            }
+            KeyCode::F(2) => return self.save_release_now_notes(),
+            _ => {
+                if let Some(dialog) = &mut self.release_now_notes_dialog {
+                    if let Some(input) = convert_to_textarea_input(key) {
+                        dialog.editor.input(input);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -909,6 +1113,61 @@ impl App {
             return;
         }
 
+        if self.release_now_notes_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        if self.release_now_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.scroll_release_now(-2);
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll_release_now(2);
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        if self.delete_confirmation_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left) => return,
+                _ => return,
+            }
+        }
+
         if self.browser_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
@@ -919,6 +1178,17 @@ impl App {
                     self.move_browser_selection(1);
                     return;
                 }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left) => return,
                 _ => {}
             }
         }
@@ -937,6 +1207,8 @@ impl App {
                     self.rotate_bump_action(-1);
                 } else if self.screen == Screen::Wizard {
                     self.scroll_wizard_body(-1);
+                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+                    self.scroll_project_settings(-1);
                 } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
                     if self
                         .overview_recent_viewport
@@ -965,7 +1237,7 @@ impl App {
                     if let Some(dialog) = &mut self.overview_recent_changes {
                         dialog.scroll_by(-2);
                     }
-                } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
+                } else if self.screen == Screen::Dashboard {
                     self.move_project_selection(-1);
                 }
             }
@@ -982,6 +1254,8 @@ impl App {
                     self.rotate_bump_action(1);
                 } else if self.screen == Screen::Wizard {
                     self.scroll_wizard_body(1);
+                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+                    self.scroll_project_settings(1);
                 } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
                     if self
                         .overview_recent_viewport
@@ -1010,7 +1284,7 @@ impl App {
                     if let Some(dialog) = &mut self.overview_recent_changes {
                         dialog.scroll_by(2);
                     }
-                } else if matches!(self.screen, Screen::Dashboard | Screen::Settings) {
+                } else if self.screen == Screen::Dashboard {
                     self.move_project_selection(1);
                 }
             }
@@ -1177,6 +1451,12 @@ impl App {
             return true;
         }
 
+        if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+            if p_s_s::insert_project_settings_text(self, text) {
+                return true;
+            }
+        }
+
         if self.screen == Screen::Wizard {
             if self.wizard.insert_text(text) {
                 return true;
@@ -1201,15 +1481,26 @@ impl App {
                 self.overview_tab = tab;
                 self.dashboard_focus = DashboardPane::Overview;
             }
+            HitAction::SelectProjectSettingsTab(tab) => {
+                self.overview_tab = OverviewTab::ProjectSettings;
+                self.project_settings_tab = tab;
+                self.dashboard_focus = DashboardPane::Overview;
+                p_s_s::sync_project_settings_state(self);
+            }
+            HitAction::SelectProjectSettingsField(field) => return p_s_s::activate_project_settings_field(self, field),
+            HitAction::BrowseProjectSettingsField(field) => {
+                p_s_s::set_project_settings_focus(self, field);
+                return p_s_s::open_browser_for_project_settings_focus(self);
+            }
             HitAction::SelectProject(index) => {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
                 self.prime_selected_project_dashboard_data();
                 self.dashboard_focus = DashboardPane::Projects;
             }
             HitAction::SelectOverviewScope(scope_index) => return self.select_dashboard_overview_scope(scope_index),
-            HitAction::OpenOverviewRecentChanges(scope_index) => {
+            HitAction::OpenOverviewReleaseNow(scope_index) => {
                 self.dashboard_focus = DashboardPane::Overview;
-                return self.open_recent_changes_with_scope(Some(scope_index));
+                return self.open_overview_release_now(scope_index);
             }
             HitAction::BeginOverviewBump(scope_index) => {
                 self.dashboard_focus = DashboardPane::Overview;
@@ -1231,7 +1522,6 @@ impl App {
                 return self.reset_overview_pending_version(scope_index)
             }
             HitAction::OpenOverviewTagDialog(scope_index) => return self.open_overview_tag_dialog(scope_index),
-            HitAction::OpenProjectEdit => return self.open_project_edit_dialog(),
             HitAction::EditProjectField(field) => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.focus = field;
@@ -1244,6 +1534,34 @@ impl App {
                 self.project_edit_dialog = None;
                 self.status = StatusMessage::info("Project edit cancelled.");
             }
+            HitAction::CycleReleaseNowOption(delta) => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.cycle_option(delta);
+                }
+            }
+            HitAction::ToggleReleaseNowChangelog => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.toggle_attach_changelog();
+                }
+            }
+            HitAction::EditReleaseNowNotes => return self.open_release_now_notes_dialog(),
+            HitAction::RunReleaseNow => return self.request_run_release_now(),
+            HitAction::ContinueReleaseNowWarning => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.proceed_past_warning();
+                }
+            }
+            HitAction::ToggleReleaseNowAutoFollow => self.toggle_release_now_auto_follow(),
+            HitAction::CancelReleaseNowRun => self.request_cancel_release_now(),
+            HitAction::ScrollReleaseNow(delta) => self.scroll_release_now(delta),
+            HitAction::SaveReleaseNowNotes => return self.save_release_now_notes(),
+            HitAction::CancelReleaseNowNotes => {
+                self.release_now_notes_dialog = None;
+                self.status = StatusMessage::info("Release notes editor closed.");
+            }
+            HitAction::CloseReleaseNow => self.close_release_now_dialog(),
+            HitAction::ConfirmDeleteRequest => return self.confirm_delete_request(),
+            HitAction::CancelDeleteRequest => self.cancel_delete_request(),
             HitAction::ToggleTabHints => return self.toggle_tab_hints(),
             HitAction::ToggleFooter => return self.toggle_footer(),
             HitAction::CycleFooterContent(delta) => return self.cycle_footer_content(delta),
@@ -1340,6 +1658,36 @@ impl App {
         self.open_tag_dialog_with_scope(preferred_scope, None)
     }
 
+    fn open_overview_release_now(&mut self, scope_index: usize) -> Result<()> {
+        self.open_release_now_with_scope(Some(scope_index))
+    }
+
+    fn open_release_now_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        let scope_index = preferred_scope.unwrap_or_else(|| {
+            if project.project_type == ProjectType::Branched {
+                self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
+            } else {
+                0
+            }
+        });
+
+        self.bump_dialog = None;
+        self.tag_dialog = None;
+        self.tag_annotation_dialog = None;
+        self.release_now_dialog = None;
+        self.release_now_notes_dialog = None;
+        self.project_edit_dialog = None;
+        self.browser_dialog = None;
+        self.schedule_progress_job(
+            " Validating ReleaseNOW ",
+            format!("Checking ReleaseNOW prerequisites for {}.", project.name),
+            BackgroundJobRequest::ValidateReleaseNow { project, scope_index },
+        )?;
+        self.status = StatusMessage::info("Validating ReleaseNOW prerequisites for the selected scope.");
+        Ok(())
+    }
+
     fn open_recent_changes_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
         let project = self.selected_project()?.clone();
         if !project.integration_mode.requires_repo() {
@@ -1361,24 +1709,150 @@ impl App {
         Ok(())
     }
 
+    fn open_release_now_notes_dialog(&mut self) -> Result<()> {
+        let dialog = self
+            .release_now_dialog
+            .as_ref()
+            .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
+        if !dialog.attach_changelog {
+            bail!("enable changelog attachment before editing release notes")
+        }
+        self.release_now_notes_dialog = Some(TagAnnotationDialog::with_placeholder(
+            &dialog.release_notes_markdown,
+            dialog.release_notes_placeholder.as_str(),
+        ));
+        self.status = StatusMessage::info("Editing ReleaseNOW release notes.");
+        Ok(())
+    }
+
+    fn save_release_now_notes(&mut self) -> Result<()> {
+        let notes = self
+            .release_now_notes_dialog
+            .as_ref()
+            .ok_or_else(|| anyhow!("ReleaseNOW release notes editor is not open"))?
+            .editor
+            .lines()
+            .join("\n");
+        let dialog = self
+            .release_now_dialog
+            .as_mut()
+            .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
+        dialog.release_notes_markdown = notes;
+        self.release_now_notes_dialog = None;
+        self.status = StatusMessage::success("ReleaseNOW release notes updated.");
+        Ok(())
+    }
+
+    fn request_run_release_now(&mut self) -> Result<()> {
+        let request = {
+            let dialog = self
+                .release_now_dialog
+                .as_ref()
+                .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
+            if dialog.is_warning_mode() {
+                bail!("confirm the recent bump warning before running ReleaseNOW")
+            }
+            if dialog.is_running() {
+                bail!("ReleaseNOW is already running")
+            }
+            if dialog.is_completed() {
+                self.close_release_now_dialog();
+                return Ok(());
+            }
+
+            rls_now::build_execution_request(dialog)
+        };
+
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.begin_running();
+        }
+
+        self.schedule_foreground_job(BackgroundJobRequest::RunReleaseNow { request })?;
+        self.status =
+            StatusMessage::info("Running ReleaseNOW for the selected scope. Live logs will stream into the dialog.");
+        Ok(())
+    }
+
+    fn close_release_now_dialog(&mut self) {
+        if self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_running)
+            .unwrap_or(false)
+        {
+            self.status = StatusMessage::warning(
+                "ReleaseNOW is still running. Wait for it to finish before closing the dialog.",
+            );
+            return;
+        }
+
+        self.release_now_notes_dialog = None;
+        self.release_now_dialog = None;
+        self.status = StatusMessage::info("ReleaseNOW closed.");
+    }
+
+    fn scroll_release_now(&mut self, delta: i16) {
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.scroll_by(delta);
+        }
+    }
+
+    fn toggle_release_now_auto_follow(&mut self) {
+        if let Some(dialog) = &mut self.release_now_dialog {
+            let enabled = dialog.toggle_auto_follow();
+            self.status = StatusMessage::info(if enabled {
+                "ReleaseNOW auto-follow resumed."
+            } else {
+                "ReleaseNOW auto-follow paused."
+            });
+        }
+    }
+
+    fn request_cancel_release_now(&mut self) {
+        let Some(dialog) = &mut self.release_now_dialog else {
+            return;
+        };
+        if !dialog.is_running() {
+            return;
+        }
+        if dialog.cancel_requested() {
+            self.status = StatusMessage::warning("ReleaseNOW cancellation is already in progress.");
+            return;
+        }
+
+        if let Some(cancel) = &self.current_release_now_cancel {
+            cancel.cancel();
+            dialog.mark_cancel_requested();
+            self.status = StatusMessage::warning("Cancelling ReleaseNOW. Waiting for the current step to stop.");
+        }
+    }
+
+    fn schedule_foreground_job(&mut self, request: BackgroundJobRequest) -> Result<u64> {
+        if self.background_job_active {
+            bail!("another background job is already running");
+        }
+
+        let request_id = self.schedule_background_job(BackgroundJobPriority::Foreground, request)?;
+        self.background_job_active = true;
+        self.active_foreground_job_id = Some(request_id);
+
+        Ok(request_id)
+    }
+
     fn schedule_progress_job(
         &mut self,
         title: impl Into<String>,
         message: impl Into<String>,
         request: BackgroundJobRequest,
     ) -> Result<()> {
-        if self.background_job_active {
-            bail!("another background job is already running");
-        }
-
-        let request_id = self.schedule_background_job(BackgroundJobPriority::Foreground, request)?;
+        let request_id = self.schedule_foreground_job(request)?;
 
         self.progress_dialog = Some(ProgressDialog {
             title: title.into(),
             message: message.into(),
         });
-        self.background_job_active = true;
-        self.active_foreground_job_id = Some(request_id);
+
+        debug_assert_eq!(self.active_foreground_job_id, Some(request_id));
 
         Ok(())
     }
@@ -1400,22 +1874,26 @@ impl App {
             }
         };
 
-        self.background_jobs_inflight = self.background_jobs_inflight.saturating_sub(1);
-        if self.active_foreground_job_id == Some(message.id) {
-            self.progress_dialog = None;
-            self.background_job_active = false;
-            self.active_foreground_job_id = None;
-        }
+        let terminal = matches!(message.payload, BackgroundJobMessagePayload::Finished(_));
 
-        if self.current_overview_activity_job_id == Some(message.id)
-            && message.kind == BackgroundJobKind::OverviewActivity
-        {
-            self.overview_activity_job_inflight = false;
-            if self.overview_activity_refresh_inflight {
-                self.overview_activity_refresh_inflight = false;
-                if self.overview_activity_refresh_pending {
-                    self.overview_activity_refresh_pending = false;
-                    self.schedule_refresh_overview_activity_cache()?;
+        if terminal {
+            self.background_jobs_inflight = self.background_jobs_inflight.saturating_sub(1);
+            if self.active_foreground_job_id == Some(message.id) {
+                self.progress_dialog = None;
+                self.background_job_active = false;
+                self.active_foreground_job_id = None;
+            }
+
+            if self.current_overview_activity_job_id == Some(message.id)
+                && message.kind == BackgroundJobKind::OverviewActivity
+            {
+                self.overview_activity_job_inflight = false;
+                if self.overview_activity_refresh_inflight {
+                    self.overview_activity_refresh_inflight = false;
+                    if self.overview_activity_refresh_pending {
+                        self.overview_activity_refresh_pending = false;
+                        self.schedule_refresh_overview_activity_cache()?;
+                    }
                 }
             }
         }
@@ -1424,9 +1902,29 @@ impl App {
             return Ok(true);
         }
 
-        match message.result {
-            Ok(output) => self.apply_background_job_output(output)?,
-            Err(message) => self.status = StatusMessage::error(message),
+        match message.payload {
+            BackgroundJobMessagePayload::Progress(output) => self.apply_background_job_output(output)?,
+            BackgroundJobMessagePayload::Finished(result) => match result {
+                Ok(output) => self.apply_background_job_output(output)?,
+                Err(error_message) => {
+                    if message.kind == BackgroundJobKind::ReleaseNow {
+                        if let Some(dialog) = &mut self.release_now_dialog {
+                            if rls_now::is_cancelled_error(&error_message) {
+                                dialog.apply_cancelled(error_message.clone());
+                            } else {
+                                dialog.apply_failure(error_message.clone());
+                            }
+                        }
+                    }
+                    self.status = if message.kind == BackgroundJobKind::ReleaseNow
+                        && rls_now::is_cancelled_error(&error_message)
+                    {
+                        StatusMessage::warning(error_message)
+                    } else {
+                        StatusMessage::error(error_message)
+                    };
+                }
+            },
         }
 
         Ok(true)
@@ -1513,6 +2011,29 @@ impl App {
                     self.overview_activity_project = Some(project_index);
                 }
             }
+            BackgroundJobOutput::ReleaseNowValidated(validation) => {
+                let project_name = validation.project_name.clone();
+                let warning_pending = validation.warning_message.is_some();
+                self.release_now_dialog = Some(rls_now::ReleaseNowDialog::from_validation(validation));
+                self.release_now_notes_dialog = None;
+                self.status = if warning_pending {
+                    StatusMessage::warning("ReleaseNOW found an older-than-expected bump. Confirm before continuing.")
+                } else {
+                    StatusMessage::info(format!("ReleaseNOW is ready for {}.", project_name))
+                };
+            }
+            BackgroundJobOutput::ReleaseNowLogChunk(lines) => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.append_log_lines(lines);
+                }
+            }
+            BackgroundJobOutput::ReleaseNowCompleted(outcome) => {
+                let summary = outcome.summary.clone();
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.apply_outcome(outcome);
+                }
+                self.status = StatusMessage::success(summary);
+            }
             BackgroundJobOutput::CreateTag { summary } => {
                 self.sync_dashboard_overview_after_repo_change();
                 self.tag_dialog = None;
@@ -1555,6 +2076,40 @@ impl App {
                 } else {
                     Some(target.action.clone())
                 }?;
+
+                if self.browser_dialog.is_some() && !matches!(action, HitAction::BrowserSelect(_)) {
+                    return None;
+                }
+
+                if self.delete_confirmation_dialog.is_some()
+                    && !matches!(action, HitAction::ConfirmDeleteRequest | HitAction::CancelDeleteRequest)
+                {
+                    return None;
+                }
+
+                if self.release_now_notes_dialog.is_some()
+                    && !matches!(action, HitAction::SaveReleaseNowNotes | HitAction::CancelReleaseNowNotes)
+                {
+                    return None;
+                }
+
+                if self.release_now_dialog.is_some()
+                    && self.release_now_notes_dialog.is_none()
+                    && !matches!(
+                        action,
+                        HitAction::CycleReleaseNowOption(_)
+                            | HitAction::ToggleReleaseNowChangelog
+                            | HitAction::EditReleaseNowNotes
+                            | HitAction::RunReleaseNow
+                            | HitAction::ContinueReleaseNowWarning
+                            | HitAction::ToggleReleaseNowAutoFollow
+                            | HitAction::CancelReleaseNowRun
+                            | HitAction::ScrollReleaseNow(_)
+                            | HitAction::CloseReleaseNow
+                    )
+                {
+                    return None;
+                }
 
                 Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action))
             })
@@ -1707,11 +2262,16 @@ impl App {
 
     fn open_dashboard_changelog_preview(&mut self) -> Result<()> {
         let project = self.selected_project()?.clone();
+        let scope_index = if project.project_type == ProjectType::Branched {
+            self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
+        } else {
+            0
+        };
         if !project.integration_mode.requires_repo() {
             bail!("changelog preview requires a git-backed project");
         }
-        if !project.changelog.enabled {
-            bail!("changelog generation is disabled for this project");
+        if !project.changelog_enabled_for_scope(scope_index) {
+            bail!("changelog generation is disabled for the selected scope");
         }
 
         self.schedule_progress_job(
@@ -1719,7 +2279,7 @@ impl App {
             "Building changelog preview from current git history.",
             BackgroundJobRequest::OpenDashboardChangelogPreview {
                 project,
-                scope_index: self.overview_focused_scope,
+                scope_index,
                 pending_versions: self.overview_pending_versions.clone(),
             },
         )?;
@@ -1978,6 +2538,10 @@ impl App {
         self.wizard.scroll_body(delta);
     }
 
+    fn scroll_project_settings(&mut self, delta: isize) {
+        p_s_s::scroll_project_settings(self, delta);
+    }
+
     fn select_browser_index(&mut self, index: usize) {
         let mut confirm_file = false;
         if let Some(dialog) = &mut self.browser_dialog {
@@ -2020,6 +2584,7 @@ impl App {
         self.config_store.save(&self.config)?;
         self.invalidate_overview_cache();
         self.prime_selected_project_dashboard_data();
+        p_s_s::invalidate_project_settings_state(self);
         self.project_edit_dialog = None;
         self.status = StatusMessage::success("Project settings updated.");
         Ok(())
@@ -2034,18 +2599,7 @@ impl App {
             bail!("selected project no longer exists");
         }
 
-        let removed = self.config.projects.remove(dialog.project_index);
-        self.config_store.save(&self.config)?;
-        self.project_edit_dialog = None;
-        if self.config.projects.is_empty() {
-            self.selected_project = 0;
-        } else {
-            self.selected_project = dialog.project_index.min(self.config.projects.len().saturating_sub(1));
-        }
-        self.invalidate_overview_cache();
-        self.prime_selected_project_dashboard_data();
-        self.status = StatusMessage::success(format!("Removed project '{}'.", removed.name));
-        Ok(())
+        self.request_project_deletion(dialog.project_index)
     }
 
     fn open_tag_dialog(&mut self) -> Result<()> {
@@ -2069,10 +2623,10 @@ impl App {
     }
 
     fn create_local_tag(&mut self) -> Result<()> {
-        let changelog_enabled = self.selected_project()?.changelog.enabled;
         let Some(dialog) = self.tag_dialog.clone() else {
             return Ok(());
         };
+        let changelog_enabled = self.selected_project()?.changelog_enabled_for_scope(dialog.selected_scope);
 
         let tag_name = dialog.tag_name.value.trim();
         if tag_name.is_empty() {
@@ -2302,6 +2856,182 @@ impl App {
         }
     }
 
+    fn request_dashboard_delete(&mut self) -> Result<()> {
+        let Some(project) = self.config.projects.get(self.selected_project).cloned() else {
+            self.status = StatusMessage::info("No project is selected.");
+            return Ok(());
+        };
+
+        match project.project_type {
+            ProjectType::AllInOne => self.request_project_deletion(self.selected_project),
+            ProjectType::Branched => {
+                if project.branches.is_empty() {
+                    return self.request_project_deletion(self.selected_project);
+                }
+
+                let scope_index = self.overview_focused_scope.min(project.branches.len().saturating_sub(1));
+                self.request_scope_deletion(self.selected_project, scope_index)
+            }
+        }
+    }
+
+    fn request_project_deletion(&mut self, project_index: usize) -> Result<()> {
+        let project = self
+            .config
+            .projects
+            .get(project_index)
+            .ok_or_else(|| anyhow!("selected project no longer exists"))?;
+        self.delete_confirmation_dialog = Some(DeleteConfirmationDialog::project(
+            project_index,
+            project.name.clone(),
+        ));
+        self.status = StatusMessage::warning(format!("Confirm deletion of project '{}'.", project.name));
+        Ok(())
+    }
+
+    fn request_scope_deletion(&mut self, project_index: usize, scope_index: usize) -> Result<()> {
+        let project = self
+            .config
+            .projects
+            .get(project_index)
+            .ok_or_else(|| anyhow!("selected project no longer exists"))?;
+        if project.project_type != ProjectType::Branched {
+            return self.request_project_deletion(project_index);
+        }
+
+        let branch = project
+            .branches
+            .get(scope_index)
+            .ok_or_else(|| anyhow!("selected scope no longer exists"))?;
+        self.delete_confirmation_dialog = Some(DeleteConfirmationDialog::scope(
+            project_index,
+            project.name.clone(),
+            scope_index,
+            branch.display_name().to_string(),
+            branch.scope_kind,
+            project.branches.len() == 1,
+        ));
+        self.status = StatusMessage::warning(format!(
+            "Confirm deletion of scope '{}' from project '{}'.",
+            branch.display_name(),
+            project.name
+        ));
+        Ok(())
+    }
+
+    fn confirm_delete_request(&mut self) -> Result<()> {
+        let Some(dialog) = self.delete_confirmation_dialog.clone() else {
+            return Ok(());
+        };
+        self.delete_confirmation_dialog = None;
+
+        match dialog.target {
+            DeleteConfirmationTarget::Project { project_index, .. } => self.delete_project_at(project_index),
+            DeleteConfirmationTarget::Scope {
+                project_index,
+                scope_index,
+                removes_project,
+                ..
+            } => {
+                if removes_project {
+                    self.delete_last_scope_project(project_index, scope_index)
+                } else {
+                    self.delete_scope_at(project_index, scope_index)
+                }
+            }
+        }
+    }
+
+    fn cancel_delete_request(&mut self) {
+        self.delete_confirmation_dialog = None;
+        self.status = StatusMessage::info("Deletion cancelled.");
+    }
+
+    fn delete_project_at(&mut self, project_index: usize) -> Result<()> {
+        if project_index >= self.config.projects.len() {
+            bail!("selected project no longer exists");
+        }
+
+        let removed = self.config.projects.remove(project_index);
+        self.finish_delete_mutation(project_index)?;
+        self.status = StatusMessage::success(format!("Removed project '{}'.", removed.name));
+        Ok(())
+    }
+
+    fn delete_scope_at(&mut self, project_index: usize, scope_index: usize) -> Result<()> {
+        let (project_name, scope_name, remaining_scopes) = {
+            let project = self
+                .config
+                .projects
+                .get_mut(project_index)
+                .ok_or_else(|| anyhow!("selected project no longer exists"))?;
+            if project.project_type != ProjectType::Branched {
+                bail!("selected project does not contain removable scopes");
+            }
+            if scope_index >= project.branches.len() {
+                bail!("selected scope no longer exists");
+            }
+            let removed = project.branches.remove(scope_index);
+            (
+                project.name.clone(),
+                removed.display_name().to_string(),
+                project.branches.len(),
+            )
+        };
+
+        self.finish_delete_mutation(project_index)?;
+        if remaining_scopes > 0 {
+            self.overview_focused_scope = scope_index.min(remaining_scopes.saturating_sub(1));
+        }
+        self.status = StatusMessage::success(format!(
+            "Removed scope '{}' from project '{}'.",
+            scope_name, project_name
+        ));
+        Ok(())
+    }
+
+    fn delete_last_scope_project(&mut self, project_index: usize, scope_index: usize) -> Result<()> {
+        let (project_name, scope_name) = {
+            let project = self
+                .config
+                .projects
+                .get(project_index)
+                .ok_or_else(|| anyhow!("selected project no longer exists"))?;
+            if project.project_type != ProjectType::Branched {
+                bail!("selected project does not contain removable scopes");
+            }
+            let branch = project
+                .branches
+                .get(scope_index)
+                .ok_or_else(|| anyhow!("selected scope no longer exists"))?;
+            (project.name.clone(), branch.display_name().to_string())
+        };
+
+        self.config.projects.remove(project_index);
+        self.finish_delete_mutation(project_index)?;
+        self.status = StatusMessage::success(format!(
+            "Removed scope '{}' and deleted project '{}' because it had no scopes left.",
+            scope_name, project_name
+        ));
+        Ok(())
+    }
+
+    fn finish_delete_mutation(&mut self, selected_index_hint: usize) -> Result<()> {
+        self.config_store.save(&self.config)?;
+        self.project_edit_dialog = None;
+        self.browser_dialog = None;
+        if self.config.projects.is_empty() {
+            self.selected_project = 0;
+            self.overview_focused_scope = 0;
+        } else {
+            self.selected_project = selected_index_hint.min(self.config.projects.len().saturating_sub(1));
+        }
+        self.invalidate_overview_cache();
+        self.prime_selected_project_dashboard_data();
+        p_s_s::invalidate_project_settings_state(self);
+        Ok(())
+    }
+
     fn validate_wizard_target(&mut self) {
         let (target_path, target_key) = if self.wizard.project_type == ProjectType::Branched {
             self.wizard
@@ -2407,6 +3137,11 @@ impl App {
                 .as_ref()
                 .map(|dialog| dialog.repo_root.value().to_string())
                 .unwrap_or_default(),
+            BrowseTarget::ProjectSettingsChangelogPath
+            | BrowseTarget::ProjectSettingsReleaseNowWindows
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => p_s_s::initial_browser_path(self, target).unwrap_or_default(),
         }
     }
 
@@ -2454,6 +3189,17 @@ impl App {
             BrowseTarget::ProjectEditRepoRoot => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.set_repo_root_from_browse(selected);
+                }
+            }
+            BrowseTarget::ProjectSettingsChangelogPath
+            | BrowseTarget::ProjectSettingsReleaseNowWindows
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+                if p_s_s::apply_browser_selection(self, target, selected)? {
+                    self.browser_dialog = None;
+                    self.status = StatusMessage::success("Selection applied.");
+                    return Ok(());
                 }
             }
         }
@@ -2542,17 +3288,11 @@ impl App {
         }
 
         if self.screen == Screen::Dashboard && self.dashboard_focus == DashboardPane::Overview {
-            let target = match key.code {
-                KeyCode::Char('1') => Some(OverviewTab::Overview),
-                KeyCode::Char('2') => {
-                    if self.overview_show_recent_tab {
-                        Some(OverviewTab::RecentChanges)
-                    } else {
-                        Some(OverviewTab::ProjectDetail)
-                    }
-                }
-                KeyCode::Char('3') if self.overview_show_recent_tab => Some(OverviewTab::ProjectDetail),
-                _ => None,
+            let target = if let KeyCode::Char(digit @ '1'..='4') = key.code {
+                let index = (digit as u8 - b'1') as usize;
+                overview_tabs(self.overview_show_recent_tab).get(index).copied()
+            } else {
+                None
             };
             if let Some(target) = target {
                 self.overview_tab = target;
@@ -2563,8 +3303,7 @@ impl App {
         let target = match key.code {
             KeyCode::Char('1') => Some(Screen::Dashboard),
             KeyCode::Char('2') => Some(Screen::Wizard),
-            KeyCode::Char('3') => Some(Screen::Settings),
-            KeyCode::Char('4') => Some(Screen::UiSettings),
+            KeyCode::Char('3') => Some(Screen::UiSettings),
             _ => None,
         };
 
@@ -2689,7 +3428,6 @@ impl App {
 pub(crate) enum Screen {
     Dashboard,
     Wizard,
-    Settings,
     UiSettings,
 }
 
@@ -2735,9 +3473,12 @@ impl HitTarget {
 pub(crate) enum HitAction {
     Switch(Screen),
     SelectOverviewTab(OverviewTab),
+    SelectProjectSettingsTab(ProjectSettingsTab),
+    SelectProjectSettingsField(ProjectSettingsFocus),
     SelectProject(usize),
     SelectOverviewScope(usize),
-    OpenOverviewRecentChanges(usize),
+    BrowseProjectSettingsField(ProjectSettingsFocus),
+    OpenOverviewReleaseNow(usize),
     BeginOverviewBump(usize),
     SelectOverviewBumpWorkflow(usize),
     ConfirmOverviewBumpWorkflow,
@@ -2751,12 +3492,24 @@ pub(crate) enum HitAction {
     AdjustOverviewVersion(usize, OverviewVersionControl, i32),
     ResetOverviewPendingVersion(usize),
     OpenOverviewTagDialog(usize),
-    OpenProjectEdit,
     EditProjectField(ProjectEditFocus),
     ProjectEditScopeAction(ScopeAction),
     SaveProjectEdit,
     RemoveProject,
     CancelProjectEdit,
+    CycleReleaseNowOption(isize),
+    ToggleReleaseNowChangelog,
+    EditReleaseNowNotes,
+    RunReleaseNow,
+    ContinueReleaseNowWarning,
+    ToggleReleaseNowAutoFollow,
+    CancelReleaseNowRun,
+    ScrollReleaseNow(i16),
+    SaveReleaseNowNotes,
+    CancelReleaseNowNotes,
+    CloseReleaseNow,
+    ConfirmDeleteRequest,
+    CancelDeleteRequest,
     ToggleTabHints,
     ToggleFooter,
     CycleFooterContent(i32),
@@ -2815,6 +3568,65 @@ struct ChangelogPreviewDialog {
     release_message: TuiTextArea<'static>,
     release_message_placeholder: String,
     scroll: u16,
+}
+
+#[derive(Clone)]
+struct DeleteConfirmationDialog {
+    target: DeleteConfirmationTarget,
+    confirm_selected: bool,
+}
+
+impl DeleteConfirmationDialog {
+    fn project(project_index: usize, project_name: String) -> Self {
+        Self {
+            target: DeleteConfirmationTarget::Project {
+                project_index,
+                project_name,
+            },
+            confirm_selected: false,
+        }
+    }
+
+    fn scope(
+        project_index: usize,
+        project_name: String,
+        scope_index: usize,
+        scope_name: String,
+        scope_kind: BranchScopeKind,
+        removes_project: bool,
+    ) -> Self {
+        Self {
+            target: DeleteConfirmationTarget::Scope {
+                project_index,
+                project_name,
+                scope_index,
+                scope_name,
+                scope_kind,
+                removes_project,
+            },
+            confirm_selected: false,
+        }
+    }
+
+    fn toggle_selection(&mut self) {
+        self.confirm_selected = !self.confirm_selected;
+    }
+}
+
+#[derive(Clone)]
+enum DeleteConfirmationTarget {
+    Project {
+        project_index: usize,
+        project_name: String,
+    },
+    Scope {
+        project_index: usize,
+        project_name: String,
+        scope_index: usize,
+        scope_name: String,
+        scope_kind: BranchScopeKind,
+        removes_project: bool,
+    },
 }
 
 impl ChangelogPreviewDialog {
@@ -2991,6 +3803,13 @@ enum BackgroundJobRequest {
         project_index: usize,
         project: ProjectConfig,
     },
+    ValidateReleaseNow {
+        project: ProjectConfig,
+        scope_index: usize,
+    },
+    RunReleaseNow {
+        request: rls_now::ReleaseNowExecutionRequest,
+    },
     PrefetchRecentChanges {
         dialog: RecentChangesDialog,
     },
@@ -3028,12 +3847,20 @@ enum BackgroundJobOutput {
         project_index: usize,
         summaries: Vec<Option<RepoActivitySummary>>,
     },
+    ReleaseNowValidated(rls_now::ReleaseNowValidation),
+    ReleaseNowLogChunk(Vec<String>),
+    ReleaseNowCompleted(rls_now::ReleaseNowExecutionOutcome),
     CreateTag {
         summary: String,
     },
 }
 
 type BackgroundJobResult = std::result::Result<BackgroundJobOutput, String>;
+
+enum BackgroundJobMessagePayload {
+    Progress(BackgroundJobOutput),
+    Finished(BackgroundJobResult),
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BackgroundJobKind {
@@ -3042,6 +3869,7 @@ enum BackgroundJobKind {
     RecentChangesPrefetch,
     ChangelogPreview,
     OverviewActivity,
+    ReleaseNow,
     TagAction,
 }
 
@@ -3062,7 +3890,24 @@ struct BackgroundJobRequestMessage {
 struct BackgroundJobResultMessage {
     id: u64,
     kind: BackgroundJobKind,
-    result: BackgroundJobResult,
+    payload: BackgroundJobMessagePayload,
+}
+
+#[derive(Clone)]
+struct BackgroundJobProgressSink {
+    id: u64,
+    kind: BackgroundJobKind,
+    result_tx: UnboundedSender<BackgroundJobResultMessage>,
+}
+
+impl BackgroundJobProgressSink {
+    fn send(&self, output: BackgroundJobOutput) {
+        let _ = self.result_tx.send(BackgroundJobResultMessage {
+            id: self.id,
+            kind: self.kind,
+            payload: BackgroundJobMessagePayload::Progress(output),
+        });
+    }
 }
 
 impl BackgroundJobRequest {
@@ -3077,6 +3922,7 @@ impl BackgroundJobRequest {
                 BackgroundJobKind::ChangelogPreview
             }
             Self::RefreshOverviewActivity { .. } => BackgroundJobKind::OverviewActivity,
+            Self::ValidateReleaseNow { .. } | Self::RunReleaseNow { .. } => BackgroundJobKind::ReleaseNow,
             Self::CreateTag { .. } => BackgroundJobKind::TagAction,
         }
     }
@@ -3341,6 +4187,7 @@ pub(crate) struct ScopeDraft {
     pub(crate) name: TextInput,
     pub(crate) label: String,
     pub(crate) label_follows_name: bool,
+    pub(crate) changelog_enabled: bool,
     pub(crate) target_label: String,
     pub(crate) target_path: TextInput,
     pub(crate) target_key: TextInput,
@@ -3358,6 +4205,7 @@ impl ScopeDraft {
             name: TextInput::with_value(name.clone()),
             label: name.clone(),
             label_follows_name: true,
+            changelog_enabled: false,
             target_label: "Version".to_string(),
             target_path: TextInput::with_value(""),
             target_key: TextInput::with_value("version"),
@@ -3393,6 +4241,7 @@ impl ScopeDraft {
             name: TextInput::with_value(branch.name.clone()),
             label,
             label_follows_name: branch.label.trim().is_empty() || branch.label == branch.name,
+            changelog_enabled: branch.changelog_enabled,
             target_label: target.label.clone(),
             target_path: TextInput::with_value(target.path.clone()),
             target_key: TextInput::with_value(target.key_path.clone()),
@@ -3455,6 +4304,9 @@ impl ScopeDraft {
             },
             scope_kind: self.scope_kind,
             repo: self.repo.clone(),
+            changelog_enabled: self.changelog_enabled,
+            changelog_path: None,
+            release_now: crate::config::ReleaseNowSettings::default(),
             version_scheme,
             targets: vec![TargetSpec {
                 label: self.target_label.clone(),
@@ -3553,11 +4405,18 @@ fn spawn_background_job_task(
     result_tx: UnboundedSender<BackgroundJobResultMessage>,
 ) {
     tokio::spawn(async move {
-        let result = run_background_job(request.request, request.cancel).await.map_err(|error| error.to_string());
+        let progress = BackgroundJobProgressSink {
+            id: request.id,
+            kind: request.kind,
+            result_tx: result_tx.clone(),
+        };
+        let result = run_background_job(request.request, request.cancel, progress)
+            .await
+            .map_err(|error| error.to_string());
         let _ = result_tx.send(BackgroundJobResultMessage {
             id: request.id,
             kind: request.kind,
-            result,
+            payload: BackgroundJobMessagePayload::Finished(result),
         });
     });
 }
@@ -3572,7 +4431,11 @@ where
         .map_err(|error| anyhow!("background task failed: {error}"))?
 }
 
-async fn run_background_job(request: BackgroundJobRequest, cancel: GitCancellation) -> Result<BackgroundJobOutput> {
+async fn run_background_job(
+    request: BackgroundJobRequest,
+    cancel: GitCancellation,
+    progress: BackgroundJobProgressSink,
+) -> Result<BackgroundJobOutput> {
     match request {
         BackgroundJobRequest::OpenRecentChanges {
             project,
@@ -3659,6 +4522,18 @@ async fn run_background_job(request: BackgroundJobRequest, cancel: GitCancellati
             project_index,
             summaries: load_overview_activity_summaries_async(project, Some(cancel)).await?,
         }),
+        BackgroundJobRequest::ValidateReleaseNow {
+            project,
+            scope_index,
+        } => Ok(BackgroundJobOutput::ReleaseNowValidated(
+            run_blocking_job(move || rls_now::validate_release_now(&project, scope_index, Some(cancel))).await?,
+        )),
+        BackgroundJobRequest::RunReleaseNow { request } => Ok(BackgroundJobOutput::ReleaseNowCompleted(
+            rls_now::execute_release_now_async(request, cancel, move |lines| {
+                progress.send(BackgroundJobOutput::ReleaseNowLogChunk(lines));
+            })
+            .await?,
+        )),
         BackgroundJobRequest::PrefetchRecentChanges { dialog } => {
             let project_name = dialog.project_name.clone();
             let (next_scope_index, prefetched_recent_range, history_scope_index, prefetched_history_ranges) =
@@ -3988,6 +4863,10 @@ impl App {
                 self.current_overview_activity_job_id = Some(id);
                 self.current_overview_activity_cancel = Some(cancel);
             }
+            BackgroundJobKind::ReleaseNow => {
+                self.current_release_now_job_id = Some(id);
+                self.current_release_now_cancel = Some(cancel);
+            }
             BackgroundJobKind::TagAction => {}
         }
         id
@@ -4012,6 +4891,10 @@ impl App {
                 self.current_overview_activity_job_id = None;
                 self.current_overview_activity_cancel = None;
             }
+            BackgroundJobKind::ReleaseNow if self.current_release_now_job_id == Some(id) => {
+                self.current_release_now_job_id = None;
+                self.current_release_now_cancel = None;
+            }
             _ => {}
         }
     }
@@ -4023,6 +4906,7 @@ impl App {
             BackgroundJobKind::RecentChangesPrefetch => self.current_recent_changes_prefetch_job_id != Some(message.id),
             BackgroundJobKind::ChangelogPreview => self.current_changelog_preview_job_id != Some(message.id),
             BackgroundJobKind::OverviewActivity => self.current_overview_activity_job_id != Some(message.id),
+            BackgroundJobKind::ReleaseNow => self.current_release_now_job_id != Some(message.id),
             BackgroundJobKind::TagAction => false,
         }
     }
@@ -4109,6 +4993,11 @@ impl App {
                     cancel.cancel();
                 }
             }
+            BackgroundJobKind::ReleaseNow => {
+                if let Some(cancel) = self.current_release_now_cancel.take() {
+                    cancel.cancel();
+                }
+            }
             BackgroundJobKind::TagAction => {}
         }
     }
@@ -4135,6 +5024,11 @@ impl App {
                 .current_overview_activity_cancel
                 .clone()
                 .filter(|_| self.current_overview_activity_job_id == Some(id))
+                .unwrap_or_default(),
+            BackgroundJobKind::ReleaseNow => self
+                .current_release_now_cancel
+                .clone()
+                .filter(|_| self.current_release_now_job_id == Some(id))
                 .unwrap_or_default(),
             BackgroundJobKind::TagAction => GitCancellation::default(),
         }
@@ -4239,17 +5133,21 @@ struct TagAnnotationDialog {
 
 impl TagAnnotationDialog {
     fn new(existing_annotation: &str) -> Self {
+        Self::with_placeholder(existing_annotation, "Optional multi-line tag annotation")
+    }
+
+    fn with_placeholder(existing_annotation: &str, placeholder: &str) -> Self {
         let mut editor = if existing_annotation.trim().is_empty() {
             TuiTextArea::default()
         } else {
             TuiTextArea::from(existing_annotation.lines())
         };
-        editor.set_placeholder_text("Optional multi-line tag annotation");
+        editor.set_placeholder_text(placeholder);
         editor.set_tab_length(2);
         editor.set_max_histories(100);
         Self {
             editor,
-            placeholder: "Optional multi-line tag annotation".to_string(),
+            placeholder: placeholder.to_string(),
         }
     }
 }
@@ -4260,6 +5158,11 @@ enum BrowseTarget {
     WizardRepoRoot,
     ProjectEditTargetPath,
     ProjectEditRepoRoot,
+    ProjectSettingsChangelogPath,
+    ProjectSettingsReleaseNowWindows,
+    ProjectSettingsReleaseNowLinuxArm,
+    ProjectSettingsReleaseNowLinuxAmd,
+    ProjectSettingsReleaseNowMacOs,
 }
 
 struct FileBrowserDialog {
@@ -4276,10 +5179,14 @@ impl FileBrowserDialog {
             BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot
         );
         let explorer = configure_file_explorer(FileExplorerBuilder::default(), &initial_path, select_directories)?;
-        let title = if select_directories {
-            "Browse Repo Root"
-        } else {
-            "Browse Target Path"
+        let title = match target {
+            BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot => "Browse Repo Root",
+            BrowseTarget::ProjectSettingsChangelogPath => "Browse Changelog Path",
+            BrowseTarget::ProjectSettingsReleaseNowWindows
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => "Browse Release Script",
+            _ => "Browse Target Path",
         };
 
         Ok(Self {
@@ -4719,8 +5626,7 @@ fn browser_visible_range(total: usize, selected: usize, height: usize) -> (usize
 fn main_screen_from_index(index: usize) -> Screen {
     match index {
         1 => Screen::Wizard,
-        2 => Screen::Settings,
-        3 => Screen::UiSettings,
+        2 => Screen::UiSettings,
         _ => Screen::Dashboard,
     }
 }
@@ -4735,21 +5641,6 @@ fn should_use_recent_changes_tab(area_height: u16, max_tile_height: u16) -> bool
 
 fn main_tabs_shortcut_spans() -> Vec<Span<'static>> {
     shortcut_key_label("NUM", " Tabs")
-}
-
-fn settings_footer_line() -> Line<'static> {
-    let mut spans = main_tabs_shortcut_spans();
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_token("↑/↓"));
-    spans.push(Span::raw(" projects | "));
-    spans.extend(shortcut_key_label("E", "dit Selected"));
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("N", "ew Project"));
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("H", "ide Footer"));
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("Q", "uit"));
-    Line::from(spans)
 }
 
 fn ui_settings_footer_line() -> Line<'static> {
@@ -4782,7 +5673,7 @@ fn shortcut_key_label(key: &str, rest: &str) -> Vec<Span<'static>> {
 
 impl App {
     fn main_tab_labels(&self) -> Vec<String> {
-        ["Dashboard", "New Project", "Settings", "UI Settings"]
+        ["Dashboard", "New Project", "UI Settings"]
             .into_iter()
             .enumerate()
             .map(|(index, label)| {
@@ -4799,8 +5690,7 @@ impl App {
         match self.screen {
             Screen::Dashboard => 0,
             Screen::Wizard => 1,
-            Screen::Settings => 2,
-            Screen::UiSettings => 3,
+            Screen::UiSettings => 2,
         }
     }
 }
@@ -4973,13 +5863,12 @@ mod tests {
         let mut wizard = ProjectWizard::default();
         wizard.project_type = ProjectType::Branched;
         wizard.integration_mode = IntegrationMode::GitHubEnabled;
-        wizard.changelog_enabled = true;
-        wizard.focus = WizardField::ChangelogPath;
+        wizard.focus = WizardField::RemoteUrl;
 
         let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
 
         assert_eq!(row_height, 2);
-        assert!(visible_fields.contains(&WizardField::ChangelogPath));
+        assert!(visible_fields.contains(&WizardField::RemoteUrl));
         assert!(show_above);
         assert!(!show_below);
     }
@@ -4993,6 +5882,153 @@ mod tests {
 
         assert_eq!(wizard.target_key.value(), "package.version");
         assert!(!wizard.target_key_custom);
+    }
+
+    #[test]
+    fn browser_modal_hit_resolution_ignores_background_targets() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.browser_dialog = Some(
+            FileBrowserDialog::new(BrowseTarget::ProjectSettingsReleaseNowWindows, String::new())
+                .expect("browser dialog should build"),
+        );
+        app.hit_targets.push(HitTarget::new(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            HitAction::SelectProject(0),
+        ));
+        app.hit_targets.push(HitTarget::new(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 1,
+            },
+            HitAction::BrowserSelect(3),
+        ));
+
+        assert!(matches!(
+            app.resolve_hit_action(0, 0, false),
+            Some(HitAction::BrowserSelect(3))
+        ));
+    }
+
+    #[test]
+    fn pss_text_input_captures_global_shortcuts() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+        }];
+        app.selected_project = 0;
+        app.screen = Screen::Dashboard;
+        app.dashboard_focus = DashboardPane::Overview;
+        app.overview_tab = OverviewTab::ProjectSettings;
+        app.project_settings_tab = ProjectSettingsTab::Distro;
+        p_s_s::sync_project_settings_state(&mut app);
+        app.project_settings_state.focus = ProjectSettingsFocus::ReleaseNowWindows;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE))
+            .expect("key handling should succeed");
+
+        assert!(matches!(app.screen, Screen::Dashboard));
+        assert_eq!(app.project_settings_state.release_now_windows.value(), "2");
+    }
+
+    #[test]
+    fn dashboard_delete_shortcut_confirms_before_removing_project() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+        }];
+        app.screen = Screen::Dashboard;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .expect("delete shortcut should open confirmation");
+
+        assert!(app.delete_confirmation_dialog.is_some());
+        assert_eq!(app.config.projects.len(), 1);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .expect("confirming deletion should succeed");
+
+        assert!(app.delete_confirmation_dialog.is_none());
+        assert!(app.config.projects.is_empty());
+    }
+
+    #[test]
+    fn dashboard_delete_shortcut_removes_focused_scope_for_branched_projects() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    repo: None,
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: Vec::new(),
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    label: "API".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    repo: None,
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: Vec::new(),
+                },
+            ],
+            repo: None,
+        }];
+        app.screen = Screen::Dashboard;
+        app.overview_focused_scope = 1;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .expect("delete shortcut should open scope confirmation");
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .expect("confirming scope deletion should succeed");
+
+        assert_eq!(app.config.projects.len(), 1);
+        assert_eq!(app.config.projects[0].branches.len(), 1);
+        assert_eq!(app.config.projects[0].branches[0].name, "core");
+        assert_eq!(app.overview_focused_scope, 0);
     }
 
     #[test]
