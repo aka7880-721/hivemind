@@ -221,6 +221,7 @@ struct App {
     overview_tile_scroll: usize,
     overview_tile_viewport: Option<Rect>,
     overview_recent_viewport: Option<Rect>,
+    release_now_log_viewport: Option<Rect>,
     overview_tile_rects: Vec<(Rect, usize)>,
     overview_drag_scope: Option<usize>,
     wizard: ProjectWizard,
@@ -308,6 +309,7 @@ impl App {
             overview_tile_scroll: 0,
             overview_tile_viewport: None,
             overview_recent_viewport: None,
+            release_now_log_viewport: None,
             overview_tile_rects: Vec::new(),
             overview_drag_scope: None,
             wizard: ProjectWizard::default(),
@@ -1129,6 +1131,10 @@ impl App {
         }
 
         if self.release_now_dialog.is_some() {
+            let in_log_viewport = self
+                .release_now_log_viewport
+                .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
+                .unwrap_or(false);
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     self.scroll_release_now(-2);
@@ -1139,6 +1145,9 @@ impl App {
                     return;
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
+                    if in_log_viewport && self.begin_release_now_log_selection(mouse.row) {
+                        return;
+                    }
                     if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
                         if let Err(error) = self.handle_hit_action(action) {
                             self.status = StatusMessage::error(error.to_string());
@@ -1146,6 +1155,19 @@ impl App {
                     }
                     return;
                 }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if in_log_viewport && self.update_release_now_log_selection(mouse.row) {
+                        return;
+                    }
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    if in_log_viewport {
+                        self.copy_selected_release_now_log(mouse.row);
+                    }
+                    return;
+                }
+                MouseEventKind::Up(MouseButton::Left) => return,
                 _ => return,
             }
         }
@@ -1795,6 +1817,45 @@ impl App {
     fn scroll_release_now(&mut self, delta: i16) {
         if let Some(dialog) = &mut self.release_now_dialog {
             dialog.scroll_by(delta);
+        }
+    }
+
+    fn begin_release_now_log_selection(&mut self, mouse_row: u16) -> bool {
+        let Some(viewport) = self.release_now_log_viewport else {
+            return false;
+        };
+        let Some(dialog) = &mut self.release_now_dialog else {
+            return false;
+        };
+
+        dialog.begin_body_selection(mouse_row.saturating_sub(viewport.y))
+    }
+
+    fn update_release_now_log_selection(&mut self, mouse_row: u16) -> bool {
+        let Some(viewport) = self.release_now_log_viewport else {
+            return false;
+        };
+        let Some(dialog) = &mut self.release_now_dialog else {
+            return false;
+        };
+
+        dialog.update_body_selection(mouse_row.saturating_sub(viewport.y))
+    }
+
+    fn copy_selected_release_now_log(&mut self, mouse_row: u16) {
+        let Some(viewport) = self.release_now_log_viewport else {
+            return;
+        };
+        let Some(dialog) = &mut self.release_now_dialog else {
+            return;
+        };
+
+        if !dialog.has_body_selection() {
+            let _ = dialog.begin_body_selection(mouse_row.saturating_sub(viewport.y));
+        }
+
+        if let Some(text) = dialog.selected_body_text() {
+            self.copy_text_to_clipboard(&text);
         }
     }
 
