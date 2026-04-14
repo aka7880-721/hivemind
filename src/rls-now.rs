@@ -3,6 +3,12 @@
 //
 // Licensed under the ComfyVersionBumper License v1.2
 //
+fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
+    if cancel.is_cancelled() {
+        bail!("ReleaseNOW cancelled by user")
+    }
+    Ok(())
+}
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
@@ -55,9 +61,12 @@ pub(super) struct ReleaseNowDialog {
     pub(super) warning_message: Option<String>,
     pub(super) mode: ReleaseNowMode,
     pub(super) running: bool,
+    pub(super) auto_follow: bool,
+    pub(super) cancel_requested: bool,
     pub(super) warning_confirm_selected: bool,
     pub(super) scroll: u16,
     pub(super) summary: Option<String>,
+    pub(super) summary_is_warning: bool,
     pub(super) summary_is_error: bool,
     pub(super) artifact_files: Vec<String>,
     pub(super) log_lines: Vec<String>,
@@ -84,9 +93,12 @@ impl ReleaseNowDialog {
             warning_message: validation.warning_message,
             mode,
             running: false,
+            auto_follow: false,
+            cancel_requested: false,
             warning_confirm_selected: false,
             scroll: 0,
             summary: None,
+            summary_is_warning: false,
             summary_is_error: false,
             artifact_files: Vec::new(),
             log_lines: Vec::new(),
@@ -103,6 +115,14 @@ impl ReleaseNowDialog {
 
     pub(super) fn is_running(&self) -> bool {
         self.running
+    }
+
+    pub(super) fn auto_follow(&self) -> bool {
+        self.auto_follow
+    }
+
+    pub(super) fn cancel_requested(&self) -> bool {
+        self.cancel_requested
     }
 
     pub(super) fn selected_option(&self) -> &ReleaseNowRunOption {
@@ -134,17 +154,40 @@ impl ReleaseNowDialog {
     }
 
     pub(super) fn scroll_by(&mut self, delta: i16) {
+        if self.running && delta != 0 {
+            self.auto_follow = false;
+        }
         self.scroll = self.scroll.saturating_add_signed(delta);
     }
 
     pub(super) fn begin_running(&mut self) {
         self.running = true;
         self.mode = ReleaseNowMode::Configure;
+        self.auto_follow = true;
+        self.cancel_requested = false;
         self.summary = None;
+        self.summary_is_warning = false;
         self.summary_is_error = false;
         self.artifact_files.clear();
         self.log_lines.clear();
         self.scroll = 0;
+    }
+
+    pub(super) fn toggle_auto_follow(&mut self) -> bool {
+        self.auto_follow = !self.auto_follow;
+        if self.auto_follow {
+            self.scroll_to_tail();
+        }
+        self.auto_follow
+    }
+
+    pub(super) fn mark_cancel_requested(&mut self) {
+        if self.cancel_requested {
+            return;
+        }
+
+        self.cancel_requested = true;
+        self.append_log_lines(vec!["Cancellation requested. Waiting for the running command to stop...".to_string()]);
     }
 
     pub(super) fn append_log_lines(&mut self, lines: Vec<String>) {
@@ -153,25 +196,43 @@ impl ReleaseNowDialog {
         }
 
         self.log_lines.extend(lines);
-        if self.running {
-            self.scroll = self.log_lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        if self.running && self.auto_follow {
+            self.scroll_to_tail();
         }
     }
 
     pub(super) fn apply_outcome(&mut self, outcome: ReleaseNowExecutionOutcome) {
         self.running = false;
+        self.auto_follow = false;
+        self.cancel_requested = false;
         self.mode = ReleaseNowMode::Completed;
         self.summary = Some(outcome.summary);
+        self.summary_is_warning = false;
         self.summary_is_error = false;
         self.artifact_files = outcome.artifact_files;
         self.append_log_lines(outcome.log_lines);
         self.scroll = 0;
     }
 
+    pub(super) fn apply_cancelled(&mut self, message: String) {
+        self.running = false;
+        self.auto_follow = false;
+        self.cancel_requested = false;
+        self.mode = ReleaseNowMode::Completed;
+        self.summary = Some(message);
+        self.summary_is_warning = true;
+        self.summary_is_error = false;
+        self.artifact_files.clear();
+        self.scroll = 0;
+    }
+
     pub(super) fn apply_failure(&mut self, error_message: String) {
         self.running = false;
+        self.auto_follow = false;
+        self.cancel_requested = false;
         self.mode = ReleaseNowMode::Completed;
         self.summary = Some(format!("ReleaseNOW failed: {}", error_message));
+        self.summary_is_warning = false;
         self.summary_is_error = true;
         self.artifact_files.clear();
         if self.log_lines.is_empty() {
@@ -179,6 +240,10 @@ impl ReleaseNowDialog {
                 .push("ReleaseNOW failed before any logs were captured.".to_string());
         }
         self.scroll = 0;
+    }
+
+    fn scroll_to_tail(&mut self) {
+        self.scroll = self.log_lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
     }
 
     pub(super) fn body_title(&self) -> &'static str {
@@ -246,7 +311,13 @@ impl ReleaseNowDialog {
                         Line::from(summary.clone())
                             .style(
                                 Style::default()
-                                    .fg(if self.summary_is_error { Color::Red } else { Color::Green })
+                                    .fg(if self.summary_is_error {
+                                        Color::Red
+                                    } else if self.summary_is_warning {
+                                        Color::Yellow
+                                    } else {
+                                        Color::Green
+                                    })
                                     .add_modifier(Modifier::BOLD),
                             ),
                     );
@@ -371,9 +442,11 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
 
 pub(super) async fn execute_release_now_async(
     request: ReleaseNowExecutionRequest,
+    cancel: GitCancellation,
     mut emit_progress: impl FnMut(Vec<String>) + Send,
 ) -> Result<ReleaseNowExecutionOutcome> {
     ensure_gh_authenticated()?;
+    ensure_not_cancelled(&cancel)?;
 
     emit_progress(vec![format!(
         "Starting ReleaseNOW for {} using {}.",
@@ -381,9 +454,11 @@ pub(super) async fn execute_release_now_async(
     )]);
 
     for script in &request.scripts {
-        run_script_with_live_logs(&request.repo_root, script, &mut emit_progress).await?;
+        ensure_not_cancelled(&cancel)?;
+        run_script_with_live_logs(&request.repo_root, script, cancel.clone(), &mut emit_progress).await?;
     }
 
+    ensure_not_cancelled(&cancel)?;
     emit_progress(vec!["Scanning dist/latest for release artifacts...".to_string()]);
     let repo_root = request.repo_root.clone();
     let artifact_dirs = request.artifact_dirs.clone();
@@ -402,6 +477,7 @@ pub(super) async fn execute_release_now_async(
         &request.release_title,
         request.release_notes_markdown.as_deref(),
         &artifact_files,
+        cancel,
         &mut emit_progress,
     )
     .await?;
@@ -416,6 +492,10 @@ pub(super) async fn execute_release_now_async(
         artifact_files,
         log_lines: Vec::new(),
     })
+}
+
+pub(super) fn is_cancelled_error(message: &str) -> bool {
+    message.contains("cancelled by user")
 }
 
 fn collect_release_now_options(settings: &ReleaseNowSettings) -> Result<Vec<ReleaseNowRunOption>> {
@@ -593,6 +673,7 @@ fn ensure_gh_authenticated() -> Result<()> {
 async fn run_script_with_live_logs(
     repo_root: &str,
     script: &ReleaseNowScript,
+    cancel: GitCancellation,
     emit_progress: &mut impl FnMut(Vec<String>),
 ) -> Result<()> {
     let script_path = resolve_script_path(repo_root, &script.script_path)?;
@@ -611,6 +692,7 @@ async fn run_script_with_live_logs(
                 RELEASE_NOW_TIMEOUT,
                 &action,
                 &log_label,
+                &cancel,
                 &progress_tx,
             )
         },
@@ -700,6 +782,7 @@ fn run_command_with_streaming(
     timeout_window: Duration,
     action: &str,
     log_label: &str,
+    cancel: &GitCancellation,
     progress_tx: &UnboundedSender<Vec<String>>,
 ) -> Result<()> {
     let mut command = Command::new(program);
@@ -734,6 +817,15 @@ fn run_command_with_streaming(
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {}
+        }
+
+        if cancel.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            join_stream_reader(stdout_thread, action)?;
+            join_stream_reader(stderr_thread, action)?;
+            drain_stream_lines(&line_rx, log_label, progress_tx);
+            bail!("ReleaseNOW cancelled by user")
         }
 
         if let Some(status) = child.try_wait().with_context(|| format!("failed to poll {}", action))? {
@@ -791,8 +883,10 @@ async fn create_or_update_github_release(
     release_title: &str,
     release_notes_markdown: Option<&str>,
     artifact_files: &[String],
+    cancel: GitCancellation,
     emit_progress: &mut impl FnMut(Vec<String>),
 ) -> Result<()> {
+    ensure_not_cancelled(&cancel)?;
     let notes_file = release_notes_markdown
         .filter(|notes| !notes.trim().is_empty())
         .map(write_release_notes_file)
@@ -811,6 +905,7 @@ async fn create_or_update_github_release(
         if release_exists {
             emit_progress(vec![format!("Updating existing GitHub release '{}'.", tag_name)]);
             let repo_root_owned = repo_root.to_string();
+            let upload_cancel = cancel.clone();
 
             let mut upload_args = vec!["release".to_string(), "upload".to_string(), tag_name.to_string()];
             upload_args.extend(artifact_files.iter().cloned());
@@ -824,6 +919,7 @@ async fn create_or_update_github_release(
                         RELEASE_NOW_TIMEOUT,
                         "gh release upload",
                         "gh",
+                        &upload_cancel,
                         &progress_tx,
                     )
                 },
@@ -842,6 +938,7 @@ async fn create_or_update_github_release(
                     notes_file.display().to_string(),
                 ];
                 let repo_root_owned = repo_root.to_string();
+                let edit_cancel = cancel.clone();
                 run_blocking_streaming_operation(
                     move |progress_tx| {
                         run_command_with_streaming(
@@ -851,6 +948,7 @@ async fn create_or_update_github_release(
                             RELEASE_NOW_TIMEOUT,
                             "gh release edit",
                             "gh",
+                            &edit_cancel,
                             &progress_tx,
                         )
                     },
@@ -874,6 +972,7 @@ async fn create_or_update_github_release(
                 create_args.push(notes_file.display().to_string());
             }
             let repo_root = repo_root.to_string();
+            let create_cancel = cancel.clone();
             run_blocking_streaming_operation(
                 move |progress_tx| {
                     run_command_with_streaming(
@@ -883,6 +982,7 @@ async fn create_or_update_github_release(
                         RELEASE_NOW_TIMEOUT,
                         "gh release create",
                         "gh",
+                        &create_cancel,
                         &progress_tx,
                     )
                 },
