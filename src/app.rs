@@ -606,6 +606,8 @@ impl App {
 
         if running {
             match key.code {
+                KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::End => self.toggle_release_now_auto_follow(),
+                KeyCode::Char('x') | KeyCode::Char('X') => self.request_cancel_release_now(),
                 KeyCode::Up => self.scroll_release_now(-1),
                 KeyCode::Down => self.scroll_release_now(1),
                 KeyCode::PageUp => self.scroll_release_now(-6),
@@ -1549,6 +1551,8 @@ impl App {
                     dialog.proceed_past_warning();
                 }
             }
+            HitAction::ToggleReleaseNowAutoFollow => self.toggle_release_now_auto_follow(),
+            HitAction::CancelReleaseNowRun => self.request_cancel_release_now(),
             HitAction::ScrollReleaseNow(delta) => self.scroll_release_now(delta),
             HitAction::SaveReleaseNowNotes => return self.save_release_now_notes(),
             HitAction::CancelReleaseNowNotes => {
@@ -1793,6 +1797,36 @@ impl App {
         }
     }
 
+    fn toggle_release_now_auto_follow(&mut self) {
+        if let Some(dialog) = &mut self.release_now_dialog {
+            let enabled = dialog.toggle_auto_follow();
+            self.status = StatusMessage::info(if enabled {
+                "ReleaseNOW auto-follow resumed."
+            } else {
+                "ReleaseNOW auto-follow paused."
+            });
+        }
+    }
+
+    fn request_cancel_release_now(&mut self) {
+        let Some(dialog) = &mut self.release_now_dialog else {
+            return;
+        };
+        if !dialog.is_running() {
+            return;
+        }
+        if dialog.cancel_requested() {
+            self.status = StatusMessage::warning("ReleaseNOW cancellation is already in progress.");
+            return;
+        }
+
+        if let Some(cancel) = &self.current_release_now_cancel {
+            cancel.cancel();
+            dialog.mark_cancel_requested();
+            self.status = StatusMessage::warning("Cancelling ReleaseNOW. Waiting for the current step to stop.");
+        }
+    }
+
     fn schedule_foreground_job(&mut self, request: BackgroundJobRequest) -> Result<u64> {
         if self.background_job_active {
             bail!("another background job is already running");
@@ -1875,10 +1909,20 @@ impl App {
                 Err(error_message) => {
                     if message.kind == BackgroundJobKind::ReleaseNow {
                         if let Some(dialog) = &mut self.release_now_dialog {
-                            dialog.apply_failure(error_message.clone());
+                            if rls_now::is_cancelled_error(&error_message) {
+                                dialog.apply_cancelled(error_message.clone());
+                            } else {
+                                dialog.apply_failure(error_message.clone());
+                            }
                         }
                     }
-                    self.status = StatusMessage::error(error_message);
+                    self.status = if message.kind == BackgroundJobKind::ReleaseNow
+                        && rls_now::is_cancelled_error(&error_message)
+                    {
+                        StatusMessage::warning(error_message)
+                    } else {
+                        StatusMessage::error(error_message)
+                    };
                 }
             },
         }
@@ -2058,6 +2102,8 @@ impl App {
                             | HitAction::EditReleaseNowNotes
                             | HitAction::RunReleaseNow
                             | HitAction::ContinueReleaseNowWarning
+                            | HitAction::ToggleReleaseNowAutoFollow
+                            | HitAction::CancelReleaseNowRun
                             | HitAction::ScrollReleaseNow(_)
                             | HitAction::CloseReleaseNow
                     )
@@ -3456,6 +3502,8 @@ pub(crate) enum HitAction {
     EditReleaseNowNotes,
     RunReleaseNow,
     ContinueReleaseNowWarning,
+    ToggleReleaseNowAutoFollow,
+    CancelReleaseNowRun,
     ScrollReleaseNow(i16),
     SaveReleaseNowNotes,
     CancelReleaseNowNotes,
@@ -4481,7 +4529,7 @@ async fn run_background_job(
             run_blocking_job(move || rls_now::validate_release_now(&project, scope_index, Some(cancel))).await?,
         )),
         BackgroundJobRequest::RunReleaseNow { request } => Ok(BackgroundJobOutput::ReleaseNowCompleted(
-            rls_now::execute_release_now_async(request, move |lines| {
+            rls_now::execute_release_now_async(request, cancel, move |lines| {
                 progress.send(BackgroundJobOutput::ReleaseNowLogChunk(lines));
             })
             .await?,
