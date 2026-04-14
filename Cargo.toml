@@ -4,6 +4,14 @@ version = "0.6.1"
 edition = "2024"
 rust-version = "1.94"
 description = "Ratatui public edition of the original Comfy Version Bumper"
+authors = ["ComfyHome™ <dev@comfyhome.io>"]
+license = "SA-PS"
+license-link = "https://github.com/comfy-home/perk-ComfyVersionBumper?tab=License-1-ov-file"
+homepage = "https://github.com/comfy-home/perk-ComfyVersionBumper"
+repository = "https://github.com/comfy-home/perk-ComfyVersionBumper"
+readme = "README.md"
+keywords = ["tui", "cli", "ratatui", "comfy", "comfyhome", "versioning", "version-management", "release-management", "version-bump", "git", "changelog", "semantic-versioning", "semver", "calver"]
+categories = ["development-tools", "command-line-utilities", "command-line-interface"]
 
 [[bin]]
 name = "cvb"
