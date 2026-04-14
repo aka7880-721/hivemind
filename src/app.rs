@@ -229,6 +229,7 @@ struct App {
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
+    delete_confirmation_dialog: Option<DeleteConfirmationDialog>,
     progress_dialog: Option<ProgressDialog>,
     foreground_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
     refresh_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
@@ -311,6 +312,7 @@ impl App {
             recent_changes_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
+            delete_confirmation_dialog: None,
             progress_dialog: None,
             foreground_request_tx,
             refresh_request_tx,
@@ -378,6 +380,10 @@ impl App {
 
         if self.browser_dialog.is_some() {
             return self.handle_browser_key(key);
+        }
+
+        if self.delete_confirmation_dialog.is_some() {
+            return self.handle_delete_confirmation_key(key);
         }
 
         if self.project_edit_dialog.is_some() {
@@ -451,6 +457,7 @@ impl App {
         match key.code {
             KeyCode::Char('n') => self.open_wizard(),
             KeyCode::Char('e') => self.open_project_edit_dialog()?,
+            KeyCode::Char('d') | KeyCode::Char('D') => self.request_dashboard_delete()?,
             KeyCode::Char('b') => self.open_bump_dialog()?,
             KeyCode::Char('g') => self.open_recent_changes()?,
             KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
@@ -499,6 +506,31 @@ impl App {
                     }
                 }
             }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_delete_confirmation_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                if let Some(dialog) = &mut self.delete_confirmation_dialog {
+                    dialog.toggle_selection();
+                }
+            }
+            KeyCode::Enter => {
+                if self
+                    .delete_confirmation_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.confirm_selected)
+                    .unwrap_or(false)
+                {
+                    return self.confirm_delete_request();
+                }
+                self.cancel_delete_request();
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => return self.confirm_delete_request(),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.cancel_delete_request(),
             _ => {}
         }
         Ok(())
@@ -932,6 +964,25 @@ impl App {
             return;
         }
 
+        if self.delete_confirmation_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left) => return,
+                _ => return,
+            }
+        }
+
         if self.browser_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
@@ -1298,6 +1349,8 @@ impl App {
                 self.project_edit_dialog = None;
                 self.status = StatusMessage::info("Project edit cancelled.");
             }
+            HitAction::ConfirmDeleteRequest => return self.confirm_delete_request(),
+            HitAction::CancelDeleteRequest => self.cancel_delete_request(),
             HitAction::ToggleTabHints => return self.toggle_tab_hints(),
             HitAction::ToggleFooter => return self.toggle_footer(),
             HitAction::CycleFooterContent(delta) => return self.cycle_footer_content(delta),
@@ -1611,6 +1664,12 @@ impl App {
                 }?;
 
                 if self.browser_dialog.is_some() && !matches!(action, HitAction::BrowserSelect(_)) {
+                    return None;
+                }
+
+                if self.delete_confirmation_dialog.is_some()
+                    && !matches!(action, HitAction::ConfirmDeleteRequest | HitAction::CancelDeleteRequest)
+                {
                     return None;
                 }
 
@@ -2102,18 +2161,7 @@ impl App {
             bail!("selected project no longer exists");
         }
 
-        let removed = self.config.projects.remove(dialog.project_index);
-        self.config_store.save(&self.config)?;
-        self.project_edit_dialog = None;
-        if self.config.projects.is_empty() {
-            self.selected_project = 0;
-        } else {
-            self.selected_project = dialog.project_index.min(self.config.projects.len().saturating_sub(1));
-        }
-        self.invalidate_overview_cache();
-        self.prime_selected_project_dashboard_data();
-        self.status = StatusMessage::success(format!("Removed project '{}'.", removed.name));
-        Ok(())
+        self.request_project_deletion(dialog.project_index)
     }
 
     fn open_tag_dialog(&mut self) -> Result<()> {
@@ -2368,6 +2416,182 @@ impl App {
             self.selected_project = next;
             self.prime_selected_project_dashboard_data();
         }
+    }
+
+    fn request_dashboard_delete(&mut self) -> Result<()> {
+        let Some(project) = self.config.projects.get(self.selected_project).cloned() else {
+            self.status = StatusMessage::info("No project is selected.");
+            return Ok(());
+        };
+
+        match project.project_type {
+            ProjectType::AllInOne => self.request_project_deletion(self.selected_project),
+            ProjectType::Branched => {
+                if project.branches.is_empty() {
+                    return self.request_project_deletion(self.selected_project);
+                }
+
+                let scope_index = self.overview_focused_scope.min(project.branches.len().saturating_sub(1));
+                self.request_scope_deletion(self.selected_project, scope_index)
+            }
+        }
+    }
+
+    fn request_project_deletion(&mut self, project_index: usize) -> Result<()> {
+        let project = self
+            .config
+            .projects
+            .get(project_index)
+            .ok_or_else(|| anyhow!("selected project no longer exists"))?;
+        self.delete_confirmation_dialog = Some(DeleteConfirmationDialog::project(
+            project_index,
+            project.name.clone(),
+        ));
+        self.status = StatusMessage::warning(format!("Confirm deletion of project '{}'.", project.name));
+        Ok(())
+    }
+
+    fn request_scope_deletion(&mut self, project_index: usize, scope_index: usize) -> Result<()> {
+        let project = self
+            .config
+            .projects
+            .get(project_index)
+            .ok_or_else(|| anyhow!("selected project no longer exists"))?;
+        if project.project_type != ProjectType::Branched {
+            return self.request_project_deletion(project_index);
+        }
+
+        let branch = project
+            .branches
+            .get(scope_index)
+            .ok_or_else(|| anyhow!("selected scope no longer exists"))?;
+        self.delete_confirmation_dialog = Some(DeleteConfirmationDialog::scope(
+            project_index,
+            project.name.clone(),
+            scope_index,
+            branch.display_name().to_string(),
+            branch.scope_kind,
+            project.branches.len() == 1,
+        ));
+        self.status = StatusMessage::warning(format!(
+            "Confirm deletion of scope '{}' from project '{}'.",
+            branch.display_name(),
+            project.name
+        ));
+        Ok(())
+    }
+
+    fn confirm_delete_request(&mut self) -> Result<()> {
+        let Some(dialog) = self.delete_confirmation_dialog.clone() else {
+            return Ok(());
+        };
+        self.delete_confirmation_dialog = None;
+
+        match dialog.target {
+            DeleteConfirmationTarget::Project { project_index, .. } => self.delete_project_at(project_index),
+            DeleteConfirmationTarget::Scope {
+                project_index,
+                scope_index,
+                removes_project,
+                ..
+            } => {
+                if removes_project {
+                    self.delete_last_scope_project(project_index, scope_index)
+                } else {
+                    self.delete_scope_at(project_index, scope_index)
+                }
+            }
+        }
+    }
+
+    fn cancel_delete_request(&mut self) {
+        self.delete_confirmation_dialog = None;
+        self.status = StatusMessage::info("Deletion cancelled.");
+    }
+
+    fn delete_project_at(&mut self, project_index: usize) -> Result<()> {
+        if project_index >= self.config.projects.len() {
+            bail!("selected project no longer exists");
+        }
+
+        let removed = self.config.projects.remove(project_index);
+        self.finish_delete_mutation(project_index)?;
+        self.status = StatusMessage::success(format!("Removed project '{}'.", removed.name));
+        Ok(())
+    }
+
+    fn delete_scope_at(&mut self, project_index: usize, scope_index: usize) -> Result<()> {
+        let (project_name, scope_name, remaining_scopes) = {
+            let project = self
+                .config
+                .projects
+                .get_mut(project_index)
+                .ok_or_else(|| anyhow!("selected project no longer exists"))?;
+            if project.project_type != ProjectType::Branched {
+                bail!("selected project does not contain removable scopes");
+            }
+            if scope_index >= project.branches.len() {
+                bail!("selected scope no longer exists");
+            }
+            let removed = project.branches.remove(scope_index);
+            (
+                project.name.clone(),
+                removed.display_name().to_string(),
+                project.branches.len(),
+            )
+        };
+
+        self.finish_delete_mutation(project_index)?;
+        if remaining_scopes > 0 {
+            self.overview_focused_scope = scope_index.min(remaining_scopes.saturating_sub(1));
+        }
+        self.status = StatusMessage::success(format!(
+            "Removed scope '{}' from project '{}'.",
+            scope_name, project_name
+        ));
+        Ok(())
+    }
+
+    fn delete_last_scope_project(&mut self, project_index: usize, scope_index: usize) -> Result<()> {
+        let (project_name, scope_name) = {
+            let project = self
+                .config
+                .projects
+                .get(project_index)
+                .ok_or_else(|| anyhow!("selected project no longer exists"))?;
+            if project.project_type != ProjectType::Branched {
+                bail!("selected project does not contain removable scopes");
+            }
+            let branch = project
+                .branches
+                .get(scope_index)
+                .ok_or_else(|| anyhow!("selected scope no longer exists"))?;
+            (project.name.clone(), branch.display_name().to_string())
+        };
+
+        self.config.projects.remove(project_index);
+        self.finish_delete_mutation(project_index)?;
+        self.status = StatusMessage::success(format!(
+            "Removed scope '{}' and deleted project '{}' because it had no scopes left.",
+            scope_name, project_name
+        ));
+        Ok(())
+    }
+
+    fn finish_delete_mutation(&mut self, selected_index_hint: usize) -> Result<()> {
+        self.config_store.save(&self.config)?;
+        self.project_edit_dialog = None;
+        self.browser_dialog = None;
+        if self.config.projects.is_empty() {
+            self.selected_project = 0;
+            self.overview_focused_scope = 0;
+        } else {
+            self.selected_project = selected_index_hint.min(self.config.projects.len().saturating_sub(1));
+        }
+        self.invalidate_overview_cache();
+        self.prime_selected_project_dashboard_data();
+        p_s_s::invalidate_project_settings_state(self);
+        Ok(())
     }
 
     fn validate_wizard_target(&mut self) {
@@ -2835,6 +3059,8 @@ pub(crate) enum HitAction {
     SaveProjectEdit,
     RemoveProject,
     CancelProjectEdit,
+    ConfirmDeleteRequest,
+    CancelDeleteRequest,
     ToggleTabHints,
     ToggleFooter,
     CycleFooterContent(i32),
@@ -2893,6 +3119,65 @@ struct ChangelogPreviewDialog {
     release_message: TuiTextArea<'static>,
     release_message_placeholder: String,
     scroll: u16,
+}
+
+#[derive(Clone)]
+struct DeleteConfirmationDialog {
+    target: DeleteConfirmationTarget,
+    confirm_selected: bool,
+}
+
+impl DeleteConfirmationDialog {
+    fn project(project_index: usize, project_name: String) -> Self {
+        Self {
+            target: DeleteConfirmationTarget::Project {
+                project_index,
+                project_name,
+            },
+            confirm_selected: false,
+        }
+    }
+
+    fn scope(
+        project_index: usize,
+        project_name: String,
+        scope_index: usize,
+        scope_name: String,
+        scope_kind: BranchScopeKind,
+        removes_project: bool,
+    ) -> Self {
+        Self {
+            target: DeleteConfirmationTarget::Scope {
+                project_index,
+                project_name,
+                scope_index,
+                scope_name,
+                scope_kind,
+                removes_project,
+            },
+            confirm_selected: false,
+        }
+    }
+
+    fn toggle_selection(&mut self) {
+        self.confirm_selected = !self.confirm_selected;
+    }
+}
+
+#[derive(Clone)]
+enum DeleteConfirmationTarget {
+    Project {
+        project_index: usize,
+        project_name: String,
+    },
+    Scope {
+        project_index: usize,
+        project_name: String,
+        scope_index: usize,
+        scope_name: String,
+        scope_kind: BranchScopeKind,
+        removes_project: bool,
+    },
 }
 
 impl ChangelogPreviewDialog {
@@ -5133,6 +5418,88 @@ mod tests {
 
         assert!(matches!(app.screen, Screen::Dashboard));
         assert_eq!(app.project_settings_state.release_now_windows.value(), "2");
+    }
+
+    #[test]
+    fn dashboard_delete_shortcut_confirms_before_removing_project() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+        }];
+        app.screen = Screen::Dashboard;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .expect("delete shortcut should open confirmation");
+
+        assert!(app.delete_confirmation_dialog.is_some());
+        assert_eq!(app.config.projects.len(), 1);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .expect("confirming deletion should succeed");
+
+        assert!(app.delete_confirmation_dialog.is_none());
+        assert!(app.config.projects.is_empty());
+    }
+
+    #[test]
+    fn dashboard_delete_shortcut_removes_focused_scope_for_branched_projects() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    repo: None,
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: Vec::new(),
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    label: "API".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    repo: None,
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: Vec::new(),
+                },
+            ],
+            repo: None,
+        }];
+        app.screen = Screen::Dashboard;
+        app.overview_focused_scope = 1;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .expect("delete shortcut should open scope confirmation");
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .expect("confirming scope deletion should succeed");
+
+        assert_eq!(app.config.projects.len(), 1);
+        assert_eq!(app.config.projects[0].branches.len(), 1);
+        assert_eq!(app.config.projects[0].branches[0].name, "core");
+        assert_eq!(app.overview_focused_scope, 0);
     }
 
     #[test]
