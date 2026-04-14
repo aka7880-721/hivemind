@@ -472,6 +472,11 @@ impl ConfigStore {
         Ok(Self { path })
     }
 
+    #[cfg(test)]
+    pub fn with_path(path: PathBuf) -> Self {
+        Self { path }
+    }
+
     pub fn load(&self) -> Result<AppConfig> {
         if !self.path.exists() {
             return Ok(AppConfig::default());
