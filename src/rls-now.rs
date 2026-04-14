@@ -8,12 +8,19 @@
 use super::*;
 use std::{
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc::{RecvTimeoutError, Sender as StdSender, channel},
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use tokio::{
+    sync::mpsc::{UnboundedSender, unbounded_channel},
+    task::spawn_blocking,
+};
 
 use crate::{
     config::ReleaseNowSettings,
@@ -47,9 +54,11 @@ pub(super) struct ReleaseNowDialog {
     pub(super) release_notes_placeholder: String,
     pub(super) warning_message: Option<String>,
     pub(super) mode: ReleaseNowMode,
+    pub(super) running: bool,
     pub(super) warning_confirm_selected: bool,
     pub(super) scroll: u16,
     pub(super) summary: Option<String>,
+    pub(super) summary_is_error: bool,
     pub(super) artifact_files: Vec<String>,
     pub(super) log_lines: Vec<String>,
 }
@@ -74,9 +83,11 @@ impl ReleaseNowDialog {
             release_notes_placeholder: "Edit release notes in Markdown before publishing.".to_string(),
             warning_message: validation.warning_message,
             mode,
+            running: false,
             warning_confirm_selected: false,
             scroll: 0,
             summary: None,
+            summary_is_error: false,
             artifact_files: Vec::new(),
             log_lines: Vec::new(),
         }
@@ -88,6 +99,10 @@ impl ReleaseNowDialog {
 
     pub(super) fn is_completed(&self) -> bool {
         self.mode == ReleaseNowMode::Completed
+    }
+
+    pub(super) fn is_running(&self) -> bool {
+        self.running
     }
 
     pub(super) fn selected_option(&self) -> &ReleaseNowRunOption {
@@ -122,11 +137,47 @@ impl ReleaseNowDialog {
         self.scroll = self.scroll.saturating_add_signed(delta);
     }
 
+    pub(super) fn begin_running(&mut self) {
+        self.running = true;
+        self.mode = ReleaseNowMode::Configure;
+        self.summary = None;
+        self.summary_is_error = false;
+        self.artifact_files.clear();
+        self.log_lines.clear();
+        self.scroll = 0;
+    }
+
+    pub(super) fn append_log_lines(&mut self, lines: Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+
+        self.log_lines.extend(lines);
+        if self.running {
+            self.scroll = self.log_lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        }
+    }
+
     pub(super) fn apply_outcome(&mut self, outcome: ReleaseNowExecutionOutcome) {
+        self.running = false;
         self.mode = ReleaseNowMode::Completed;
         self.summary = Some(outcome.summary);
+        self.summary_is_error = false;
         self.artifact_files = outcome.artifact_files;
-        self.log_lines = outcome.log_lines;
+        self.append_log_lines(outcome.log_lines);
+        self.scroll = 0;
+    }
+
+    pub(super) fn apply_failure(&mut self, error_message: String) {
+        self.running = false;
+        self.mode = ReleaseNowMode::Completed;
+        self.summary = Some(format!("ReleaseNOW failed: {}", error_message));
+        self.summary_is_error = true;
+        self.artifact_files.clear();
+        if self.log_lines.is_empty() {
+            self.log_lines
+                .push("ReleaseNOW failed before any logs were captured.".to_string());
+        }
         self.scroll = 0;
     }
 
@@ -134,7 +185,9 @@ impl ReleaseNowDialog {
         match self.mode {
             ReleaseNowMode::BumpWarning => " Bump Check ",
             ReleaseNowMode::Configure => {
-                if self.attach_changelog {
+                if self.running {
+                    " Live Log "
+                } else if self.attach_changelog {
                     " Release Notes Preview "
                 } else {
                     " Release Summary "
@@ -158,7 +211,16 @@ impl ReleaseNowDialog {
                 lines
             }
             ReleaseNowMode::Configure => {
-                if self.attach_changelog {
+                if self.running {
+                    if self.log_lines.is_empty() {
+                        vec![Line::from("Waiting for ReleaseNOW output...")]
+                    } else {
+                        self.log_lines
+                            .iter()
+                            .map(|line| Line::from(line.clone()))
+                            .collect()
+                    }
+                } else if self.attach_changelog {
                     self.release_notes_markdown
                         .lines()
                         .map(|line| Line::from(line.to_string()))
@@ -182,7 +244,11 @@ impl ReleaseNowDialog {
                 if let Some(summary) = &self.summary {
                     lines.push(
                         Line::from(summary.clone())
-                            .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                            .style(
+                                Style::default()
+                                    .fg(if self.summary_is_error { Color::Red } else { Color::Green })
+                                    .add_modifier(Modifier::BOLD),
+                            ),
                     );
                     lines.push(Line::raw(""));
                 }
@@ -233,7 +299,6 @@ pub(super) struct ReleaseNowScript {
 
 #[derive(Clone)]
 pub(super) struct ReleaseNowExecutionRequest {
-    pub(super) project_name: String,
     pub(super) scope_label: String,
     pub(super) repo_root: String,
     pub(super) tag_name: String,
@@ -290,7 +355,6 @@ pub(super) fn validate_release_now(
 
 pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
     ReleaseNowExecutionRequest {
-        project_name: dialog.project_name.clone(),
         scope_label: dialog.scope_label.clone(),
         repo_root: dialog.repo_root.clone(),
         tag_name: dialog.tag_name.clone(),
@@ -307,21 +371,20 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
 
 pub(super) async fn execute_release_now_async(
     request: ReleaseNowExecutionRequest,
+    mut emit_progress: impl FnMut(Vec<String>) + Send,
 ) -> Result<ReleaseNowExecutionOutcome> {
     ensure_gh_authenticated()?;
 
-    let mut log_lines = vec![format!(
+    emit_progress(vec![format!(
         "Starting ReleaseNOW for {} using {}.",
         request.scope_label, request.selected_option_label
-    )];
+    )]);
 
     for script in &request.scripts {
-        let repo_root = request.repo_root.clone();
-        let script_to_run = script.clone();
-        let output = run_blocking_job(move || run_script_and_collect_logs(&repo_root, &script_to_run)).await?;
-        log_lines.extend(output);
+        run_script_with_live_logs(&request.repo_root, script, &mut emit_progress).await?;
     }
 
+    emit_progress(vec!["Scanning dist/latest for release artifacts...".to_string()]);
     let repo_root = request.repo_root.clone();
     let artifact_dirs = request.artifact_dirs.clone();
     let artifact_files = run_blocking_job(move || discover_artifacts(&repo_root, &artifact_dirs)).await?;
@@ -331,23 +394,17 @@ pub(super) async fn execute_release_now_async(
             request.selected_option_label
         )
     }
+    emit_progress(vec![format!("Discovered {} artifact(s).", artifact_files.len())]);
 
-    let repo_root = request.repo_root.clone();
-    let tag_name = request.tag_name.clone();
-    let release_title = request.release_title.clone();
-    let release_notes_markdown = request.release_notes_markdown.clone();
-    let upload_files = artifact_files.clone();
-    let release_log_lines = run_blocking_job(move || {
-        create_or_update_github_release(
-            &repo_root,
-            &tag_name,
-            &release_title,
-            release_notes_markdown.as_deref(),
-            &upload_files,
-        )
-    })
+    create_or_update_github_release(
+        &request.repo_root,
+        &request.tag_name,
+        &request.release_title,
+        request.release_notes_markdown.as_deref(),
+        &artifact_files,
+        &mut emit_progress,
+    )
     .await?;
-    log_lines.extend(release_log_lines);
 
     Ok(ReleaseNowExecutionOutcome {
         summary: format!(
@@ -357,7 +414,7 @@ pub(super) async fn execute_release_now_async(
             request.selected_option_label
         ),
         artifact_files,
-        log_lines,
+        log_lines: Vec::new(),
     })
 }
 
@@ -533,25 +590,35 @@ fn ensure_gh_authenticated() -> Result<()> {
     }
 }
 
-fn run_script_and_collect_logs(repo_root: &str, script: &ReleaseNowScript) -> Result<Vec<String>> {
+async fn run_script_with_live_logs(
+    repo_root: &str,
+    script: &ReleaseNowScript,
+    emit_progress: &mut impl FnMut(Vec<String>),
+) -> Result<()> {
     let script_path = resolve_script_path(repo_root, &script.script_path)?;
     let display_path = script_path.display().to_string();
     let (program, args) = script_command(&script_path)?;
-    let output = run_command_with_capture(repo_root, &program, &args, RELEASE_NOW_TIMEOUT, &format!("run {} script", script.label))?;
-
-    let mut lines = vec![format!("[{}] Running {}", script.label, display_path)];
-    lines.extend(prefix_output_lines(
-        &script.label,
-        "stdout",
-        &String::from_utf8_lossy(&output.stdout),
-    ));
-    lines.extend(prefix_output_lines(
-        &script.label,
-        "stderr",
-        &String::from_utf8_lossy(&output.stderr),
-    ));
-    lines.push(format!("[{}] Completed successfully.", script.label));
-    Ok(lines)
+    emit_progress(vec![format!("[{}] Running {}", script.label, display_path)]);
+    let repo_root = repo_root.to_string();
+    let action = format!("run {} script", script.label);
+    let log_label = script.label.clone();
+    run_blocking_streaming_operation(
+        move |progress_tx| {
+            run_command_with_streaming(
+                &repo_root,
+                &program,
+                &args,
+                RELEASE_NOW_TIMEOUT,
+                &action,
+                &log_label,
+                &progress_tx,
+            )
+        },
+        emit_progress,
+    )
+    .await?;
+    emit_progress(vec![format!("[{}] Completed successfully.", script.label)]);
+    Ok(())
 }
 
 fn resolve_script_path(repo_root: &str, script_path: &str) -> Result<PathBuf> {
@@ -596,25 +663,45 @@ fn script_command(script_path: &Path) -> Result<(String, Vec<String>)> {
     Ok((script_path.display().to_string(), Vec::new()))
 }
 
-fn prefix_output_lines(label: &str, stream: &str, output: &str) -> Vec<String> {
-    let lines = split_output_lines(output);
-    if lines.is_empty() {
-        Vec::new()
-    } else {
-        lines
-            .into_iter()
-            .map(|line| format!("[{}][{}] {}", label, stream, line))
-            .collect()
+async fn run_blocking_streaming_operation<T>(
+    operation: impl FnOnce(UnboundedSender<Vec<String>>) -> Result<T> + Send + 'static,
+    emit_progress: &mut impl FnMut(Vec<String>),
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    let (progress_tx, mut progress_rx) = unbounded_channel::<Vec<String>>();
+    let handle = spawn_blocking(move || operation(progress_tx));
+    tokio::pin!(handle);
+
+    loop {
+        tokio::select! {
+            maybe_lines = progress_rx.recv() => {
+                if let Some(lines) = maybe_lines {
+                    emit_progress(lines);
+                }
+            }
+            result = &mut handle => {
+                let value = result
+                    .map_err(|error| anyhow!("background task failed: {error}"))??;
+                while let Ok(lines) = progress_rx.try_recv() {
+                    emit_progress(lines);
+                }
+                return Ok(value);
+            }
+        }
     }
 }
 
-fn run_command_with_capture(
+fn run_command_with_streaming(
     repo_root: &str,
     program: &str,
     args: &[String],
-    timeout: Duration,
+    timeout_window: Duration,
     action: &str,
-) -> Result<std::process::Output> {
+    log_label: &str,
+    progress_tx: &UnboundedSender<Vec<String>>,
+) -> Result<()> {
     let mut command = Command::new(program);
     command
         .current_dir(repo_root)
@@ -625,30 +712,49 @@ fn run_command_with_capture(
     let mut child = command
         .spawn()
         .with_context(|| format!("failed to start {} in '{}'", action, repo_root))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture stdout for {}", action))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture stderr for {}", action))?;
+
+    let (line_tx, line_rx) = channel::<(String, String)>();
+    let stdout_thread = spawn_stream_reader(stdout, "stdout", line_tx.clone());
+    let stderr_thread = spawn_stream_reader(stderr, "stderr", line_tx);
     let started_at = Instant::now();
 
     loop {
-        if let Some(status) = child.try_wait().with_context(|| format!("failed to poll {}", action))? {
-            let output = child
-                .wait_with_output()
-                .with_context(|| format!("failed to collect output for {}", action))?;
-            if status.success() {
-                return Ok(output);
+        match line_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok((stream, line)) => {
+                let _ = progress_tx.send(vec![format!("[{}][{}] {}", log_label, stream, line)]);
             }
-
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let detail = if stderr.is_empty() { stdout } else { stderr };
-            bail!("{} failed: {}", action, detail)
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {}
         }
 
-        if started_at.elapsed() >= timeout {
+        if let Some(status) = child.try_wait().with_context(|| format!("failed to poll {}", action))? {
+            join_stream_reader(stdout_thread, action)?;
+            join_stream_reader(stderr_thread, action)?;
+            drain_stream_lines(&line_rx, log_label, progress_tx);
+
+            if status.success() {
+                return Ok(());
+            }
+            bail!("{} failed with exit code {:?}", action, status.code())
+        }
+
+        if started_at.elapsed() >= timeout_window {
             let _ = child.kill();
-            let _ = child.wait_with_output();
-            bail!("{} timed out after {}s", action, timeout.as_secs())
+            let _ = child.wait();
+            join_stream_reader(stdout_thread, action)?;
+            join_stream_reader(stderr_thread, action)?;
+            drain_stream_lines(&line_rx, log_label, progress_tx);
+            bail!("{} timed out after {}s", action, timeout_window.as_secs())
         }
-
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -679,13 +785,14 @@ fn collect_files_recursive(root: &Path, files: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn create_or_update_github_release(
+async fn create_or_update_github_release(
     repo_root: &str,
     tag_name: &str,
     release_title: &str,
     release_notes_markdown: Option<&str>,
     artifact_files: &[String],
-) -> Result<Vec<String>> {
+    emit_progress: &mut impl FnMut(Vec<String>),
+) -> Result<()> {
     let notes_file = release_notes_markdown
         .filter(|notes| !notes.trim().is_empty())
         .map(write_release_notes_file)
@@ -700,54 +807,141 @@ fn create_or_update_github_release(
         .context("failed to check for an existing GitHub release")?
         .success();
 
-    let mut log_lines = Vec::new();
-    if release_exists {
-        let mut upload_args = vec!["release".to_string(), "upload".to_string(), tag_name.to_string()];
-        upload_args.extend(artifact_files.iter().cloned());
-        upload_args.push("--clobber".to_string());
-        let output = run_command_with_capture(repo_root, "gh", &upload_args, RELEASE_NOW_TIMEOUT, "gh release upload")?;
-        log_lines.push(format!("Updated existing GitHub release '{}'.", tag_name));
-        log_lines.extend(prefix_output_lines("gh", "stdout", &String::from_utf8_lossy(&output.stdout)));
-        log_lines.extend(prefix_output_lines("gh", "stderr", &String::from_utf8_lossy(&output.stderr)));
+    let result = async {
+        if release_exists {
+            emit_progress(vec![format!("Updating existing GitHub release '{}'.", tag_name)]);
+            let repo_root_owned = repo_root.to_string();
 
-        if let Some(notes_file) = &notes_file {
-            let edit_args = vec![
+            let mut upload_args = vec!["release".to_string(), "upload".to_string(), tag_name.to_string()];
+            upload_args.extend(artifact_files.iter().cloned());
+            upload_args.push("--clobber".to_string());
+            run_blocking_streaming_operation(
+                move |progress_tx| {
+                    run_command_with_streaming(
+                        &repo_root_owned,
+                        "gh",
+                        &upload_args,
+                        RELEASE_NOW_TIMEOUT,
+                        "gh release upload",
+                        "gh",
+                        &progress_tx,
+                    )
+                },
+                emit_progress,
+            )
+            .await?;
+
+            if let Some(notes_file) = &notes_file {
+                let edit_args = vec![
+                    "release".to_string(),
+                    "edit".to_string(),
+                    tag_name.to_string(),
+                    "--title".to_string(),
+                    release_title.to_string(),
+                    "--notes-file".to_string(),
+                    notes_file.display().to_string(),
+                ];
+                let repo_root_owned = repo_root.to_string();
+                run_blocking_streaming_operation(
+                    move |progress_tx| {
+                        run_command_with_streaming(
+                            &repo_root_owned,
+                            "gh",
+                            &edit_args,
+                            RELEASE_NOW_TIMEOUT,
+                            "gh release edit",
+                            "gh",
+                            &progress_tx,
+                        )
+                    },
+                    emit_progress,
+                )
+                .await?;
+            }
+        } else {
+            emit_progress(vec![format!("Creating GitHub release '{}'.", tag_name)]);
+
+            let mut create_args = vec![
                 "release".to_string(),
-                "edit".to_string(),
+                "create".to_string(),
                 tag_name.to_string(),
-                "--title".to_string(),
-                release_title.to_string(),
-                "--notes-file".to_string(),
-                notes_file.display().to_string(),
             ];
-            let output = run_command_with_capture(repo_root, "gh", &edit_args, RELEASE_NOW_TIMEOUT, "gh release edit")?;
-            log_lines.extend(prefix_output_lines("gh", "stdout", &String::from_utf8_lossy(&output.stdout)));
-            log_lines.extend(prefix_output_lines("gh", "stderr", &String::from_utf8_lossy(&output.stderr)));
+            create_args.extend(artifact_files.iter().cloned());
+            create_args.push("--title".to_string());
+            create_args.push(release_title.to_string());
+            if let Some(notes_file) = &notes_file {
+                create_args.push("--notes-file".to_string());
+                create_args.push(notes_file.display().to_string());
+            }
+            let repo_root = repo_root.to_string();
+            run_blocking_streaming_operation(
+                move |progress_tx| {
+                    run_command_with_streaming(
+                        &repo_root,
+                        "gh",
+                        &create_args,
+                        RELEASE_NOW_TIMEOUT,
+                        "gh release create",
+                        "gh",
+                        &progress_tx,
+                    )
+                },
+                emit_progress,
+            )
+            .await?;
         }
-    } else {
-        let mut create_args = vec![
-            "release".to_string(),
-            "create".to_string(),
-            tag_name.to_string(),
-        ];
-        create_args.extend(artifact_files.iter().cloned());
-        create_args.push("--title".to_string());
-        create_args.push(release_title.to_string());
-        if let Some(notes_file) = &notes_file {
-            create_args.push("--notes-file".to_string());
-            create_args.push(notes_file.display().to_string());
-        }
-        let output = run_command_with_capture(repo_root, "gh", &create_args, RELEASE_NOW_TIMEOUT, "gh release create")?;
-        log_lines.push(format!("Created GitHub release '{}'.", tag_name));
-        log_lines.extend(prefix_output_lines("gh", "stdout", &String::from_utf8_lossy(&output.stdout)));
-        log_lines.extend(prefix_output_lines("gh", "stderr", &String::from_utf8_lossy(&output.stderr)));
+
+        Ok(())
     }
+    .await;
 
     if let Some(notes_file) = notes_file {
         let _ = fs::remove_file(notes_file);
     }
 
-    Ok(log_lines)
+    result
+}
+
+fn spawn_stream_reader<R>(
+    stream: R,
+    stream_name: &'static str,
+    line_tx: StdSender<(String, String)>,
+) -> thread::JoinHandle<Result<()>>
+where
+    R: std::io::Read + Send + 'static,
+{
+    thread::spawn(move || read_command_stream(stream, stream_name, line_tx))
+}
+
+fn read_command_stream<R>(stream: R, stream_name: &'static str, line_tx: StdSender<(String, String)>) -> Result<()>
+where
+    R: std::io::Read,
+{
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        let line = line?;
+        for chunk in split_output_lines(&line) {
+            let _ = line_tx.send((stream_name.to_string(), chunk));
+        }
+    }
+    Ok(())
+}
+
+fn join_stream_reader(handle: thread::JoinHandle<Result<()>>, action: &str) -> Result<()> {
+    handle
+        .join()
+        .map_err(|_| anyhow!("failed to join output reader thread for {}", action))??;
+    Ok(())
+}
+
+fn drain_stream_lines(
+    line_rx: &std::sync::mpsc::Receiver<(String, String)>,
+    log_label: &str,
+    progress_tx: &UnboundedSender<Vec<String>>,
+) {
+    while let Ok((stream, line)) = line_rx.try_recv() {
+        let _ = progress_tx.send(vec![format!("[{}][{}] {}", log_label, stream, line)]);
+    }
 }
 
 fn write_release_notes_file(notes: &str) -> Result<PathBuf> {
