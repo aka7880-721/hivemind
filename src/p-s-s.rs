@@ -12,7 +12,7 @@ use ratatui::{
 	layout::{Alignment, Constraint, Direction, Layout, Rect},
 	style::{Color, Style, Stylize},
 	text::{Line, Span},
-	widgets::{Block, Borders, Paragraph, Wrap},
+	widgets::{Block, Borders, Paragraph},
 };
 use tui_checkbox::Checkbox;
 use tui_tabs::TabNav;
@@ -56,6 +56,9 @@ pub(crate) enum ProjectSettingsFocus {
 pub(crate) struct ProjectSettingsState {
 	pub(crate) binding: Option<(usize, usize)>,
 	pub(crate) focus: ProjectSettingsFocus,
+	pub(crate) scroll: u16,
+	pub(crate) viewport_height: u16,
+	pub(crate) follow_focus: bool,
 	pub(crate) changelog_path: TextInput,
 	pub(crate) release_now_windows: TextInput,
 	pub(crate) release_now_linux_arm: TextInput,
@@ -68,6 +71,9 @@ impl Default for ProjectSettingsState {
 		Self {
 			binding: None,
 			focus: ProjectSettingsFocus::ChangelogEnabled,
+			scroll: 0,
+			viewport_height: 0,
+			follow_focus: true,
 			changelog_path: TextInput::with_value(DEFAULT_CHANGELOG_PATH),
 			release_now_windows: TextInput::with_value(""),
 			release_now_linux_arm: TextInput::with_value(""),
@@ -91,6 +97,8 @@ impl ProjectSettingsState {
 
 		let release_now = project.release_now_for_scope(scope_index);
 		self.binding = Some((project_index, scope_index));
+		self.scroll = 0;
+		self.follow_focus = true;
 		self.changelog_path.set_value(project.changelog_path_for_scope(scope_index).to_string());
 		self.release_now_windows.set_value(release_now.windows_script.clone());
 		self.release_now_linux_arm.set_value(release_now.linux_arm_script.clone());
@@ -137,6 +145,7 @@ impl ProjectSettingsState {
 		let fields = self.visible_fields(tab, project, scope_index);
 		if !fields.contains(&self.focus) {
 			self.focus = *fields.first().unwrap_or(&ProjectSettingsFocus::ChangelogEnabled);
+			self.follow_focus = true;
 		}
 	}
 
@@ -144,12 +153,14 @@ impl ProjectSettingsState {
 		let fields = self.visible_fields(tab, project, scope_index);
 		let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
 		self.focus = fields[(index + 1) % fields.len()];
+		self.follow_focus = true;
 	}
 
 	fn focus_previous(&mut self, tab: ProjectSettingsTab, project: &ProjectConfig, scope_index: usize) {
 		let fields = self.visible_fields(tab, project, scope_index);
 		let index = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
 		self.focus = fields[(index + fields.len() - 1) % fields.len()];
+		self.follow_focus = true;
 	}
 
 	fn focus_accepts_text(&self, tab: ProjectSettingsTab, project: &ProjectConfig, scope_index: usize) -> bool {
@@ -210,6 +221,41 @@ impl ProjectSettingsState {
 			_ => {}
 		}
 	}
+
+	fn clamp_scroll(&mut self, total_height: u16, viewport_height: u16) {
+		let max_scroll = total_height.saturating_sub(viewport_height);
+		self.scroll = self.scroll.min(max_scroll);
+	}
+
+	fn ensure_row_visible(&mut self, top: u16, height: u16, total_height: u16, viewport_height: u16) {
+		self.clamp_scroll(total_height, viewport_height);
+		if viewport_height == 0 {
+			self.scroll = 0;
+			return;
+		}
+		if top < self.scroll {
+			self.scroll = top;
+		} else {
+			let bottom = top.saturating_add(height);
+			let viewport_bottom = self.scroll.saturating_add(viewport_height);
+			if bottom > viewport_bottom {
+				self.scroll = bottom.saturating_sub(viewport_height);
+			}
+		}
+		self.clamp_scroll(total_height, viewport_height);
+	}
+
+	fn scroll_by(&mut self, delta: isize, total_height: u16, viewport_height: u16) {
+		self.follow_focus = false;
+		self.clamp_scroll(total_height, viewport_height);
+		let max_scroll = total_height.saturating_sub(viewport_height);
+		let next = if delta.is_negative() {
+			self.scroll.saturating_sub(delta.unsigned_abs() as u16)
+		} else {
+			self.scroll.saturating_add(delta as u16).min(max_scroll)
+		};
+		self.scroll = next;
+	}
 }
 
 pub(crate) fn render_project_settings(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -249,12 +295,27 @@ pub(crate) fn invalidate_project_settings_state(app: &mut App) {
 
 pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
 	app.project_settings_tab = app.project_settings_tab.step(delta);
+	app.project_settings_state.scroll = 0;
+	app.project_settings_state.follow_focus = true;
 	sync_project_settings_state(app);
 	if let Some(project) = app.config.projects.get(app.selected_project).cloned() {
 		let scope_index = active_scope_index(&project, app.overview_focused_scope);
 		app.project_settings_state
 			.ensure_focus_visible(app.project_settings_tab, &project, scope_index);
 	}
+}
+
+pub(crate) fn captures_text_input(app: &mut App) -> bool {
+	if app.dashboard_focus != super::DashboardPane::Overview || app.overview_tab != super::OverviewTab::ProjectSettings {
+		return false;
+	}
+	sync_project_settings_state(app);
+	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+		return false;
+	};
+	let scope_index = active_scope_index(&project, app.overview_focused_scope);
+	app.project_settings_state
+		.focus_accepts_text(app.project_settings_tab, &project, scope_index)
 }
 
 pub(crate) fn try_handle_project_settings_key(app: &mut App, key: KeyEvent) -> Result<bool> {
@@ -346,6 +407,54 @@ pub(crate) fn insert_project_settings_text(app: &mut App, text: &str) -> bool {
 pub(crate) fn set_project_settings_focus(app: &mut App, focus: ProjectSettingsFocus) {
 	sync_project_settings_state(app);
 	app.project_settings_state.focus = focus;
+	app.project_settings_state.follow_focus = true;
+}
+
+pub(crate) fn activate_project_settings_field(app: &mut App, focus: ProjectSettingsFocus) -> Result<()> {
+	sync_project_settings_state(app);
+	app.project_settings_state.focus = focus;
+	app.project_settings_state.follow_focus = true;
+	if is_checkbox_field(focus) {
+		return toggle_focused_project_settings_control(app);
+	}
+	Ok(())
+}
+
+pub(crate) fn scroll_project_settings(app: &mut App, delta: isize) {
+	sync_project_settings_state(app);
+	let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+		return;
+	};
+	let scope_index = active_scope_index(&project, app.overview_focused_scope);
+	let rows = build_rows(app.project_settings_tab, &project, scope_index);
+	let total_height = total_rows_height(&rows);
+	let viewport_height = app.project_settings_state.viewport_height;
+	app.project_settings_state.scroll_by(delta, total_height, viewport_height);
+}
+
+#[derive(Clone)]
+enum ProjectSettingsRow {
+	Text(Line<'static>),
+	Spacer(u16),
+	Checkbox(ProjectSettingsFocus),
+	Path(ProjectSettingsFocus),
+}
+
+impl ProjectSettingsRow {
+	fn height(&self) -> u16 {
+		match self {
+			Self::Text(_) => 1,
+			Self::Spacer(height) => *height,
+			Self::Checkbox(_) | Self::Path(_) => 3,
+		}
+	}
+
+	fn focus(&self) -> Option<ProjectSettingsFocus> {
+		match self {
+			Self::Checkbox(field) | Self::Path(field) => Some(*field),
+			_ => None,
+		}
+	}
 }
 
 pub(crate) fn open_browser_for_project_settings_focus(app: &mut App) -> Result<()> {
@@ -416,84 +525,177 @@ fn render_general_settings(
 	project: &ProjectConfig,
 	scope_index: usize,
 ) {
-	let sections = Layout::default()
-		.direction(Direction::Vertical)
-		.constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Min(6)])
-		.split(area);
-
-	let scope_name = active_scope_name(project, scope_index);
-	let scope_kind = active_scope_kind(project, scope_index);
-	let header = vec![
-		Line::from(format!("Selected scope: {}", scope_name)).bold(),
-		Line::from(format!("Scope type: {}", scope_kind)),
-		Line::from(format!("Project: {}", project.name)),
-	];
-	frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
-
-	render_controls(app, frame, sections[1], project, scope_index);
-
-	let body = vec![
-		Line::from("This toggle now lives at the scope level.".yellow()),
-		Line::from(if project.project_type == ProjectType::Branched {
-			"Use the focused overview tile or click another tile to switch scopes."
-		} else {
-			"All-in-one projects apply this setting to the single project scope."
-		}),
-		Line::from("Press Space or Enter to toggle the selected checkbox. Ctrl+O opens Browse on path fields."),
-		Line::from("Up/Down or Tab/Shift+Tab moves between PSS fields. Use [ and ] to switch General/Distro."),
-	];
-	frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), sections[2]);
+	render_scrollable_rows(app, frame, area, project, scope_index, &build_general_rows(project, scope_index));
 }
 
 
 fn render_distro_settings(app: &mut App, frame: &mut Frame, area: Rect, project: &ProjectConfig, scope_index: usize) {
-	let sections = Layout::default()
-		.direction(Direction::Vertical)
-		.constraints([
-			Constraint::Length(4),
-			Constraint::Length(control_section_height(app.project_settings_state.visible_fields(ProjectSettingsTab::Distro, project, scope_index).len())),
-			Constraint::Min(4),
-		])
-		.split(area);
-
-	let lines = vec![
-		Line::from(format!("Scope: {}", active_scope_name(project, scope_index))).bold(),
-		Line::from(format!("Scope type: {}", active_scope_kind(project, scope_index))),
-		Line::raw(""),
-		Line::from("Configure release-now script paths per scope. The feature is not wired into release execution yet."),
-	];
-	frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sections[0]);
-
-	render_controls(app, frame, sections[1], project, scope_index);
-
-	let info = vec![
-		Line::from("When enabled, each platform path can point to a script or command wrapper.".yellow()),
-		Line::from("Browse selects a file path only; no validation or execution is performed yet."),
-	];
-	frame.render_widget(Paragraph::new(info).wrap(Wrap { trim: false }), sections[2]);
+	render_scrollable_rows(app, frame, area, project, scope_index, &build_distro_rows(project, scope_index));
 }
 
-fn render_controls(app: &mut App, frame: &mut Frame, area: Rect, project: &ProjectConfig, scope_index: usize) {
-	let fields = app
-		.project_settings_state
-		.visible_fields(app.project_settings_tab, project, scope_index);
-	if fields.is_empty() {
-		return;
+fn render_scrollable_rows(
+	app: &mut App,
+	frame: &mut Frame,
+	area: Rect,
+	project: &ProjectConfig,
+	scope_index: usize,
+	rows: &[ProjectSettingsRow],
+) {
+	let gutter_width = if area.width > 3 { 1 } else { 0 };
+	let content_area = Rect {
+		x: area.x,
+		y: area.y,
+		width: area.width.saturating_sub(gutter_width),
+		height: area.height,
+	};
+	let total_height = total_rows_height(rows);
+	app.project_settings_state.viewport_height = content_area.height;
+	if app.project_settings_state.follow_focus {
+		if let Some((top, height)) = focused_row_bounds(rows, app.project_settings_state.focus) {
+			app.project_settings_state
+				.ensure_row_visible(top, height, total_height, content_area.height);
+		} else {
+			app.project_settings_state.clamp_scroll(total_height, content_area.height);
+		}
+	} else if let Some((top, height)) = focused_row_bounds(rows, app.project_settings_state.focus) {
+		let viewport_top = app.project_settings_state.scroll;
+		let viewport_bottom = viewport_top.saturating_add(content_area.height);
+		if top >= viewport_top && top.saturating_add(height) <= viewport_bottom {
+			app.project_settings_state.follow_focus = true;
+		}
+		app.project_settings_state.clamp_scroll(total_height, content_area.height);
+	} else {
+		app.project_settings_state.clamp_scroll(total_height, content_area.height);
 	}
 
-	let rows = Layout::default()
-		.direction(Direction::Vertical)
-		.constraints(vec![Constraint::Length(3); fields.len()])
-		.split(area);
+	let mut cursor_y = 0u16;
+	let scroll = app.project_settings_state.scroll;
+	for row in rows {
+		let row_height = row.height();
+		let row_bottom = cursor_y.saturating_add(row_height);
+		if row_bottom <= scroll {
+			cursor_y = row_bottom;
+			continue;
+		}
 
-	for (field, row) in fields.into_iter().zip(rows.iter().copied()) {
-		let focused = field == app.project_settings_state.focus;
-		if is_checkbox_field(field) {
-			render_checkbox_row(app, frame, row, field, project, scope_index, focused);
-		} else {
-			render_path_row(app, frame, row, field, focused);
+		let screen_y = content_area.y.saturating_add(cursor_y.saturating_sub(scroll));
+		if screen_y >= content_area.y.saturating_add(content_area.height) {
+			break;
+		}
+		let remaining_height = content_area.height.saturating_sub(screen_y.saturating_sub(content_area.y));
+		if remaining_height == 0 {
+			break;
+		}
+		let row_area = Rect {
+			x: content_area.x,
+			y: screen_y,
+			width: content_area.width,
+			height: row_height.min(remaining_height),
+		};
+
+		match row {
+			ProjectSettingsRow::Text(line) => {
+				frame.render_widget(Paragraph::new(line.clone()), row_area);
+			}
+			ProjectSettingsRow::Spacer(_) => {}
+			ProjectSettingsRow::Checkbox(field) if row_area.height >= 3 => {
+				let focused = *field == app.project_settings_state.focus;
+				render_checkbox_row(app, frame, row_area, *field, project, scope_index, focused);
+			}
+			ProjectSettingsRow::Path(field) if row_area.height >= 3 => {
+				let focused = *field == app.project_settings_state.focus;
+				render_path_row(app, frame, row_area, *field, focused);
+			}
+			_ => {}
+		}
+
+		cursor_y = row_bottom;
+	}
+
+	if gutter_width == 1 && total_height > content_area.height {
+		let indicator_x = area.x + area.width - 1;
+		if app.project_settings_state.scroll > 0 {
+			frame.render_widget(Paragraph::new("▲").alignment(Alignment::Center), Rect { x: indicator_x, y: area.y, width: 1, height: 1 });
+		}
+		if app.project_settings_state.scroll.saturating_add(content_area.height) < total_height {
+			frame.render_widget(
+				Paragraph::new("▼").alignment(Alignment::Center),
+				Rect { x: indicator_x, y: area.y + area.height.saturating_sub(1), width: 1, height: 1 },
+			);
 		}
 	}
+}
+
+fn build_rows(tab: ProjectSettingsTab, project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
+	match tab {
+		ProjectSettingsTab::General => build_general_rows(project, scope_index),
+		ProjectSettingsTab::Distro => build_distro_rows(project, scope_index),
+	}
+}
+
+fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
+	let mut rows = vec![
+		ProjectSettingsRow::Text(Line::from(format!("Selected scope: {}", active_scope_name(project, scope_index))).bold()),
+		ProjectSettingsRow::Text(Line::from(format!("Scope type: {}", active_scope_kind(project, scope_index)))),
+		ProjectSettingsRow::Text(Line::from(format!("Project: {}", project.name))),
+		ProjectSettingsRow::Spacer(1),
+		ProjectSettingsRow::Checkbox(ProjectSettingsFocus::ChangelogEnabled),
+	];
+	if project.changelog_enabled_for_scope(scope_index) {
+		rows.push(ProjectSettingsRow::Path(ProjectSettingsFocus::ChangelogPath));
+	}
+	rows.extend([
+		ProjectSettingsRow::Spacer(1),
+		ProjectSettingsRow::Text(Line::from("This toggle now lives at the scope level.".yellow())),
+		ProjectSettingsRow::Text(Line::from(if project.project_type == ProjectType::Branched {
+			"Use the focused overview tile or click another tile to switch scopes."
+		} else {
+			"All-in-one projects apply this setting to the single project scope."
+		})),
+		ProjectSettingsRow::Text(Line::from("Press Space or Enter to toggle the selected checkbox. Ctrl+O opens Browse on path fields.")),
+		ProjectSettingsRow::Text(Line::from("Up/Down or Tab/Shift+Tab moves between fields. Mouse wheel scrolls when content overflows.")),
+	]);
+	rows
+}
+
+fn build_distro_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
+	let mut rows = vec![
+		ProjectSettingsRow::Text(Line::from(format!("Scope: {}", active_scope_name(project, scope_index))).bold()),
+		ProjectSettingsRow::Text(Line::from(format!("Scope type: {}", active_scope_kind(project, scope_index)))),
+		ProjectSettingsRow::Text(Line::from("Configure release-now script paths per scope. The feature is not wired into release execution yet.")),
+		ProjectSettingsRow::Spacer(1),
+		ProjectSettingsRow::Checkbox(ProjectSettingsFocus::ReleaseNowEnabled),
+	];
+	if project.release_now_for_scope(scope_index).enabled {
+		rows.extend([
+			ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowWindows),
+			ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowLinuxArm),
+			ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowLinuxAmd),
+			ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowMacOs),
+		]);
+	}
+	rows.extend([
+		ProjectSettingsRow::Spacer(1),
+		ProjectSettingsRow::Text(Line::from("When enabled, each platform path can point to a script or command wrapper.".yellow())),
+		ProjectSettingsRow::Text(Line::from("Browse selects a file path only; no validation or execution is performed yet.")),
+	]);
+	rows
+}
+
+fn total_rows_height(rows: &[ProjectSettingsRow]) -> u16 {
+	rows.iter().map(ProjectSettingsRow::height).sum()
+}
+
+fn focused_row_bounds(rows: &[ProjectSettingsRow], focus: ProjectSettingsFocus) -> Option<(u16, u16)> {
+	let mut top = 0u16;
+	for row in rows {
+		let height = row.height();
+		if row.focus() == Some(focus) {
+			return Some((top, height));
+		}
+		top = top.saturating_add(height);
+	}
+	None
 }
 
 fn render_checkbox_row(
@@ -626,10 +828,6 @@ fn control_inset(area: Rect) -> Rect {
 		width: area.width.saturating_sub(2),
 		height: area.height,
 	}
-}
-
-fn control_section_height(field_count: usize) -> u16 {
-	(field_count.max(1) as u16) * 3
 }
 
 fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
