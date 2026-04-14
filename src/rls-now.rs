@@ -452,7 +452,10 @@ impl ReleaseNowDialog {
                     if self.log_lines.is_empty() {
                         vec!["Waiting for ReleaseNOW output...".to_string()]
                     } else {
-                        self.log_lines.clone()
+                        self.log_lines
+                            .iter()
+                            .map(|line| strip_terminal_control_sequences(line))
+                            .collect()
                     }
                 } else if self.attach_changelog {
                     self.release_notes_markdown.lines().map(|line| line.to_string()).collect()
@@ -481,7 +484,11 @@ impl ReleaseNowDialog {
                 if self.log_lines.is_empty() {
                     lines.push("No script or release logs were captured.".to_string());
                 } else {
-                    lines.extend(self.log_lines.iter().cloned());
+                    lines.extend(
+                        self.log_lines
+                            .iter()
+                            .map(|line| strip_terminal_control_sequences(line)),
+                    );
                 }
                 lines
             }
@@ -958,6 +965,7 @@ fn run_command_with_streaming(
         .args(args)
         .env("CARGO_TERM_COLOR", "always")
         .env("CARGO_TERM_PROGRESS_WHEN", "always")
+        .env("CARGO_TERM_PROGRESS_WIDTH", "120")
         .env("CLICOLOR_FORCE", "1")
         .env("TERM", "xterm-256color")
         .stdout(Stdio::piped())
@@ -1273,6 +1281,51 @@ fn flush_stream_fragment(
     }
 }
 
+fn strip_terminal_control_sequences(line: &str) -> String {
+    let mut result = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    let _ = chars.next();
+                    for next in chars.by_ref() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    let _ = chars.next();
+                    let mut previous = None;
+                    for next in chars.by_ref() {
+                        if next == '\u{7}' || (previous == Some('\u{1b}') && next == '\\') {
+                            break;
+                        }
+                        previous = Some(next);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        if ch == '\u{8}' {
+            let _ = result.pop();
+            continue;
+        }
+
+        if ch.is_control() && ch != '\n' && ch != '\t' {
+            continue;
+        }
+
+        result.push(ch);
+    }
+
+    result
+}
+
 fn ansi_line_to_ratatui(line: &str) -> Line<'static> {
     let mut spans = Vec::new();
     let mut style = Style::default();
@@ -1407,5 +1460,19 @@ mod tests {
         assert_eq!(options.len(), 3);
         assert_eq!(options[1].label, "Windows");
         assert_eq!(options[2].label, "Linux AMD");
+    }
+
+    #[test]
+    fn strip_terminal_control_sequences_removes_ansi_sequences() {
+        let raw = "[Windows][stderr] \u{1b}[1m\u{1b}[91merror\u{1b}[0m: build failed";
+        assert_eq!(
+            strip_terminal_control_sequences(raw),
+            "[Windows][stderr] error: build failed"
+        );
+    }
+
+    #[test]
+    fn strip_terminal_control_sequences_applies_backspaces() {
+        assert_eq!(strip_terminal_control_sequences("abc\u{8}d"), "abd");
     }
 }
