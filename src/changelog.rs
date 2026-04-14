@@ -309,6 +309,36 @@ pub(crate) fn archive_changelog_markdown(repo_root: &str, label: &str, markdown:
 	Ok(output_path)
 }
 
+pub(crate) fn find_archived_changelog_markdown(repo_root: &str, label: &str) -> Result<Option<String>> {
+	let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
+	if !history_dir.is_dir() {
+		return Ok(None);
+	}
+
+	let candidates = history_label_candidates(label);
+	let mut matches = fs::read_dir(&history_dir)
+		.with_context(|| format!("failed to read {}", history_dir.display()))?
+		.filter_map(|entry| entry.ok().map(|item| item.path()))
+		.filter(|path| path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case("md")))
+		.filter(|path| {
+			path.file_stem()
+				.and_then(|value| value.to_str())
+				.is_some_and(|stem| candidates.iter().any(|candidate| stem.ends_with(&format!("-{}", candidate))))
+		})
+		.collect::<Vec<_>>();
+
+	if matches.is_empty() {
+		return Ok(None);
+	}
+
+	matches.sort();
+	let path = matches.pop().expect("matches should not be empty");
+	Ok(Some(
+		fs::read_to_string(&path)
+			.with_context(|| format!("failed to read {}", path.display()))?,
+	))
+}
+
 fn resolve_changelog_path(repo_root: &str, changelog_path: &str) -> PathBuf {
 	let candidate = Path::new(changelog_path);
 	if candidate.is_absolute() {
@@ -330,6 +360,27 @@ fn sanitize_history_label(label: &str) -> String {
 	} else {
 		sanitized.to_string()
 	}
+}
+
+fn history_label_candidates(label: &str) -> Vec<String> {
+	let trimmed = label.trim();
+	let mut candidates = Vec::new();
+
+	for candidate in [
+		trimmed.to_string(),
+		trimmed.strip_prefix('v').unwrap_or(trimmed).to_string(),
+		trimmed
+			.rsplit_once("-v")
+			.map(|(_, version)| version.to_string())
+			.unwrap_or_else(|| trimmed.to_string()),
+	] {
+		let sanitized = sanitize_history_label(&candidate);
+		if !sanitized.is_empty() && !candidates.iter().any(|existing| existing == &sanitized) {
+			candidates.push(sanitized);
+		}
+	}
+
+	candidates
 }
 
 #[cfg(test)]
@@ -954,6 +1005,28 @@ mod tests {
 
 		assert_eq!(output_path.file_name().and_then(|name| name.to_str()), Some("changelog_temp.md"));
 		assert_eq!(std::fs::read_to_string(&output_path).expect("temp changelog should be readable"), "hello world");
+
+		let _ = std::fs::remove_dir_all(repo_root);
+	}
+
+	#[test]
+	fn archived_changelog_lookup_matches_tag_prefix_variants() {
+		let repo_root = std::env::temp_dir().join(format!(
+			"cvb-history-changelog-{}",
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap_or_default()
+				.as_nanos()
+		));
+		std::fs::create_dir_all(&repo_root).expect("repo root should be created");
+
+		archive_changelog_markdown(&repo_root.display().to_string(), "1.2.3", "history payload")
+			.expect("history changelog should be written");
+
+		let markdown = find_archived_changelog_markdown(&repo_root.display().to_string(), "core-v1.2.3")
+			.expect("lookup should succeed")
+			.expect("history changelog should be found");
+		assert_eq!(markdown, "history payload");
 
 		let _ = std::fs::remove_dir_all(repo_root);
 	}
