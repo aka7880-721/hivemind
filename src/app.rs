@@ -88,6 +88,8 @@ mod git_flow;
 mod overview;
 #[path = "p-s-s.rs"]
 mod p_s_s;
+#[path = "rls-now.rs"]
+mod rls_now;
 #[path = "render.rs"]
 mod render;
 
@@ -229,6 +231,8 @@ struct App {
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
+    release_now_dialog: Option<rls_now::ReleaseNowDialog>,
+    release_now_notes_dialog: Option<TagAnnotationDialog>,
     delete_confirmation_dialog: Option<DeleteConfirmationDialog>,
     progress_dialog: Option<ProgressDialog>,
     foreground_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
@@ -244,6 +248,7 @@ struct App {
     current_recent_changes_prefetch_job_id: Option<u64>,
     current_changelog_preview_job_id: Option<u64>,
     current_overview_activity_job_id: Option<u64>,
+    current_release_now_job_id: Option<u64>,
     overview_activity_job_inflight: bool,
     overview_activity_refresh_inflight: bool,
     overview_activity_refresh_pending: bool,
@@ -251,6 +256,7 @@ struct App {
     current_recent_changes_prefetch_cancel: Option<GitCancellation>,
     current_changelog_preview_cancel: Option<GitCancellation>,
     current_overview_activity_cancel: Option<GitCancellation>,
+    current_release_now_cancel: Option<GitCancellation>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
@@ -312,6 +318,8 @@ impl App {
             recent_changes_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
+            release_now_dialog: None,
+            release_now_notes_dialog: None,
             delete_confirmation_dialog: None,
             progress_dialog: None,
             foreground_request_tx,
@@ -327,6 +335,7 @@ impl App {
             current_recent_changes_prefetch_job_id: None,
             current_changelog_preview_job_id: None,
             current_overview_activity_job_id: None,
+            current_release_now_job_id: None,
             overview_activity_job_inflight: false,
             overview_activity_refresh_inflight: false,
             overview_activity_refresh_pending: false,
@@ -334,6 +343,7 @@ impl App {
             current_recent_changes_prefetch_cancel: None,
             current_changelog_preview_cancel: None,
             current_overview_activity_cancel: None,
+            current_release_now_cancel: None,
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
@@ -380,6 +390,14 @@ impl App {
 
         if self.browser_dialog.is_some() {
             return self.handle_browser_key(key);
+        }
+
+        if self.release_now_notes_dialog.is_some() {
+            return self.handle_release_now_notes_key(key);
+        }
+
+        if self.release_now_dialog.is_some() {
+            return self.handle_release_now_key(key);
         }
 
         if self.delete_confirmation_dialog.is_some() {
@@ -458,6 +476,7 @@ impl App {
             KeyCode::Char('n') => self.open_wizard(),
             KeyCode::Char('e') => self.open_project_edit_dialog()?,
             KeyCode::Char('d') | KeyCode::Char('D') => self.request_dashboard_delete()?,
+            KeyCode::Char('l') | KeyCode::Char('L') => self.open_release_now_with_scope(None)?,
             KeyCode::Char('b') => self.open_bump_dialog()?,
             KeyCode::Char('g') => self.open_recent_changes()?,
             KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
@@ -533,6 +552,113 @@ impl App {
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.cancel_delete_request(),
             _ => {}
         }
+        Ok(())
+    }
+
+    fn handle_release_now_key(&mut self, key: KeyEvent) -> Result<()> {
+        let warning_mode = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_warning_mode)
+            .unwrap_or(false);
+        let completed = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_completed)
+            .unwrap_or(false);
+
+        if warning_mode {
+            match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.toggle_warning_selection();
+                    }
+                }
+                KeyCode::Enter => {
+                    let proceed = self
+                        .release_now_dialog
+                        .as_ref()
+                        .map(|dialog| dialog.warning_confirm_selected)
+                        .unwrap_or(false);
+                    if proceed {
+                        if let Some(dialog) = &mut self.release_now_dialog {
+                            dialog.proceed_past_warning();
+                        }
+                    } else {
+                        self.close_release_now_dialog();
+                    }
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.proceed_past_warning();
+                    }
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.close_release_now_dialog(),
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if completed {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => self.close_release_now_dialog(),
+                KeyCode::Up => self.scroll_release_now(-1),
+                KeyCode::Down => self.scroll_release_now(1),
+                KeyCode::PageUp => self.scroll_release_now(-6),
+                KeyCode::PageDown => self.scroll_release_now(6),
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        match key.code {
+            KeyCode::Esc => self.close_release_now_dialog(),
+            KeyCode::Left => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.cycle_option(-1);
+                }
+            }
+            KeyCode::Right => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.cycle_option(1);
+                }
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.toggle_attach_changelog();
+                }
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => self.open_release_now_notes_dialog()?,
+            KeyCode::Enter | KeyCode::F(2) => return self.request_run_release_now(),
+            KeyCode::Up => self.scroll_release_now(-1),
+            KeyCode::Down => self.scroll_release_now(1),
+            KeyCode::PageUp => self.scroll_release_now(-6),
+            KeyCode::PageDown => self.scroll_release_now(6),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_release_now_notes_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            return self.save_release_now_notes();
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.release_now_notes_dialog = None;
+                self.status = StatusMessage::info("Release notes editor closed.");
+            }
+            KeyCode::F(2) => return self.save_release_now_notes(),
+            _ => {
+                if let Some(dialog) = &mut self.release_now_notes_dialog {
+                    if let Some(input) = convert_to_textarea_input(key) {
+                        dialog.editor.input(input);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -964,6 +1090,42 @@ impl App {
             return;
         }
 
+        if self.release_now_notes_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        if self.release_now_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.scroll_release_now(-2);
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll_release_now(2);
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+
         if self.delete_confirmation_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -1313,9 +1475,9 @@ impl App {
                 self.dashboard_focus = DashboardPane::Projects;
             }
             HitAction::SelectOverviewScope(scope_index) => return self.select_dashboard_overview_scope(scope_index),
-            HitAction::OpenOverviewRecentChanges(scope_index) => {
+            HitAction::OpenOverviewReleaseNow(scope_index) => {
                 self.dashboard_focus = DashboardPane::Overview;
-                return self.open_recent_changes_with_scope(Some(scope_index));
+                return self.open_overview_release_now(scope_index);
             }
             HitAction::BeginOverviewBump(scope_index) => {
                 self.dashboard_focus = DashboardPane::Overview;
@@ -1349,6 +1511,30 @@ impl App {
                 self.project_edit_dialog = None;
                 self.status = StatusMessage::info("Project edit cancelled.");
             }
+            HitAction::CycleReleaseNowOption(delta) => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.cycle_option(delta);
+                }
+            }
+            HitAction::ToggleReleaseNowChangelog => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.toggle_attach_changelog();
+                }
+            }
+            HitAction::EditReleaseNowNotes => return self.open_release_now_notes_dialog(),
+            HitAction::RunReleaseNow => return self.request_run_release_now(),
+            HitAction::ContinueReleaseNowWarning => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.proceed_past_warning();
+                }
+            }
+            HitAction::ScrollReleaseNow(delta) => self.scroll_release_now(delta),
+            HitAction::SaveReleaseNowNotes => return self.save_release_now_notes(),
+            HitAction::CancelReleaseNowNotes => {
+                self.release_now_notes_dialog = None;
+                self.status = StatusMessage::info("Release notes editor closed.");
+            }
+            HitAction::CloseReleaseNow => self.close_release_now_dialog(),
             HitAction::ConfirmDeleteRequest => return self.confirm_delete_request(),
             HitAction::CancelDeleteRequest => self.cancel_delete_request(),
             HitAction::ToggleTabHints => return self.toggle_tab_hints(),
@@ -1447,6 +1633,36 @@ impl App {
         self.open_tag_dialog_with_scope(preferred_scope, None)
     }
 
+    fn open_overview_release_now(&mut self, scope_index: usize) -> Result<()> {
+        self.open_release_now_with_scope(Some(scope_index))
+    }
+
+    fn open_release_now_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        let scope_index = preferred_scope.unwrap_or_else(|| {
+            if project.project_type == ProjectType::Branched {
+                self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
+            } else {
+                0
+            }
+        });
+
+        self.bump_dialog = None;
+        self.tag_dialog = None;
+        self.tag_annotation_dialog = None;
+        self.release_now_dialog = None;
+        self.release_now_notes_dialog = None;
+        self.project_edit_dialog = None;
+        self.browser_dialog = None;
+        self.schedule_progress_job(
+            " Validating ReleaseNOW ",
+            format!("Checking ReleaseNOW prerequisites for {}.", project.name),
+            BackgroundJobRequest::ValidateReleaseNow { project, scope_index },
+        )?;
+        self.status = StatusMessage::info("Validating ReleaseNOW prerequisites for the selected scope.");
+        Ok(())
+    }
+
     fn open_recent_changes_with_scope(&mut self, preferred_scope: Option<usize>) -> Result<()> {
         let project = self.selected_project()?.clone();
         if !project.integration_mode.requires_repo() {
@@ -1466,6 +1682,75 @@ impl App {
         )?;
         self.status = StatusMessage::info("Loading git history for the selected project.");
         Ok(())
+    }
+
+    fn open_release_now_notes_dialog(&mut self) -> Result<()> {
+        let dialog = self
+            .release_now_dialog
+            .as_ref()
+            .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
+        if !dialog.attach_changelog {
+            bail!("enable changelog attachment before editing release notes")
+        }
+        self.release_now_notes_dialog = Some(TagAnnotationDialog::with_placeholder(
+            &dialog.release_notes_markdown,
+            dialog.release_notes_placeholder.as_str(),
+        ));
+        self.status = StatusMessage::info("Editing ReleaseNOW release notes.");
+        Ok(())
+    }
+
+    fn save_release_now_notes(&mut self) -> Result<()> {
+        let notes = self
+            .release_now_notes_dialog
+            .as_ref()
+            .ok_or_else(|| anyhow!("ReleaseNOW release notes editor is not open"))?
+            .editor
+            .lines()
+            .join("\n");
+        let dialog = self
+            .release_now_dialog
+            .as_mut()
+            .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
+        dialog.release_notes_markdown = notes;
+        self.release_now_notes_dialog = None;
+        self.status = StatusMessage::success("ReleaseNOW release notes updated.");
+        Ok(())
+    }
+
+    fn request_run_release_now(&mut self) -> Result<()> {
+        let dialog = self
+            .release_now_dialog
+            .as_ref()
+            .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
+        if dialog.is_warning_mode() {
+            bail!("confirm the recent bump warning before running ReleaseNOW")
+        }
+        if dialog.is_completed() {
+            self.close_release_now_dialog();
+            return Ok(());
+        }
+
+        let request = rls_now::build_execution_request(dialog);
+        self.schedule_progress_job(
+            " Running ReleaseNOW ",
+            format!("Running {} for {}.", request.selected_option_label, request.project_name),
+            BackgroundJobRequest::RunReleaseNow { request },
+        )?;
+        self.status = StatusMessage::info("Running ReleaseNOW for the selected scope.");
+        Ok(())
+    }
+
+    fn close_release_now_dialog(&mut self) {
+        self.release_now_notes_dialog = None;
+        self.release_now_dialog = None;
+        self.status = StatusMessage::info("ReleaseNOW closed.");
+    }
+
+    fn scroll_release_now(&mut self, delta: i16) {
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.scroll_by(delta);
+        }
     }
 
     fn schedule_progress_job(
@@ -1620,6 +1905,24 @@ impl App {
                     self.overview_activity_project = Some(project_index);
                 }
             }
+            BackgroundJobOutput::ReleaseNowValidated(validation) => {
+                let project_name = validation.project_name.clone();
+                let warning_pending = validation.warning_message.is_some();
+                self.release_now_dialog = Some(rls_now::ReleaseNowDialog::from_validation(validation));
+                self.release_now_notes_dialog = None;
+                self.status = if warning_pending {
+                    StatusMessage::warning("ReleaseNOW found an older-than-expected bump. Confirm before continuing.")
+                } else {
+                    StatusMessage::info(format!("ReleaseNOW is ready for {}.", project_name))
+                };
+            }
+            BackgroundJobOutput::ReleaseNowCompleted(outcome) => {
+                let summary = outcome.summary.clone();
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.apply_outcome(outcome);
+                }
+                self.status = StatusMessage::success(summary);
+            }
             BackgroundJobOutput::CreateTag { summary } => {
                 self.sync_dashboard_overview_after_repo_change();
                 self.tag_dialog = None;
@@ -1669,6 +1972,28 @@ impl App {
 
                 if self.delete_confirmation_dialog.is_some()
                     && !matches!(action, HitAction::ConfirmDeleteRequest | HitAction::CancelDeleteRequest)
+                {
+                    return None;
+                }
+
+                if self.release_now_notes_dialog.is_some()
+                    && !matches!(action, HitAction::SaveReleaseNowNotes | HitAction::CancelReleaseNowNotes)
+                {
+                    return None;
+                }
+
+                if self.release_now_dialog.is_some()
+                    && self.release_now_notes_dialog.is_none()
+                    && !matches!(
+                        action,
+                        HitAction::CycleReleaseNowOption(_)
+                            | HitAction::ToggleReleaseNowChangelog
+                            | HitAction::EditReleaseNowNotes
+                            | HitAction::RunReleaseNow
+                            | HitAction::ContinueReleaseNowWarning
+                            | HitAction::ScrollReleaseNow(_)
+                            | HitAction::CloseReleaseNow
+                    )
                 {
                     return None;
                 }
@@ -3040,7 +3365,7 @@ pub(crate) enum HitAction {
     SelectProject(usize),
     SelectOverviewScope(usize),
     BrowseProjectSettingsField(ProjectSettingsFocus),
-    OpenOverviewRecentChanges(usize),
+    OpenOverviewReleaseNow(usize),
     BeginOverviewBump(usize),
     SelectOverviewBumpWorkflow(usize),
     ConfirmOverviewBumpWorkflow,
@@ -3059,6 +3384,15 @@ pub(crate) enum HitAction {
     SaveProjectEdit,
     RemoveProject,
     CancelProjectEdit,
+    CycleReleaseNowOption(isize),
+    ToggleReleaseNowChangelog,
+    EditReleaseNowNotes,
+    RunReleaseNow,
+    ContinueReleaseNowWarning,
+    ScrollReleaseNow(i16),
+    SaveReleaseNowNotes,
+    CancelReleaseNowNotes,
+    CloseReleaseNow,
     ConfirmDeleteRequest,
     CancelDeleteRequest,
     ToggleTabHints,
@@ -3354,6 +3688,13 @@ enum BackgroundJobRequest {
         project_index: usize,
         project: ProjectConfig,
     },
+    ValidateReleaseNow {
+        project: ProjectConfig,
+        scope_index: usize,
+    },
+    RunReleaseNow {
+        request: rls_now::ReleaseNowExecutionRequest,
+    },
     PrefetchRecentChanges {
         dialog: RecentChangesDialog,
     },
@@ -3391,6 +3732,8 @@ enum BackgroundJobOutput {
         project_index: usize,
         summaries: Vec<Option<RepoActivitySummary>>,
     },
+    ReleaseNowValidated(rls_now::ReleaseNowValidation),
+    ReleaseNowCompleted(rls_now::ReleaseNowExecutionOutcome),
     CreateTag {
         summary: String,
     },
@@ -3405,6 +3748,7 @@ enum BackgroundJobKind {
     RecentChangesPrefetch,
     ChangelogPreview,
     OverviewActivity,
+    ReleaseNow,
     TagAction,
 }
 
@@ -3440,6 +3784,7 @@ impl BackgroundJobRequest {
                 BackgroundJobKind::ChangelogPreview
             }
             Self::RefreshOverviewActivity { .. } => BackgroundJobKind::OverviewActivity,
+            Self::ValidateReleaseNow { .. } | Self::RunReleaseNow { .. } => BackgroundJobKind::ReleaseNow,
             Self::CreateTag { .. } => BackgroundJobKind::TagAction,
         }
     }
@@ -4028,6 +4373,15 @@ async fn run_background_job(request: BackgroundJobRequest, cancel: GitCancellati
             project_index,
             summaries: load_overview_activity_summaries_async(project, Some(cancel)).await?,
         }),
+        BackgroundJobRequest::ValidateReleaseNow {
+            project,
+            scope_index,
+        } => Ok(BackgroundJobOutput::ReleaseNowValidated(
+            run_blocking_job(move || rls_now::validate_release_now(&project, scope_index, Some(cancel))).await?,
+        )),
+        BackgroundJobRequest::RunReleaseNow { request } => {
+            Ok(BackgroundJobOutput::ReleaseNowCompleted(rls_now::execute_release_now_async(request).await?))
+        }
         BackgroundJobRequest::PrefetchRecentChanges { dialog } => {
             let project_name = dialog.project_name.clone();
             let (next_scope_index, prefetched_recent_range, history_scope_index, prefetched_history_ranges) =
@@ -4357,6 +4711,10 @@ impl App {
                 self.current_overview_activity_job_id = Some(id);
                 self.current_overview_activity_cancel = Some(cancel);
             }
+            BackgroundJobKind::ReleaseNow => {
+                self.current_release_now_job_id = Some(id);
+                self.current_release_now_cancel = Some(cancel);
+            }
             BackgroundJobKind::TagAction => {}
         }
         id
@@ -4381,6 +4739,10 @@ impl App {
                 self.current_overview_activity_job_id = None;
                 self.current_overview_activity_cancel = None;
             }
+            BackgroundJobKind::ReleaseNow if self.current_release_now_job_id == Some(id) => {
+                self.current_release_now_job_id = None;
+                self.current_release_now_cancel = None;
+            }
             _ => {}
         }
     }
@@ -4392,6 +4754,7 @@ impl App {
             BackgroundJobKind::RecentChangesPrefetch => self.current_recent_changes_prefetch_job_id != Some(message.id),
             BackgroundJobKind::ChangelogPreview => self.current_changelog_preview_job_id != Some(message.id),
             BackgroundJobKind::OverviewActivity => self.current_overview_activity_job_id != Some(message.id),
+            BackgroundJobKind::ReleaseNow => self.current_release_now_job_id != Some(message.id),
             BackgroundJobKind::TagAction => false,
         }
     }
@@ -4478,6 +4841,11 @@ impl App {
                     cancel.cancel();
                 }
             }
+            BackgroundJobKind::ReleaseNow => {
+                if let Some(cancel) = self.current_release_now_cancel.take() {
+                    cancel.cancel();
+                }
+            }
             BackgroundJobKind::TagAction => {}
         }
     }
@@ -4504,6 +4872,11 @@ impl App {
                 .current_overview_activity_cancel
                 .clone()
                 .filter(|_| self.current_overview_activity_job_id == Some(id))
+                .unwrap_or_default(),
+            BackgroundJobKind::ReleaseNow => self
+                .current_release_now_cancel
+                .clone()
+                .filter(|_| self.current_release_now_job_id == Some(id))
                 .unwrap_or_default(),
             BackgroundJobKind::TagAction => GitCancellation::default(),
         }
@@ -4608,17 +4981,21 @@ struct TagAnnotationDialog {
 
 impl TagAnnotationDialog {
     fn new(existing_annotation: &str) -> Self {
+        Self::with_placeholder(existing_annotation, "Optional multi-line tag annotation")
+    }
+
+    fn with_placeholder(existing_annotation: &str, placeholder: &str) -> Self {
         let mut editor = if existing_annotation.trim().is_empty() {
             TuiTextArea::default()
         } else {
             TuiTextArea::from(existing_annotation.lines())
         };
-        editor.set_placeholder_text("Optional multi-line tag annotation");
+        editor.set_placeholder_text(placeholder);
         editor.set_tab_length(2);
         editor.set_max_histories(100);
         Self {
             editor,
-            placeholder: "Optional multi-line tag annotation".to_string(),
+            placeholder: placeholder.to_string(),
         }
     }
 }
