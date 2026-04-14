@@ -561,6 +561,11 @@ impl App {
             .as_ref()
             .map(rls_now::ReleaseNowDialog::is_warning_mode)
             .unwrap_or(false);
+        let running = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_running)
+            .unwrap_or(false);
         let completed = self
             .release_now_dialog
             .as_ref()
@@ -594,6 +599,22 @@ impl App {
                     }
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.close_release_now_dialog(),
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if running {
+            match key.code {
+                KeyCode::Up => self.scroll_release_now(-1),
+                KeyCode::Down => self.scroll_release_now(1),
+                KeyCode::PageUp => self.scroll_release_now(-6),
+                KeyCode::PageDown => self.scroll_release_now(6),
+                KeyCode::Esc => {
+                    self.status = StatusMessage::warning(
+                        "ReleaseNOW is still running. Wait for it to finish before closing the dialog.",
+                    );
+                }
                 _ => {}
             }
             return Ok(());
@@ -1719,29 +1740,48 @@ impl App {
     }
 
     fn request_run_release_now(&mut self) -> Result<()> {
-        let dialog = self
-            .release_now_dialog
-            .as_ref()
-            .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
-        if dialog.is_warning_mode() {
-            bail!("confirm the recent bump warning before running ReleaseNOW")
-        }
-        if dialog.is_completed() {
-            self.close_release_now_dialog();
-            return Ok(());
+        let request = {
+            let dialog = self
+                .release_now_dialog
+                .as_ref()
+                .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
+            if dialog.is_warning_mode() {
+                bail!("confirm the recent bump warning before running ReleaseNOW")
+            }
+            if dialog.is_running() {
+                bail!("ReleaseNOW is already running")
+            }
+            if dialog.is_completed() {
+                self.close_release_now_dialog();
+                return Ok(());
+            }
+
+            rls_now::build_execution_request(dialog)
+        };
+
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.begin_running();
         }
 
-        let request = rls_now::build_execution_request(dialog);
-        self.schedule_progress_job(
-            " Running ReleaseNOW ",
-            format!("Running {} for {}.", request.selected_option_label, request.project_name),
-            BackgroundJobRequest::RunReleaseNow { request },
-        )?;
-        self.status = StatusMessage::info("Running ReleaseNOW for the selected scope.");
+        self.schedule_foreground_job(BackgroundJobRequest::RunReleaseNow { request })?;
+        self.status =
+            StatusMessage::info("Running ReleaseNOW for the selected scope. Live logs will stream into the dialog.");
         Ok(())
     }
 
     fn close_release_now_dialog(&mut self) {
+        if self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_running)
+            .unwrap_or(false)
+        {
+            self.status = StatusMessage::warning(
+                "ReleaseNOW is still running. Wait for it to finish before closing the dialog.",
+            );
+            return;
+        }
+
         self.release_now_notes_dialog = None;
         self.release_now_dialog = None;
         self.status = StatusMessage::info("ReleaseNOW closed.");
@@ -1753,24 +1793,32 @@ impl App {
         }
     }
 
+    fn schedule_foreground_job(&mut self, request: BackgroundJobRequest) -> Result<u64> {
+        if self.background_job_active {
+            bail!("another background job is already running");
+        }
+
+        let request_id = self.schedule_background_job(BackgroundJobPriority::Foreground, request)?;
+        self.background_job_active = true;
+        self.active_foreground_job_id = Some(request_id);
+
+        Ok(request_id)
+    }
+
     fn schedule_progress_job(
         &mut self,
         title: impl Into<String>,
         message: impl Into<String>,
         request: BackgroundJobRequest,
     ) -> Result<()> {
-        if self.background_job_active {
-            bail!("another background job is already running");
-        }
-
-        let request_id = self.schedule_background_job(BackgroundJobPriority::Foreground, request)?;
+        let request_id = self.schedule_foreground_job(request)?;
 
         self.progress_dialog = Some(ProgressDialog {
             title: title.into(),
             message: message.into(),
         });
-        self.background_job_active = true;
-        self.active_foreground_job_id = Some(request_id);
+
+        debug_assert_eq!(self.active_foreground_job_id, Some(request_id));
 
         Ok(())
     }
@@ -1792,22 +1840,26 @@ impl App {
             }
         };
 
-        self.background_jobs_inflight = self.background_jobs_inflight.saturating_sub(1);
-        if self.active_foreground_job_id == Some(message.id) {
-            self.progress_dialog = None;
-            self.background_job_active = false;
-            self.active_foreground_job_id = None;
-        }
+        let terminal = matches!(message.payload, BackgroundJobMessagePayload::Finished(_));
 
-        if self.current_overview_activity_job_id == Some(message.id)
-            && message.kind == BackgroundJobKind::OverviewActivity
-        {
-            self.overview_activity_job_inflight = false;
-            if self.overview_activity_refresh_inflight {
-                self.overview_activity_refresh_inflight = false;
-                if self.overview_activity_refresh_pending {
-                    self.overview_activity_refresh_pending = false;
-                    self.schedule_refresh_overview_activity_cache()?;
+        if terminal {
+            self.background_jobs_inflight = self.background_jobs_inflight.saturating_sub(1);
+            if self.active_foreground_job_id == Some(message.id) {
+                self.progress_dialog = None;
+                self.background_job_active = false;
+                self.active_foreground_job_id = None;
+            }
+
+            if self.current_overview_activity_job_id == Some(message.id)
+                && message.kind == BackgroundJobKind::OverviewActivity
+            {
+                self.overview_activity_job_inflight = false;
+                if self.overview_activity_refresh_inflight {
+                    self.overview_activity_refresh_inflight = false;
+                    if self.overview_activity_refresh_pending {
+                        self.overview_activity_refresh_pending = false;
+                        self.schedule_refresh_overview_activity_cache()?;
+                    }
                 }
             }
         }
@@ -1816,9 +1868,19 @@ impl App {
             return Ok(true);
         }
 
-        match message.result {
-            Ok(output) => self.apply_background_job_output(output)?,
-            Err(message) => self.status = StatusMessage::error(message),
+        match message.payload {
+            BackgroundJobMessagePayload::Progress(output) => self.apply_background_job_output(output)?,
+            BackgroundJobMessagePayload::Finished(result) => match result {
+                Ok(output) => self.apply_background_job_output(output)?,
+                Err(error_message) => {
+                    if message.kind == BackgroundJobKind::ReleaseNow {
+                        if let Some(dialog) = &mut self.release_now_dialog {
+                            dialog.apply_failure(error_message.clone());
+                        }
+                    }
+                    self.status = StatusMessage::error(error_message);
+                }
+            },
         }
 
         Ok(true)
@@ -1915,6 +1977,11 @@ impl App {
                 } else {
                     StatusMessage::info(format!("ReleaseNOW is ready for {}.", project_name))
                 };
+            }
+            BackgroundJobOutput::ReleaseNowLogChunk(lines) => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.append_log_lines(lines);
+                }
             }
             BackgroundJobOutput::ReleaseNowCompleted(outcome) => {
                 let summary = outcome.summary.clone();
@@ -3733,6 +3800,7 @@ enum BackgroundJobOutput {
         summaries: Vec<Option<RepoActivitySummary>>,
     },
     ReleaseNowValidated(rls_now::ReleaseNowValidation),
+    ReleaseNowLogChunk(Vec<String>),
     ReleaseNowCompleted(rls_now::ReleaseNowExecutionOutcome),
     CreateTag {
         summary: String,
@@ -3740,6 +3808,11 @@ enum BackgroundJobOutput {
 }
 
 type BackgroundJobResult = std::result::Result<BackgroundJobOutput, String>;
+
+enum BackgroundJobMessagePayload {
+    Progress(BackgroundJobOutput),
+    Finished(BackgroundJobResult),
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BackgroundJobKind {
@@ -3769,7 +3842,24 @@ struct BackgroundJobRequestMessage {
 struct BackgroundJobResultMessage {
     id: u64,
     kind: BackgroundJobKind,
-    result: BackgroundJobResult,
+    payload: BackgroundJobMessagePayload,
+}
+
+#[derive(Clone)]
+struct BackgroundJobProgressSink {
+    id: u64,
+    kind: BackgroundJobKind,
+    result_tx: UnboundedSender<BackgroundJobResultMessage>,
+}
+
+impl BackgroundJobProgressSink {
+    fn send(&self, output: BackgroundJobOutput) {
+        let _ = self.result_tx.send(BackgroundJobResultMessage {
+            id: self.id,
+            kind: self.kind,
+            payload: BackgroundJobMessagePayload::Progress(output),
+        });
+    }
 }
 
 impl BackgroundJobRequest {
@@ -4267,11 +4357,18 @@ fn spawn_background_job_task(
     result_tx: UnboundedSender<BackgroundJobResultMessage>,
 ) {
     tokio::spawn(async move {
-        let result = run_background_job(request.request, request.cancel).await.map_err(|error| error.to_string());
+        let progress = BackgroundJobProgressSink {
+            id: request.id,
+            kind: request.kind,
+            result_tx: result_tx.clone(),
+        };
+        let result = run_background_job(request.request, request.cancel, progress)
+            .await
+            .map_err(|error| error.to_string());
         let _ = result_tx.send(BackgroundJobResultMessage {
             id: request.id,
             kind: request.kind,
-            result,
+            payload: BackgroundJobMessagePayload::Finished(result),
         });
     });
 }
@@ -4286,7 +4383,11 @@ where
         .map_err(|error| anyhow!("background task failed: {error}"))?
 }
 
-async fn run_background_job(request: BackgroundJobRequest, cancel: GitCancellation) -> Result<BackgroundJobOutput> {
+async fn run_background_job(
+    request: BackgroundJobRequest,
+    cancel: GitCancellation,
+    progress: BackgroundJobProgressSink,
+) -> Result<BackgroundJobOutput> {
     match request {
         BackgroundJobRequest::OpenRecentChanges {
             project,
@@ -4379,9 +4480,12 @@ async fn run_background_job(request: BackgroundJobRequest, cancel: GitCancellati
         } => Ok(BackgroundJobOutput::ReleaseNowValidated(
             run_blocking_job(move || rls_now::validate_release_now(&project, scope_index, Some(cancel))).await?,
         )),
-        BackgroundJobRequest::RunReleaseNow { request } => {
-            Ok(BackgroundJobOutput::ReleaseNowCompleted(rls_now::execute_release_now_async(request).await?))
-        }
+        BackgroundJobRequest::RunReleaseNow { request } => Ok(BackgroundJobOutput::ReleaseNowCompleted(
+            rls_now::execute_release_now_async(request, move |lines| {
+                progress.send(BackgroundJobOutput::ReleaseNowLogChunk(lines));
+            })
+            .await?,
+        )),
         BackgroundJobRequest::PrefetchRecentChanges { dialog } => {
             let project_name = dialog.project_name.clone();
             let (next_scope_index, prefetched_recent_range, history_scope_index, prefetched_history_ranges) =
