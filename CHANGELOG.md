@@ -1,3 +1,113 @@
+## Changelog 0.7.0
+2026-04-14
+
+#### What's changed:
+
+### ✨ New Feature: ReleaseNOW!
+
+#### 🧩 Features
+
+* ...from now on... let's RELEASE!   _(f526cb8)_
+
+---
+
+### ✨ New Feature: DELETE scope/project
+
+#### 🧩 Features
+
+* yeah, bit silly, but I forgot about this one 🤦‍♂️, we can delete now 🧨   _(ee33aa9)_
+
+---
+
+### General Improvements:
+
+### 🧩 Features
+
+* implement cancellation handling and auto-follow controls in ReleaseNOW dialog   _(5b9601c)_
+
+* enhance ReleaseNOW dialog with follow and cancel controls, and update log display   _(1717c68)_
+
+* add controls for auto-follow and cancellation in ReleaseNOW dialog   _(b9452fb)_
+
+* enhance ReleaseNow dialog with running state management and live logging   _(adad7ae)_
+
+* add running state messages and controls to ReleaseNOW dialog   _(7ec6f1d)_
+
+* enhance ReleaseNOW dialog with running state management and logging   _(851f5d8)_
+
+* update button labels in semver and calver tiles with `rls` button   _(d28ca0d)_
+
+* implement ReleaseNOW and Release Notes dialogs in the app   _(41929e8)_
+
+* update dashboard tile action to open ReleaseNow dialog instead of recent changes   _(c32832c)_
+
+* implement ReleaseNOW dialog and associated functionality for release management   _(82eb2f4)_
+
+* implement ReleaseNow dialog and validation logic for release management   _(f526cb8)_
+
+* update package metadata in Cargo.toml   _(bf9fc57)_
+
+* add delete confirmation dialog rendering and integration in the app   _(772330c)_
+
+* demo project: implement placeholder functionality for local-only projects in dashboard overview   _(7d60df4)_
+
+* add delete confirmation dialog and handling for project and scope deletions   _(ee33aa9)_
+
+* add test helper method to ConfigStore for path initialization   _(d15fae3)_
+
+* enhance project settings with scrolling and focus management features   _(f76c372)_
+
+* enhance App struct with new initialization methods and project settings handling   _(df3598c)_
+
+* add license header to rls-now.rs file   _(18129f1)_
+
+* remove changelog path field from project wizard and add release now settings   _(988781a)_
+
+* hide changelog path field in project edit dialog   _(358570f)_
+
+* enhance project settings management with new focus handling and input synchronization   _(3db7b12)_
+
+* enhance changelog preview context collection by including changelog paths   _(a076b63)_
+
+* add release now settings to test configurations and update changelog path handling   _(1f8ad2c)_
+
+* add release now settings to project configuration and enhance changelog path handling   _(f8a39ec)_
+
+* enhance project settings management by adding state handling and refactoring key handling logic   _(dc03265)_
+
+* refactor render logic by removing settings screen and enhancing progress dialog   _(ae5c660)_
+
+* remove changelog_enabled field and update related logic in ProjectWizard   _(4356f60)_
+
+* remove changelog_enabled field and adjust related logic in ProjectEditDialog   _(ba2c6a0)_
+
+* implement project settings tab with changelog generation toggle and layout adjustments   _(a4ba10b)_
+
+* enhance changelog generation logic to support scope-based settings   _(89ed6c0)_
+
+* add ProjectSettings tab to overview and update related logic   _(bb76f2c)_
+
+* add changelog_enabled field to test configurations   _(cbcb82b)_
+
+* add changelog settings to project configuration and enhance migration logic   _(1abd400)_
+
+* enhance project settings tab functionality and streamline dashboard interactions   _(1b08d55)_
+
+* add tui-checkbox dependency to Cargo.toml and Cargo.lock   _(9e62914)_
+
+### 🐛 Fix(es)
+
+* improve path normalization in normalize_pathspec function that was throwing error with Linux AMD64 builds   _(09b4b99)_
+
+### 📝 Other
+
+* Merge pull request #10 from comfy-home/v0.7.0   _(e6f9962)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
+
 ## Changelog 0.6.1
 2026-04-13
 
