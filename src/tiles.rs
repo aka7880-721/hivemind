@@ -65,7 +65,7 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	let parts = split_semver(&tile.preview_version);
 	let button_slots = space_evenly_positions(right_width, &[6, 6, 5]);
 	let button_positions = [button_slots[0] + 1, button_slots[1] + 1, button_slots[2] + 1];
-	let button_line = build_button_line(right_width, &button_positions, &["view", "bump", "tag"]);
+	let button_line = build_button_line(right_width, &button_positions, &["rls", "bump", "tag"]);
 
 	let rows = [
 		border_top_semver(right_width),
@@ -119,17 +119,17 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		format!("║{:^content_width$}║", tile.name, content_width = content_width),
 		format!("║{}║", dot_fill(content_width)),
 		format!("║{}│{:^action_width$}║", format_activity_detail(" tag..→HEAD", &tile.commits_since_tag_label, 8, detail_width), "bump", action_width = CALVER_ACTION_WIDTH),
-		format!("║{}│{:^action_width$}║", format_activity_detail(" last bump", &tile.last_bump_label, 9, detail_width), "view", action_width = CALVER_ACTION_WIDTH),
+		format!("║{}│{:^action_width$}║", format_activity_detail(" last bump", &tile.last_bump_label, 9, detail_width), "rls", action_width = CALVER_ACTION_WIDTH),
 		format!("║{}│{:^action_width$}║", format_activity_detail(" last commit", &tile.last_commit_label, 7, detail_width), "tag", action_width = CALVER_ACTION_WIDTH),
 		format!("╟{}┴{}╢", "─".repeat(detail_width), "─".repeat(CALVER_ACTION_WIDTH)),
 		format!("║{:^content_width$}║", spaced_version(&tile.preview_version), content_width = content_width),
 		format!("╚{}╝", "═".repeat(content_width)),
 	];
 	render_rows(frame, area, &rows, border_style, tile_style);
-	for (row_offset, label) in [(3_u16, "bump"), (4, "view"), (5, "tag")].into_iter() {
+	for (row_offset, label) in [(3_u16, "bump"), (4, "rls"), (5, "tag")].into_iter() {
 		let action_start = 1 + detail_width + 1;
 		let action_style = match label {
-			"view" => VIEW_BUTTON_STYLE,
+			"rls" => VIEW_BUTTON_STYLE,
 			"bump" => BUMP_BUTTON_STYLE,
 			_ => TAG_BUTTON_STYLE,
 		};
