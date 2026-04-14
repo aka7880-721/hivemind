@@ -1198,6 +1198,9 @@ impl App {
 		if dialog.is_warning_mode() {
 			header.push(Line::from("The most recent bump does not look fresh enough for a confident release."));
 			header.push(Line::from("Choose whether to continue anyway or cancel this release."));
+		} else if dialog.is_running() {
+			header.push(Line::from("ReleaseNOW is running now. Live stdout/stderr is streaming into the log pane below."));
+			header.push(Line::from("Use the mouse wheel or PgUp/PgDn to review output while the release is in progress."));
 		} else if dialog.is_completed() {
 			header.push(Line::from("ReleaseNOW finished. Review artifacts and logs below."));
 			header.push(Line::from("Esc or Enter closes this dialog. Mouse wheel and PgUp/PgDn scroll the log."));
@@ -1212,7 +1215,9 @@ impl App {
 		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
 		if !dialog.is_warning_mode() {
-			let config_line = if dialog.is_completed() {
+			let config_line = if dialog.is_running() {
+				format!("Running: {} | Live log lines: {}", dialog.selected_option().label, dialog.log_lines.len())
+			} else if dialog.is_completed() {
 				format!("Artifacts: {}", dialog.artifact_files.len())
 			} else {
 				format!(
@@ -1256,6 +1261,14 @@ impl App {
 						HitAction::CloseReleaseNow,
 						Style::default().fg(Color::White).bg(Color::Red),
 					),
+				],
+			);
+		} else if dialog.is_running() {
+			self.render_button_row(
+				frame,
+				sections[3],
+				&[
+					DialogButton::new("Scroll", false, HitAction::ScrollReleaseNow(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
 				],
 			);
 		} else if dialog.is_completed() {
