@@ -1200,7 +1200,7 @@ impl App {
 			header.push(Line::from("Choose whether to continue anyway or cancel this release."));
 		} else if dialog.is_running() {
 			header.push(Line::from("ReleaseNOW is running now. Live stdout/stderr is streaming into the log pane below."));
-			header.push(Line::from("Use the mouse wheel or PgUp/PgDn to review output while the release is in progress."));
+			header.push(Line::from("Use the mouse wheel or PgUp/PgDn to review output. F toggles follow mode and X cancels the run."));
 		} else if dialog.is_completed() {
 			header.push(Line::from("ReleaseNOW finished. Review artifacts and logs below."));
 			header.push(Line::from("Esc or Enter closes this dialog. Mouse wheel and PgUp/PgDn scroll the log."));
@@ -1216,7 +1216,13 @@ impl App {
 
 		if !dialog.is_warning_mode() {
 			let config_line = if dialog.is_running() {
-				format!("Running: {} | Live log lines: {}", dialog.selected_option().label, dialog.log_lines.len())
+				format!(
+					"Running: {} | Follow: {} | Cancel: {} | Live log lines: {}",
+					dialog.selected_option().label,
+					if dialog.auto_follow() { "On" } else { "Off" },
+					if dialog.cancel_requested() { "requested" } else { "ready" },
+					dialog.log_lines.len()
+				)
 			} else if dialog.is_completed() {
 				format!("Artifacts: {}", dialog.artifact_files.len())
 			} else {
@@ -1268,7 +1274,19 @@ impl App {
 				frame,
 				sections[3],
 				&[
+					DialogButton::new(
+						format!("Follow: {}", if dialog.auto_follow() { "On" } else { "Off" }),
+						false,
+						HitAction::ToggleReleaseNowAutoFollow,
+						Style::default().fg(Color::Black).bg(Color::Rgb(180, 205, 255)),
+					),
 					DialogButton::new("Scroll", false, HitAction::ScrollReleaseNow(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
+					DialogButton::new(
+						if dialog.cancel_requested() { "Cancelling..." } else { "Cancel Run" },
+						false,
+						HitAction::CancelReleaseNowRun,
+						Style::default().fg(Color::White).bg(Color::Red),
+					),
 				],
 			);
 		} else if dialog.is_completed() {
