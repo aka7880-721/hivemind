@@ -65,6 +65,8 @@ pub(super) struct ReleaseNowDialog {
     pub(super) warning_confirm_selected: bool,
     pub(super) scroll: u16,
     pub(super) body_viewport_height: u16,
+    pub(super) selection_anchor: Option<usize>,
+    pub(super) selection_focus: Option<usize>,
     pub(super) summary: Option<String>,
     pub(super) summary_is_warning: bool,
     pub(super) summary_is_error: bool,
@@ -98,6 +100,8 @@ impl ReleaseNowDialog {
             warning_confirm_selected: false,
             scroll: 0,
             body_viewport_height: 0,
+            selection_anchor: None,
+            selection_focus: None,
             summary: None,
             summary_is_warning: false,
             summary_is_error: false,
@@ -174,6 +178,7 @@ impl ReleaseNowDialog {
         self.mode = ReleaseNowMode::Configure;
         self.auto_follow = true;
         self.cancel_requested = false;
+        self.clear_body_selection();
         self.summary = None;
         self.summary_is_warning = false;
         self.summary_is_error = false;
@@ -214,6 +219,7 @@ impl ReleaseNowDialog {
         self.running = false;
         self.auto_follow = false;
         self.cancel_requested = false;
+        self.clear_body_selection();
         self.mode = ReleaseNowMode::Completed;
         self.summary = Some(outcome.summary);
         self.summary_is_warning = false;
@@ -227,6 +233,7 @@ impl ReleaseNowDialog {
         self.running = false;
         self.auto_follow = false;
         self.cancel_requested = false;
+        self.clear_body_selection();
         self.mode = ReleaseNowMode::Completed;
         self.summary = Some(message);
         self.summary_is_warning = true;
@@ -239,6 +246,7 @@ impl ReleaseNowDialog {
         self.running = false;
         self.auto_follow = false;
         self.cancel_requested = false;
+        self.clear_body_selection();
         self.mode = ReleaseNowMode::Completed;
         self.summary = Some(format!("ReleaseNOW failed: {}", error_message));
         self.summary_is_warning = false;
@@ -260,15 +268,71 @@ impl ReleaseNowDialog {
     }
 
     fn max_scroll_offset(&self) -> u16 {
-        self.log_lines.len().saturating_sub(1).min(u16::MAX as usize) as u16
+        self.body_plain_lines()
+            .len()
+            .saturating_sub(self.body_viewport_height.max(1) as usize)
+            .min(u16::MAX as usize) as u16
     }
 
     fn tail_scroll_offset(&self) -> u16 {
-        let visible_height = self.body_viewport_height.max(1) as usize;
-        self.log_lines
-            .len()
-            .saturating_sub(visible_height)
-            .min(u16::MAX as usize) as u16
+        self.max_scroll_offset()
+    }
+
+    pub(super) fn begin_body_selection(&mut self, row_offset: u16) -> bool {
+        let Some(index) = self.body_line_index_for_row(row_offset) else {
+            return false;
+        };
+
+        if self.running {
+            self.auto_follow = false;
+        }
+        self.selection_anchor = Some(index);
+        self.selection_focus = Some(index);
+        true
+    }
+
+    pub(super) fn update_body_selection(&mut self, row_offset: u16) -> bool {
+        let Some(anchor) = self.selection_anchor else {
+            return false;
+        };
+        let Some(index) = self.body_line_index_for_row(row_offset) else {
+            return false;
+        };
+
+        self.selection_anchor = Some(anchor);
+        self.selection_focus = Some(index);
+        true
+    }
+
+    pub(super) fn has_body_selection(&self) -> bool {
+        self.selection_anchor.is_some() && self.selection_focus.is_some()
+    }
+
+    pub(super) fn selected_body_text(&self) -> Option<String> {
+        let (start, end) = self.selection_range()?;
+        let lines = self.body_plain_lines();
+        Some(lines[start..=end].join("\n"))
+    }
+
+    fn clear_body_selection(&mut self) {
+        self.selection_anchor = None;
+        self.selection_focus = None;
+    }
+
+    fn selection_range(&self) -> Option<(usize, usize)> {
+        let start = self.selection_anchor?;
+        let end = self.selection_focus?;
+        Some((start.min(end), start.max(end)))
+    }
+
+    fn body_line_index_for_row(&self, row_offset: u16) -> Option<usize> {
+        let count = self.body_plain_lines().len();
+        if count == 0 {
+            return None;
+        }
+
+        let index = self.scroll_offset() as usize + row_offset as usize;
+        (index < count).then_some(index)
     }
 
     pub(super) fn body_title(&self) -> &'static str {
@@ -288,7 +352,7 @@ impl ReleaseNowDialog {
     }
 
     pub(super) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
-        match self.mode {
+        let lines = match self.mode {
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
                     Line::from("Recent bump validation did not find a very recent release tag.")
@@ -362,18 +426,84 @@ impl ReleaseNowDialog {
                 }
                 lines
             }
-        }
+        };
+
+        self.highlight_selected_lines(lines)
     }
 
     fn log_display_lines(&self) -> Vec<Line<'static>> {
-        let visible_height = self.body_viewport_height.max(1) as usize;
-        let lines = if self.running && self.auto_follow && self.log_lines.len() > visible_height {
-            &self.log_lines[self.log_lines.len().saturating_sub(visible_height)..]
-        } else {
-            &self.log_lines[..]
+        self.log_lines.iter().map(|line| ansi_line_to_ratatui(line)).collect()
+    }
+
+    fn body_plain_lines(&self) -> Vec<String> {
+        match self.mode {
+            ReleaseNowMode::BumpWarning => {
+                let mut lines = vec![
+                    "Recent bump validation did not find a very recent release tag.".to_string(),
+                    String::new(),
+                ];
+                if let Some(message) = &self.warning_message {
+                    lines.extend(message.lines().map(|line| line.to_string()));
+                }
+                lines
+            }
+            ReleaseNowMode::Configure => {
+                if self.running {
+                    if self.log_lines.is_empty() {
+                        vec!["Waiting for ReleaseNOW output...".to_string()]
+                    } else {
+                        self.log_lines.clone()
+                    }
+                } else if self.attach_changelog {
+                    self.release_notes_markdown.lines().map(|line| line.to_string()).collect()
+                } else {
+                    vec![
+                        "Changelog attachment is disabled for this release.".to_string(),
+                        String::new(),
+                        format!("Run option: {}", self.selected_option().label),
+                        format!("Tag: {}", self.tag_name),
+                        "Enable changelog attachment to preview and edit release notes.".to_string(),
+                    ]
+                }
+            }
+            ReleaseNowMode::Completed => {
+                let mut lines = Vec::new();
+                if let Some(summary) = &self.summary {
+                    lines.push(summary.clone());
+                    lines.push(String::new());
+                }
+                if !self.artifact_files.is_empty() {
+                    lines.push("Artifacts".to_string());
+                    lines.extend(self.artifact_files.iter().map(|file| format!("- {}", file)));
+                    lines.push(String::new());
+                }
+                lines.push("Log".to_string());
+                if self.log_lines.is_empty() {
+                    lines.push("No script or release logs were captured.".to_string());
+                } else {
+                    lines.extend(self.log_lines.iter().cloned());
+                }
+                lines
+            }
+        }
+    }
+
+    fn highlight_selected_lines(&self, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+        let Some((start, end)) = self.selection_range() else {
+            return lines;
         };
 
-        lines.iter().map(|line| ansi_line_to_ratatui(line)).collect()
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| {
+                if index >= start && index <= end {
+                    highlight_line(line)
+                } else {
+                    line
+                }
+            })
+            .collect()
     }
 }
 
@@ -763,14 +893,18 @@ fn script_command(script_path: &Path) -> Result<(String, Vec<String>)> {
         .unwrap_or_default();
 
     if extension == "ps1" {
+        let escaped_path = script_path.display().to_string().replace('\'', "''");
         return Ok((
             "pwsh".to_string(),
             vec![
                 "-NoProfile".to_string(),
                 "-ExecutionPolicy".to_string(),
                 "Bypass".to_string(),
-                "-File".to_string(),
-                script_path.display().to_string(),
+                "-Command".to_string(),
+                format!(
+                    r"& {{ $PSStyle.OutputRendering = 'Ansi'; $InformationPreference = 'Continue'; & '{}' 6>&1 }}",
+                    escaped_path
+                ),
             ],
         ));
     }
@@ -857,8 +991,7 @@ fn run_command_with_streaming(
         }
 
         if cancel.is_cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = terminate_process_tree(&mut child);
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
             drain_stream_lines(&line_rx, log_label, progress_tx);
@@ -877,8 +1010,7 @@ fn run_command_with_streaming(
         }
 
         if started_at.elapsed() >= timeout_window {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = terminate_process_tree(&mut child);
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
             drain_stream_lines(&line_rx, log_label, progress_tx);
@@ -1106,6 +1238,25 @@ fn drain_stream_lines(
     }
 }
 
+fn terminate_process_tree(child: &mut std::process::Child) -> Result<()> {
+    if cfg!(windows) {
+        let status = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        if status.as_ref().map(|value| !value.success()).unwrap_or(true) {
+            let _ = child.kill();
+        }
+    } else {
+        let _ = child.kill();
+    }
+
+    let _ = child.wait();
+    Ok(())
+}
+
 fn flush_stream_fragment(
     pending: &mut Vec<u8>,
     stream_name: &'static str,
@@ -1210,6 +1361,16 @@ fn apply_ansi_sgr(mut style: Style, sequence: &str) -> Style {
     }
 
     style
+}
+
+fn highlight_line(line: Line<'static>) -> Line<'static> {
+    let highlight = Style::default().bg(Color::Rgb(55, 80, 140));
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, span.style.patch(highlight)))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn write_release_notes_file(notes: &str) -> Result<PathBuf> {
