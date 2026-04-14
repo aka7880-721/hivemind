@@ -63,6 +63,9 @@ impl App {
 		if self.project_edit_dialog.is_some() {
 			self.render_project_edit_dialog(frame, frame.area());
 		}
+		if self.delete_confirmation_dialog.is_some() {
+			self.render_delete_confirmation_dialog(frame, frame.area());
+		}
 		if self.browser_dialog.is_some() {
 			self.render_browser_dialog(frame, frame.area());
 		}
@@ -1090,6 +1093,77 @@ impl App {
 		);
 	}
 
+	fn render_delete_confirmation_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.delete_confirmation_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 60, 28);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(" Confirm Delete ")
+			.border_style(Style::default().fg(Color::Yellow));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let sections = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Min(6), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.split(inner);
+
+		let lines = match &dialog.target {
+			DeleteConfirmationTarget::Project { project_name, .. } => vec![
+				Line::from("Are you sure?".yellow().bold()),
+				Line::from(format!("Project: {}", project_name)).bold(),
+				Line::from("This removes the project from the saved config."),
+				Line::from("Files, tags, and repositories on disk are not deleted."),
+				Line::from("Use Left/Right or Tab to pick an option. Y confirms, N cancels."),
+			],
+			DeleteConfirmationTarget::Scope {
+				project_name,
+				scope_name,
+				scope_kind,
+				removes_project,
+				..
+			} => {
+				let mut lines = vec![
+					Line::from("Are you sure?".yellow().bold()),
+					Line::from(format!("Project: {}", project_name)).bold(),
+					Line::from(format!("Scope: {} ({})", scope_name, scope_kind.display_name())),
+					Line::from("This removes the scope from the saved config."),
+				];
+				if *removes_project {
+					lines.push(Line::from("It is the last remaining scope, so the whole project will also be removed.").style(Style::default().fg(Color::Yellow)));
+				} else {
+					lines.push(Line::from("Files, tags, and repositories on disk are not deleted."));
+				}
+				lines.push(Line::from("Use Left/Right or Tab to pick an option. Y confirms, N cancels."));
+				lines
+			}
+		};
+		frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sections[0]);
+
+		self.render_button_row(
+			frame,
+			sections[1],
+			&[
+				DialogButton::new(
+					"Delete",
+					dialog.confirm_selected,
+					HitAction::ConfirmDeleteRequest,
+					Style::default().fg(Color::White).bg(Color::Red),
+				),
+				DialogButton::new(
+					"Cancel",
+					!dialog.confirm_selected,
+					HitAction::CancelDeleteRequest,
+					Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90)),
+				),
+			],
+		);
+	}
+
 	fn render_wizard(&mut self, frame: &mut Frame, area: Rect) {
 		let chunks = Layout::default()
 			.direction(Direction::Horizontal)
@@ -1522,6 +1596,8 @@ impl App {
 		spans.extend(shortcut_key_label("N", "ew Project"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("E", "dit Project"));
+		spans.push(Span::raw(" | "));
+		spans.extend(shortcut_key_label("D", "elete"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("G", "itlog"));
 		spans.push(Span::raw(" / "));
