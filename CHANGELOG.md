@@ -1,3 +1,35 @@
+## Changelog 0.7.1
+2026-04-14
+
+#### What's changed:
+
+### 🧩 Features
+
+* add terminal control sequence stripping for log output in ReleaseNowDialog   _(59735b6)_
+
+* enhance ReleaseNowDialog with body selection functionality and scrolling improvements   _(42efe01)_
+
+* still broken: enhance ReleaseNowDialog with dynamic body viewport height and scrolling adjustments   _(557d591)_
+
+* still broken: enhance ReleaseNowDialog with body viewport height and scrolling improvements   _(2cbbca1)_
+
+* implement function to find archived changelog markdown and add history label candidate generation   _(30c64cf)_
+
+* add function to find archived changelog markdown and refactor selection confirmation logic   _(5609345)_
+
+### 🐛 Fix(es)
+
+* copied log is no longer malformed   _(59735b6)_
+
+* fixes previously broken→add release now log viewport handling in render_release_now_dialog   _(7fdf770)_
+
+* fixes previously broken→add release now log viewport and selection handling in ReleaseNowDialog   _(affa899)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
+
 ## Changelog 0.7.0
 2026-04-14
 
