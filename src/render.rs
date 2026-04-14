@@ -13,6 +13,7 @@ impl App {
 		self.hit_targets.clear();
 		self.overview_tile_viewport = None;
 		self.overview_recent_viewport = None;
+		self.release_now_log_viewport = None;
 		self.overview_tile_rects.clear();
 
 		let header_height = header_height_for_viewport(frame.area().height);
@@ -1242,6 +1243,7 @@ impl App {
 
 		let body_block = Block::default().borders(Borders::ALL).title(dialog.body_title());
 		let body_inner = body_block.inner(sections[2]);
+		self.release_now_log_viewport = Some(body_inner);
 		if let Some(dialog) = &mut self.release_now_dialog {
 			dialog.set_body_viewport_height(body_inner.height);
 		}
