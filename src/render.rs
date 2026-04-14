@@ -1242,11 +1242,15 @@ impl App {
 
 		let body_block = Block::default().borders(Borders::ALL).title(dialog.body_title());
 		let body_inner = body_block.inner(sections[2]);
+		if let Some(dialog) = &mut self.release_now_dialog {
+			dialog.set_body_viewport_height(body_inner.height);
+		}
+		let dialog = self.release_now_dialog.as_ref().expect("ReleaseNOW dialog should stay open while rendering");
 		frame.render_widget(body_block, sections[2]);
 		frame.render_widget(
 			Paragraph::new(dialog.rendered_body_lines())
 				.wrap(Wrap { trim: false })
-				.scroll((dialog.scroll, 0)),
+				.scroll((dialog.scroll_offset(), 0)),
 			body_inner,
 		);
 
