@@ -265,6 +265,10 @@ struct App {
 impl App {
     fn new() -> Result<Self> {
         let config_store = ConfigStore::locate()?;
+        Self::new_with_config_store(config_store)
+    }
+
+    fn new_with_config_store(config_store: ConfigStore) -> Result<Self> {
         let config = config_store.load()?;
         let status = StatusMessage::info("Press N to create your first project, or Q to quit.");
         let (
@@ -345,6 +349,19 @@ impl App {
         })
     }
 
+    #[cfg(test)]
+    fn new_for_tests() -> Result<Self> {
+        let unique = format!(
+            "cvb-test-config-{}.toml",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        Self::new_with_config_store(ConfigStore::with_path(path))
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
             self.paste_from_clipboard();
@@ -397,6 +414,13 @@ impl App {
 
         if self.bump_dialog.is_some() {
             return self.handle_bump_key(key);
+        }
+
+        if self.screen == Screen::Dashboard
+            && self.overview_tab == OverviewTab::ProjectSettings
+            && p_s_s::captures_text_input(self)
+        {
+            return self.handle_dashboard_key(key);
         }
 
         if self.handle_tab_shortcut(key) {
@@ -918,6 +942,17 @@ impl App {
                     self.move_browser_selection(1);
                     return;
                 }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left) => return,
                 _ => {}
             }
         }
@@ -936,6 +971,8 @@ impl App {
                     self.rotate_bump_action(-1);
                 } else if self.screen == Screen::Wizard {
                     self.scroll_wizard_body(-1);
+                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+                    self.scroll_project_settings(-1);
                 } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
                     if self
                         .overview_recent_viewport
@@ -981,6 +1018,8 @@ impl App {
                     self.rotate_bump_action(1);
                 } else if self.screen == Screen::Wizard {
                     self.scroll_wizard_body(1);
+                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+                    self.scroll_project_settings(1);
                 } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
                     if self
                         .overview_recent_viewport
@@ -1212,7 +1251,7 @@ impl App {
                 self.dashboard_focus = DashboardPane::Overview;
                 p_s_s::sync_project_settings_state(self);
             }
-            HitAction::SelectProjectSettingsField(field) => p_s_s::set_project_settings_focus(self, field),
+            HitAction::SelectProjectSettingsField(field) => return p_s_s::activate_project_settings_field(self, field),
             HitAction::BrowseProjectSettingsField(field) => {
                 p_s_s::set_project_settings_focus(self, field);
                 return p_s_s::open_browser_for_project_settings_focus(self);
@@ -1570,6 +1609,10 @@ impl App {
                 } else {
                     Some(target.action.clone())
                 }?;
+
+                if self.browser_dialog.is_some() && !matches!(action, HitAction::BrowserSelect(_)) {
+                    return None;
+                }
 
                 Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action))
             })
@@ -1996,6 +2039,10 @@ impl App {
 
     fn scroll_wizard_body(&mut self, delta: isize) {
         self.wizard.scroll_body(delta);
+    }
+
+    fn scroll_project_settings(&mut self, delta: isize) {
+        p_s_s::scroll_project_settings(self, delta);
     }
 
     fn select_browser_index(&mut self, index: usize) {
@@ -5021,6 +5068,71 @@ mod tests {
 
         assert_eq!(wizard.target_key.value(), "package.version");
         assert!(!wizard.target_key_custom);
+    }
+
+    #[test]
+    fn browser_modal_hit_resolution_ignores_background_targets() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.browser_dialog = Some(
+            FileBrowserDialog::new(BrowseTarget::ProjectSettingsReleaseNowWindows, String::new())
+                .expect("browser dialog should build"),
+        );
+        app.hit_targets.push(HitTarget::new(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            HitAction::SelectProject(0),
+        ));
+        app.hit_targets.push(HitTarget::new(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 1,
+            },
+            HitAction::BrowserSelect(3),
+        ));
+
+        assert!(matches!(
+            app.resolve_hit_action(0, 0, false),
+            Some(HitAction::BrowserSelect(3))
+        ));
+    }
+
+    #[test]
+    fn pss_text_input_captures_global_shortcuts() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+        }];
+        app.selected_project = 0;
+        app.screen = Screen::Dashboard;
+        app.dashboard_focus = DashboardPane::Overview;
+        app.overview_tab = OverviewTab::ProjectSettings;
+        app.project_settings_tab = ProjectSettingsTab::Distro;
+        p_s_s::sync_project_settings_state(&mut app);
+        app.project_settings_state.focus = ProjectSettingsFocus::ReleaseNowWindows;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE))
+            .expect("key handling should succeed");
+
+        assert!(matches!(app.screen, Screen::Dashboard));
+        assert_eq!(app.project_settings_state.release_now_windows.value(), "2");
     }
 
     #[test]
