@@ -14,7 +14,6 @@ fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
 use super::*;
 use std::{
     fs,
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{RecvTimeoutError, Sender as StdSender, channel},
@@ -65,6 +64,7 @@ pub(super) struct ReleaseNowDialog {
     pub(super) cancel_requested: bool,
     pub(super) warning_confirm_selected: bool,
     pub(super) scroll: u16,
+    pub(super) body_viewport_height: u16,
     pub(super) summary: Option<String>,
     pub(super) summary_is_warning: bool,
     pub(super) summary_is_error: bool,
@@ -97,6 +97,7 @@ impl ReleaseNowDialog {
             cancel_requested: false,
             warning_confirm_selected: false,
             scroll: 0,
+            body_viewport_height: 0,
             summary: None,
             summary_is_warning: false,
             summary_is_error: false,
@@ -123,6 +124,13 @@ impl ReleaseNowDialog {
 
     pub(super) fn cancel_requested(&self) -> bool {
         self.cancel_requested
+    }
+
+    pub(super) fn set_body_viewport_height(&mut self, height: u16) {
+        self.body_viewport_height = height;
+        if self.running && self.auto_follow {
+            self.scroll_to_tail();
+        }
     }
 
     pub(super) fn selected_option(&self) -> &ReleaseNowRunOption {
@@ -155,6 +163,7 @@ impl ReleaseNowDialog {
 
     pub(super) fn scroll_by(&mut self, delta: i16) {
         if self.running && delta != 0 {
+            self.scroll_to_tail();
             self.auto_follow = false;
         }
         self.scroll = self.scroll.saturating_add_signed(delta);
@@ -243,7 +252,23 @@ impl ReleaseNowDialog {
     }
 
     fn scroll_to_tail(&mut self) {
-        self.scroll = self.log_lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        self.scroll = self.tail_scroll_offset();
+    }
+
+    pub(super) fn scroll_offset(&self) -> u16 {
+        self.scroll.min(self.max_scroll_offset())
+    }
+
+    fn max_scroll_offset(&self) -> u16 {
+        self.log_lines.len().saturating_sub(1).min(u16::MAX as usize) as u16
+    }
+
+    fn tail_scroll_offset(&self) -> u16 {
+        let visible_height = self.body_viewport_height.max(1) as usize;
+        self.log_lines
+            .len()
+            .saturating_sub(visible_height)
+            .min(u16::MAX as usize) as u16
     }
 
     pub(super) fn body_title(&self) -> &'static str {
@@ -280,10 +305,7 @@ impl ReleaseNowDialog {
                     if self.log_lines.is_empty() {
                         vec![Line::from("Waiting for ReleaseNOW output...")]
                     } else {
-                        self.log_lines
-                            .iter()
-                            .map(|line| Line::from(line.clone()))
-                            .collect()
+                        self.log_display_lines()
                     }
                 } else if self.attach_changelog {
                     self.release_notes_markdown
@@ -336,11 +358,22 @@ impl ReleaseNowDialog {
                 if self.log_lines.is_empty() {
                     lines.push(Line::from("No script or release logs were captured."));
                 } else {
-                    lines.extend(self.log_lines.iter().map(|line| Line::from(line.clone())));
+                    lines.extend(self.log_display_lines());
                 }
                 lines
             }
         }
+    }
+
+    fn log_display_lines(&self) -> Vec<Line<'static>> {
+        let visible_height = self.body_viewport_height.max(1) as usize;
+        let lines = if self.running && self.auto_follow && self.log_lines.len() > visible_height {
+            &self.log_lines[self.log_lines.len().saturating_sub(visible_height)..]
+        } else {
+            &self.log_lines[..]
+        };
+
+        lines.iter().map(|line| ansi_line_to_ratatui(line)).collect()
     }
 }
 
@@ -789,6 +822,10 @@ fn run_command_with_streaming(
     command
         .current_dir(repo_root)
         .args(args)
+        .env("CARGO_TERM_COLOR", "always")
+        .env("CARGO_TERM_PROGRESS_WHEN", "always")
+        .env("CLICOLOR_FORCE", "1")
+        .env("TERM", "xterm-256color")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -1017,13 +1054,38 @@ fn read_command_stream<R>(stream: R, stream_name: &'static str, line_tx: StdSend
 where
     R: std::io::Read,
 {
-    let reader = BufReader::new(stream);
-    for line in reader.lines() {
-        let line = line?;
-        for chunk in split_output_lines(&line) {
-            let _ = line_tx.send((stream_name.to_string(), chunk));
+    let mut stream = stream;
+    let mut buffer = [0_u8; 1024];
+    let mut pending = Vec::new();
+    let mut last_was_cr = false;
+
+    loop {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+
+        for byte in &buffer[..read] {
+            match *byte {
+                b'\r' => {
+                    flush_stream_fragment(&mut pending, stream_name, &line_tx);
+                    last_was_cr = true;
+                }
+                b'\n' => {
+                    if !last_was_cr {
+                        flush_stream_fragment(&mut pending, stream_name, &line_tx);
+                    }
+                    last_was_cr = false;
+                }
+                byte => {
+                    pending.push(byte);
+                    last_was_cr = false;
+                }
+            }
         }
     }
+
+    flush_stream_fragment(&mut pending, stream_name, &line_tx);
     Ok(())
 }
 
@@ -1042,6 +1104,112 @@ fn drain_stream_lines(
     while let Ok((stream, line)) = line_rx.try_recv() {
         let _ = progress_tx.send(vec![format!("[{}][{}] {}", log_label, stream, line)]);
     }
+}
+
+fn flush_stream_fragment(
+    pending: &mut Vec<u8>,
+    stream_name: &'static str,
+    line_tx: &StdSender<(String, String)>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+
+    let fragment = String::from_utf8_lossy(pending).to_string();
+    pending.clear();
+    for chunk in split_output_lines(&fragment) {
+        let _ = line_tx.send((stream_name.to_string(), chunk));
+    }
+}
+
+fn ansi_line_to_ratatui(line: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut style = Style::default();
+    let mut text = String::new();
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            let _ = chars.next();
+            let mut sequence = String::new();
+            while let Some(next) = chars.next() {
+                if next == 'm' {
+                    break;
+                }
+                sequence.push(next);
+            }
+
+            if !text.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut text), style));
+            }
+            style = apply_ansi_sgr(style, &sequence);
+            continue;
+        }
+
+        text.push(ch);
+    }
+
+    if !text.is_empty() || spans.is_empty() {
+        spans.push(Span::styled(text, style));
+    }
+
+    Line::from(spans)
+}
+
+fn apply_ansi_sgr(mut style: Style, sequence: &str) -> Style {
+    let codes = if sequence.is_empty() {
+        vec![0]
+    } else {
+        sequence
+            .split(';')
+            .filter_map(|part| part.parse::<u16>().ok())
+            .collect::<Vec<_>>()
+    };
+
+    for code in codes {
+        style = match code {
+            0 => Style::default(),
+            1 => style.add_modifier(Modifier::BOLD),
+            22 => style.remove_modifier(Modifier::BOLD),
+            30 => style.fg(Color::Black),
+            31 => style.fg(Color::Red),
+            32 => style.fg(Color::Green),
+            33 => style.fg(Color::Yellow),
+            34 => style.fg(Color::Blue),
+            35 => style.fg(Color::Magenta),
+            36 => style.fg(Color::Cyan),
+            37 => style.fg(Color::Gray),
+            39 => style.fg(Color::Reset),
+            40 => style.bg(Color::Black),
+            41 => style.bg(Color::Red),
+            42 => style.bg(Color::Green),
+            43 => style.bg(Color::Yellow),
+            44 => style.bg(Color::Blue),
+            45 => style.bg(Color::Magenta),
+            46 => style.bg(Color::Cyan),
+            47 => style.bg(Color::Gray),
+            49 => style.bg(Color::Reset),
+            90 => style.fg(Color::DarkGray),
+            91 => style.fg(Color::LightRed),
+            92 => style.fg(Color::LightGreen),
+            93 => style.fg(Color::LightYellow),
+            94 => style.fg(Color::LightBlue),
+            95 => style.fg(Color::LightMagenta),
+            96 => style.fg(Color::LightCyan),
+            97 => style.fg(Color::White),
+            100 => style.bg(Color::DarkGray),
+            101 => style.bg(Color::LightRed),
+            102 => style.bg(Color::LightGreen),
+            103 => style.bg(Color::LightYellow),
+            104 => style.bg(Color::LightBlue),
+            105 => style.bg(Color::LightMagenta),
+            106 => style.bg(Color::LightCyan),
+            107 => style.bg(Color::White),
+            _ => style,
+        };
+    }
+
+    style
 }
 
 fn write_release_notes_file(notes: &str) -> Result<PathBuf> {
