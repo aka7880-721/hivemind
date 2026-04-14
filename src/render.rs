@@ -63,6 +63,12 @@ impl App {
 		if self.project_edit_dialog.is_some() {
 			self.render_project_edit_dialog(frame, frame.area());
 		}
+		if self.release_now_dialog.is_some() {
+			self.render_release_now_dialog(frame, frame.area());
+		}
+		if self.release_now_notes_dialog.is_some() {
+			self.render_release_now_notes_dialog(frame, frame.area());
+		}
 		if self.delete_confirmation_dialog.is_some() {
 			self.render_delete_confirmation_dialog(frame, frame.area());
 		}
@@ -1164,6 +1170,170 @@ impl App {
 		);
 	}
 
+	fn render_release_now_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.release_now_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 88, 76);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(" ReleaseNOW ")
+			.border_style(Style::default().fg(Color::Cyan));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let sections = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Length(6), Constraint::Length(3), Constraint::Min(10), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.split(inner);
+
+		let mut header = vec![
+			Line::from(format!("Project: {}", dialog.project_name)).bold(),
+			Line::from(format!("Scope: {}", dialog.scope_label)),
+			Line::from(format!("Repo: {}", dialog.repo_root)),
+			Line::from(format!("Tag: {}", dialog.tag_name)).style(Style::default().fg(Color::Yellow)),
+		];
+		if dialog.is_warning_mode() {
+			header.push(Line::from("The most recent bump does not look fresh enough for a confident release."));
+			header.push(Line::from("Choose whether to continue anyway or cancel this release."));
+		} else if dialog.is_completed() {
+			header.push(Line::from("ReleaseNOW finished. Review artifacts and logs below."));
+			header.push(Line::from("Esc or Enter closes this dialog. Mouse wheel and PgUp/PgDn scroll the log."));
+		} else {
+			header.push(Line::from(format!(
+				"Build: < {} > | Changelog: {}",
+				dialog.selected_option().label,
+				if dialog.attach_changelog { "Yes" } else { "No" }
+			)));
+			header.push(Line::from("Left/Right cycles build options. C toggles changelog. E edits notes. Enter or F2 runs ReleaseNOW."));
+		}
+		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
+
+		if !dialog.is_warning_mode() {
+			let config_line = if dialog.is_completed() {
+				format!("Artifacts: {}", dialog.artifact_files.len())
+			} else {
+				format!(
+					"Selected: {} | Notes: {}",
+					dialog.selected_option().label,
+					if dialog.attach_changelog { "attached" } else { "disabled" }
+				)
+			};
+			frame.render_widget(
+				Paragraph::new(config_line)
+					.alignment(Alignment::Center)
+					.style(Style::default().fg(Color::Gray)),
+				sections[1],
+			);
+		}
+
+		let body_block = Block::default().borders(Borders::ALL).title(dialog.body_title());
+		let body_inner = body_block.inner(sections[2]);
+		frame.render_widget(body_block, sections[2]);
+		frame.render_widget(
+			Paragraph::new(dialog.rendered_body_lines())
+				.wrap(Wrap { trim: false })
+				.scroll((dialog.scroll, 0)),
+			body_inner,
+		);
+
+		if dialog.is_warning_mode() {
+			self.render_button_row(
+				frame,
+				sections[3],
+				&[
+					DialogButton::new(
+						"Yes, I'm ready",
+						dialog.warning_confirm_selected,
+						HitAction::ContinueReleaseNowWarning,
+						Style::default().fg(Color::Black).bg(Color::Yellow),
+					),
+					DialogButton::new(
+						"OMG, no, cancel!",
+						!dialog.warning_confirm_selected,
+						HitAction::CloseReleaseNow,
+						Style::default().fg(Color::White).bg(Color::Red),
+					),
+				],
+			);
+		} else if dialog.is_completed() {
+			self.render_button_row(
+				frame,
+				sections[3],
+				&[
+					DialogButton::new("Scroll", false, HitAction::ScrollReleaseNow(3), Style::default().fg(Color::Black).bg(Color::Yellow)),
+					DialogButton::new("Close", true, HitAction::CloseReleaseNow, Style::default().fg(Color::White).bg(Color::Red)),
+				],
+			);
+		} else {
+			let mut buttons = vec![
+				DialogButton::new(
+					format!("Build: < {} >", dialog.selected_option().label),
+					false,
+					HitAction::CycleReleaseNowOption(1),
+					Style::default().fg(Color::Black).bg(Color::Rgb(180, 205, 255)),
+				),
+				DialogButton::new(
+					format!("Changelog: {}", if dialog.attach_changelog { "On" } else { "Off" }),
+					false,
+					HitAction::ToggleReleaseNowChangelog,
+					Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+				),
+			];
+			if dialog.attach_changelog {
+				buttons.push(DialogButton::new(
+					"Edit Notes",
+					false,
+					HitAction::EditReleaseNowNotes,
+					Style::default().fg(Color::Black).bg(Color::Rgb(230, 190, 90)),
+				));
+			}
+			buttons.push(DialogButton::new("Run", false, HitAction::RunReleaseNow, Style::default().fg(Color::Black).bg(Color::Green)));
+			buttons.push(DialogButton::new("Cancel", false, HitAction::CloseReleaseNow, Style::default().fg(Color::White).bg(Color::Red)));
+			self.render_button_row(frame, sections[3], &buttons);
+		}
+	}
+
+	fn render_release_now_notes_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.release_now_notes_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 84, 62);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(" Edit Release Notes ")
+			.border_style(Style::default().fg(Color::Cyan));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let sections = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.split(inner);
+
+		frame.render_widget(
+			Paragraph::new(vec![
+				Line::from("Edit the Markdown that will be attached to the GitHub release.").bold(),
+				Line::from("Ctrl+S or F2 saves. Esc closes without saving."),
+			])
+			.wrap(Wrap { trim: false }),
+			sections[0],
+		);
+		self.render_textarea_editor(frame, sections[1], " Release Notes ", dialog.placeholder.as_str(), &dialog.editor);
+		self.render_button_row(
+			frame,
+			sections[2],
+			&[
+				DialogButton::new("Save", false, HitAction::SaveReleaseNowNotes, Style::default().fg(Color::Black).bg(Color::Green)),
+				DialogButton::new("Cancel", false, HitAction::CancelReleaseNowNotes, Style::default().fg(Color::White).bg(Color::Red)),
+			],
+		);
+	}
+
 	fn render_wizard(&mut self, frame: &mut Frame, area: Rect) {
 		let chunks = Layout::default()
 			.direction(Direction::Horizontal)
@@ -1598,6 +1768,8 @@ impl App {
 		spans.extend(shortcut_key_label("E", "dit Project"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("D", "elete"));
+		spans.push(Span::raw(" | "));
+		spans.extend(shortcut_key_label("L", " ReleaseNOW"));
 		spans.push(Span::raw(" | "));
 		spans.extend(shortcut_key_label("G", "itlog"));
 		spans.push(Span::raw(" / "));
