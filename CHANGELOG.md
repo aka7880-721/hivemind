@@ -1,3 +1,19 @@
+## Changelog 0.7.3
+2026-04-15
+
+#### What's changed:
+
+### 📝 Other
+
+* add empty README   _(6bfa96e)_
+
+* update changelog for version 0.7.2   _(bb9500b)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
+
 ## Changelog 0.7.2
 2026-04-15
 
