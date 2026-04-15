@@ -166,7 +166,7 @@ impl ReleaseNowDialog {
     }
 
     pub(super) fn scroll_by(&mut self, delta: i16) {
-        if self.running && delta != 0 {
+        if self.running && self.auto_follow && delta != 0 {
             self.scroll_to_tail();
             self.auto_follow = false;
         }

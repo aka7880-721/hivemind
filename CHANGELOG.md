@@ -1,3 +1,13 @@
+## Changelog 0.7.2
+2026-04-15
+
+#### What's changed:
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
+
 ## Changelog 0.7.1
 2026-04-14
 

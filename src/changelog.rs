@@ -5,7 +5,11 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+	collections::HashSet,
+	fs,
+	path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
@@ -13,11 +17,13 @@ use chrono::{Local, NaiveDate};
 const FOOTER: &str = "<br>\n\n---\n... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)";
 const TEMP_CHANGELOG_FILE: &str = "changelog_temp.md";
 const HISTORY_DIR_NAME: &str = ".changelogs";
+const HISTORY_SUMMARY_FILE: &str = "README.md";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Category {
 	Features,
 	Fixes,
+	Broken,
 	Build,
 	Maintenance,
 	Enhancements,
@@ -36,6 +42,7 @@ impl Category {
 		match self {
 			Self::Features => "🧩 Features",
 			Self::Fixes => "🐛 Fix(es)",
+			Self::Broken => "⛓️‍💥 Not Working Yet / Broken",
 			Self::Build => "📦 Build",
 			Self::Maintenance => "🔧 Maintenance",
 			Self::Enhancements => "💎 Enhancements",
@@ -54,17 +61,18 @@ impl Category {
 		match self {
 			Self::Features => 0,
 			Self::Fixes => 1,
-			Self::Build => 2,
-			Self::Maintenance => 3,
-			Self::Enhancements => 4,
-			Self::Documentation => 5,
-			Self::Visuals => 6,
-			Self::UiChanges => 7,
-			Self::Refactor => 8,
-			Self::Performance => 9,
-			Self::Tests => 10,
-			Self::Removed => 11,
-			Self::Other => 12,
+			Self::Broken => 2,
+			Self::Build => 3,
+			Self::Maintenance => 4,
+			Self::Enhancements => 5,
+			Self::Documentation => 6,
+			Self::Visuals => 7,
+			Self::UiChanges => 8,
+			Self::Refactor => 9,
+			Self::Performance => 10,
+			Self::Tests => 11,
+			Self::Removed => 12,
+			Self::Other => 13,
 		}
 	}
 
@@ -72,6 +80,7 @@ impl Category {
 		match normalize_alias(alias).as_str() {
 			"feat" | "ft" | "feature" | "element" => Some(Self::Features),
 			"fix" | "bugfix" | "bf" => Some(Self::Fixes),
+			"broken" | "brkn" | "brk" | "notworking" | "dnw" | "fail" => Some(Self::Broken),
 			"build" | "bld" | "rls" | "release" => Some(Self::Build),
 			"chore" | "chores" | "depup" | "dpndc" | "dep" | "mtn" | "mtnnc"
 			| "mt" | "upd" | "bump" | "bmp" => Some(Self::Maintenance),
@@ -306,7 +315,12 @@ pub(crate) fn archive_changelog_markdown(repo_root: &str, label: &str, markdown:
 	let output_path = history_dir.join(file_name);
 	fs::write(&output_path, markdown.trim_end())
 		.with_context(|| format!("failed to write {}", output_path.display()))?;
+	write_history_summary_readme(&history_dir)?;
 	Ok(output_path)
+}
+
+pub(crate) fn history_summary_readme_path(repo_root: &str) -> PathBuf {
+	Path::new(repo_root).join(HISTORY_DIR_NAME).join(HISTORY_SUMMARY_FILE)
 }
 
 pub(crate) fn find_archived_changelog_markdown(repo_root: &str, label: &str) -> Result<Option<String>> {
@@ -381,6 +395,129 @@ fn history_label_candidates(label: &str) -> Vec<String> {
 	}
 
 	candidates
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArchivedChangelogEntry {
+	timestamp: String,
+	label: String,
+	markdown: String,
+}
+
+fn write_history_summary_readme(history_dir: &Path) -> Result<PathBuf> {
+	let entries = load_archived_changelog_entries(history_dir)?;
+	let summary_path = history_dir.join(HISTORY_SUMMARY_FILE);
+	let rendered = render_history_summary_markdown(&entries);
+	fs::write(&summary_path, rendered.trim_end())
+		.with_context(|| format!("failed to write {}", summary_path.display()))?;
+	Ok(summary_path)
+}
+
+fn load_archived_changelog_entries(history_dir: &Path) -> Result<Vec<ArchivedChangelogEntry>> {
+	let mut entries = fs::read_dir(history_dir)
+		.with_context(|| format!("failed to read {}", history_dir.display()))?
+		.filter_map(|entry| entry.ok().map(|item| item.path()))
+		.filter(|path| path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case("md")))
+		.filter(|path| path.file_name().and_then(|value| value.to_str()) != Some(HISTORY_SUMMARY_FILE))
+		.filter_map(|path| {
+			let stem = path.file_stem()?.to_str()?;
+			let (timestamp, label) = parse_history_file_stem(stem)?;
+			Some((path, timestamp, label))
+		})
+		.map(|(path, timestamp, label)| {
+			Ok(ArchivedChangelogEntry {
+				timestamp,
+				label,
+				markdown: fs::read_to_string(&path)
+					.with_context(|| format!("failed to read {}", path.display()))?,
+			})
+		})
+		.collect::<Result<Vec<_>>>()?;
+
+	entries.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+	Ok(entries)
+}
+
+fn parse_history_file_stem(stem: &str) -> Option<(String, String)> {
+	let mut parts = stem.splitn(4, '-');
+	let date = parts.next()?;
+	let time = parts.next()?;
+	let millis = parts.next()?;
+	let label = parts.next()?.trim();
+
+	if date.len() != 8
+		|| time.len() != 6
+		|| millis.len() != 3
+		|| !date.chars().all(|character| character.is_ascii_digit())
+		|| !time.chars().all(|character| character.is_ascii_digit())
+		|| !millis.chars().all(|character| character.is_ascii_digit())
+		|| label.is_empty()
+	{
+		return None;
+	}
+
+	Some((format!("{date}-{time}-{millis}"), label.to_string()))
+}
+
+fn render_history_summary_markdown(entries: &[ArchivedChangelogEntry]) -> String {
+	let mut seen = HashSet::new();
+	let mut lines = vec![
+		"# Changelog History".to_string(),
+		String::new(),
+		"Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.".to_string(),
+		String::new(),
+	];
+
+	for entry in entries {
+		let dedupe_key = history_summary_key(&entry.label);
+		if !seen.insert(dedupe_key) {
+			continue;
+		}
+
+		let normalized = strip_summary_footer(&entry.markdown);
+		if normalized.is_empty() {
+			continue;
+		}
+
+		lines.push(normalized);
+		lines.push(String::new());
+		lines.push("---".to_string());
+		lines.push(String::new());
+	}
+
+	if lines.len() == 4 {
+		lines.push("No archived changelogs yet.".to_string());
+		lines.push(String::new());
+	} else {
+		while lines.last().is_some_and(|line| line.is_empty()) {
+			lines.pop();
+		}
+		if lines.last().is_some_and(|line| line == "---") {
+			lines.pop();
+		}
+		while lines.last().is_some_and(|line| line.is_empty()) {
+			lines.pop();
+		}
+		lines.push(String::new());
+	}
+
+	lines.push(FOOTER.to_string());
+	lines.join("\n")
+}
+
+fn history_summary_key(label: &str) -> String {
+	history_label_candidates(label)
+		.pop()
+		.unwrap_or_else(|| sanitize_history_label(label))
+}
+
+fn strip_summary_footer(markdown: &str) -> String {
+	markdown
+		.trim()
+		.strip_suffix(FOOTER)
+		.unwrap_or(markdown.trim())
+		.trim_end()
+		.to_string()
 }
 
 #[cfg(test)]
@@ -842,6 +979,14 @@ mod tests {
 	}
 
 	#[test]
+	fn parses_broken_aliases() {
+		let parsed = ParsedCommit::parse("brk: release updater is not available yet", "abc1234");
+
+		assert_eq!(parsed.category, Some(Category::Broken));
+		assert_eq!(parsed.effective_category(), Category::Broken);
+	}
+
+	#[test]
 	fn parses_new_modifier_without_category() {
 		let parsed = ParsedCommit::parse("@: first public release", "abc1234");
 
@@ -1027,6 +1172,45 @@ mod tests {
 			.expect("lookup should succeed")
 			.expect("history changelog should be found");
 		assert_eq!(markdown, "history payload");
+
+		let _ = std::fs::remove_dir_all(repo_root);
+	}
+
+	#[test]
+	fn archived_summary_keeps_only_newest_duplicate_version() {
+		let repo_root = std::env::temp_dir().join(format!(
+			"cvb-history-summary-{}",
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap_or_default()
+				.as_nanos()
+		));
+		let history_dir = repo_root.join(HISTORY_DIR_NAME);
+		std::fs::create_dir_all(&history_dir).expect("history dir should be created");
+
+		std::fs::write(
+			history_dir.join("20260415-101010-001-v1-2-3.md"),
+			"## Changelog v1.2.3\n\nold entry\n\n".to_string() + FOOTER,
+		)
+		.expect("old entry should be written");
+		std::fs::write(
+			history_dir.join("20260415-111111-002-core-v1-2-3.md"),
+			"## Changelog core-v1.2.3\n\nnew entry\n\n".to_string() + FOOTER,
+		)
+		.expect("new entry should be written");
+		std::fs::write(
+			history_dir.join("20260414-090000-003-v1-2-2.md"),
+			"## Changelog v1.2.2\n\nolder version\n\n".to_string() + FOOTER,
+		)
+		.expect("older version should be written");
+
+		let summary_path = write_history_summary_readme(&history_dir).expect("summary should be written");
+		let summary = std::fs::read_to_string(summary_path).expect("summary should be readable");
+
+		assert!(summary.contains("# Changelog History"));
+		assert!(summary.contains("new entry"));
+		assert!(summary.contains("older version"));
+		assert!(!summary.contains("old entry"));
 
 		let _ = std::fs::remove_dir_all(repo_root);
 	}
