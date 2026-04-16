@@ -612,6 +612,29 @@ mod tests {
 		assert_eq!(resolved_scope_preview_version(&scope, false), "2.4.6");
 		assert!(placeholder_activity(&scope, &project).is_none());
 	}
+
+	#[test]
+	fn changelog_preview_opens_only_for_tag_workflows() {
+		let mut app = App::new_for_tests().expect("app should initialize");
+		let mut changelog = ChangelogSettings::default();
+		changelog.enabled = true;
+		app.config.projects = vec![ProjectConfig {
+			name: "demo".to_string(),
+			project_type: ProjectType::AllInOne,
+			integration_mode: IntegrationMode::GitLocalOnly,
+			unified_versioning: true,
+			version_scheme: VersionScheme::SemVer,
+			changelog,
+			release_now: ReleaseNowSettings::default(),
+			targets: Vec::new(),
+			branches: Vec::new(),
+			repo: None,
+		}];
+		app.selected_project = 0;
+
+		assert!(!should_open_overview_changelog_preview(&mut app, 0, OverviewBumpWorkflow::Commit).expect("check should succeed"));
+		assert!(should_open_overview_changelog_preview(&mut app, 0, OverviewBumpWorkflow::CommitAndTag).expect("check should succeed"));
+	}
 }
 
 pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<()> {
@@ -1017,7 +1040,7 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 	pending_versions: &[String],
 	cancel: Option<GitCancellation>,
 ) -> Result<ChangelogPreviewDialog> {
-	if workflow == OverviewBumpWorkflow::JustBump {
+	if !workflow.requires_tag() {
 		bail!("the selected workflow does not require changelog generation");
 	}
 	if !project.integration_mode.requires_repo() {
@@ -1072,7 +1095,7 @@ fn should_open_overview_changelog_preview(
 	scope_index: usize,
 	workflow: OverviewBumpWorkflow,
 ) -> Result<bool> {
-	if workflow == OverviewBumpWorkflow::JustBump {
+	if !workflow.requires_tag() {
 		return Ok(false);
 	}
 
