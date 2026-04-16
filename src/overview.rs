@@ -9,7 +9,10 @@ use super::*;
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
 use crate::changelog::{archive_changelog_markdown, build_document_from_git_log, sum_changelog_gen};
-use crate::{dialogs::load_recent_change_range_with_cancel, git::GitCancellation};
+use crate::{
+	dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
+	git::{GitCancellation, sorted_local_tags_with_cancel},
+};
 use super::git_flow::{
 	append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
 	collect_unexpected_staged_paths_with_cancel, refresh_target_artifacts, stage_path_for_file,
@@ -770,6 +773,7 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 	project: &ProjectConfig,
 	focused_scope: usize,
 	pending_versions: &[String],
+	selection: Option<CustomChangelogSelection>,
 	cancel: Option<GitCancellation>,
 ) -> Result<ChangelogPreviewDialog> {
 	if !project.integration_mode.requires_repo() {
@@ -805,7 +809,26 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 	}
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &enabled_scope_indexes, &next_version, cancel).await?;
+	let selected_context = git_contexts
+		.get(scope_index)
+		.or_else(|| git_contexts.first())
+		.ok_or_else(|| anyhow!("git scope metadata is unavailable for changelog preview"))?;
+	let tags = sorted_local_tags_with_cancel(&selected_context.repo_root, cancel.clone())?;
+	let custom_range = (!tags.is_empty()).then(|| {
+		CustomChangelogRangeState::new(
+			selected_context.display_name.clone(),
+			tags,
+			selection,
+		)
+	});
+	let changelog_entries = collect_preview_entries_async(
+		project,
+		&git_contexts,
+		&enabled_scope_indexes,
+		&next_version,
+		custom_range.as_ref(),
+		cancel,
+	).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -814,6 +837,7 @@ pub(super) async fn build_dashboard_changelog_preview_dialog_async(
 		project.name.clone(),
 		next_version,
 		scope_index,
+		custom_range,
 		changelog_entries,
 	))
 }
@@ -1076,7 +1100,14 @@ pub(super) async fn build_overview_workflow_changelog_preview_dialog_async(
 	}
 
 	let git_contexts = collect_all_branch_git_scope_contexts(project)?;
-	let changelog_entries = collect_preview_entries_async(project, &git_contexts, &enabled_scope_indexes, &next_version, cancel).await?;
+	let changelog_entries = collect_preview_entries_async(
+		project,
+		&git_contexts,
+		&enabled_scope_indexes,
+		&next_version,
+		None,
+		cancel,
+	).await?;
 	if changelog_entries.is_empty() {
 		bail!("no changelog content was generated from the current git history");
 	}
@@ -1141,15 +1172,18 @@ async fn collect_preview_entries_async(
 	git_contexts: &[crate::git::GitScopeContext],
 	affected_scope_indexes: &[usize],
 	next_version: &str,
+	custom_range: Option<&CustomChangelogRangeState>,
 	cancel: Option<GitCancellation>,
 ) -> Result<Vec<ChangelogPreviewEntry>> {
 	let merged_contexts = collect_preview_contexts(project, git_contexts, affected_scope_indexes)?;
+	let custom_selection = custom_range.and_then(CustomChangelogRangeState::selection);
 	let semaphore = Arc::new(Semaphore::new(BACKGROUND_MAX_PARALLEL_REPO_JOBS.max(1)));
 	let mut tasks = JoinSet::new();
 
 	for (context, changelog_path) in merged_contexts {
 		let semaphore = Arc::clone(&semaphore);
 		let next_version = next_version.to_string();
+		let custom_selection = custom_selection.clone();
 		let cancel = cancel.clone();
 		tasks.spawn(async move {
 			let _permit = semaphore
@@ -1157,7 +1191,16 @@ async fn collect_preview_entries_async(
 				.await
 				.map_err(|_| anyhow!("preview worker pool is unavailable"))?;
 			run_blocking_job(move || {
-				let recent_range = load_recent_change_range_with_cancel(&context, cancel)?;
+				let recent_range = if let Some(selection) = &custom_selection {
+					load_change_range_for_refs_with_cancel(
+						&context,
+						&selection.from_ref,
+						selection.to_ref.as_deref().unwrap_or("HEAD"),
+						cancel,
+					)?
+				} else {
+					load_recent_change_range_with_cancel(&context, cancel)?
+				};
 				Ok(ChangelogPreviewEntry {
 					repo_root: context.repo_root.clone(),
 					changelog_path: changelog_path.clone(),
