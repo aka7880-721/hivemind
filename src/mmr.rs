@@ -146,6 +146,15 @@ pub(crate) fn save_std_changelog_memory(repo_root: &str, local: bool, memory: &S
 	Ok(path)
 }
 
+pub(crate) fn load_merged_std_changelog_memory(repo_root: &str) -> Result<StdChangelogMemory> {
+	let shared = load_std_changelog_memory(repo_root, false)?;
+	let mut local = load_std_changelog_memory(repo_root, true)?;
+	if merge_std_changelog_memories(&mut local, &shared) {
+		save_std_changelog_memory(repo_root, true, &local)?;
+	}
+	Ok(local)
+}
+
 pub(crate) fn merge_std_changelog_memories(local: &mut StdChangelogMemory, incoming: &StdChangelogMemory) -> bool {
 	let before = local.clone();
 	let mut seen = local
