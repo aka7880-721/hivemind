@@ -767,6 +767,8 @@ impl App {
 			.direction(Direction::Vertical)
 			.constraints(if dialog.workflow.is_some() {
 				[Constraint::Length(4), Constraint::Length(8), Constraint::Min(8), Constraint::Length(BUTTON_ROW_HEIGHT)]
+			} else if dialog.custom_range.is_some() {
+				[Constraint::Length(7), Constraint::Length(0), Constraint::Min(12), Constraint::Length(BUTTON_ROW_HEIGHT)]
 			} else {
 				[Constraint::Length(4), Constraint::Length(0), Constraint::Min(15), Constraint::Length(BUTTON_ROW_HEIGHT)]
 			})
@@ -779,6 +781,17 @@ impl App {
 		if let Some(workflow) = dialog.workflow {
 			header.push(Line::from(format!("Workflow: {}", workflow.display_name())));
 			header.push(Line::from("Review the generated changelog below. Edit the optional multi-line release notes in Markdown, save to repo root if needed, then confirm to write and stage the changelog file."));
+		} else if let Some(custom_range) = &dialog.custom_range {
+			header.push(Line::from(format!("Scope: {}", custom_range.scope_name)));
+			header.push(Line::from(format!("Range: {}", custom_range.range_label())));
+			header.push(Line::from(format!(
+				"{} From: {}    {} To: {}",
+				custom_range.focus_label(CustomChangelogRangeFocus::From),
+				custom_range.from_display(),
+				custom_range.focus_label(CustomChangelogRangeFocus::To),
+				custom_range.to_display(),
+			)));
+			header.push(Line::from("Tab switches From/To, Left/Right changes the selected ref, 1/2 focuses From or To, Ctrl+S saves changelog_temp.md, and Enter/F2 closes the preview."));
 		} else {
 			header.push(Line::from("Preview mode: current git history rendered as the changelog."));
 			header.push(Line::from("Press Ctrl+S or Save to write changelog_temp.md in each repo root, or Enter/F2/Close to dismiss this preview."));
@@ -1757,7 +1770,16 @@ impl App {
 		} else if self.tag_annotation_dialog.is_some() {
 			Line::from("Type annotation | Enter newline | F2 or Ctrl+S save | Esc cancel")
 		} else if self.changelog_preview_dialog.is_some() {
-			Line::from("Type release notes | Ctrl+S save preview | F2 continue/close | PgUp/PgDn or wheel scroll preview | Esc cancel")
+			if self
+				.changelog_preview_dialog
+				.as_ref()
+				.and_then(|dialog| dialog.custom_range.as_ref())
+				.is_some()
+			{
+				Line::from("Tab switch From/To | Left/Right change refs | Ctrl+S save preview | PgUp/PgDn or wheel scroll preview | Enter/F2/Esc close")
+			} else {
+				Line::from("Type release notes | Ctrl+S save preview | F2 continue/close | PgUp/PgDn or wheel scroll preview | Esc cancel")
+			}
 		} else if self.tag_dialog.is_some() {
 			Line::from("Type tag name | [ ] scope | A annotation | Left/Right action | Enter run | Esc cancel")
 		} else if self.recent_changes_dialog.is_some() {
