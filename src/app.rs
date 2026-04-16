@@ -64,7 +64,7 @@ use crate::{
     },
     dialogs::{
         BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput,
-        ChangeRange, load_change_range_for_tags_with_cancel, load_history_ranges_with_cancel,
+        ChangeRange, load_change_range_for_refs_with_cancel, load_change_range_for_tags_with_cancel, load_history_ranges_with_cancel,
         load_recent_change_range_with_cancel,
     },
     git::{
@@ -5590,7 +5590,12 @@ fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeCont
 
     let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
     if let Some(last_public_release) = last_public_release.filter(|tag| tag.trim() != tag_name.trim()) {
-        let release_range = load_change_range_for_tags_with_cancel(scope, &last_public_release, tag_name, None)?;
+        let local_tags = sorted_local_tags_with_cancel(&scope.repo_root, None)?;
+        let release_range = if local_tags.iter().any(|candidate| candidate.trim() == tag_name.trim()) {
+            load_change_range_for_tags_with_cancel(scope, &last_public_release, tag_name, None)?
+        } else {
+            load_change_range_for_refs_with_cancel(scope, &last_public_release, "HEAD", None)?
+        };
         return Ok(rls_changelog_gen(tag_name.to_string(), &release_range.lines, Some(&last_public_release)).markdown);
     }
 
