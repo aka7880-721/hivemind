@@ -493,7 +493,7 @@ impl App {
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_release_now_with_scope(None)?,
             KeyCode::Char('b') => self.open_bump_dialog()?,
             KeyCode::Char('g') => self.open_recent_changes()?,
-            KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
+            KeyCode::Char('c') | KeyCode::Char('C') => self.open_dashboard_changelog_preview(None)?,
             KeyCode::Char('t') => self.open_tag_dialog()?,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reload_dashboard_overview_data()?,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
@@ -844,6 +844,8 @@ impl App {
             return self.save_changelog_preview();
         }
 
+        let mut refresh_selection = None;
+
         match key.code {
             KeyCode::Esc => self.cancel_changelog_preview(),
             KeyCode::F(2) => return self.confirm_changelog_preview(),
@@ -853,6 +855,113 @@ impl App {
                 .is_some_and(|dialog| dialog.workflow.is_none()) =>
             {
                 return self.confirm_changelog_preview()
+            }
+            KeyCode::Tab
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    custom_range.cycle_focus(1);
+                }
+            }
+            KeyCode::BackTab
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    custom_range.cycle_focus(-1);
+                }
+            }
+            KeyCode::Char('1')
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    custom_range.select_focus(CustomChangelogRangeFocus::From);
+                }
+            }
+            KeyCode::Char('2')
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    custom_range.select_focus(CustomChangelogRangeFocus::To);
+                }
+            }
+            KeyCode::Left
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    if custom_range.adjust_focused_selection(-1) {
+                        refresh_selection = custom_range.selection();
+                    }
+                }
+            }
+            KeyCode::Right
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    if custom_range.adjust_focused_selection(1) {
+                        refresh_selection = custom_range.selection();
+                    }
+                }
+            }
+            KeyCode::Char('r') | KeyCode::Char('R')
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                refresh_selection = self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .and_then(CustomChangelogRangeState::selection);
             }
             KeyCode::PageUp => self.scroll_changelog_preview(-8),
             KeyCode::PageDown => self.scroll_changelog_preview(8),
@@ -867,6 +976,11 @@ impl App {
                 }
             }
         }
+
+        if let Some(selection) = refresh_selection {
+            return self.open_dashboard_changelog_preview(Some(selection));
+        }
+
         Ok(())
     }
 
@@ -2364,7 +2478,7 @@ impl App {
         overview::reset_overview_pending_version(self, scope_index)
     }
 
-    fn open_dashboard_changelog_preview(&mut self) -> Result<()> {
+    fn open_dashboard_changelog_preview(&mut self, selection: Option<CustomChangelogSelection>) -> Result<()> {
         let project = self.selected_project()?.clone();
         let scope_index = if project.project_type == ProjectType::Branched {
             self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
@@ -2380,14 +2494,15 @@ impl App {
 
         self.schedule_progress_job(
             " Generating Changelog ",
-            "Building changelog preview from current git history.",
+            "Building custom changelog preview.",
             BackgroundJobRequest::OpenDashboardChangelogPreview {
                 project,
                 scope_index,
                 pending_versions: self.overview_pending_versions.clone(),
+                selection,
             },
         )?;
-        self.status = StatusMessage::info("Generating changelog preview from current git history.");
+        self.status = StatusMessage::info("Generating custom changelog preview.");
         Ok(())
     }
 
@@ -2499,9 +2614,14 @@ impl App {
     fn open_changelog_preview(&mut self, dialog: ChangelogPreviewDialog) {
         self.pending_changelog_write = None;
         let preview_only = dialog.workflow.is_none();
+        let custom_range = dialog.custom_range.is_some();
         self.changelog_preview_dialog = Some(dialog);
         self.status = StatusMessage::info(if preview_only {
-            "Showing the generated changelog preview for the current git history."
+            if custom_range {
+                "Showing the custom changelog preview. Use Tab to switch From/To, Left/Right to change the range, and Ctrl+S to save changelog_temp.md."
+            } else {
+                "Showing the generated changelog preview for the current git history."
+            }
         } else {
             "Review the generated changelog, add an optional release message, then confirm the bump."
         });
@@ -3770,11 +3890,175 @@ pub(crate) enum OverviewVersionControl {
     Whole,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CustomChangelogRangeFocus {
+    From,
+    To,
+}
+
+#[derive(Clone)]
+struct CustomChangelogSelection {
+    from_ref: String,
+    to_ref: Option<String>,
+}
+
+#[derive(Clone)]
+struct CustomChangelogRangeState {
+    scope_name: String,
+    tags: Vec<String>,
+    from_index: usize,
+    to_index: Option<usize>,
+    focus: CustomChangelogRangeFocus,
+}
+
+impl CustomChangelogRangeState {
+    fn new(scope_name: String, tags: Vec<String>, selection: Option<CustomChangelogSelection>) -> Self {
+        let mut state = Self {
+            scope_name,
+            tags,
+            from_index: 0,
+            to_index: None,
+            focus: CustomChangelogRangeFocus::From,
+        };
+
+        if let Some(selection) = selection {
+            if let Some(from_index) = state.tags.iter().position(|tag| tag == &selection.from_ref) {
+                state.from_index = from_index;
+            }
+            state.to_index = selection
+                .to_ref
+                .as_ref()
+                .and_then(|to_ref| state.tags.iter().position(|tag| tag == to_ref))
+                .filter(|to_index| *to_index < state.from_index);
+        }
+
+        state.ensure_valid_to_index();
+        state
+    }
+
+    fn has_tags(&self) -> bool {
+        !self.tags.is_empty()
+    }
+
+    fn focus_label(&self, focus: CustomChangelogRangeFocus) -> &'static str {
+        if self.focus == focus {
+            ">"
+        } else {
+            " "
+        }
+    }
+
+    fn current_from_ref(&self) -> Option<&str> {
+        self.tags.get(self.from_index).map(String::as_str)
+    }
+
+    fn current_to_ref(&self) -> &str {
+        self.to_index
+            .and_then(|index| self.tags.get(index))
+            .map(String::as_str)
+            .unwrap_or("HEAD")
+    }
+
+    fn range_label(&self) -> String {
+        self.current_from_ref()
+            .map(|from_ref| format!("{}..{}", from_ref, self.current_to_ref()))
+            .unwrap_or_else(|| "no tags found; showing the latest 60 commits".to_string())
+    }
+
+    fn selection(&self) -> Option<CustomChangelogSelection> {
+        Some(CustomChangelogSelection {
+            from_ref: self.current_from_ref()?.to_string(),
+            to_ref: self.to_index.and_then(|index| self.tags.get(index)).cloned(),
+        })
+    }
+
+    fn cycle_focus(&mut self, delta: isize) {
+        let focuses = [CustomChangelogRangeFocus::From, CustomChangelogRangeFocus::To];
+        let current = match self.focus {
+            CustomChangelogRangeFocus::From => 0,
+            CustomChangelogRangeFocus::To => 1,
+        } as isize;
+        let next = (current + delta).rem_euclid(focuses.len() as isize) as usize;
+        self.focus = focuses[next];
+    }
+
+    fn select_focus(&mut self, focus: CustomChangelogRangeFocus) {
+        self.focus = focus;
+    }
+
+    fn adjust_focused_selection(&mut self, delta: isize) -> bool {
+        if !self.has_tags() || delta == 0 {
+            return false;
+        }
+
+        match self.focus {
+            CustomChangelogRangeFocus::From => self.adjust_from(delta),
+            CustomChangelogRangeFocus::To => self.adjust_to(delta),
+        }
+    }
+
+    fn from_display(&self) -> String {
+        self.current_from_ref().unwrap_or("<no tags>").to_string()
+    }
+
+    fn to_display(&self) -> String {
+        self.current_to_ref().to_string()
+    }
+
+    fn ensure_valid_to_index(&mut self) {
+        if self.tags.is_empty() {
+            self.from_index = 0;
+            self.to_index = None;
+            return;
+        }
+
+        self.from_index = self.from_index.min(self.tags.len().saturating_sub(1));
+        if self.from_index == 0 {
+            self.to_index = None;
+        } else if self.to_index.is_some_and(|to_index| to_index >= self.from_index) {
+            self.to_index = Some(self.from_index - 1);
+        }
+    }
+
+    fn adjust_from(&mut self, delta: isize) -> bool {
+        let len = self.tags.len();
+        if len == 0 {
+            return false;
+        }
+
+        let next = (self.from_index as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize;
+        if next == self.from_index {
+            return false;
+        }
+
+        self.from_index = next;
+        self.ensure_valid_to_index();
+        true
+    }
+
+    fn adjust_to(&mut self, delta: isize) -> bool {
+        let max_position = self.from_index;
+        let current_position = self.to_index.map(|to_index| to_index + 1).unwrap_or(0);
+        let next_position = (current_position as isize + delta).clamp(0, max_position as isize) as usize;
+        if next_position == current_position {
+            return false;
+        }
+
+        self.to_index = if next_position == 0 {
+            None
+        } else {
+            Some(next_position - 1)
+        };
+        true
+    }
+}
+
 struct ChangelogPreviewDialog {
     project_name: String,
     next_version: String,
     scope_index: usize,
     workflow: Option<OverviewBumpWorkflow>,
+    custom_range: Option<CustomChangelogRangeState>,
     entries: Vec<ChangelogPreviewEntry>,
     release_message: TuiTextArea<'static>,
     release_message_placeholder: String,
@@ -3853,6 +4137,7 @@ impl ChangelogPreviewDialog {
             next_version,
             scope_index,
             workflow: Some(workflow),
+            custom_range: None,
             entries,
             release_message: new_release_message_editor(""),
             release_message_placeholder: "Optional multi-line release notes in Markdown".to_string(),
@@ -3864,6 +4149,7 @@ impl ChangelogPreviewDialog {
         project_name: String,
         next_version: String,
         scope_index: usize,
+        custom_range: Option<CustomChangelogRangeState>,
         entries: Vec<ChangelogPreviewEntry>,
     ) -> Self {
         Self {
@@ -3871,6 +4157,7 @@ impl ChangelogPreviewDialog {
             next_version,
             scope_index,
             workflow: None,
+            custom_range,
             entries,
             release_message: new_release_message_editor(""),
             release_message_placeholder: "Optional multi-line release notes in Markdown".to_string(),
@@ -4003,6 +4290,7 @@ enum BackgroundJobRequest {
         project: ProjectConfig,
         scope_index: usize,
         pending_versions: Vec<String>,
+        selection: Option<CustomChangelogSelection>,
     },
     OpenOverviewWorkflowChangelog {
         project: ProjectConfig,
@@ -4749,11 +5037,13 @@ async fn run_background_job(
             project,
             scope_index,
             pending_versions,
+            selection,
         } => Ok(BackgroundJobOutput::OpenChangelogPreview(
             overview::build_dashboard_changelog_preview_dialog_async(
                 &project,
                 scope_index,
                 &pending_versions,
+                selection,
                 Some(cancel),
             ).await?,
         )),
@@ -6603,6 +6893,44 @@ mod tests {
         );
 
         assert_eq!(decision, StdChangelogDecision::Generate);
+    }
+
+    #[test]
+    fn custom_changelog_range_defaults_to_latest_tag_to_head() {
+        let state = CustomChangelogRangeState::new(
+            "main".to_string(),
+            vec!["v1.2.0".to_string(), "v1.1.0".to_string(), "v1.0.0".to_string()],
+            None,
+        );
+
+        assert_eq!(state.current_from_ref(), Some("v1.2.0"));
+        assert_eq!(state.current_to_ref(), "HEAD");
+        assert_eq!(state.range_label(), "v1.2.0..HEAD");
+    }
+
+    #[test]
+    fn custom_changelog_range_keeps_to_ref_newer_than_from_ref() {
+        let mut state = CustomChangelogRangeState::new(
+            "main".to_string(),
+            vec!["v1.2.0".to_string(), "v1.1.0".to_string(), "v1.0.0".to_string()],
+            Some(CustomChangelogSelection {
+                from_ref: "v1.0.0".to_string(),
+                to_ref: Some("v1.2.0".to_string()),
+            }),
+        );
+
+        assert_eq!(state.range_label(), "v1.0.0..v1.2.0");
+
+        state.select_focus(CustomChangelogRangeFocus::From);
+        assert!(state.adjust_focused_selection(-1));
+
+        assert_eq!(state.current_from_ref(), Some("v1.1.0"));
+        assert_eq!(state.current_to_ref(), "v1.2.0");
+        assert_eq!(state.range_label(), "v1.1.0..v1.2.0");
+
+        assert!(state.adjust_focused_selection(-1));
+        assert_eq!(state.current_from_ref(), Some("v1.2.0"));
+        assert_eq!(state.current_to_ref(), "HEAD");
     }
 
         #[test]
