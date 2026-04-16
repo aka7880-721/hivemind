@@ -55,6 +55,7 @@ use crate::{
     branding::{PixelLogo, choose_header_content},
     changelog::{
         ChangelogDocument, archive_changelog_markdown, find_archived_changelog_markdown,
+        rebuild_history_summary_readme,
         rls_changelog_gen, std_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
     },
     config::{
@@ -5203,6 +5204,13 @@ struct PostponedReplayOutcome {
     errors: Vec<String>,
 }
 
+#[derive(Default)]
+struct StandardChangelogExecutionOutcome {
+    summary_notes: Vec<String>,
+    replay_notices: Vec<String>,
+    replay_errors: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StdChangelogExecutionPolicy {
     Auto,
@@ -5238,21 +5246,8 @@ async fn run_create_tag_job_async(
     let annotation = dialog.annotation.trim().to_string();
     let tag_name = dialog.tag_name.value.trim().to_string();
     let active_scope_for_notes = active_scope.clone();
-    let active_scope_for_standard = active_scope.clone();
     let repo_root_for_branch = repo_root.clone();
     let branch_name = run_blocking_job(move || current_branch_with_cancel(&repo_root_for_branch, None)).await?;
-    let repo_root_for_previous_tag = repo_root.clone();
-    let previous_tag = if changelog_enabled {
-        Some(run_blocking_job(move || latest_local_tag_with_cancel(&repo_root_for_previous_tag, None)).await?)
-    } else {
-        None
-    }
-    .flatten();
-    let standard_recent_range = if changelog_enabled && previous_tag.is_some() {
-        Some(run_blocking_job(move || load_recent_change_range_with_cancel(&active_scope_for_standard, None)).await?)
-    } else {
-        None
-    };
     let tag_name_for_create = tag_name.clone();
     let annotation_for_create = annotation.clone();
 
@@ -5269,16 +5264,8 @@ async fn run_create_tag_job_async(
         )
     }).await?;
 
-    if created {
-        let repo_root_for_memory = repo_root.clone();
-        let branch_name_for_memory = branch_name.clone();
-        let tag_name_for_memory = tag_name.clone();
-        run_blocking_job(move || {
-            record_std_changelog_created(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)
-        }).await?;
-    }
-
     let mut summary_notes = Vec::new();
+    let mut standard_outcome = StandardChangelogExecutionOutcome::default();
 
     let release_notes = if created || matches!(action, TagAction::CreatePushAndRelease) {
         let tag_name_for_notes = tag_name.clone();
@@ -5287,110 +5274,14 @@ async fn run_create_tag_job_async(
         None
     };
 
-    if created && changelog_enabled {
-        let decision = match std_changelog_policy {
-            StdChangelogExecutionPolicy::ForceGenerate => StdChangelogDecision::Generate,
-            StdChangelogExecutionPolicy::ForcePostpone => StdChangelogDecision::PostponeOnSubBranch(branch_name.clone()),
-            StdChangelogExecutionPolicy::Auto => {
-                if let Some(previous_tag) = previous_tag.as_deref() {
-                    let repo_root_for_previous_branches = repo_root.clone();
-                    let previous_tag_for_branches = previous_tag.to_string();
-                    let previous_branches = run_blocking_job(move || {
-                        branches_containing_ref_with_cancel(&repo_root_for_previous_branches, &previous_tag_for_branches, None)
-                    }).await?;
-                    let repo_root_for_new_branches = repo_root.clone();
-                    let tag_name_for_branches = tag_name.clone();
-                    let new_branches = run_blocking_job(move || {
-                        branches_containing_ref_with_cancel(&repo_root_for_new_branches, &tag_name_for_branches, None)
-                    }).await?;
-                    decide_std_changelog_generation(previous_tag, &branch_name, &previous_branches, &new_branches)
-                } else {
-                    StdChangelogDecision::SkipNoPreviousTag
-                }
-            }
-        };
-
-        match decision {
-            StdChangelogDecision::Generate => {
-                if let Some(recent_range) = standard_recent_range.as_ref() {
-                    if recent_range.lines.is_empty() {
-                        let repo_root_for_memory = repo_root.clone();
-                        let tag_name_for_memory = tag_name.clone();
-                        let branch_name_for_error = branch_name.clone();
-                        let reason = "standard changelog range was empty".to_string();
-                        run_blocking_job(move || {
-                            record_std_changelog_error(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_error, &reason)
-                        }).await?;
-                        summary_notes.push("Standard changelog was not generated because the computed tag range was empty.".to_string());
-                    } else {
-                        let markdown = std_changelog_gen(tag_name.clone(), &recent_range.lines).markdown;
-                        let repo_root_for_archive = repo_root.clone();
-                        let tag_name_for_archive = tag_name.clone();
-                        let markdown_for_archive = markdown;
-                        let branch_name_for_memory = branch_name.clone();
-                        let archive_result = run_blocking_job(move || {
-                            archive_changelog_markdown(&repo_root_for_archive, &tag_name_for_archive, &markdown_for_archive)
-                                .map(|_| ())
-                        }).await;
-                        match archive_result {
-                            Ok(()) => {
-                                let repo_root_for_memory = repo_root.clone();
-                                let tag_name_for_memory = tag_name.clone();
-                                run_blocking_job(move || {
-                                    record_std_changelog_generated(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)
-                                }).await?;
-                            }
-                            Err(error) => {
-                                let repo_root_for_memory = repo_root.clone();
-                                let tag_name_for_memory = tag_name.clone();
-                                let reason = error.to_string();
-                                let branch_name_for_error = branch_name.clone();
-                                run_blocking_job(move || {
-                                    record_std_changelog_error(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_error, &reason)
-                                }).await?;
-                                return Err(error);
-                            }
-                        }
-                    }
-                }
-            }
-            StdChangelogDecision::IgnoreNotOnMain => {
-                summary_notes.push("Standard changelog was not generated because this tag is not yet on main/master lineage.".to_string());
-            }
-            StdChangelogDecision::PostponeOnSubBranch(branch) => {
-                let repo_root_for_memory = repo_root.clone();
-                let tag_name_for_memory = tag_name.clone();
-                let branch_name_for_memory = branch_name.clone();
-                run_blocking_job(move || {
-                    record_std_changelog_postponed(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)
-                }).await?;
-                summary_notes.push(format!(
-                    "Standard changelog was postponed because '{}' already has tags on sub-branch '{}'.",
-                    tag_name, branch
-                ));
-            }
-            StdChangelogDecision::SkipNoPreviousTag => {
-                summary_notes.push("Standard changelog was not generated because no previous tag was found.".to_string());
-            }
-        }
-
-        let replay_outcome = if is_mainline_branch(&branch_name) {
-            replay_postponed_std_changelogs(&active_scope, &branch_name).await?
-        } else {
-            PostponedReplayOutcome::default()
-        };
-        if !replay_outcome.notices.is_empty() {
-            summary_notes.push(format!(
-                "Replayed {} postponed changelog(s).",
-                replay_outcome.notices.len()
-            ));
-        }
-        if !replay_outcome.errors.is_empty() {
-            summary_notes.push(format!(
-                "{} postponed changelog replay error(s) occurred. See sticky toasts.",
-                replay_outcome.errors.len()
-            ));
-        }
+    if changelog_enabled {
+        standard_outcome = execute_standard_changelog_for_tag(
+            &active_scope,
+            &tag_name,
+            &branch_name,
+            std_changelog_policy,
+        ).await?;
+        summary_notes.extend(standard_outcome.summary_notes.clone());
 
         if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
             let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
@@ -5423,8 +5314,8 @@ async fn run_create_tag_job_async(
             } else {
                 append_background_tag_summary_notes(format!("{} Annotation included.", summary), &summary_notes)
             },
-            replay_notices: replay_outcome.notices,
-            replay_errors: replay_outcome.errors,
+            replay_notices: standard_outcome.replay_notices,
+            replay_errors: standard_outcome.replay_errors,
         });
     }
 
@@ -5459,8 +5350,8 @@ async fn run_create_tag_job_async(
         } else {
             append_background_tag_summary_notes(format!("{} Annotation included.", summary), &summary_notes)
         },
-        replay_notices: Vec::new(),
-        replay_errors: Vec::new(),
+        replay_notices: standard_outcome.replay_notices,
+        replay_errors: standard_outcome.replay_errors,
     })
 }
 
@@ -5472,14 +5363,112 @@ fn append_background_tag_summary_notes(summary: String, notes: &[String]) -> Str
     }
 }
 
-async fn replay_postponed_std_changelogs(
+async fn execute_standard_changelog_for_tag(
     scope: &crate::git::GitScopeContext,
+    tag_name: &str,
     branch_name: &str,
-) -> Result<PostponedReplayOutcome> {
+    std_changelog_policy: StdChangelogExecutionPolicy,
+) -> Result<StandardChangelogExecutionOutcome> {
     let scope = scope.clone();
-    let repo_root = scope.repo_root.clone();
+    let tag_name = tag_name.to_string();
     let branch_name = branch_name.to_string();
-    run_blocking_job(move || replay_postponed_std_changelogs_blocking(&scope, &repo_root, &branch_name)).await
+    run_blocking_job(move || {
+        execute_standard_changelog_for_tag_blocking(&scope, &tag_name, &branch_name, std_changelog_policy)
+    }).await
+}
+
+fn execute_standard_changelog_for_tag_blocking(
+    scope: &crate::git::GitScopeContext,
+    tag_name: &str,
+    branch_name: &str,
+    std_changelog_policy: StdChangelogExecutionPolicy,
+) -> Result<StandardChangelogExecutionOutcome> {
+    let repo_root = &scope.repo_root;
+    ensure_std_changelog_memory_entry(repo_root, tag_name, branch_name)?;
+
+    let sorted_tags = sorted_local_tags_with_cancel(repo_root, None)?;
+    let previous_tag = previous_tag_for_replay(&sorted_tags, tag_name);
+    let decision = match std_changelog_policy {
+        StdChangelogExecutionPolicy::ForceGenerate => StdChangelogDecision::Generate,
+        StdChangelogExecutionPolicy::ForcePostpone => StdChangelogDecision::PostponeOnSubBranch(branch_name.to_string()),
+        StdChangelogExecutionPolicy::Auto => {
+            if let Some(previous_tag) = previous_tag.as_deref() {
+                let previous_branches = branches_containing_ref_with_cancel(repo_root, previous_tag, None)?;
+                let new_branches = branches_containing_ref_with_cancel(repo_root, tag_name, None)?;
+                decide_std_changelog_generation(previous_tag, branch_name, &previous_branches, &new_branches)
+            } else {
+                StdChangelogDecision::SkipNoPreviousTag
+            }
+        }
+    };
+
+    let mut outcome = StandardChangelogExecutionOutcome::default();
+    match decision {
+        StdChangelogDecision::Generate => {
+            if find_archived_changelog_markdown(repo_root, tag_name)?.is_some() {
+                rebuild_history_summary_readme(repo_root)?;
+                record_std_changelog_generated(repo_root, tag_name, branch_name)?;
+            } else if let Some(previous_tag) = previous_tag.as_deref() {
+                let range = load_change_range_for_tags_with_cancel(scope, previous_tag, tag_name, None)?;
+                if range.lines.is_empty() {
+                    let reason = "standard changelog range was empty".to_string();
+                    record_std_changelog_error(repo_root, tag_name, branch_name, &reason)?;
+                    outcome.summary_notes.push("Standard changelog was not generated because the computed tag range was empty.".to_string());
+                } else {
+                    let markdown = std_changelog_gen(tag_name.to_string(), &range.lines).markdown;
+                    archive_changelog_markdown(repo_root, tag_name, &markdown)?;
+                    record_std_changelog_generated(repo_root, tag_name, branch_name)?;
+                }
+            } else {
+                outcome.summary_notes.push("Standard changelog was not generated because no previous tag was found.".to_string());
+            }
+        }
+        StdChangelogDecision::IgnoreNotOnMain => {
+            outcome.summary_notes.push("Standard changelog was not generated because this tag is not yet on main/master lineage.".to_string());
+        }
+        StdChangelogDecision::PostponeOnSubBranch(branch) => {
+            record_std_changelog_postponed(repo_root, tag_name, branch_name)?;
+            outcome.summary_notes.push(format!(
+                "Standard changelog was postponed because '{}' already has tags on sub-branch '{}'.",
+                tag_name, branch
+            ));
+        }
+        StdChangelogDecision::SkipNoPreviousTag => {
+            outcome.summary_notes.push("Standard changelog was not generated because no previous tag was found.".to_string());
+        }
+    }
+
+    let replay_outcome = if is_mainline_branch(branch_name) {
+        replay_postponed_std_changelogs_blocking(scope, repo_root, branch_name)?
+    } else {
+        PostponedReplayOutcome::default()
+    };
+    if !replay_outcome.notices.is_empty() {
+        outcome.summary_notes.push(format!(
+            "Replayed {} postponed changelog(s).",
+            replay_outcome.notices.len()
+        ));
+    }
+    if !replay_outcome.errors.is_empty() {
+        outcome.summary_notes.push(format!(
+            "{} postponed changelog replay error(s) occurred. See sticky toasts.",
+            replay_outcome.errors.len()
+        ));
+    }
+    outcome.replay_notices = replay_outcome.notices;
+    outcome.replay_errors = replay_outcome.errors;
+    Ok(outcome)
+}
+
+fn ensure_std_changelog_memory_entry(repo_root: &str, tag_name: &str, branch_name: &str) -> Result<()> {
+    let memory = load_merged_std_changelog_memory(repo_root)?;
+    if memory.entries.iter().any(|entry| {
+        entry.tag_from.trim() == tag_name.trim() && entry.tag_origin.trim() == branch_name.trim()
+    }) {
+        return Ok(());
+    }
+
+    record_std_changelog_created(repo_root, tag_name, branch_name)
 }
 
 fn replay_postponed_std_changelogs_blocking(

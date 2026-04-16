@@ -50,6 +50,8 @@ pub(super) enum ReleaseNowMode {
 pub(super) struct ReleaseNowDialog {
     pub(super) project_name: String,
     pub(super) scope_label: String,
+    pub(super) scope: GitScopeContext,
+    pub(super) changelog_enabled: bool,
     pub(super) repo_root: String,
     pub(super) tag_name: String,
     pub(super) options: Vec<ReleaseNowRunOption>,
@@ -85,6 +87,8 @@ impl ReleaseNowDialog {
         Self {
             project_name: validation.project_name,
             scope_label: validation.scope_label,
+            scope: validation.scope,
+            changelog_enabled: validation.changelog_enabled,
             repo_root: validation.repo_root,
             tag_name: validation.tag_name,
             options: validation.options,
@@ -518,6 +522,8 @@ impl ReleaseNowDialog {
 pub(super) struct ReleaseNowValidation {
     pub(super) project_name: String,
     pub(super) scope_label: String,
+    pub(super) scope: GitScopeContext,
+    pub(super) changelog_enabled: bool,
     pub(super) repo_root: String,
     pub(super) tag_name: String,
     pub(super) options: Vec<ReleaseNowRunOption>,
@@ -541,6 +547,8 @@ pub(super) struct ReleaseNowScript {
 #[derive(Clone)]
 pub(super) struct ReleaseNowExecutionRequest {
     pub(super) scope_label: String,
+    pub(super) scope: GitScopeContext,
+    pub(super) changelog_enabled: bool,
     pub(super) repo_root: String,
     pub(super) tag_name: String,
     pub(super) release_title: String,
@@ -586,6 +594,8 @@ pub(super) fn validate_release_now(
             .scope_kind
             .map(|kind| format!("{} ({})", scope.display_name, kind.display_name()))
             .unwrap_or_else(|| scope.display_name.clone()),
+        scope: scope.clone(),
+        changelog_enabled: project.changelog_enabled_for_scope(scope_index),
         repo_root: scope.repo_root.clone(),
         tag_name: scope.suggested_tag_name.clone(),
         options,
@@ -597,6 +607,8 @@ pub(super) fn validate_release_now(
 pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
     ReleaseNowExecutionRequest {
         scope_label: dialog.scope_label.clone(),
+        scope: dialog.scope.clone(),
+        changelog_enabled: dialog.changelog_enabled,
         repo_root: dialog.repo_root.clone(),
         tag_name: dialog.tag_name.clone(),
         release_title: format!("{} {}", dialog.project_name, dialog.tag_name),
@@ -641,6 +653,40 @@ pub(super) async fn execute_release_now_async(
     }
     emit_progress(vec![format!("Discovered {} artifact(s).", artifact_files.len())]);
 
+    ensure_not_cancelled(&cancel)?;
+    emit_progress(vec![format!("Ensuring local tag '{}' exists.", request.tag_name)]);
+    let repo_root_for_tag = request.repo_root.clone();
+    let tag_name_for_tag = request.tag_name.clone();
+    let created_local_tag = run_blocking_job(move || ensure_local_tag(&repo_root_for_tag, &tag_name_for_tag, None)).await?;
+    emit_progress(vec![if created_local_tag {
+        format!("Created local tag '{}'.", request.tag_name)
+    } else {
+        format!("Local tag '{}' already exists; reconciling changelog state.", request.tag_name)
+    }]);
+
+    let mut release_notes = Vec::new();
+    if request.changelog_enabled {
+        let repo_root_for_branch = request.repo_root.clone();
+        let branch_name = run_blocking_job(move || current_branch_with_cancel(&repo_root_for_branch, None)).await?;
+        emit_progress(vec!["Syncing standard changelog archive, summary, and memory state.".to_string()]);
+        let std_outcome = execute_standard_changelog_for_tag(
+            &request.scope,
+            &request.tag_name,
+            &branch_name,
+            StdChangelogExecutionPolicy::Auto,
+        ).await?;
+        for line in &std_outcome.summary_notes {
+            emit_progress(vec![line.clone()]);
+        }
+        for line in &std_outcome.replay_notices {
+            emit_progress(vec![line.clone()]);
+        }
+        for line in &std_outcome.replay_errors {
+            emit_progress(vec![format!("Warning: {}", line)]);
+        }
+        release_notes.extend(std_outcome.summary_notes);
+    }
+
     create_or_update_github_release(
         &request.repo_root,
         &request.tag_name,
@@ -653,11 +699,14 @@ pub(super) async fn execute_release_now_async(
     .await?;
 
     Ok(ReleaseNowExecutionOutcome {
-        summary: format!(
-            "ReleaseNOW published '{}' with {} artifact(s) using {}.",
-            request.tag_name,
-            artifact_files.len(),
-            request.selected_option_label
+        summary: append_background_tag_summary_notes(
+            format!(
+                "ReleaseNOW published '{}' with {} artifact(s) using {}.",
+                request.tag_name,
+                artifact_files.len(),
+                request.selected_option_label
+            ),
+            &release_notes,
         ),
         artifact_files,
         log_lines: Vec::new(),

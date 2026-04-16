@@ -366,6 +366,15 @@ pub(crate) fn archive_changelog_markdown(repo_root: &str, label: &str, markdown:
 	Ok(output_path)
 }
 
+pub(crate) fn rebuild_history_summary_readme(repo_root: &str) -> Result<Option<PathBuf>> {
+	let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
+	if !history_dir.is_dir() {
+		return Ok(None);
+	}
+
+	write_history_summary_readme(&history_dir).map(Some)
+}
+
 pub(crate) fn find_archived_changelog_markdown(repo_root: &str, label: &str) -> Result<Option<String>> {
 	let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
 	if !history_dir.is_dir() {
