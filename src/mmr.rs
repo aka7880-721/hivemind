@@ -179,6 +179,12 @@ pub(crate) fn record_std_changelog_generated(repo_root: &str, tag_name: &str, br
 	})
 }
 
+pub(crate) fn record_std_changelog_postponed(repo_root: &str, tag_name: &str, branch_name: &str) -> Result<()> {
+	apply_std_changelog_entry_both(repo_root, tag_name, branch_name, |entry| {
+		entry.mark_postponed();
+	})
+}
+
 pub(crate) fn record_std_changelog_error(
 	repo_root: &str,
 	tag_name: &str,
@@ -324,6 +330,28 @@ mod tests {
 			assert_eq!(loaded.entries[0].tag_origin, "main");
 			assert_eq!(loaded.entries[0].tag_to.as_deref(), Some("v0.7.3"));
 			assert_eq!(loaded.entries[0].generated, StdChangelogGeneratedState::True);
+		}
+
+		let _ = std::fs::remove_dir_all(repo_root);
+	}
+
+	#[test]
+	fn record_std_changelog_postponed_updates_both_memories() {
+		let repo_root = std::env::temp_dir().join(format!(
+			"cvb-mmr-postponed-{}",
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap_or_default()
+				.as_nanos()
+		));
+		let repo_root_string = repo_root.display().to_string();
+
+		record_std_changelog_created(&repo_root_string, "v0.7.4", "feature-a").expect("created state should save");
+		record_std_changelog_postponed(&repo_root_string, "v0.7.4", "feature-a").expect("postponed state should save");
+
+		for local in [false, true] {
+			let loaded = load_std_changelog_memory(&repo_root_string, local).expect("memory should load");
+			assert_eq!(loaded.entries[0].generated, StdChangelogGeneratedState::Postponed);
 		}
 
 		let _ = std::fs::remove_dir_all(repo_root);
