@@ -2122,11 +2122,21 @@ impl App {
                 }
                 self.status = StatusMessage::success(summary);
             }
-            BackgroundJobOutput::CreateTag { summary } => {
+            BackgroundJobOutput::CreateTag {
+                summary,
+                replay_notices,
+                replay_errors,
+            } => {
                 self.sync_dashboard_overview_after_repo_change();
                 self.tag_dialog = None;
                 self.tag_annotation_dialog = None;
                 self.status = StatusMessage::success(summary);
+                for notice in replay_notices {
+                    self.show_transient_toast(StatusKind::Info, notice);
+                }
+                for error in replay_errors {
+                    self.show_sticky_error_toast(error);
+                }
             }
         }
 
@@ -3604,6 +3614,24 @@ impl App {
             ),
         }
     }
+
+    fn show_transient_toast(&mut self, kind: StatusKind, text: impl Into<String>) {
+        let builder = ToastBuilder::new(text.into().into());
+        match kind {
+            StatusKind::Info => self.transient_toaster.show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Success => self.transient_toaster.show_toast(builder.toast_type(ToastType::Success)),
+            StatusKind::Warning => self.transient_toaster.show_toast(builder.toast_type(ToastType::Warning)),
+            StatusKind::Error => self.sticky_toaster.show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
+        }
+    }
+
+    fn show_sticky_error_toast(&mut self, text: impl Into<String>) {
+        self.sticky_toaster.show_toast(
+            ToastBuilder::new(text.into().into())
+                .toast_type(ToastType::Error)
+                .keep_on(1),
+        );
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4036,6 +4064,8 @@ enum BackgroundJobOutput {
     ReleaseNowCompleted(rls_now::ReleaseNowExecutionOutcome),
     CreateTag {
         summary: String,
+        replay_notices: Vec<String>,
+        replay_errors: Vec<String>,
     },
 }
 
@@ -4780,6 +4810,8 @@ async fn run_background_job(
             let outcome = run_create_tag_job_async(dialog, changelog_enabled, std_changelog_policy).await?;
             Ok(BackgroundJobOutput::CreateTag {
                 summary: outcome.summary,
+                replay_notices: outcome.replay_notices,
+                replay_errors: outcome.replay_errors,
             })
         }
     }
@@ -4871,6 +4903,14 @@ fn prefetch_recent_changes(
 
 struct BackgroundTagOutcome {
     summary: String,
+    replay_notices: Vec<String>,
+    replay_errors: Vec<String>,
+}
+
+#[derive(Default)]
+struct PostponedReplayOutcome {
+    notices: Vec<String>,
+    errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5044,9 +5084,58 @@ async fn run_create_tag_job_async(
             }
         }
 
-		if is_mainline_branch(&branch_name) {
-			summary_notes.extend(replay_postponed_std_changelogs(&active_scope, &branch_name).await?);
-		}
+        let replay_outcome = if is_mainline_branch(&branch_name) {
+            replay_postponed_std_changelogs(&active_scope, &branch_name).await?
+        } else {
+            PostponedReplayOutcome::default()
+        };
+        if !replay_outcome.notices.is_empty() {
+            summary_notes.push(format!(
+                "Replayed {} postponed changelog(s).",
+                replay_outcome.notices.len()
+            ));
+        }
+        if !replay_outcome.errors.is_empty() {
+            summary_notes.push(format!(
+                "{} postponed changelog replay error(s) occurred. See sticky toasts.",
+                replay_outcome.errors.len()
+            ));
+        }
+
+        if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
+            let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+            run_git_push_with_retry_async(repo_root.clone(), remote_spec, tag_name.clone()).await?;
+        }
+
+        if matches!(action, TagAction::CreatePushAndRelease) {
+            run_blocking_job(ensure_gh_available).await?;
+            let release_notes = release_notes
+                .as_deref()
+                .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
+            create_github_release_with_retry_async(repo_root.clone(), tag_name.clone(), release_notes.to_string()).await?;
+        }
+
+        let scope_notice = if active_scope.scope_kind.is_some() {
+            format!(" for {}", active_scope.display_name)
+        } else {
+            String::new()
+        };
+        let summary = match action {
+            TagAction::CreateLocal if created => format!("Created local tag '{}' in {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}{}.", tag_name, project_name, scope_notice),
+        };
+
+        return Ok(BackgroundTagOutcome {
+            summary: if annotation.is_empty() {
+                append_background_tag_summary_notes(summary, &summary_notes)
+            } else {
+                append_background_tag_summary_notes(format!("{} Annotation included.", summary), &summary_notes)
+            },
+            replay_notices: replay_outcome.notices,
+            replay_errors: replay_outcome.errors,
+        });
     }
 
     if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
@@ -5080,6 +5169,8 @@ async fn run_create_tag_job_async(
         } else {
             append_background_tag_summary_notes(format!("{} Annotation included.", summary), &summary_notes)
         },
+        replay_notices: Vec::new(),
+        replay_errors: Vec::new(),
     })
 }
 
@@ -5094,7 +5185,7 @@ fn append_background_tag_summary_notes(summary: String, notes: &[String]) -> Str
 async fn replay_postponed_std_changelogs(
     scope: &crate::git::GitScopeContext,
     branch_name: &str,
-) -> Result<Vec<String>> {
+) -> Result<PostponedReplayOutcome> {
     let scope = scope.clone();
     let repo_root = scope.repo_root.clone();
     let branch_name = branch_name.to_string();
@@ -5105,9 +5196,9 @@ fn replay_postponed_std_changelogs_blocking(
     scope: &crate::git::GitScopeContext,
     repo_root: &str,
     branch_name: &str,
-) -> Result<Vec<String>> {
+) -> Result<PostponedReplayOutcome> {
     if !is_mainline_branch(branch_name) {
-        return Ok(Vec::new());
+        return Ok(PostponedReplayOutcome::default());
     }
 
     let memory = load_merged_std_changelog_memory(repo_root)?;
@@ -5119,11 +5210,11 @@ fn replay_postponed_std_changelogs_blocking(
         .collect::<Vec<_>>();
     postponed.sort_by(|left, right| left.ts.cmp(&right.ts));
     if postponed.is_empty() {
-        return Ok(Vec::new());
+		return Ok(PostponedReplayOutcome::default());
     }
 
     let sorted_tags = sorted_local_tags_with_cancel(repo_root, None)?;
-    let mut notes = Vec::new();
+    let mut outcome = PostponedReplayOutcome::default();
     for entry in postponed {
         let mainline_branches = branches_containing_ref_with_cancel(repo_root, &entry.tag_from, None)?;
         if !mainline_branches.iter().any(|branch| is_mainline_branch(branch)) {
@@ -5132,14 +5223,14 @@ fn replay_postponed_std_changelogs_blocking(
 
         if find_archived_changelog_markdown(repo_root, &entry.tag_from)?.is_some() {
             record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
-            notes.push(format!("Replayed postponed changelog '{}' was already archived and has been marked generated.", entry.tag_from));
+            outcome.notices.push(format!("Replayed postponed changelog '{}' was already archived and has been marked generated.", entry.tag_from));
             continue;
         }
 
         let Some(previous_tag) = previous_tag_for_replay(&sorted_tags, &entry.tag_from) else {
             let reason = "no previous tag found for postponed replay".to_string();
             record_std_changelog_error(repo_root, &entry.tag_from, &entry.tag_origin, &reason)?;
-            notes.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
+            outcome.errors.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
             continue;
         };
 
@@ -5147,17 +5238,17 @@ fn replay_postponed_std_changelogs_blocking(
         if range.lines.is_empty() {
             let reason = "replayed postponed changelog range was empty".to_string();
             record_std_changelog_error(repo_root, &entry.tag_from, &entry.tag_origin, &reason)?;
-            notes.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
+            outcome.errors.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
             continue;
         }
 
         let markdown = std_changelog_gen(entry.tag_from.clone(), &range.lines).markdown;
         archive_changelog_markdown(repo_root, &entry.tag_from, &markdown)?;
         record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
-        notes.push(format!("Replayed postponed changelog '{}' after it reached main/master lineage.", entry.tag_from));
+        outcome.notices.push(format!("Replayed postponed changelog '{}' after it reached main/master lineage.", entry.tag_from));
     }
 
-    Ok(notes)
+    Ok(outcome)
 }
 
 fn previous_tag_for_replay(sorted_tags: &[String], tag_name: &str) -> Option<String> {
