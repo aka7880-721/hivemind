@@ -235,6 +235,7 @@ struct App {
     overview_bump_workflow_dialog: Option<OverviewBumpWorkflowDialog>,
     overview_bump_warning_dialog: Option<OverviewBumpWarningDialog>,
     main_branch_warning_dialog: Option<MainBranchWarningDialog>,
+    std_changelog_sub_branch_dialog: Option<StdChangelogSubBranchDialog>,
     changelog_preview_dialog: Option<ChangelogPreviewDialog>,
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
@@ -323,6 +324,7 @@ impl App {
             overview_bump_workflow_dialog: None,
             overview_bump_warning_dialog: None,
             main_branch_warning_dialog: None,
+            std_changelog_sub_branch_dialog: None,
             changelog_preview_dialog: None,
             recent_changes_dialog: None,
             tag_dialog: None,
@@ -421,12 +423,16 @@ impl App {
             return self.handle_tag_annotation_key(key);
         }
 
-        if self.tag_dialog.is_some() {
-            return self.handle_tag_key(key);
-        }
-
         if self.main_branch_warning_dialog.is_some() {
             return self.handle_main_branch_warning_key(key);
+        }
+
+        if self.std_changelog_sub_branch_dialog.is_some() {
+            return self.handle_std_changelog_sub_branch_key(key);
+        }
+
+        if self.tag_dialog.is_some() {
+            return self.handle_tag_key(key);
         }
 
         if self.changelog_preview_dialog.is_some() {
@@ -815,6 +821,20 @@ impl App {
             KeyCode::Char('2') => self.select_main_branch_warning(1),
             KeyCode::Char('3') => self.select_main_branch_warning(2),
             KeyCode::Enter | KeyCode::F(2) => return self.confirm_main_branch_warning(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_std_changelog_sub_branch_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_std_changelog_sub_branch_warning(),
+            KeyCode::Up | KeyCode::BackTab => self.rotate_std_changelog_sub_branch_warning(-1),
+            KeyCode::Down | KeyCode::Tab => self.rotate_std_changelog_sub_branch_warning(1),
+            KeyCode::Char('1') => self.select_std_changelog_sub_branch_warning(0),
+            KeyCode::Char('2') => self.select_std_changelog_sub_branch_warning(1),
+            KeyCode::Char('3') => self.select_std_changelog_sub_branch_warning(2),
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_std_changelog_sub_branch_warning(),
             _ => {}
         }
         Ok(())
@@ -1540,6 +1560,7 @@ impl App {
             HitAction::CancelOverviewBumpWorkflow => self.cancel_overview_bump_workflow(),
             HitAction::SelectOverviewBumpWarningChoice(index) => self.select_overview_bump_warning(index),
             HitAction::SelectMainBranchWarningChoice(index) => self.select_main_branch_warning(index),
+            HitAction::SelectStdChangelogSubBranchChoice(index) => self.select_std_changelog_sub_branch_warning(index),
             HitAction::ConfirmChangelogPreview => return self.confirm_changelog_preview(),
             HitAction::SaveChangelogPreview => return self.save_changelog_preview(),
             HitAction::CancelChangelogPreview => self.cancel_changelog_preview(),
@@ -2179,6 +2200,12 @@ impl App {
                     return None;
                 }
 
+                if self.std_changelog_sub_branch_dialog.is_some()
+                    && !matches!(action, HitAction::SelectStdChangelogSubBranchChoice(_))
+                {
+                    return None;
+                }
+
                 Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action))
             })
             .min_by_key(|(area, reverse_index, _)| (*area, *reverse_index))
@@ -2701,7 +2728,53 @@ impl App {
             bail!("tag name cannot be empty");
         }
 
-        let message = match dialog.selected_action() {
+        let request = PendingTagRequest {
+            dialog,
+            changelog_enabled,
+            std_changelog_policy: StdChangelogExecutionPolicy::Auto,
+        };
+
+        if let Some(warning_dialog) = self.build_std_changelog_sub_branch_dialog(&request)? {
+            self.std_changelog_sub_branch_dialog = Some(warning_dialog);
+            self.status = StatusMessage::warning(
+                "Standard changelog is on a non-main sub-branch. Choose whether to generate now or postpone.",
+            );
+            return Ok(());
+        }
+
+        self.schedule_pending_tag_request(request)
+    }
+
+    fn build_std_changelog_sub_branch_dialog(
+        &self,
+        request: &PendingTagRequest,
+    ) -> Result<Option<StdChangelogSubBranchDialog>> {
+        if !request.changelog_enabled {
+            return Ok(None);
+        }
+
+        let repo_root = &request.dialog.active_scope().repo_root;
+        let branch_name = current_branch_with_cancel(repo_root, None)?;
+        let Some(previous_tag) = latest_local_tag_with_cancel(repo_root, None)? else {
+            return Ok(None);
+        };
+        let previous_branches = branches_containing_ref_with_cancel(repo_root, &previous_tag, None)?;
+        let head_branches = branches_containing_ref_with_cancel(repo_root, "HEAD", None)?;
+        let decision = decide_std_changelog_generation(&previous_tag, &branch_name, &previous_branches, &head_branches);
+
+        match decision {
+            StdChangelogDecision::PostponeOnSubBranch(sub_branch) => Ok(Some(StdChangelogSubBranchDialog::new(
+                request.clone(),
+                previous_tag,
+                sub_branch,
+            ))),
+            _ => Ok(None),
+        }
+    }
+
+    fn schedule_pending_tag_request(&mut self, request: PendingTagRequest) -> Result<()> {
+        let tag_name = request.dialog.tag_name.value.trim().to_string();
+        let message = match request.dialog.selected_action() {
             TagAction::CreateLocal => format!("Creating local tag '{}' and generating release notes if needed.", tag_name),
             TagAction::CreateAndPush => format!("Creating and pushing tag '{}' for the selected scope.", tag_name),
             TagAction::CreatePushAndRelease => format!("Creating, pushing, and publishing tag '{}' with generated release notes.", tag_name),
@@ -2710,11 +2783,53 @@ impl App {
             " Running Tag Action ",
             message.clone(),
             BackgroundJobRequest::CreateTag {
-                dialog,
-                changelog_enabled,
+                dialog: request.dialog,
+                changelog_enabled: request.changelog_enabled,
+                std_changelog_policy: request.std_changelog_policy,
             },
         )?;
         self.status = StatusMessage::info(message);
+        Ok(())
+    }
+
+    fn select_std_changelog_sub_branch_warning(&mut self, index: usize) {
+        if let Some(dialog) = &mut self.std_changelog_sub_branch_dialog {
+            dialog.select(index);
+        }
+    }
+
+    fn rotate_std_changelog_sub_branch_warning(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.std_changelog_sub_branch_dialog {
+            dialog.rotate(delta);
+        }
+    }
+
+    fn cancel_std_changelog_sub_branch_warning(&mut self) {
+        self.std_changelog_sub_branch_dialog = None;
+        self.status = StatusMessage::info("Standard changelog decision cancelled. Tag dialog is still open.");
+    }
+
+    fn confirm_std_changelog_sub_branch_warning(&mut self) -> Result<()> {
+        let Some(dialog) = self.std_changelog_sub_branch_dialog.clone() else {
+            return Ok(());
+        };
+
+        match dialog.selected_choice() {
+            StdChangelogSubBranchChoice::GenerateNow => {
+                self.std_changelog_sub_branch_dialog = None;
+                let mut request = dialog.pending_request;
+                request.std_changelog_policy = StdChangelogExecutionPolicy::ForceGenerate;
+                self.schedule_pending_tag_request(request)?;
+            }
+            StdChangelogSubBranchChoice::Postpone => {
+                self.std_changelog_sub_branch_dialog = None;
+                let mut request = dialog.pending_request;
+                request.std_changelog_policy = StdChangelogExecutionPolicy::ForcePostpone;
+                self.schedule_pending_tag_request(request)?;
+            }
+            StdChangelogSubBranchChoice::Cancel => self.cancel_std_changelog_sub_branch_warning(),
+        }
+
         Ok(())
     }
 
@@ -3553,6 +3668,7 @@ pub(crate) enum HitAction {
     CancelOverviewBumpWorkflow,
     SelectOverviewBumpWarningChoice(usize),
     SelectMainBranchWarningChoice(usize),
+    SelectStdChangelogSubBranchChoice(usize),
     ConfirmChangelogPreview,
     SaveChangelogPreview,
     CancelChangelogPreview,
@@ -3884,6 +4000,7 @@ enum BackgroundJobRequest {
     CreateTag {
         dialog: TagDialog,
         changelog_enabled: bool,
+        std_changelog_policy: StdChangelogExecutionPolicy,
     },
 }
 
@@ -4195,6 +4312,48 @@ impl MainBranchWarningDialog {
 enum MainBranchWarningChoice {
     SwitchToMain,
     IgnoreAndContinue,
+    Cancel,
+}
+
+#[derive(Clone)]
+struct StdChangelogSubBranchDialog {
+    pending_request: PendingTagRequest,
+    previous_tag: String,
+    branch_name: String,
+    selected: usize,
+}
+
+impl StdChangelogSubBranchDialog {
+    fn new(pending_request: PendingTagRequest, previous_tag: String, branch_name: String) -> Self {
+        Self {
+            pending_request,
+            previous_tag,
+            branch_name,
+            selected: 1,
+        }
+    }
+
+    fn select(&mut self, index: usize) {
+        self.selected = index.min(2);
+    }
+
+    fn rotate(&mut self, delta: isize) {
+        self.selected = (self.selected as isize + delta).rem_euclid(3) as usize;
+    }
+
+    fn selected_choice(&self) -> StdChangelogSubBranchChoice {
+        match self.selected {
+            0 => StdChangelogSubBranchChoice::GenerateNow,
+            1 => StdChangelogSubBranchChoice::Postpone,
+            _ => StdChangelogSubBranchChoice::Cancel,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StdChangelogSubBranchChoice {
+    GenerateNow,
+    Postpone,
     Cancel,
 }
 
@@ -4617,8 +4776,9 @@ async fn run_background_job(
         BackgroundJobRequest::CreateTag {
             dialog,
             changelog_enabled,
+            std_changelog_policy,
         } => {
-            let outcome = run_create_tag_job_async(dialog, changelog_enabled).await?;
+            let outcome = run_create_tag_job_async(dialog, changelog_enabled, std_changelog_policy).await?;
             Ok(BackgroundJobOutput::CreateTag {
                 summary: outcome.summary,
             })
@@ -4714,6 +4874,20 @@ struct BackgroundTagOutcome {
     summary: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdChangelogExecutionPolicy {
+    Auto,
+    ForceGenerate,
+    ForcePostpone,
+}
+
+#[derive(Clone)]
+struct PendingTagRequest {
+    dialog: TagDialog,
+    changelog_enabled: bool,
+    std_changelog_policy: StdChangelogExecutionPolicy,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum StdChangelogDecision {
     Generate,
@@ -4722,7 +4896,11 @@ enum StdChangelogDecision {
     SkipNoPreviousTag,
 }
 
-async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) -> Result<BackgroundTagOutcome> {
+async fn run_create_tag_job_async(
+    dialog: TagDialog,
+    changelog_enabled: bool,
+    std_changelog_policy: StdChangelogExecutionPolicy,
+) -> Result<BackgroundTagOutcome> {
     let active_scope = dialog.active_scope().clone();
     let repo_root = active_scope.repo_root.clone();
     let project_name = dialog.project_name.clone();
@@ -4742,14 +4920,13 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
     }
     .flatten();
     let standard_recent_range = if changelog_enabled && previous_tag.is_some() {
-        Some(run_blocking_job(move || {
-            load_recent_change_range_with_cancel(&active_scope_for_standard, None)
-        }).await?)
+        Some(run_blocking_job(move || load_recent_change_range_with_cancel(&active_scope_for_standard, None)).await?)
     } else {
         None
     };
     let tag_name_for_create = tag_name.clone();
     let annotation_for_create = annotation.clone();
+
     let repo_root_for_create = repo_root.clone();
     let created = run_blocking_job(move || {
         ensure_local_tag(
@@ -4767,7 +4944,9 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
         let repo_root_for_memory = repo_root.clone();
         let branch_name_for_memory = branch_name.clone();
         let tag_name_for_memory = tag_name.clone();
-        run_blocking_job(move || record_std_changelog_created(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)).await?;
+        run_blocking_job(move || {
+            record_std_changelog_created(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)
+        }).await?;
     }
 
     let mut summary_notes = Vec::new();
@@ -4780,20 +4959,26 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
     };
 
     if created && changelog_enabled {
-        let decision = if let Some(previous_tag) = previous_tag.as_deref() {
-            let repo_root_for_previous_branches = repo_root.clone();
-            let previous_tag_for_branches = previous_tag.to_string();
-            let previous_branches = run_blocking_job(move || {
-                branches_containing_ref_with_cancel(&repo_root_for_previous_branches, &previous_tag_for_branches, None)
-            }).await?;
-            let repo_root_for_new_branches = repo_root.clone();
-            let tag_name_for_branches = tag_name.clone();
-            let new_branches = run_blocking_job(move || {
-                branches_containing_ref_with_cancel(&repo_root_for_new_branches, &tag_name_for_branches, None)
-            }).await?;
-            decide_std_changelog_generation(previous_tag, &branch_name, &previous_branches, &new_branches)
-        } else {
-            StdChangelogDecision::SkipNoPreviousTag
+        let decision = match std_changelog_policy {
+            StdChangelogExecutionPolicy::ForceGenerate => StdChangelogDecision::Generate,
+            StdChangelogExecutionPolicy::ForcePostpone => StdChangelogDecision::PostponeOnSubBranch(branch_name.clone()),
+            StdChangelogExecutionPolicy::Auto => {
+                if let Some(previous_tag) = previous_tag.as_deref() {
+                    let repo_root_for_previous_branches = repo_root.clone();
+                    let previous_tag_for_branches = previous_tag.to_string();
+                    let previous_branches = run_blocking_job(move || {
+                        branches_containing_ref_with_cancel(&repo_root_for_previous_branches, &previous_tag_for_branches, None)
+                    }).await?;
+                    let repo_root_for_new_branches = repo_root.clone();
+                    let tag_name_for_branches = tag_name.clone();
+                    let new_branches = run_blocking_job(move || {
+                        branches_containing_ref_with_cancel(&repo_root_for_new_branches, &tag_name_for_branches, None)
+                    }).await?;
+                    decide_std_changelog_generation(previous_tag, &branch_name, &previous_branches, &new_branches)
+                } else {
+                    StdChangelogDecision::SkipNoPreviousTag
+                }
+            }
         };
 
         match decision {
@@ -6286,6 +6471,30 @@ mod tests {
 
             assert_eq!(decision, StdChangelogDecision::PostponeOnSubBranch("feature-a".to_string()));
         }
+
+    #[test]
+    fn std_changelog_sub_branch_dialog_defaults_to_postpone() {
+        let dialog = StdChangelogSubBranchDialog::new(
+            PendingTagRequest {
+                dialog: TagDialog {
+                    project_name: "demo".to_string(),
+                    scopes: Vec::new(),
+                    selected_scope: 0,
+                    tag_name: TextInput::with_value("v0.7.4"),
+                    annotation: String::new(),
+                    actions: vec![TagAction::CreateLocal],
+                    integration_mode: IntegrationMode::GitLocalOnly,
+                    action_index: 0,
+                },
+                changelog_enabled: true,
+                std_changelog_policy: StdChangelogExecutionPolicy::Auto,
+            },
+            "v0.7.3".to_string(),
+            "feature-a".to_string(),
+        );
+
+        assert!(matches!(dialog.selected_choice(), StdChangelogSubBranchChoice::Postpone));
+    }
 
         #[test]
     fn dashboard_delete_shortcut_removes_focused_scope_for_branched_projects() {
