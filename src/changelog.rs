@@ -297,6 +297,7 @@ pub(crate) fn rls_changelog_gen(
 	document.render_markdown()
 }
 
+#[allow(dead_code)]
 pub(crate) fn custom_changelog_gen(
 	current_tag: impl Into<String>,
 	lines: &[String],
@@ -363,10 +364,6 @@ pub(crate) fn archive_changelog_markdown(repo_root: &str, label: &str, markdown:
 		.with_context(|| format!("failed to write {}", output_path.display()))?;
 	write_history_summary_readme(&history_dir)?;
 	Ok(output_path)
-}
-
-pub(crate) fn history_summary_readme_path(repo_root: &str) -> PathBuf {
-	Path::new(repo_root).join(HISTORY_DIR_NAME).join(HISTORY_SUMMARY_FILE)
 }
 
 pub(crate) fn find_archived_changelog_markdown(repo_root: &str, label: &str) -> Result<Option<String>> {
