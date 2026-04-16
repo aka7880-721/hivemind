@@ -8,7 +8,6 @@
 use anyhow::{Result, bail};
 use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::cmp::Ordering;
 
 use crate::{
     config::{IntegrationMode, ProjectConfig},
@@ -117,7 +116,7 @@ pub(crate) fn load_history_ranges_with_cancel(
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
 
     let mut tags = split_output_lines(&run_git_checked_with_cancel(repo_root, &["tag"], cancel.clone())?);
-    sort_tags_for_history(&mut tags);
+    crate::git::sort_tags_for_history(&mut tags);
     let mut history_ranges = Vec::new();
     for window in tags.windows(2) {
         let newer = &window[0];
@@ -131,61 +130,6 @@ pub(crate) fn load_history_ranges_with_cancel(
     }
 
     Ok(history_ranges)
-}
-
-fn sort_tags_for_history(tags: &mut [String]) {
-    tags.sort_by(|left, right| compare_history_tags(right, left));
-}
-
-fn compare_history_tags(left: &str, right: &str) -> Ordering {
-    match (history_tag_components(left), history_tag_components(right)) {
-        (Some(left_components), Some(right_components)) => compare_tag_components(&left_components, &right_components)
-            .then_with(|| left.cmp(right)),
-        (Some(_), None) => Ordering::Greater,
-        (None, Some(_)) => Ordering::Less,
-        (None, None) => left.cmp(right),
-    }
-}
-
-fn compare_tag_components(left: &[u64], right: &[u64]) -> Ordering {
-    let max_len = left.len().max(right.len());
-    for index in 0..max_len {
-        let left_part = left.get(index).copied().unwrap_or(0);
-        let right_part = right.get(index).copied().unwrap_or(0);
-        match left_part.cmp(&right_part) {
-            Ordering::Equal => continue,
-            ordering => return ordering,
-        }
-    }
-    Ordering::Equal
-}
-
-fn history_tag_components(tag: &str) -> Option<Vec<u64>> {
-    let trimmed = tag.trim();
-    let trimmed = trimmed
-        .strip_prefix('v')
-        .or_else(|| trimmed.strip_prefix('V'))
-        .unwrap_or(trimmed);
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let components = trimmed
-        .split('.')
-        .map(|segment| {
-            let digits = segment
-                .chars()
-                .take_while(|character| character.is_ascii_digit())
-                .collect::<String>();
-            if digits.is_empty() {
-                None
-            } else {
-                digits.parse::<u64>().ok()
-            }
-        })
-        .collect::<Option<Vec<_>>>();
-
-    components.filter(|components| !components.is_empty())
 }
 
 fn build_log_args<const N: usize>(base: [&str; N], pathspecs: &[String]) -> Vec<String> {
@@ -781,7 +725,7 @@ fn next_char_boundary(value: &str, index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{BumpDialog, TagAction, TextInput, available_tag_actions, sort_tags_for_history};
+    use super::{BumpDialog, TagAction, TextInput, available_tag_actions};
     use crate::{
         config::{BranchScopeKind, IntegrationMode, TargetFormat},
         targets::{BumpScope, BumpTarget},
@@ -926,7 +870,7 @@ mod tests {
             "0.2.0".to_string(),
         ];
 
-        sort_tags_for_history(&mut tags);
+        crate::git::sort_tags_for_history(&mut tags);
 
         assert_eq!(tags, vec!["0.5.0", "0.2.0", "0.1.0", "0.0.1"]);
     }
