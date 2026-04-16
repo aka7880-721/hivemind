@@ -690,6 +690,7 @@ pub(super) async fn execute_release_now_async(
     create_or_update_github_release(
         &request.repo_root,
         &request.tag_name,
+        request.scope.remote_spec.as_deref(),
         &request.release_title,
         request.release_notes_markdown.as_deref(),
         &artifact_files,
@@ -1106,6 +1107,7 @@ fn collect_files_recursive(root: &Path, files: &mut Vec<String>) -> Result<()> {
 async fn create_or_update_github_release(
     repo_root: &str,
     tag_name: &str,
+    remote_spec: Option<&str>,
     release_title: &str,
     release_notes_markdown: Option<&str>,
     artifact_files: &[String],
@@ -1183,6 +1185,29 @@ async fn create_or_update_github_release(
                 .await?;
             }
         } else {
+            let remote_spec = remote_spec.ok_or_else(|| anyhow!("ReleaseNOW requires a configured git remote to publish a GitHub release"))?;
+            emit_progress(vec![format!("Pushing tag '{}' to {}.", tag_name, remote_spec)]);
+
+            let repo_root_owned = repo_root.to_string();
+            let push_cancel = cancel.clone();
+            let push_args = vec!["push".to_string(), remote_spec.to_string(), tag_name.to_string()];
+            run_blocking_streaming_operation(
+                move |progress_tx| {
+                    run_command_with_streaming(
+                        &repo_root_owned,
+                        "git",
+                        &push_args,
+                        RELEASE_NOW_TIMEOUT,
+                        "git push",
+                        "git",
+                        &push_cancel,
+                        &progress_tx,
+                    )
+                },
+                emit_progress,
+            )
+            .await?;
+
             emit_progress(vec![format!("Creating GitHub release '{}'.", tag_name)]);
 
             let mut create_args = vec![
