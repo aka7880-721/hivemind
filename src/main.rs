@@ -11,6 +11,7 @@ mod changelog;
 mod config;
 mod dialogs;
 mod git;
+mod mmr;
 #[path = "overview-pg.rs"]
 mod overview_pg;
 mod project_edit;
