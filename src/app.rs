@@ -56,7 +56,7 @@ use crate::{
     changelog::{
         ChangelogDocument, archive_changelog_markdown, build_document_from_git_log,
         find_archived_changelog_markdown,
-        write_changelog_markdown, write_temp_changelog_markdown,
+        rls_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
     },
     config::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
@@ -64,7 +64,8 @@ use crate::{
     },
     dialogs::{
         BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput,
-        ChangeRange, load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
+        ChangeRange, load_change_range_for_tags_with_cancel, load_history_ranges_with_cancel,
+        load_recent_change_range_with_cancel,
     },
     git::{
         GitCancellation, collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
@@ -4787,10 +4788,35 @@ fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeCont
         return Ok(markdown);
     }
 
+    let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
+    if let Some(last_public_release) = last_public_release.filter(|tag| tag.trim() != tag_name.trim()) {
+        let release_range = load_change_range_for_tags_with_cancel(scope, &last_public_release, tag_name, None)?;
+        return Ok(rls_changelog_gen(tag_name.to_string(), &release_range.lines, Some(&last_public_release)).markdown);
+    }
+
     let recent_range = load_recent_change_range_with_cancel(scope, None)?;
-    Ok(build_document_from_git_log(tag_name.to_string(), &recent_range.lines)
-        .render_markdown()
-        .markdown)
+    Ok(rls_changelog_gen(tag_name.to_string(), &recent_range.lines, None).markdown)
+}
+
+fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
+    ensure_gh_available()?;
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .args(["release", "list", "--limit", "1", "--json", "tagName", "--jq", ".[].tagName"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to query latest public release")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        bail!("failed to query latest public release: {}", detail)
+    }
+
+    let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!tag.is_empty()).then_some(tag))
 }
 
 async fn run_git_push_with_retry_async(repo_root: String, remote_spec: String, tag_name: String) -> Result<()> {
