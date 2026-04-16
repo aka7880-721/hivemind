@@ -84,6 +84,30 @@ pub(crate) fn load_recent_change_range_with_cancel(
     Ok(recent_range)
 }
 
+pub(crate) fn load_change_range_for_tags_with_cancel(
+    scope: &GitScopeContext,
+    from_tag: &str,
+    to_tag: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<ChangeRange> {
+    let repo_root = &scope.repo_root;
+    let pathspecs = scope.git_pathspecs();
+
+    ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
+
+    let range = format!("{}..{}", from_tag.trim(), to_tag.trim());
+    let output = run_git_checked_owned(
+        repo_root,
+        build_log_args(["log", "--oneline", "--graph", range.as_str()], &pathspecs),
+        cancel,
+    )?;
+
+    Ok(ChangeRange {
+        label: range,
+        lines: split_output_lines(&output),
+    })
+}
+
 pub(crate) fn load_history_ranges_with_cancel(
     scope: &GitScopeContext,
     cancel: Option<GitCancellation>,
