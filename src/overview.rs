@@ -8,7 +8,7 @@
 use super::*;
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
-use crate::changelog::{archive_changelog_markdown, build_document_from_git_log, history_summary_readme_path};
+use crate::changelog::{archive_changelog_markdown, build_document_from_git_log, sum_changelog_gen};
 use crate::{dialogs::load_recent_change_range_with_cancel, git::GitCancellation};
 use super::git_flow::{
 	append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
@@ -969,7 +969,7 @@ pub(super) fn execute_overview_bump_workflow(
 			for entry in &pending_changelog.entries {
 				write_changelog_markdown(&entry.repo_root, &entry.changelog_path, &entry.markdown)?;
 				let history_path = archive_changelog_markdown(&entry.repo_root, &next_version, &entry.markdown)?;
-				let summary_path = history_summary_readme_path(&entry.repo_root);
+				let summary_path = sum_changelog_gen(&entry.repo_root)?;
 				append_repo_stage_paths(
 					&mut repo_operations,
 					&entry.repo_root,
