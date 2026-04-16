@@ -56,7 +56,7 @@ use crate::{
     changelog::{
         ChangelogDocument, archive_changelog_markdown, build_document_from_git_log,
         find_archived_changelog_markdown,
-        rls_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
+        rls_changelog_gen, std_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
     },
     config::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
@@ -68,9 +68,13 @@ use crate::{
         load_recent_change_range_with_cancel,
     },
     git::{
-        GitCancellation, collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
+        GitCancellation, collect_all_branch_git_scope_contexts, current_branch_with_cancel,
+        ensure_gh_available, ensure_local_tag,
         RepoActivitySummary, load_scope_activity_summary_with_cancel, run_git, run_git_checked,
         split_output_lines,
+    },
+    mmr::{
+        record_std_changelog_created, record_std_changelog_error, record_std_changelog_generated,
     },
     overview_pg::{OverviewTab, overview_tab_rects, overview_tabs, render_overview_tabs},
     project_edit::{ProjectEditDialog, ProjectEditFocus},
@@ -4718,6 +4722,18 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
     let annotation = dialog.annotation.trim().to_string();
     let tag_name = dialog.tag_name.value.trim().to_string();
     let active_scope_for_notes = active_scope.clone();
+    let active_scope_for_standard = active_scope.clone();
+    let repo_root_for_branch = repo_root.clone();
+    let branch_name = run_blocking_job(move || current_branch_with_cancel(&repo_root_for_branch, None)).await?;
+    let standard_changelog = if changelog_enabled {
+        let tag_name_for_standard = tag_name.clone();
+        Some(run_blocking_job(move || {
+            let recent_range = load_recent_change_range_with_cancel(&active_scope_for_standard, None)?;
+            Ok(std_changelog_gen(tag_name_for_standard, &recent_range.lines).markdown)
+        }).await?)
+    } else {
+        None
+    };
     let tag_name_for_create = tag_name.clone();
     let annotation_for_create = annotation.clone();
     let repo_root_for_create = repo_root.clone();
@@ -4733,19 +4749,49 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
         )
     }).await?;
 
-    let generated_changelog = if created || matches!(action, TagAction::CreatePushAndRelease) {
+    if created {
+        let repo_root_for_memory = repo_root.clone();
+        let branch_name_for_memory = branch_name.clone();
+        let tag_name_for_memory = tag_name.clone();
+        run_blocking_job(move || record_std_changelog_created(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)).await?;
+    }
+
+    let release_notes = if created || matches!(action, TagAction::CreatePushAndRelease) {
         let tag_name_for_notes = tag_name.clone();
         Some(run_blocking_job(move || build_release_notes_markdown(&tag_name_for_notes, &active_scope_for_notes)).await?)
     } else {
         None
     };
 
-    if changelog_enabled {
-        if let Some(markdown) = generated_changelog.as_deref() {
+    if created && changelog_enabled {
+        if let Some(markdown) = standard_changelog.as_deref() {
             let repo_root_for_archive = repo_root.clone();
             let tag_name_for_archive = tag_name.clone();
             let markdown_for_archive = markdown.to_string();
-            run_blocking_job(move || archive_changelog_markdown(&repo_root_for_archive, &tag_name_for_archive, &markdown_for_archive).map(|_| ())).await?;
+            let branch_name_for_memory = branch_name.clone();
+            let archive_result = run_blocking_job(move || {
+                archive_changelog_markdown(&repo_root_for_archive, &tag_name_for_archive, &markdown_for_archive)
+                    .map(|_| ())
+            }).await;
+            match archive_result {
+                Ok(()) => {
+                    let repo_root_for_memory = repo_root.clone();
+                    let tag_name_for_memory = tag_name.clone();
+                    run_blocking_job(move || {
+                        record_std_changelog_generated(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)
+                    }).await?;
+                }
+                Err(error) => {
+                    let repo_root_for_memory = repo_root.clone();
+                    let tag_name_for_memory = tag_name.clone();
+                    let reason = error.to_string();
+                    let branch_name_for_error = branch_name.clone();
+                    run_blocking_job(move || {
+                        record_std_changelog_error(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_error, &reason)
+                    }).await?;
+                    return Err(error);
+                }
+            }
         }
     }
 
@@ -4756,7 +4802,7 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
 
     if matches!(action, TagAction::CreatePushAndRelease) {
         run_blocking_job(ensure_gh_available).await?;
-        let release_notes = generated_changelog
+        let release_notes = release_notes
             .as_deref()
             .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
         create_github_release_with_retry_async(repo_root.clone(), tag_name.clone(), release_notes.to_string()).await?;
