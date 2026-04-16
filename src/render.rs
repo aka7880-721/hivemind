@@ -58,6 +58,9 @@ impl App {
 		if self.tag_dialog.is_some() {
 			self.render_tag_dialog(frame, frame.area());
 		}
+		if self.std_changelog_sub_branch_dialog.is_some() {
+			self.render_std_changelog_sub_branch_dialog(frame, frame.area());
+		}
 		if self.tag_annotation_dialog.is_some() {
 			self.render_tag_annotation_dialog(frame, frame.area());
 		}
@@ -680,6 +683,66 @@ impl App {
 					"Cancel",
 					dialog.selected == 2,
 					HitAction::SelectMainBranchWarningChoice(2),
+					Style::default().fg(Color::White).bg(Color::Red),
+				),
+			],
+		);
+	}
+
+	fn render_std_changelog_sub_branch_dialog(&mut self, frame: &mut Frame, area: Rect) {
+		let Some(dialog) = &self.std_changelog_sub_branch_dialog else {
+			return;
+		};
+
+		let popup = centered_rect(area, 84, 48);
+		frame.render_widget(Clear, popup);
+		let block = Block::default()
+			.borders(Borders::ALL)
+			.title(" Standard Changelog Decision ")
+			.border_style(Style::default().fg(Color::Yellow));
+		let inner = block.inner(popup);
+		frame.render_widget(block, popup);
+
+		let sections = Layout::default()
+			.direction(Direction::Vertical)
+			.constraints([Constraint::Length(5), Constraint::Min(6), Constraint::Length(BUTTON_ROW_HEIGHT)])
+			.split(inner);
+
+		let header = vec![
+			Line::from("This tag is on the same non-main branch as the previous tag.")
+				.style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+			Line::from("Standard changelogs are usually deferred until the branch is merged into main/master."),
+			Line::from("Choose whether to generate it now or mark it postponed in sync memory."),
+		];
+		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
+
+		let details = vec![
+			Line::from(format!("Current branch: {}", dialog.branch_name)).bold(),
+			Line::from(format!("Previous tag: {}", dialog.previous_tag)),
+			Line::from(format!("New tag: {}", dialog.pending_request.dialog.tag_name.value.trim())),
+		];
+		frame.render_widget(Paragraph::new(details).wrap(Wrap { trim: false }), sections[1]);
+
+		self.render_button_row(
+			frame,
+			sections[2],
+			&[
+				DialogButton::new(
+					"Generate Now",
+					dialog.selected == 0,
+					HitAction::SelectStdChangelogSubBranchChoice(0),
+					Style::default().fg(Color::Black).bg(Color::Yellow),
+				),
+				DialogButton::new(
+					"Postpone",
+					dialog.selected == 1,
+					HitAction::SelectStdChangelogSubBranchChoice(1),
+					Style::default().fg(Color::Black).bg(Color::Rgb(140, 220, 180)),
+				),
+				DialogButton::new(
+					"Cancel",
+					dialog.selected == 2,
+					HitAction::SelectStdChangelogSubBranchChoice(2),
 					Style::default().fg(Color::White).bg(Color::Red),
 				),
 			],
