@@ -54,9 +54,8 @@ use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTe
 use crate::{
     branding::{PixelLogo, choose_header_content},
     changelog::{
-        ChangelogDocument, archive_changelog_markdown, build_document_from_git_log,
-        find_archived_changelog_markdown,
-        write_changelog_markdown, write_temp_changelog_markdown,
+        ChangelogDocument, archive_changelog_markdown, find_archived_changelog_markdown,
+        rls_changelog_gen, std_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
     },
     config::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
@@ -64,12 +63,18 @@ use crate::{
     },
     dialogs::{
         BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput,
-        ChangeRange, load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
+        ChangeRange, load_change_range_for_tags_with_cancel, load_history_ranges_with_cancel,
+        load_recent_change_range_with_cancel,
     },
     git::{
-        GitCancellation, collect_all_branch_git_scope_contexts, ensure_gh_available, ensure_local_tag,
+        GitCancellation, branches_containing_ref_with_cancel, collect_all_branch_git_scope_contexts,
+        current_branch_with_cancel, ensure_gh_available, ensure_local_tag, latest_local_tag_with_cancel,
         RepoActivitySummary, load_scope_activity_summary_with_cancel, run_git, run_git_checked,
-        split_output_lines,
+        sorted_local_tags_with_cancel, split_output_lines,
+    },
+    mmr::{
+        load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error, record_std_changelog_generated,
+        record_std_changelog_postponed,
     },
     overview_pg::{OverviewTab, overview_tab_rects, overview_tabs, render_overview_tabs},
     project_edit::{ProjectEditDialog, ProjectEditFocus},
@@ -229,6 +234,7 @@ struct App {
     overview_bump_workflow_dialog: Option<OverviewBumpWorkflowDialog>,
     overview_bump_warning_dialog: Option<OverviewBumpWarningDialog>,
     main_branch_warning_dialog: Option<MainBranchWarningDialog>,
+    std_changelog_sub_branch_dialog: Option<StdChangelogSubBranchDialog>,
     changelog_preview_dialog: Option<ChangelogPreviewDialog>,
     recent_changes_dialog: Option<RecentChangesDialog>,
     tag_dialog: Option<TagDialog>,
@@ -317,6 +323,7 @@ impl App {
             overview_bump_workflow_dialog: None,
             overview_bump_warning_dialog: None,
             main_branch_warning_dialog: None,
+            std_changelog_sub_branch_dialog: None,
             changelog_preview_dialog: None,
             recent_changes_dialog: None,
             tag_dialog: None,
@@ -415,12 +422,16 @@ impl App {
             return self.handle_tag_annotation_key(key);
         }
 
-        if self.tag_dialog.is_some() {
-            return self.handle_tag_key(key);
-        }
-
         if self.main_branch_warning_dialog.is_some() {
             return self.handle_main_branch_warning_key(key);
+        }
+
+        if self.std_changelog_sub_branch_dialog.is_some() {
+            return self.handle_std_changelog_sub_branch_key(key);
+        }
+
+        if self.tag_dialog.is_some() {
+            return self.handle_tag_key(key);
         }
 
         if self.changelog_preview_dialog.is_some() {
@@ -482,7 +493,7 @@ impl App {
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_release_now_with_scope(None)?,
             KeyCode::Char('b') => self.open_bump_dialog()?,
             KeyCode::Char('g') => self.open_recent_changes()?,
-            KeyCode::Char('c') => self.open_dashboard_changelog_preview()?,
+            KeyCode::Char('c') | KeyCode::Char('C') => self.open_dashboard_changelog_preview(None)?,
             KeyCode::Char('t') => self.open_tag_dialog()?,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reload_dashboard_overview_data()?,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
@@ -814,10 +825,26 @@ impl App {
         Ok(())
     }
 
+    fn handle_std_changelog_sub_branch_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_std_changelog_sub_branch_warning(),
+            KeyCode::Up | KeyCode::BackTab => self.rotate_std_changelog_sub_branch_warning(-1),
+            KeyCode::Down | KeyCode::Tab => self.rotate_std_changelog_sub_branch_warning(1),
+            KeyCode::Char('1') => self.select_std_changelog_sub_branch_warning(0),
+            KeyCode::Char('2') => self.select_std_changelog_sub_branch_warning(1),
+            KeyCode::Char('3') => self.select_std_changelog_sub_branch_warning(2),
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_std_changelog_sub_branch_warning(),
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn handle_changelog_preview_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
             return self.save_changelog_preview();
         }
+
+        let mut refresh_selection = None;
 
         match key.code {
             KeyCode::Esc => self.cancel_changelog_preview(),
@@ -828,6 +855,113 @@ impl App {
                 .is_some_and(|dialog| dialog.workflow.is_none()) =>
             {
                 return self.confirm_changelog_preview()
+            }
+            KeyCode::Tab
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    custom_range.cycle_focus(1);
+                }
+            }
+            KeyCode::BackTab
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    custom_range.cycle_focus(-1);
+                }
+            }
+            KeyCode::Char('1')
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    custom_range.select_focus(CustomChangelogRangeFocus::From);
+                }
+            }
+            KeyCode::Char('2')
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    custom_range.select_focus(CustomChangelogRangeFocus::To);
+                }
+            }
+            KeyCode::Left
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    if custom_range.adjust_focused_selection(-1) {
+                        refresh_selection = custom_range.selection();
+                    }
+                }
+            }
+            KeyCode::Right
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                if let Some(custom_range) = self
+                    .changelog_preview_dialog
+                    .as_mut()
+                    .and_then(|dialog| dialog.custom_range.as_mut())
+                {
+                    if custom_range.adjust_focused_selection(1) {
+                        refresh_selection = custom_range.selection();
+                    }
+                }
+            }
+            KeyCode::Char('r') | KeyCode::Char('R')
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .is_some() =>
+            {
+                refresh_selection = self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.custom_range.as_ref())
+                    .and_then(CustomChangelogRangeState::selection);
             }
             KeyCode::PageUp => self.scroll_changelog_preview(-8),
             KeyCode::PageDown => self.scroll_changelog_preview(8),
@@ -842,6 +976,11 @@ impl App {
                 }
             }
         }
+
+        if let Some(selection) = refresh_selection {
+            return self.open_dashboard_changelog_preview(Some(selection));
+        }
+
         Ok(())
     }
 
@@ -1534,6 +1673,7 @@ impl App {
             HitAction::CancelOverviewBumpWorkflow => self.cancel_overview_bump_workflow(),
             HitAction::SelectOverviewBumpWarningChoice(index) => self.select_overview_bump_warning(index),
             HitAction::SelectMainBranchWarningChoice(index) => self.select_main_branch_warning(index),
+            HitAction::SelectStdChangelogSubBranchChoice(index) => self.select_std_changelog_sub_branch_warning(index),
             HitAction::ConfirmChangelogPreview => return self.confirm_changelog_preview(),
             HitAction::SaveChangelogPreview => return self.save_changelog_preview(),
             HitAction::CancelChangelogPreview => self.cancel_changelog_preview(),
@@ -2096,11 +2236,21 @@ impl App {
                 }
                 self.status = StatusMessage::success(summary);
             }
-            BackgroundJobOutput::CreateTag { summary } => {
+            BackgroundJobOutput::CreateTag {
+                summary,
+                replay_notices,
+                replay_errors,
+            } => {
                 self.sync_dashboard_overview_after_repo_change();
                 self.tag_dialog = None;
                 self.tag_annotation_dialog = None;
                 self.status = StatusMessage::success(summary);
+                for notice in replay_notices {
+                    self.show_transient_toast(StatusKind::Info, notice);
+                }
+                for error in replay_errors {
+                    self.show_sticky_error_toast(error);
+                }
             }
         }
 
@@ -2169,6 +2319,12 @@ impl App {
                             | HitAction::ScrollReleaseNow(_)
                             | HitAction::CloseReleaseNow
                     )
+                {
+                    return None;
+                }
+
+                if self.std_changelog_sub_branch_dialog.is_some()
+                    && !matches!(action, HitAction::SelectStdChangelogSubBranchChoice(_))
                 {
                     return None;
                 }
@@ -2322,7 +2478,7 @@ impl App {
         overview::reset_overview_pending_version(self, scope_index)
     }
 
-    fn open_dashboard_changelog_preview(&mut self) -> Result<()> {
+    fn open_dashboard_changelog_preview(&mut self, selection: Option<CustomChangelogSelection>) -> Result<()> {
         let project = self.selected_project()?.clone();
         let scope_index = if project.project_type == ProjectType::Branched {
             self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
@@ -2338,14 +2494,15 @@ impl App {
 
         self.schedule_progress_job(
             " Generating Changelog ",
-            "Building changelog preview from current git history.",
+            "Building custom changelog preview.",
             BackgroundJobRequest::OpenDashboardChangelogPreview {
                 project,
                 scope_index,
                 pending_versions: self.overview_pending_versions.clone(),
+                selection,
             },
         )?;
-        self.status = StatusMessage::info("Generating changelog preview from current git history.");
+        self.status = StatusMessage::info("Generating custom changelog preview.");
         Ok(())
     }
 
@@ -2457,9 +2614,14 @@ impl App {
     fn open_changelog_preview(&mut self, dialog: ChangelogPreviewDialog) {
         self.pending_changelog_write = None;
         let preview_only = dialog.workflow.is_none();
+        let custom_range = dialog.custom_range.is_some();
         self.changelog_preview_dialog = Some(dialog);
         self.status = StatusMessage::info(if preview_only {
-            "Showing the generated changelog preview for the current git history."
+            if custom_range {
+                "Showing the custom changelog preview. Use Tab to switch From/To, Left/Right to change the range, and Ctrl+S to save changelog_temp.md."
+            } else {
+                "Showing the generated changelog preview for the current git history."
+            }
         } else {
             "Review the generated changelog, add an optional release message, then confirm the bump."
         });
@@ -2695,7 +2857,53 @@ impl App {
             bail!("tag name cannot be empty");
         }
 
-        let message = match dialog.selected_action() {
+        let request = PendingTagRequest {
+            dialog,
+            changelog_enabled,
+            std_changelog_policy: StdChangelogExecutionPolicy::Auto,
+        };
+
+        if let Some(warning_dialog) = self.build_std_changelog_sub_branch_dialog(&request)? {
+            self.std_changelog_sub_branch_dialog = Some(warning_dialog);
+            self.status = StatusMessage::warning(
+                "Standard changelog is on a non-main sub-branch. Choose whether to generate now or postpone.",
+            );
+            return Ok(());
+        }
+
+        self.schedule_pending_tag_request(request)
+    }
+
+    fn build_std_changelog_sub_branch_dialog(
+        &self,
+        request: &PendingTagRequest,
+    ) -> Result<Option<StdChangelogSubBranchDialog>> {
+        if !request.changelog_enabled {
+            return Ok(None);
+        }
+
+        let repo_root = &request.dialog.active_scope().repo_root;
+        let branch_name = current_branch_with_cancel(repo_root, None)?;
+        let Some(previous_tag) = latest_local_tag_with_cancel(repo_root, None)? else {
+            return Ok(None);
+        };
+        let previous_branches = branches_containing_ref_with_cancel(repo_root, &previous_tag, None)?;
+        let head_branches = branches_containing_ref_with_cancel(repo_root, "HEAD", None)?;
+        let decision = decide_std_changelog_generation(&previous_tag, &branch_name, &previous_branches, &head_branches);
+
+        match decision {
+            StdChangelogDecision::PostponeOnSubBranch(sub_branch) => Ok(Some(StdChangelogSubBranchDialog::new(
+                request.clone(),
+                previous_tag,
+                sub_branch,
+            ))),
+            _ => Ok(None),
+        }
+    }
+
+    fn schedule_pending_tag_request(&mut self, request: PendingTagRequest) -> Result<()> {
+        let tag_name = request.dialog.tag_name.value.trim().to_string();
+        let message = match request.dialog.selected_action() {
             TagAction::CreateLocal => format!("Creating local tag '{}' and generating release notes if needed.", tag_name),
             TagAction::CreateAndPush => format!("Creating and pushing tag '{}' for the selected scope.", tag_name),
             TagAction::CreatePushAndRelease => format!("Creating, pushing, and publishing tag '{}' with generated release notes.", tag_name),
@@ -2704,11 +2912,53 @@ impl App {
             " Running Tag Action ",
             message.clone(),
             BackgroundJobRequest::CreateTag {
-                dialog,
-                changelog_enabled,
+                dialog: request.dialog,
+                changelog_enabled: request.changelog_enabled,
+                std_changelog_policy: request.std_changelog_policy,
             },
         )?;
         self.status = StatusMessage::info(message);
+        Ok(())
+    }
+
+    fn select_std_changelog_sub_branch_warning(&mut self, index: usize) {
+        if let Some(dialog) = &mut self.std_changelog_sub_branch_dialog {
+            dialog.select(index);
+        }
+    }
+
+    fn rotate_std_changelog_sub_branch_warning(&mut self, delta: isize) {
+        if let Some(dialog) = &mut self.std_changelog_sub_branch_dialog {
+            dialog.rotate(delta);
+        }
+    }
+
+    fn cancel_std_changelog_sub_branch_warning(&mut self) {
+        self.std_changelog_sub_branch_dialog = None;
+        self.status = StatusMessage::info("Standard changelog decision cancelled. Tag dialog is still open.");
+    }
+
+    fn confirm_std_changelog_sub_branch_warning(&mut self) -> Result<()> {
+        let Some(dialog) = self.std_changelog_sub_branch_dialog.clone() else {
+            return Ok(());
+        };
+
+        match dialog.selected_choice() {
+            StdChangelogSubBranchChoice::GenerateNow => {
+                self.std_changelog_sub_branch_dialog = None;
+                let mut request = dialog.pending_request;
+                request.std_changelog_policy = StdChangelogExecutionPolicy::ForceGenerate;
+                self.schedule_pending_tag_request(request)?;
+            }
+            StdChangelogSubBranchChoice::Postpone => {
+                self.std_changelog_sub_branch_dialog = None;
+                let mut request = dialog.pending_request;
+                request.std_changelog_policy = StdChangelogExecutionPolicy::ForcePostpone;
+                self.schedule_pending_tag_request(request)?;
+            }
+            StdChangelogSubBranchChoice::Cancel => self.cancel_std_changelog_sub_branch_warning(),
+        }
+
         Ok(())
     }
 
@@ -3484,6 +3734,24 @@ impl App {
             ),
         }
     }
+
+    fn show_transient_toast(&mut self, kind: StatusKind, text: impl Into<String>) {
+        let builder = ToastBuilder::new(text.into().into());
+        match kind {
+            StatusKind::Info => self.transient_toaster.show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Success => self.transient_toaster.show_toast(builder.toast_type(ToastType::Success)),
+            StatusKind::Warning => self.transient_toaster.show_toast(builder.toast_type(ToastType::Warning)),
+            StatusKind::Error => self.sticky_toaster.show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
+        }
+    }
+
+    fn show_sticky_error_toast(&mut self, text: impl Into<String>) {
+        self.sticky_toaster.show_toast(
+            ToastBuilder::new(text.into().into())
+                .toast_type(ToastType::Error)
+                .keep_on(1),
+        );
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3547,6 +3815,7 @@ pub(crate) enum HitAction {
     CancelOverviewBumpWorkflow,
     SelectOverviewBumpWarningChoice(usize),
     SelectMainBranchWarningChoice(usize),
+    SelectStdChangelogSubBranchChoice(usize),
     ConfirmChangelogPreview,
     SaveChangelogPreview,
     CancelChangelogPreview,
@@ -3621,11 +3890,175 @@ pub(crate) enum OverviewVersionControl {
     Whole,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CustomChangelogRangeFocus {
+    From,
+    To,
+}
+
+#[derive(Clone)]
+struct CustomChangelogSelection {
+    from_ref: String,
+    to_ref: Option<String>,
+}
+
+#[derive(Clone)]
+struct CustomChangelogRangeState {
+    scope_name: String,
+    tags: Vec<String>,
+    from_index: usize,
+    to_index: Option<usize>,
+    focus: CustomChangelogRangeFocus,
+}
+
+impl CustomChangelogRangeState {
+    fn new(scope_name: String, tags: Vec<String>, selection: Option<CustomChangelogSelection>) -> Self {
+        let mut state = Self {
+            scope_name,
+            tags,
+            from_index: 0,
+            to_index: None,
+            focus: CustomChangelogRangeFocus::From,
+        };
+
+        if let Some(selection) = selection {
+            if let Some(from_index) = state.tags.iter().position(|tag| tag == &selection.from_ref) {
+                state.from_index = from_index;
+            }
+            state.to_index = selection
+                .to_ref
+                .as_ref()
+                .and_then(|to_ref| state.tags.iter().position(|tag| tag == to_ref))
+                .filter(|to_index| *to_index < state.from_index);
+        }
+
+        state.ensure_valid_to_index();
+        state
+    }
+
+    fn has_tags(&self) -> bool {
+        !self.tags.is_empty()
+    }
+
+    fn focus_label(&self, focus: CustomChangelogRangeFocus) -> &'static str {
+        if self.focus == focus {
+            ">"
+        } else {
+            " "
+        }
+    }
+
+    fn current_from_ref(&self) -> Option<&str> {
+        self.tags.get(self.from_index).map(String::as_str)
+    }
+
+    fn current_to_ref(&self) -> &str {
+        self.to_index
+            .and_then(|index| self.tags.get(index))
+            .map(String::as_str)
+            .unwrap_or("HEAD")
+    }
+
+    fn range_label(&self) -> String {
+        self.current_from_ref()
+            .map(|from_ref| format!("{}..{}", from_ref, self.current_to_ref()))
+            .unwrap_or_else(|| "no tags found; showing the latest 60 commits".to_string())
+    }
+
+    fn selection(&self) -> Option<CustomChangelogSelection> {
+        Some(CustomChangelogSelection {
+            from_ref: self.current_from_ref()?.to_string(),
+            to_ref: self.to_index.and_then(|index| self.tags.get(index)).cloned(),
+        })
+    }
+
+    fn cycle_focus(&mut self, delta: isize) {
+        let focuses = [CustomChangelogRangeFocus::From, CustomChangelogRangeFocus::To];
+        let current = match self.focus {
+            CustomChangelogRangeFocus::From => 0,
+            CustomChangelogRangeFocus::To => 1,
+        } as isize;
+        let next = (current + delta).rem_euclid(focuses.len() as isize) as usize;
+        self.focus = focuses[next];
+    }
+
+    fn select_focus(&mut self, focus: CustomChangelogRangeFocus) {
+        self.focus = focus;
+    }
+
+    fn adjust_focused_selection(&mut self, delta: isize) -> bool {
+        if !self.has_tags() || delta == 0 {
+            return false;
+        }
+
+        match self.focus {
+            CustomChangelogRangeFocus::From => self.adjust_from(delta),
+            CustomChangelogRangeFocus::To => self.adjust_to(delta),
+        }
+    }
+
+    fn from_display(&self) -> String {
+        self.current_from_ref().unwrap_or("<no tags>").to_string()
+    }
+
+    fn to_display(&self) -> String {
+        self.current_to_ref().to_string()
+    }
+
+    fn ensure_valid_to_index(&mut self) {
+        if self.tags.is_empty() {
+            self.from_index = 0;
+            self.to_index = None;
+            return;
+        }
+
+        self.from_index = self.from_index.min(self.tags.len().saturating_sub(1));
+        if self.from_index == 0 {
+            self.to_index = None;
+        } else if self.to_index.is_some_and(|to_index| to_index >= self.from_index) {
+            self.to_index = Some(self.from_index - 1);
+        }
+    }
+
+    fn adjust_from(&mut self, delta: isize) -> bool {
+        let len = self.tags.len();
+        if len == 0 {
+            return false;
+        }
+
+        let next = (self.from_index as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize;
+        if next == self.from_index {
+            return false;
+        }
+
+        self.from_index = next;
+        self.ensure_valid_to_index();
+        true
+    }
+
+    fn adjust_to(&mut self, delta: isize) -> bool {
+        let max_position = self.from_index;
+        let current_position = self.to_index.map(|to_index| to_index + 1).unwrap_or(0);
+        let next_position = (current_position as isize + delta).clamp(0, max_position as isize) as usize;
+        if next_position == current_position {
+            return false;
+        }
+
+        self.to_index = if next_position == 0 {
+            None
+        } else {
+            Some(next_position - 1)
+        };
+        true
+    }
+}
+
 struct ChangelogPreviewDialog {
     project_name: String,
     next_version: String,
     scope_index: usize,
     workflow: Option<OverviewBumpWorkflow>,
+    custom_range: Option<CustomChangelogRangeState>,
     entries: Vec<ChangelogPreviewEntry>,
     release_message: TuiTextArea<'static>,
     release_message_placeholder: String,
@@ -3704,6 +4137,7 @@ impl ChangelogPreviewDialog {
             next_version,
             scope_index,
             workflow: Some(workflow),
+            custom_range: None,
             entries,
             release_message: new_release_message_editor(""),
             release_message_placeholder: "Optional multi-line release notes in Markdown".to_string(),
@@ -3715,6 +4149,7 @@ impl ChangelogPreviewDialog {
         project_name: String,
         next_version: String,
         scope_index: usize,
+        custom_range: Option<CustomChangelogRangeState>,
         entries: Vec<ChangelogPreviewEntry>,
     ) -> Self {
         Self {
@@ -3722,6 +4157,7 @@ impl ChangelogPreviewDialog {
             next_version,
             scope_index,
             workflow: None,
+            custom_range,
             entries,
             release_message: new_release_message_editor(""),
             release_message_placeholder: "Optional multi-line release notes in Markdown".to_string(),
@@ -3854,6 +4290,7 @@ enum BackgroundJobRequest {
         project: ProjectConfig,
         scope_index: usize,
         pending_versions: Vec<String>,
+        selection: Option<CustomChangelogSelection>,
     },
     OpenOverviewWorkflowChangelog {
         project: ProjectConfig,
@@ -3878,6 +4315,7 @@ enum BackgroundJobRequest {
     CreateTag {
         dialog: TagDialog,
         changelog_enabled: bool,
+        std_changelog_policy: StdChangelogExecutionPolicy,
     },
 }
 
@@ -3914,6 +4352,8 @@ enum BackgroundJobOutput {
     ReleaseNowCompleted(rls_now::ReleaseNowExecutionOutcome),
     CreateTag {
         summary: String,
+        replay_notices: Vec<String>,
+        replay_errors: Vec<String>,
     },
 }
 
@@ -4189,6 +4629,48 @@ impl MainBranchWarningDialog {
 enum MainBranchWarningChoice {
     SwitchToMain,
     IgnoreAndContinue,
+    Cancel,
+}
+
+#[derive(Clone)]
+struct StdChangelogSubBranchDialog {
+    pending_request: PendingTagRequest,
+    previous_tag: String,
+    branch_name: String,
+    selected: usize,
+}
+
+impl StdChangelogSubBranchDialog {
+    fn new(pending_request: PendingTagRequest, previous_tag: String, branch_name: String) -> Self {
+        Self {
+            pending_request,
+            previous_tag,
+            branch_name,
+            selected: 1,
+        }
+    }
+
+    fn select(&mut self, index: usize) {
+        self.selected = index.min(2);
+    }
+
+    fn rotate(&mut self, delta: isize) {
+        self.selected = (self.selected as isize + delta).rem_euclid(3) as usize;
+    }
+
+    fn selected_choice(&self) -> StdChangelogSubBranchChoice {
+        match self.selected {
+            0 => StdChangelogSubBranchChoice::GenerateNow,
+            1 => StdChangelogSubBranchChoice::Postpone,
+            _ => StdChangelogSubBranchChoice::Cancel,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StdChangelogSubBranchChoice {
+    GenerateNow,
+    Postpone,
     Cancel,
 }
 
@@ -4555,11 +5037,13 @@ async fn run_background_job(
             project,
             scope_index,
             pending_versions,
+            selection,
         } => Ok(BackgroundJobOutput::OpenChangelogPreview(
             overview::build_dashboard_changelog_preview_dialog_async(
                 &project,
                 scope_index,
                 &pending_versions,
+                selection,
                 Some(cancel),
             ).await?,
         )),
@@ -4611,10 +5095,13 @@ async fn run_background_job(
         BackgroundJobRequest::CreateTag {
             dialog,
             changelog_enabled,
+            std_changelog_policy,
         } => {
-            let outcome = run_create_tag_job_async(dialog, changelog_enabled).await?;
+            let outcome = run_create_tag_job_async(dialog, changelog_enabled, std_changelog_policy).await?;
             Ok(BackgroundJobOutput::CreateTag {
                 summary: outcome.summary,
+                replay_notices: outcome.replay_notices,
+                replay_errors: outcome.replay_errors,
             })
         }
     }
@@ -4706,9 +5193,43 @@ fn prefetch_recent_changes(
 
 struct BackgroundTagOutcome {
     summary: String,
+    replay_notices: Vec<String>,
+    replay_errors: Vec<String>,
 }
 
-async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) -> Result<BackgroundTagOutcome> {
+#[derive(Default)]
+struct PostponedReplayOutcome {
+    notices: Vec<String>,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdChangelogExecutionPolicy {
+    Auto,
+    ForceGenerate,
+    ForcePostpone,
+}
+
+#[derive(Clone)]
+struct PendingTagRequest {
+    dialog: TagDialog,
+    changelog_enabled: bool,
+    std_changelog_policy: StdChangelogExecutionPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StdChangelogDecision {
+    Generate,
+    IgnoreNotOnMain,
+    PostponeOnSubBranch(String),
+    SkipNoPreviousTag,
+}
+
+async fn run_create_tag_job_async(
+    dialog: TagDialog,
+    changelog_enabled: bool,
+    std_changelog_policy: StdChangelogExecutionPolicy,
+) -> Result<BackgroundTagOutcome> {
     let active_scope = dialog.active_scope().clone();
     let repo_root = active_scope.repo_root.clone();
     let project_name = dialog.project_name.clone();
@@ -4717,8 +5238,24 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
     let annotation = dialog.annotation.trim().to_string();
     let tag_name = dialog.tag_name.value.trim().to_string();
     let active_scope_for_notes = active_scope.clone();
+    let active_scope_for_standard = active_scope.clone();
+    let repo_root_for_branch = repo_root.clone();
+    let branch_name = run_blocking_job(move || current_branch_with_cancel(&repo_root_for_branch, None)).await?;
+    let repo_root_for_previous_tag = repo_root.clone();
+    let previous_tag = if changelog_enabled {
+        Some(run_blocking_job(move || latest_local_tag_with_cancel(&repo_root_for_previous_tag, None)).await?)
+    } else {
+        None
+    }
+    .flatten();
+    let standard_recent_range = if changelog_enabled && previous_tag.is_some() {
+        Some(run_blocking_job(move || load_recent_change_range_with_cancel(&active_scope_for_standard, None)).await?)
+    } else {
+        None
+    };
     let tag_name_for_create = tag_name.clone();
     let annotation_for_create = annotation.clone();
+
     let repo_root_for_create = repo_root.clone();
     let created = run_blocking_job(move || {
         ensure_local_tag(
@@ -4732,20 +5269,163 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
         )
     }).await?;
 
-    let generated_changelog = if created || matches!(action, TagAction::CreatePushAndRelease) {
+    if created {
+        let repo_root_for_memory = repo_root.clone();
+        let branch_name_for_memory = branch_name.clone();
+        let tag_name_for_memory = tag_name.clone();
+        run_blocking_job(move || {
+            record_std_changelog_created(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)
+        }).await?;
+    }
+
+    let mut summary_notes = Vec::new();
+
+    let release_notes = if created || matches!(action, TagAction::CreatePushAndRelease) {
         let tag_name_for_notes = tag_name.clone();
         Some(run_blocking_job(move || build_release_notes_markdown(&tag_name_for_notes, &active_scope_for_notes)).await?)
     } else {
         None
     };
 
-    if changelog_enabled {
-        if let Some(markdown) = generated_changelog.as_deref() {
-            let repo_root_for_archive = repo_root.clone();
-            let tag_name_for_archive = tag_name.clone();
-            let markdown_for_archive = markdown.to_string();
-            run_blocking_job(move || archive_changelog_markdown(&repo_root_for_archive, &tag_name_for_archive, &markdown_for_archive).map(|_| ())).await?;
+    if created && changelog_enabled {
+        let decision = match std_changelog_policy {
+            StdChangelogExecutionPolicy::ForceGenerate => StdChangelogDecision::Generate,
+            StdChangelogExecutionPolicy::ForcePostpone => StdChangelogDecision::PostponeOnSubBranch(branch_name.clone()),
+            StdChangelogExecutionPolicy::Auto => {
+                if let Some(previous_tag) = previous_tag.as_deref() {
+                    let repo_root_for_previous_branches = repo_root.clone();
+                    let previous_tag_for_branches = previous_tag.to_string();
+                    let previous_branches = run_blocking_job(move || {
+                        branches_containing_ref_with_cancel(&repo_root_for_previous_branches, &previous_tag_for_branches, None)
+                    }).await?;
+                    let repo_root_for_new_branches = repo_root.clone();
+                    let tag_name_for_branches = tag_name.clone();
+                    let new_branches = run_blocking_job(move || {
+                        branches_containing_ref_with_cancel(&repo_root_for_new_branches, &tag_name_for_branches, None)
+                    }).await?;
+                    decide_std_changelog_generation(previous_tag, &branch_name, &previous_branches, &new_branches)
+                } else {
+                    StdChangelogDecision::SkipNoPreviousTag
+                }
+            }
+        };
+
+        match decision {
+            StdChangelogDecision::Generate => {
+                if let Some(recent_range) = standard_recent_range.as_ref() {
+                    if recent_range.lines.is_empty() {
+                        let repo_root_for_memory = repo_root.clone();
+                        let tag_name_for_memory = tag_name.clone();
+                        let branch_name_for_error = branch_name.clone();
+                        let reason = "standard changelog range was empty".to_string();
+                        run_blocking_job(move || {
+                            record_std_changelog_error(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_error, &reason)
+                        }).await?;
+                        summary_notes.push("Standard changelog was not generated because the computed tag range was empty.".to_string());
+                    } else {
+                        let markdown = std_changelog_gen(tag_name.clone(), &recent_range.lines).markdown;
+                        let repo_root_for_archive = repo_root.clone();
+                        let tag_name_for_archive = tag_name.clone();
+                        let markdown_for_archive = markdown;
+                        let branch_name_for_memory = branch_name.clone();
+                        let archive_result = run_blocking_job(move || {
+                            archive_changelog_markdown(&repo_root_for_archive, &tag_name_for_archive, &markdown_for_archive)
+                                .map(|_| ())
+                        }).await;
+                        match archive_result {
+                            Ok(()) => {
+                                let repo_root_for_memory = repo_root.clone();
+                                let tag_name_for_memory = tag_name.clone();
+                                run_blocking_job(move || {
+                                    record_std_changelog_generated(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)
+                                }).await?;
+                            }
+                            Err(error) => {
+                                let repo_root_for_memory = repo_root.clone();
+                                let tag_name_for_memory = tag_name.clone();
+                                let reason = error.to_string();
+                                let branch_name_for_error = branch_name.clone();
+                                run_blocking_job(move || {
+                                    record_std_changelog_error(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_error, &reason)
+                                }).await?;
+                                return Err(error);
+                            }
+                        }
+                    }
+                }
+            }
+            StdChangelogDecision::IgnoreNotOnMain => {
+                summary_notes.push("Standard changelog was not generated because this tag is not yet on main/master lineage.".to_string());
+            }
+            StdChangelogDecision::PostponeOnSubBranch(branch) => {
+                let repo_root_for_memory = repo_root.clone();
+                let tag_name_for_memory = tag_name.clone();
+                let branch_name_for_memory = branch_name.clone();
+                run_blocking_job(move || {
+                    record_std_changelog_postponed(&repo_root_for_memory, &tag_name_for_memory, &branch_name_for_memory)
+                }).await?;
+                summary_notes.push(format!(
+                    "Standard changelog was postponed because '{}' already has tags on sub-branch '{}'.",
+                    tag_name, branch
+                ));
+            }
+            StdChangelogDecision::SkipNoPreviousTag => {
+                summary_notes.push("Standard changelog was not generated because no previous tag was found.".to_string());
+            }
         }
+
+        let replay_outcome = if is_mainline_branch(&branch_name) {
+            replay_postponed_std_changelogs(&active_scope, &branch_name).await?
+        } else {
+            PostponedReplayOutcome::default()
+        };
+        if !replay_outcome.notices.is_empty() {
+            summary_notes.push(format!(
+                "Replayed {} postponed changelog(s).",
+                replay_outcome.notices.len()
+            ));
+        }
+        if !replay_outcome.errors.is_empty() {
+            summary_notes.push(format!(
+                "{} postponed changelog replay error(s) occurred. See sticky toasts.",
+                replay_outcome.errors.len()
+            ));
+        }
+
+        if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
+            let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+            run_git_push_with_retry_async(repo_root.clone(), remote_spec, tag_name.clone()).await?;
+        }
+
+        if matches!(action, TagAction::CreatePushAndRelease) {
+            run_blocking_job(ensure_gh_available).await?;
+            let release_notes = release_notes
+                .as_deref()
+                .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
+            create_github_release_with_retry_async(repo_root.clone(), tag_name.clone(), release_notes.to_string()).await?;
+        }
+
+        let scope_notice = if active_scope.scope_kind.is_some() {
+            format!(" for {}", active_scope.display_name)
+        } else {
+            String::new()
+        };
+        let summary = match action {
+            TagAction::CreateLocal if created => format!("Created local tag '{}' in {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}{}.", tag_name, project_name, scope_notice),
+        };
+
+        return Ok(BackgroundTagOutcome {
+            summary: if annotation.is_empty() {
+                append_background_tag_summary_notes(summary, &summary_notes)
+            } else {
+                append_background_tag_summary_notes(format!("{} Annotation included.", summary), &summary_notes)
+            },
+            replay_notices: replay_outcome.notices,
+            replay_errors: replay_outcome.errors,
+        });
     }
 
     if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
@@ -4755,7 +5435,7 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
 
     if matches!(action, TagAction::CreatePushAndRelease) {
         run_blocking_job(ensure_gh_available).await?;
-        let release_notes = generated_changelog
+        let release_notes = release_notes
             .as_deref()
             .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
         create_github_release_with_retry_async(repo_root.clone(), tag_name.clone(), release_notes.to_string()).await?;
@@ -4775,11 +5455,143 @@ async fn run_create_tag_job_async(dialog: TagDialog, changelog_enabled: bool) ->
 
     Ok(BackgroundTagOutcome {
         summary: if annotation.is_empty() {
-            summary
+            append_background_tag_summary_notes(summary, &summary_notes)
         } else {
-            format!("{} Annotation included.", summary)
+            append_background_tag_summary_notes(format!("{} Annotation included.", summary), &summary_notes)
         },
+        replay_notices: Vec::new(),
+        replay_errors: Vec::new(),
     })
+}
+
+fn append_background_tag_summary_notes(summary: String, notes: &[String]) -> String {
+    if notes.is_empty() {
+        summary
+    } else {
+        format!("{} {}", summary, notes.join(" "))
+    }
+}
+
+async fn replay_postponed_std_changelogs(
+    scope: &crate::git::GitScopeContext,
+    branch_name: &str,
+) -> Result<PostponedReplayOutcome> {
+    let scope = scope.clone();
+    let repo_root = scope.repo_root.clone();
+    let branch_name = branch_name.to_string();
+    run_blocking_job(move || replay_postponed_std_changelogs_blocking(&scope, &repo_root, &branch_name)).await
+}
+
+fn replay_postponed_std_changelogs_blocking(
+    scope: &crate::git::GitScopeContext,
+    repo_root: &str,
+    branch_name: &str,
+) -> Result<PostponedReplayOutcome> {
+    if !is_mainline_branch(branch_name) {
+        return Ok(PostponedReplayOutcome::default());
+    }
+
+    let memory = load_merged_std_changelog_memory(repo_root)?;
+    let mut postponed = memory
+        .entries
+        .iter()
+        .filter(|entry| entry.generated == crate::mmr::StdChangelogGeneratedState::Postponed)
+        .cloned()
+        .collect::<Vec<_>>();
+    postponed.sort_by(|left, right| left.ts.cmp(&right.ts));
+    if postponed.is_empty() {
+		return Ok(PostponedReplayOutcome::default());
+    }
+
+    let sorted_tags = sorted_local_tags_with_cancel(repo_root, None)?;
+    let mut outcome = PostponedReplayOutcome::default();
+    for entry in postponed {
+        let mainline_branches = branches_containing_ref_with_cancel(repo_root, &entry.tag_from, None)?;
+        if !mainline_branches.iter().any(|branch| is_mainline_branch(branch)) {
+            continue;
+        }
+
+        if find_archived_changelog_markdown(repo_root, &entry.tag_from)?.is_some() {
+            record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
+            outcome.notices.push(format!("Replayed postponed changelog '{}' was already archived and has been marked generated.", entry.tag_from));
+            continue;
+        }
+
+        let Some(previous_tag) = previous_tag_for_replay(&sorted_tags, &entry.tag_from) else {
+            let reason = "no previous tag found for postponed replay".to_string();
+            record_std_changelog_error(repo_root, &entry.tag_from, &entry.tag_origin, &reason)?;
+            outcome.errors.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
+            continue;
+        };
+
+        let range = load_change_range_for_tags_with_cancel(scope, &previous_tag, &entry.tag_from, None)?;
+        if range.lines.is_empty() {
+            let reason = "replayed postponed changelog range was empty".to_string();
+            record_std_changelog_error(repo_root, &entry.tag_from, &entry.tag_origin, &reason)?;
+            outcome.errors.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
+            continue;
+        }
+
+        let markdown = std_changelog_gen(entry.tag_from.clone(), &range.lines).markdown;
+        archive_changelog_markdown(repo_root, &entry.tag_from, &markdown)?;
+        record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
+        outcome.notices.push(format!("Replayed postponed changelog '{}' after it reached main/master lineage.", entry.tag_from));
+    }
+
+    Ok(outcome)
+}
+
+fn previous_tag_for_replay(sorted_tags: &[String], tag_name: &str) -> Option<String> {
+    let index = sorted_tags.iter().position(|candidate| candidate.trim() == tag_name.trim())?;
+    sorted_tags.get(index + 1).cloned()
+}
+
+fn decide_std_changelog_generation(
+    previous_tag: &str,
+    current_branch: &str,
+    previous_branches: &[String],
+    new_branches: &[String],
+) -> StdChangelogDecision {
+    if is_mainline_branch(current_branch) {
+        return StdChangelogDecision::Generate;
+    }
+
+    let previous_has_main = previous_branches.iter().any(|branch| is_mainline_branch(branch));
+    let new_has_main = new_branches.iter().any(|branch| is_mainline_branch(branch));
+    if previous_has_main && new_has_main {
+        return StdChangelogDecision::Generate;
+    }
+    if previous_has_main && !new_has_main {
+        return StdChangelogDecision::IgnoreNotOnMain;
+    }
+
+    let previous_normalized = normalized_branch_names(previous_branches);
+    let new_normalized = normalized_branch_names(new_branches);
+    if previous_normalized == new_normalized && new_normalized.len() == 1 {
+        let branch = new_normalized[0].clone();
+        if !is_mainline_branch(&branch) {
+            let _ = previous_tag;
+            return StdChangelogDecision::PostponeOnSubBranch(branch);
+        }
+    }
+
+    StdChangelogDecision::IgnoreNotOnMain
+}
+
+fn normalized_branch_names(branches: &[String]) -> Vec<String> {
+    let mut names = branches
+        .iter()
+        .map(|branch| branch.trim().trim_start_matches('*').trim().to_string())
+        .filter(|branch| !branch.is_empty())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn is_mainline_branch(branch: &str) -> bool {
+    let normalized = branch.trim().trim_start_matches('*').trim();
+    normalized.eq_ignore_ascii_case("main") || normalized.eq_ignore_ascii_case("master")
 }
 
 fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeContext) -> Result<String> {
@@ -4787,10 +5599,35 @@ fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeCont
         return Ok(markdown);
     }
 
+    let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
+    if let Some(last_public_release) = last_public_release.filter(|tag| tag.trim() != tag_name.trim()) {
+        let release_range = load_change_range_for_tags_with_cancel(scope, &last_public_release, tag_name, None)?;
+        return Ok(rls_changelog_gen(tag_name.to_string(), &release_range.lines, Some(&last_public_release)).markdown);
+    }
+
     let recent_range = load_recent_change_range_with_cancel(scope, None)?;
-    Ok(build_document_from_git_log(tag_name.to_string(), &recent_range.lines)
-        .render_markdown()
-        .markdown)
+    Ok(rls_changelog_gen(tag_name.to_string(), &recent_range.lines, None).markdown)
+}
+
+fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
+    ensure_gh_available()?;
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .args(["release", "list", "--limit", "1", "--json", "tagName", "--jq", ".[].tagName"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to query latest public release")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        bail!("failed to query latest public release: {}", detail)
+    }
+
+    let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!tag.is_empty()).then_some(tag))
 }
 
 async fn run_git_push_with_retry_async(repo_root: String, remote_spec: String, tag_name: String) -> Result<()> {
@@ -5764,6 +6601,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::changelog::build_document_from_git_log;
 
     #[test]
     fn derive_repo_root_uses_parent_directory() {
@@ -6046,6 +6884,128 @@ mod tests {
     }
 
     #[test]
+    fn std_changelog_decision_generates_on_main_branch() {
+        let decision = decide_std_changelog_generation(
+            "v0.7.3",
+            "main",
+            &["main".to_string()],
+            &["main".to_string()],
+        );
+
+        assert_eq!(decision, StdChangelogDecision::Generate);
+    }
+
+    #[test]
+    fn custom_changelog_range_defaults_to_latest_tag_to_head() {
+        let state = CustomChangelogRangeState::new(
+            "main".to_string(),
+            vec!["v1.2.0".to_string(), "v1.1.0".to_string(), "v1.0.0".to_string()],
+            None,
+        );
+
+        assert_eq!(state.current_from_ref(), Some("v1.2.0"));
+        assert_eq!(state.current_to_ref(), "HEAD");
+        assert_eq!(state.range_label(), "v1.2.0..HEAD");
+    }
+
+    #[test]
+    fn custom_changelog_range_keeps_to_ref_newer_than_from_ref() {
+        let mut state = CustomChangelogRangeState::new(
+            "main".to_string(),
+            vec!["v1.2.0".to_string(), "v1.1.0".to_string(), "v1.0.0".to_string()],
+            Some(CustomChangelogSelection {
+                from_ref: "v1.0.0".to_string(),
+                to_ref: Some("v1.2.0".to_string()),
+            }),
+        );
+
+        assert_eq!(state.range_label(), "v1.0.0..v1.2.0");
+
+        state.select_focus(CustomChangelogRangeFocus::From);
+        assert!(state.adjust_focused_selection(-1));
+
+        assert_eq!(state.current_from_ref(), Some("v1.1.0"));
+        assert_eq!(state.current_to_ref(), "v1.2.0");
+        assert_eq!(state.range_label(), "v1.1.0..v1.2.0");
+
+        assert!(state.adjust_focused_selection(-1));
+        assert_eq!(state.current_from_ref(), Some("v1.2.0"));
+        assert_eq!(state.current_to_ref(), "HEAD");
+    }
+
+        #[test]
+        fn std_changelog_decision_ignores_when_new_tag_is_not_on_main() {
+            let decision = decide_std_changelog_generation(
+                "v0.7.3",
+                "feature-a",
+                &["main".to_string()],
+                &["feature-a".to_string()],
+            );
+
+            assert_eq!(decision, StdChangelogDecision::IgnoreNotOnMain);
+        }
+
+        #[test]
+        fn std_changelog_decision_postpones_when_tags_share_single_sub_branch() {
+            let decision = decide_std_changelog_generation(
+                "v0.7.3",
+                "feature-a",
+                &["feature-a".to_string()],
+                &["feature-a".to_string()],
+            );
+
+            assert_eq!(decision, StdChangelogDecision::PostponeOnSubBranch("feature-a".to_string()));
+        }
+
+        #[test]
+        fn std_changelog_decision_normalizes_branch_markers() {
+            let decision = decide_std_changelog_generation(
+                "v0.7.3",
+                "feature-a",
+                &["* feature-a".to_string()],
+                &["feature-a".to_string()],
+            );
+
+            assert_eq!(decision, StdChangelogDecision::PostponeOnSubBranch("feature-a".to_string()));
+        }
+
+    #[test]
+    fn std_changelog_sub_branch_dialog_defaults_to_postpone() {
+        let dialog = StdChangelogSubBranchDialog::new(
+            PendingTagRequest {
+                dialog: TagDialog {
+                    project_name: "demo".to_string(),
+                    scopes: Vec::new(),
+                    selected_scope: 0,
+                    tag_name: TextInput::with_value("v0.7.4"),
+                    annotation: String::new(),
+                    actions: vec![TagAction::CreateLocal],
+                    integration_mode: IntegrationMode::GitLocalOnly,
+                    action_index: 0,
+                },
+                changelog_enabled: true,
+                std_changelog_policy: StdChangelogExecutionPolicy::Auto,
+            },
+            "v0.7.3".to_string(),
+            "feature-a".to_string(),
+        );
+
+        assert!(matches!(dialog.selected_choice(), StdChangelogSubBranchChoice::Postpone));
+    }
+
+    #[test]
+    fn replay_uses_next_older_sorted_tag() {
+        let tags = vec![
+            "v0.7.5".to_string(),
+            "v0.7.4".to_string(),
+            "v0.7.3".to_string(),
+        ];
+
+        assert_eq!(previous_tag_for_replay(&tags, "v0.7.4"), Some("v0.7.3".to_string()));
+        assert_eq!(previous_tag_for_replay(&tags, "v0.7.3"), None);
+    }
+
+        #[test]
     fn dashboard_delete_shortcut_removes_focused_scope_for_branched_projects() {
         let mut app = App::new_for_tests().expect("app should initialize");
         app.config.projects = vec![ProjectConfig {

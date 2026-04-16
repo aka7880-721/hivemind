@@ -188,6 +188,7 @@ impl RenderedChangelog {
 pub(crate) struct ChangelogDocument {
 	current_tag: String,
 	date: NaiveDate,
+	context_lines: Vec<String>,
 	release_message: Option<String>,
 	commits: Vec<ParsedCommit>,
 }
@@ -197,6 +198,7 @@ impl ChangelogDocument {
 		Self {
 			current_tag: current_tag.into(),
 			date: Local::now().date_naive(),
+			context_lines: Vec::new(),
 			release_message: None,
 			commits,
 		}
@@ -216,12 +218,25 @@ impl ChangelogDocument {
 		self
 	}
 
+	pub(crate) fn with_context_line(mut self, context_line: impl Into<String>) -> Self {
+		let line = context_line.into();
+		if !line.trim().is_empty() {
+			self.context_lines.push(line.trim().to_string());
+		}
+		self
+	}
+
 	pub(crate) fn render_markdown(&self) -> RenderedChangelog {
 		let mut lines = vec![
 			format!("## Changelog {}", self.current_tag),
 			self.date.format("%Y-%m-%d").to_string(),
 			String::new(),
 		];
+
+		if !self.context_lines.is_empty() {
+			lines.extend(self.context_lines.iter().cloned());
+			lines.push(String::new());
+		}
 
 		render_breaking_section(&mut lines, &self.commits);
 
@@ -266,6 +281,42 @@ pub(crate) fn build_document_from_git_log(current_tag: impl Into<String>, lines:
 	ChangelogDocument::new(current_tag, commits)
 }
 
+pub(crate) fn std_changelog_gen(current_tag: impl Into<String>, lines: &[String]) -> RenderedChangelog {
+	build_document_from_git_log(current_tag, lines).render_markdown()
+}
+
+pub(crate) fn rls_changelog_gen(
+	current_tag: impl Into<String>,
+	lines: &[String],
+	last_public: Option<&str>,
+) -> RenderedChangelog {
+	let mut document = build_document_from_git_log(current_tag, lines);
+	if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
+		document = document.with_context_line(format!("_Previous Public Release Version: {}_", last_public.trim()));
+	}
+	document.render_markdown()
+}
+
+#[allow(dead_code)]
+pub(crate) fn custom_changelog_gen(
+	current_tag: impl Into<String>,
+	lines: &[String],
+	release_message: Option<&str>,
+) -> RenderedChangelog {
+	let mut document = build_document_from_git_log(current_tag, lines);
+	if let Some(release_message) = release_message.filter(|value| !value.trim().is_empty()) {
+		document = document.with_release_message(release_message.to_string());
+	}
+	document.render_markdown()
+}
+
+pub(crate) fn sum_changelog_gen(repo_root: &str) -> Result<PathBuf> {
+	let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
+	fs::create_dir_all(&history_dir)
+		.with_context(|| format!("failed to create {}", history_dir.display()))?;
+	write_history_summary_readme(&history_dir)
+}
+
 pub(crate) fn write_changelog_markdown(
 	repo_root: &str,
 	changelog_path: &str,
@@ -307,20 +358,12 @@ pub(crate) fn archive_changelog_markdown(repo_root: &str, label: &str, markdown:
 	fs::create_dir_all(&history_dir)
 		.with_context(|| format!("failed to create {}", history_dir.display()))?;
 
-	let file_name = format!(
-		"{}-{}.md",
-		Local::now().format("%Y%m%d-%H%M%S-%3f"),
-		sanitize_history_label(label),
-	);
+	let file_name = format_history_file_name(label, Local::now().format("%Y%m%d-%H%M%S-%3f").to_string());
 	let output_path = history_dir.join(file_name);
 	fs::write(&output_path, markdown.trim_end())
 		.with_context(|| format!("failed to write {}", output_path.display()))?;
 	write_history_summary_readme(&history_dir)?;
 	Ok(output_path)
-}
-
-pub(crate) fn history_summary_readme_path(repo_root: &str) -> PathBuf {
-	Path::new(repo_root).join(HISTORY_DIR_NAME).join(HISTORY_SUMMARY_FILE)
 }
 
 pub(crate) fn find_archived_changelog_markdown(repo_root: &str, label: &str) -> Result<Option<String>> {
@@ -334,19 +377,20 @@ pub(crate) fn find_archived_changelog_markdown(repo_root: &str, label: &str) -> 
 		.with_context(|| format!("failed to read {}", history_dir.display()))?
 		.filter_map(|entry| entry.ok().map(|item| item.path()))
 		.filter(|path| path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case("md")))
-		.filter(|path| {
-			path.file_stem()
-				.and_then(|value| value.to_str())
-				.is_some_and(|stem| candidates.iter().any(|candidate| stem.ends_with(&format!("-{}", candidate))))
+		.filter_map(|path| {
+			let stem = path.file_stem()?.to_str()?;
+			let parsed = parse_history_file_stem(stem)?;
+			Some((path, parsed))
 		})
+		.filter(|(_, parsed)| candidates.iter().any(|candidate| candidate == &parsed.label))
 		.collect::<Vec<_>>();
 
 	if matches.is_empty() {
 		return Ok(None);
 	}
 
-	matches.sort();
-	let path = matches.pop().expect("matches should not be empty");
+	matches.sort_by(|left, right| left.1.timestamp.cmp(&right.1.timestamp).then_with(|| left.0.cmp(&right.0)));
+	let (path, _) = matches.pop().expect("matches should not be empty");
 	Ok(Some(
 		fs::read_to_string(&path)
 			.with_context(|| format!("failed to read {}", path.display()))?,
@@ -374,6 +418,10 @@ fn sanitize_history_label(label: &str) -> String {
 	} else {
 		sanitized.to_string()
 	}
+}
+
+fn format_history_file_name(label: &str, timestamp: String) -> String {
+	format!("{}__{}.md", sanitize_history_label(label), timestamp)
 }
 
 fn history_label_candidates(label: &str) -> Vec<String> {
@@ -404,6 +452,12 @@ struct ArchivedChangelogEntry {
 	markdown: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedHistoryFileStem {
+	timestamp: String,
+	label: String,
+}
+
 fn write_history_summary_readme(history_dir: &Path) -> Result<PathBuf> {
 	let entries = load_archived_changelog_entries(history_dir)?;
 	let summary_path = history_dir.join(HISTORY_SUMMARY_FILE);
@@ -421,13 +475,13 @@ fn load_archived_changelog_entries(history_dir: &Path) -> Result<Vec<ArchivedCha
 		.filter(|path| path.file_name().and_then(|value| value.to_str()) != Some(HISTORY_SUMMARY_FILE))
 		.filter_map(|path| {
 			let stem = path.file_stem()?.to_str()?;
-			let (timestamp, label) = parse_history_file_stem(stem)?;
-			Some((path, timestamp, label))
+			let parsed = parse_history_file_stem(stem)?;
+			Some((path, parsed))
 		})
-		.map(|(path, timestamp, label)| {
+		.map(|(path, parsed)| {
 			Ok(ArchivedChangelogEntry {
-				timestamp,
-				label,
+				timestamp: parsed.timestamp,
+				label: parsed.label,
 				markdown: fs::read_to_string(&path)
 					.with_context(|| format!("failed to read {}", path.display()))?,
 			})
@@ -438,12 +492,41 @@ fn load_archived_changelog_entries(history_dir: &Path) -> Result<Vec<ArchivedCha
 	Ok(entries)
 }
 
-fn parse_history_file_stem(stem: &str) -> Option<(String, String)> {
+fn parse_history_file_stem(stem: &str) -> Option<ParsedHistoryFileStem> {
+	if let Some((label, timestamp)) = stem.split_once("__") {
+		let normalized_timestamp = normalize_history_timestamp(timestamp)?;
+		let normalized_label = sanitize_history_label(label);
+		if normalized_label.is_empty() {
+			return None;
+		}
+		return Some(ParsedHistoryFileStem {
+			timestamp: normalized_timestamp,
+			label: normalized_label,
+		});
+	}
+
 	let mut parts = stem.splitn(4, '-');
 	let date = parts.next()?;
 	let time = parts.next()?;
 	let millis = parts.next()?;
 	let label = parts.next()?.trim();
+	let normalized_timestamp = normalize_history_timestamp(&format!("{date}-{time}-{millis}"))?;
+	let normalized_label = sanitize_history_label(label);
+	if normalized_label.is_empty() {
+		return None;
+	}
+
+	Some(ParsedHistoryFileStem {
+		timestamp: normalized_timestamp,
+		label: normalized_label,
+	})
+}
+
+fn normalize_history_timestamp(timestamp: &str) -> Option<String> {
+	let mut parts = timestamp.splitn(3, '-');
+	let date = parts.next()?;
+	let time = parts.next()?;
+	let millis = parts.next()?;
 
 	if date.len() != 8
 		|| time.len() != 6
@@ -451,12 +534,11 @@ fn parse_history_file_stem(stem: &str) -> Option<(String, String)> {
 		|| !date.chars().all(|character| character.is_ascii_digit())
 		|| !time.chars().all(|character| character.is_ascii_digit())
 		|| !millis.chars().all(|character| character.is_ascii_digit())
-		|| label.is_empty()
 	{
 		return None;
 	}
 
-	Some((format!("{date}-{time}-{millis}"), label.to_string()))
+	Some(format!("{date}-{time}-{millis}"))
 }
 
 fn render_history_summary_markdown(entries: &[ArchivedChangelogEntry]) -> String {
@@ -1113,6 +1195,28 @@ mod tests {
 	}
 
 	#[test]
+	fn release_now_generator_places_previous_public_release_under_date() {
+		let changelog = rls_changelog_gen(
+			"v0.7.3",
+			&["abc1234 fix: tighten ReleaseNOW history selection".to_string()],
+			Some("v0.7.1"),
+		);
+
+		assert!(changelog.markdown.contains("## Changelog v0.7.3\n2026-"));
+		assert!(changelog.markdown.contains("_Previous Public Release Version: v0.7.1_"));
+	}
+
+	#[test]
+	fn standard_and_custom_generators_use_shared_engine() {
+		let lines = vec!["abc1234 feat: ship shared generator wrappers".to_string()];
+		let standard = std_changelog_gen("v0.7.3", &lines);
+		let custom = custom_changelog_gen("v0.7.3", &lines, Some("Custom range output."));
+
+		assert!(standard.markdown.contains("### 🧩 Features"));
+		assert!(custom.markdown.contains("Custom range output."));
+	}
+
+	#[test]
 	fn parses_graph_log_lines_into_commits() {
 		let parsed = parse_graph_log_line("* a1b2c3d feat(UI): ship new dashboard").expect("graph line should parse");
 
@@ -1222,17 +1326,17 @@ mod tests {
 		)
 		.expect("old entry should be written");
 		std::fs::write(
-			history_dir.join("20260415-111111-002-core-v1-2-3.md"),
+			history_dir.join("core-v1-2-3__20260415-111111-002.md"),
 			"## Changelog core-v1.2.3\n\nnew entry\n\n".to_string() + FOOTER,
 		)
 		.expect("new entry should be written");
 		std::fs::write(
-			history_dir.join("20260414-090000-003-v1-2-2.md"),
+			history_dir.join("v1-2-2__20260414-090000-003.md"),
 			"## Changelog v1.2.2\n\nolder version\n\n".to_string() + FOOTER,
 		)
 		.expect("older version should be written");
 
-		let summary_path = write_history_summary_readme(&history_dir).expect("summary should be written");
+		let summary_path = sum_changelog_gen(&repo_root.display().to_string()).expect("summary should be written");
 		let summary = std::fs::read_to_string(summary_path).expect("summary should be readable");
 
 		assert!(summary.contains("# Changelog History"));
@@ -1241,5 +1345,16 @@ mod tests {
 		assert!(!summary.contains("old entry"));
 
 		let _ = std::fs::remove_dir_all(repo_root);
+	}
+
+	#[test]
+	fn parses_legacy_and_new_history_file_stems() {
+		let legacy = parse_history_file_stem("20260415-111111-002-core-v1-2-3").expect("legacy stem should parse");
+		let current = parse_history_file_stem("core-v1-2-3__20260415-111111-002").expect("new stem should parse");
+
+		assert_eq!(legacy.timestamp, "20260415-111111-002");
+		assert_eq!(current.timestamp, "20260415-111111-002");
+		assert_eq!(legacy.label, "core-v1-2-3");
+		assert_eq!(current.label, "core-v1-2-3");
 	}
 }
