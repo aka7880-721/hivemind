@@ -792,21 +792,35 @@ fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommi
 	for (specific_name, specific_heading) in specific_keys {
 		if let Some(specific_heading) = specific_heading {
 			lines.push(format!("### ✨ New {}: {}", specific_heading, specific_name));
+			lines.push(String::new());
+			let section_commits: Vec<&ParsedCommit> = commits
+				.iter()
+				.copied()
+				.filter(|commit| {
+					commit.is_new
+						&& commit.specific.as_deref() == Some(specific_name.as_str())
+						&& commit.specific_heading == Some(specific_heading)
+				})
+				.collect::<Vec<_>>();
+			for commit in section_commits {
+				render_commit_bullets(lines, commit);
+			}
+			end_specific_section(lines);
 		} else {
 			lines.push(format!("### ✨ New in {}:", specific_name));
+			lines.push(String::new());
+			let section_commits: Vec<&ParsedCommit> = commits
+				.iter()
+				.copied()
+				.filter(|commit| {
+					commit.is_new
+						&& commit.specific.as_deref() == Some(specific_name.as_str())
+						&& commit.specific_heading == specific_heading
+				})
+				.collect::<Vec<_>>();
+			render_category_subsections(lines, &section_commits, 4);
+			end_specific_section(lines);
 		}
-		lines.push(String::new());
-		let section_commits: Vec<&ParsedCommit> = commits
-			.iter()
-			.copied()
-			.filter(|commit| {
-				commit.is_new
-					&& commit.specific.as_deref() == Some(specific_name.as_str())
-					&& commit.specific_heading == specific_heading
-			})
-			.collect::<Vec<_>>();
-		render_category_subsections(lines, &section_commits, 4);
-		end_specific_section(lines);
 	}
 
 	true
@@ -984,6 +998,20 @@ mod tests {
 
 		assert_eq!(parsed.category, Some(Category::Broken));
 		assert_eq!(parsed.effective_category(), Category::Broken);
+	}
+
+	#[test]
+	fn renders_new_specific_heading_without_duplicate_category() {
+		let changelog = ChangelogDocument::new(
+			"v0.7.2",
+			vec![ParsedCommit::parse("@.feat(Changelog Generation): add summary generation", "abc1234")],
+		)
+		.with_date(NaiveDate::from_ymd_opt(2026, 4, 16).unwrap())
+		.render_markdown();
+
+		assert!(changelog.markdown.contains("### ✨ New Feature: Changelog Generation"));
+		assert!(changelog.markdown.contains("* add summary generation"));
+		assert!(!changelog.markdown.contains("#### 🧩 Features"));
 	}
 
 	#[test]
