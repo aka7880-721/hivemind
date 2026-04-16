@@ -54,8 +54,7 @@ use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTe
 use crate::{
     branding::{PixelLogo, choose_header_content},
     changelog::{
-        ChangelogDocument, archive_changelog_markdown, build_document_from_git_log,
-        find_archived_changelog_markdown,
+        ChangelogDocument, archive_changelog_markdown, find_archived_changelog_markdown,
         rls_changelog_gen, std_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
     },
     config::{
@@ -71,10 +70,10 @@ use crate::{
         GitCancellation, branches_containing_ref_with_cancel, collect_all_branch_git_scope_contexts,
         current_branch_with_cancel, ensure_gh_available, ensure_local_tag, latest_local_tag_with_cancel,
         RepoActivitySummary, load_scope_activity_summary_with_cancel, run_git, run_git_checked,
-        split_output_lines,
+        sorted_local_tags_with_cancel, split_output_lines,
     },
     mmr::{
-        record_std_changelog_created, record_std_changelog_error, record_std_changelog_generated,
+        load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error, record_std_changelog_generated,
         record_std_changelog_postponed,
     },
     overview_pg::{OverviewTab, overview_tab_rects, overview_tabs, render_overview_tabs},
@@ -5044,6 +5043,10 @@ async fn run_create_tag_job_async(
                 summary_notes.push("Standard changelog was not generated because no previous tag was found.".to_string());
             }
         }
+
+		if is_mainline_branch(&branch_name) {
+			summary_notes.extend(replay_postponed_std_changelogs(&active_scope, &branch_name).await?);
+		}
     }
 
     if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
@@ -5086,6 +5089,80 @@ fn append_background_tag_summary_notes(summary: String, notes: &[String]) -> Str
     } else {
         format!("{} {}", summary, notes.join(" "))
     }
+}
+
+async fn replay_postponed_std_changelogs(
+    scope: &crate::git::GitScopeContext,
+    branch_name: &str,
+) -> Result<Vec<String>> {
+    let scope = scope.clone();
+    let repo_root = scope.repo_root.clone();
+    let branch_name = branch_name.to_string();
+    run_blocking_job(move || replay_postponed_std_changelogs_blocking(&scope, &repo_root, &branch_name)).await
+}
+
+fn replay_postponed_std_changelogs_blocking(
+    scope: &crate::git::GitScopeContext,
+    repo_root: &str,
+    branch_name: &str,
+) -> Result<Vec<String>> {
+    if !is_mainline_branch(branch_name) {
+        return Ok(Vec::new());
+    }
+
+    let memory = load_merged_std_changelog_memory(repo_root)?;
+    let mut postponed = memory
+        .entries
+        .iter()
+        .filter(|entry| entry.generated == crate::mmr::StdChangelogGeneratedState::Postponed)
+        .cloned()
+        .collect::<Vec<_>>();
+    postponed.sort_by(|left, right| left.ts.cmp(&right.ts));
+    if postponed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sorted_tags = sorted_local_tags_with_cancel(repo_root, None)?;
+    let mut notes = Vec::new();
+    for entry in postponed {
+        let mainline_branches = branches_containing_ref_with_cancel(repo_root, &entry.tag_from, None)?;
+        if !mainline_branches.iter().any(|branch| is_mainline_branch(branch)) {
+            continue;
+        }
+
+        if find_archived_changelog_markdown(repo_root, &entry.tag_from)?.is_some() {
+            record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
+            notes.push(format!("Replayed postponed changelog '{}' was already archived and has been marked generated.", entry.tag_from));
+            continue;
+        }
+
+        let Some(previous_tag) = previous_tag_for_replay(&sorted_tags, &entry.tag_from) else {
+            let reason = "no previous tag found for postponed replay".to_string();
+            record_std_changelog_error(repo_root, &entry.tag_from, &entry.tag_origin, &reason)?;
+            notes.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
+            continue;
+        };
+
+        let range = load_change_range_for_tags_with_cancel(scope, &previous_tag, &entry.tag_from, None)?;
+        if range.lines.is_empty() {
+            let reason = "replayed postponed changelog range was empty".to_string();
+            record_std_changelog_error(repo_root, &entry.tag_from, &entry.tag_origin, &reason)?;
+            notes.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
+            continue;
+        }
+
+        let markdown = std_changelog_gen(entry.tag_from.clone(), &range.lines).markdown;
+        archive_changelog_markdown(repo_root, &entry.tag_from, &markdown)?;
+        record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
+        notes.push(format!("Replayed postponed changelog '{}' after it reached main/master lineage.", entry.tag_from));
+    }
+
+    Ok(notes)
+}
+
+fn previous_tag_for_replay(sorted_tags: &[String], tag_name: &str) -> Option<String> {
+    let index = sorted_tags.iter().position(|candidate| candidate.trim() == tag_name.trim())?;
+    sorted_tags.get(index + 1).cloned()
 }
 
 fn decide_std_changelog_generation(
@@ -6143,6 +6220,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::changelog::build_document_from_git_log;
 
     #[test]
     fn derive_repo_root_uses_parent_directory() {
@@ -6494,6 +6572,18 @@ mod tests {
         );
 
         assert!(matches!(dialog.selected_choice(), StdChangelogSubBranchChoice::Postpone));
+    }
+
+    #[test]
+    fn replay_uses_next_older_sorted_tag() {
+        let tags = vec![
+            "v0.7.5".to_string(),
+            "v0.7.4".to_string(),
+            "v0.7.3".to_string(),
+        ];
+
+        assert_eq!(previous_tag_for_replay(&tags, "v0.7.4"), Some("v0.7.3".to_string()));
+        assert_eq!(previous_tag_for_replay(&tags, "v0.7.3"), None);
     }
 
         #[test]
