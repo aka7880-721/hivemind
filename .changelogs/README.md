@@ -2,6 +2,42 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.9.1
+2026-04-17
+
+#### What's changed:
+
+### ✨ New in Changelogs:
+
+#### 🧩 Features
+
+* Add support for ignoring specific commits in changelog generation:   _(0450b8b)_
+  * this is done simple by adding `~` as subject
+  * form 1→ `~: this is my commit note that won't be in the changelog`
+  * form 2→ `~{category}: you can just add tilde in front of any category, eg feat, docs, enh, fix, etc`
+  * form 3→ `fix: this bugfix part is in the changelog<semicolon> ~: this note, or extended description is not`
+  * Enjoy!
+
+---
+
+### General Improvements:
+
+### 🔧 Maintenance
+
+* CG version bump to 0.9.1   _(fe1e31c)_
+
+### 💎 Enhancements
+
+* Update commit message format for release notifications to include tilde prefix so it does not spam changelogs   _(5fccf34)_
+
+### 📝 Other
+
+* Merge pull request #18 from comfy-home/0.9.1   _(dcf71ee)_
+
+* v0.9.0 has just been released via ComfyGit!   _(48ccf8b)_
+
+---
+
 ## Changelog v0.9.0
 2026-04-17
 
