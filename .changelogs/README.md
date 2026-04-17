@@ -2,6 +2,73 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.9.0
+2026-04-17
+
+#### What's changed:
+
+### Changed in Branding
+
+#### 🎨 Visuals
+
+* update narrow ASCII header   _(5b95b61)_
+
+* adjust header height for compact viewports   _(56ac09c)_
+
+* version marker repositioning   _(4acc52a)_
+
+* simplify fallback   _(cb9458b)_
+
+* update base ASCII header   _(d5dbdaf)_
+
+#### 🗑️ Removed
+
+* fallback graphical logo   _(cb9458b)_
+
+---
+
+### General Improvements:
+
+### 🧩 Features
+
+* add footer visibility management to App struct   _(511f95c)_
+
+### 🐛 Fix(es)
+
+* Correct button action   _(6157a49)_
+
+### 🔧 Maintenance
+
+* Update changelog for version 0.8.3 and syncmem entries   _(a4150bf)_
+
+* CVB version bump to 0.9.0   _(ca35229)_
+
+### ℹ️ Documentation
+
+* rename project from ComfyVersionBumper to ComfyGit and update related documentation   _(050afc3)_
+
+### 🎨 Visuals
+
+* update button styles and positions in semver tile rendering   _(a810b55)_
+
+* further adj to compact header   _(c921821)_
+
+* NEW→ Compact header for 22row or less (eg useful for VSCode terminal bottom display)   _(30375b6)_
+
+* footer auto-hide below 25 rows viewport availability   _(511f95c)_
+
+### 🗑️ Removed
+
+* remove title from overview page block   _(055d5bf)_
+
+### 📝 Other
+
+* Merge pull request #17 from comfy-home/0.9.0   _(f1940d3)_
+
+* Merge branch 'main' into 0.9.0   _(0f7c5ac)_
+
+---
+
 ## Changelog v0.8.3
 2026-04-17
 
@@ -40,6 +107,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 * Merge pull request #16 from comfy-home/0.8.3   _(1d9214b)_
 
 * add changelog for version 0.8.2 and standard changelog execution   _(08e13e3)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
 
 ---
 
@@ -85,6 +157,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 ### 📝 Other
 
 * Merge pull request #15 from comfy-home/0.8.1   _(2fa1fd2)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
 
 ---
 
@@ -176,6 +253,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 * fixes previously broken→add release now log viewport handling in render_release_now_dialog   _(7fdf770)_
 
 * fixes previously broken→add release now log viewport and selection handling in ReleaseNowDialog   _(affa899)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
 
 ---
 
@@ -283,6 +365,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 ### 📝 Other
 
 * Merge pull request #10 from comfy-home/v0.7.0   _(e6f9962)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
 
 ---
 
@@ -503,6 +590,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 
 * add git_flow.rs   _(2e41c0d)_
 
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
+
 ---
 
 ## Changelog 0.5.0
@@ -605,4 +697,4 @@ Tet
 <br>
 
 ---
-... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
+... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
