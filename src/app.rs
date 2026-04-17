@@ -6528,8 +6528,12 @@ fn main_screen_from_index(index: usize) -> Screen {
     }
 }
 
-fn header_height_for_viewport(total_height: u16) -> u16 {
-    if total_height < 40 { 6 } else { 12 }
+fn header_height_for_viewport(_total_height: u16) -> u16 {
+    if _total_height < 40 {
+        7
+    } else {
+        9
+    }
 }
 
 fn should_use_recent_changes_tab(area_height: u16, max_tile_height: u16) -> bool {
@@ -6620,9 +6624,9 @@ mod tests {
     }
 
     #[test]
-    fn compact_viewports_use_short_header() {
-        assert_eq!(header_height_for_viewport(39), 6);
-        assert_eq!(header_height_for_viewport(40), 12);
+    fn compact_viewports_use_fixed_header_height() {
+        assert_eq!(header_height_for_viewport(39), 7);
+        assert_eq!(header_height_for_viewport(40), 9);
     }
 
     #[test]
