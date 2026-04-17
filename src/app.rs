@@ -470,7 +470,16 @@ impl App {
             return Ok(());
         }
 
-        if key.code == KeyCode::Char('q') && key.modifiers.is_empty() {
+        if key.code == KeyCode::Char('q')
+            && key.modifiers.is_empty()
+            && !(matches!(self.screen, Screen::Wizard) && self.wizard.focus_accepts_text())
+            && !self
+                .project_edit_dialog
+                .as_ref()
+                .map(|dialog| dialog.focus_accepts_text())
+                .unwrap_or(false)
+            && !p_s_s::captures_text_input(self)
+        {
             self.should_quit = true;
             return Ok(());
         }
@@ -3640,6 +3649,20 @@ impl App {
 
     fn try_handle_ui_shortcut(&mut self, key: KeyEvent) -> Result<bool> {
         if key.modifiers.is_empty() && matches!(key.code, KeyCode::Char('h') | KeyCode::Char('H')) {
+            if matches!(self.screen, Screen::Wizard) && self.wizard.focus_accepts_text() {
+                return Ok(false);
+            }
+            if self
+                .project_edit_dialog
+                .as_ref()
+                .map(|dialog| dialog.focus_accepts_text())
+                .unwrap_or(false)
+            {
+                return Ok(false);
+            }
+            if p_s_s::captures_text_input(self) {
+                return Ok(false);
+            }
             self.toggle_footer()?;
             return Ok(true);
         }
