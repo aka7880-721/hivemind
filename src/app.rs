@@ -274,6 +274,8 @@ struct App {
     transient_toaster: ToastEngine<()>,
     sticky_toaster: ToastEngine<()>,
     logo: PixelLogo,
+    footer_auto_hidden: bool,
+    footer_manual_override: bool,
     pending_changelog_write: Option<PendingChangelogWrite>,
     should_quit: bool,
 }
@@ -367,6 +369,8 @@ impl App {
                 .build(),
             status,
             logo: PixelLogo::load(),
+            footer_auto_hidden: false,
+            footer_manual_override: false,
             pending_changelog_write: None,
             should_quit: false,
         })
@@ -3566,7 +3570,23 @@ impl App {
         Ok(())
     }
 
+    fn update_footer_visibility(&mut self, viewport_height: u16) {
+        if viewport_height <= 25 {
+            if !self.config.ui.hide_footer && !self.footer_manual_override {
+                self.config.ui.hide_footer = true;
+                self.footer_auto_hidden = true;
+            }
+        } else if self.footer_auto_hidden {
+            self.config.ui.hide_footer = false;
+            self.footer_auto_hidden = false;
+        }
+    }
+
     fn toggle_footer(&mut self) -> Result<()> {
+        if self.footer_auto_hidden {
+            self.footer_auto_hidden = false;
+        }
+        self.footer_manual_override = true;
         self.config.ui.hide_footer = !self.config.ui.hide_footer;
         self.config_store.save(&self.config)?;
         self.status = StatusMessage::success(if self.config.ui.hide_footer {

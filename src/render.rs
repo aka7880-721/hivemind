@@ -16,6 +16,7 @@ impl App {
 		self.release_now_log_viewport = None;
 		self.overview_tile_rects.clear();
 
+		self.update_footer_visibility(frame.area().height);
 		let header_height = header_height_for_viewport(frame.area().height);
 		let footer_height = if self.config.ui.hide_footer { 0 } else { 3 };
 		let root = Layout::default()
