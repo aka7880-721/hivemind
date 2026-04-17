@@ -244,8 +244,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "comfy-version-bumper"
-version = "0.8.3"
+name = "comfygit"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "arboard",

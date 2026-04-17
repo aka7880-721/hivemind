@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -16,6 +16,7 @@ impl App {
 		self.release_now_log_viewport = None;
 		self.overview_tile_rects.clear();
 
+		self.update_footer_visibility(frame.area().height);
 		let header_height = header_height_for_viewport(frame.area().height);
 		let footer_height = if self.config.ui.hide_footer { 0 } else { 3 };
 		let root = Layout::default()
@@ -98,6 +99,61 @@ impl App {
 	}
 
 	fn render_header(&mut self, frame: &mut Frame, area: Rect) {
+		if frame.area().height <= 22 {
+			let block = Block::default()
+				.borders(Borders::TOP)
+				.border_style(Style::default().fg(Color::Cyan));
+			frame.render_widget(block, area);
+
+			let title_row = Rect {
+				x: area.x + 1,
+				y: area.y,
+				width: area.width.saturating_sub(2),
+				height: 1,
+			};
+
+			let cols = Layout::default()
+				.direction(Direction::Horizontal)
+				.constraints([
+					Constraint::Percentage(33),
+					Constraint::Percentage(34),
+					Constraint::Percentage(33),
+				])
+				.split(title_row);
+
+			frame.render_widget(
+				Paragraph::new(Span::styled(
+					" © 2026 ComfyHome™ ",
+					Style::default().fg(Color::Cyan),
+				))
+				.alignment(Alignment::Left),
+				cols[0],
+			);
+			frame.render_widget(
+				Paragraph::new(Line::from(vec![
+					Span::styled(
+						" ComfyGit ",
+						Style::default().fg(Color::Indexed(46)).add_modifier(Modifier::BOLD),
+					),
+					Span::styled(
+						format!("v{} ", APP_VERSION),
+						Style::default().fg(Color::Indexed(121)),
+					),
+				]))
+				.alignment(Alignment::Center),
+				cols[1],
+			);
+			frame.render_widget(
+				Paragraph::new(Span::styled(
+					format!(" {} ", SUPPORT_EMAIL.trim()),
+					Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+				))
+				.alignment(Alignment::Right),
+				cols[2],
+			);
+			return;
+		}
+
 		let block = Block::default()
 			.borders(Borders::ALL)
 			.title(" © 2026 ComfyHome™ ")
@@ -325,7 +381,6 @@ impl App {
 
 		let overview_body = Block::default()
 			.borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-			.title(" Overview ")
 			.border_style(if self.dashboard_focus == DashboardPane::Overview {
 				Style::default().fg(Color::Cyan)
 			} else {
@@ -979,7 +1034,7 @@ impl App {
 			Line::from(match dialog.selected_action() {
 				TagAction::CreateLocal => "Creates a local tag only.",
 				TagAction::CreateAndPush => "Creates the local tag if needed, then pushes it.",
-				TagAction::CreatePushAndRelease => "Creates the tag, pushes it, then publishes a GitHub release with CVB-generated notes.",
+				TagAction::CreatePushAndRelease => "Creates the tag, pushes it, then publishes a GitHub release with CG-generated notes.",
 			}),
 		];
 		frame.render_widget(Paragraph::new(notes).wrap(Wrap { trim: false }), sections[2]);

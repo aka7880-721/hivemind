@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Thank you for being part of the ComfyVersionBumper community.  
+Thank you for being part of the ComfyGit community.  
 We aim to maintain a respectful, collaborative, and professional environment for all
 contributors, users, and maintainers.
 
@@ -84,7 +84,7 @@ By participating in this project, you agree to:
 - Respect the project’s licensing model  
 - Avoid introducing harmful, insecure, or malicious code  
 - Use GitHub Issues for problem reporting  
-- Submit Pull Requests that follow the [CONTRIBUTING](https://github.com/comfy-home/perk-ComfyVersionBumper?tab=contributing-ov-file) guidelines  
+- Submit Pull Requests that follow the [CONTRIBUTING](https://github.com/comfy-home/ComfyGit?tab=contributing-ov-file) guidelines  
 
 ---
 
@@ -92,4 +92,4 @@ By participating in this project, you agree to:
 
 By engaging with this project, you acknowledge that you have read and agree to abide by this Code of Conduct.
 
-Thank you for helping keep the ComfyVersionBumper community respectful and productive.
+Thank you for helping keep the ComfyGit community respectful and productive.

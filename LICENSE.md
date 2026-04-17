@@ -1,4 +1,4 @@
-# ComfyVersionBumper Project License — v1.2
+# ComfyGit Project License — v1.2
 
 ### Source model definition
 This project is under a **Source-Available (SA) / Protected‑Source (PS)** Licensing Model (SA-PS), which means:
@@ -111,7 +111,7 @@ Pull Requests (PRs) are welcome under the following conditions:
 - Contributor grants ComfyHome™ the right to relicense contributions under commercial terms if needed
 
 Submitting a PR constitutes acceptance of these terms.
-For more info, please see [CONTRIBUTING](https://github.com/comfy-home/perk-ComfyVersionBumper?tab=contributing-ov-file)
+For more info, please see [CONTRIBUTING](https://github.com/comfy-home/ComfyGit?tab=contributing-ov-file)
 
 ---
 

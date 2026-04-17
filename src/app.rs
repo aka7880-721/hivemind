@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -276,6 +276,8 @@ struct App {
     transient_toaster: ToastEngine<()>,
     sticky_toaster: ToastEngine<()>,
     logo: PixelLogo,
+    footer_auto_hidden: bool,
+    footer_manual_override: bool,
     pending_changelog_write: Option<PendingChangelogWrite>,
     should_quit: bool,
 }
@@ -371,6 +373,8 @@ impl App {
                 .build(),
             status,
             logo: PixelLogo::load(),
+            footer_auto_hidden: false,
+            footer_manual_override: false,
             pending_changelog_write: None,
             should_quit: false,
         })
@@ -379,7 +383,7 @@ impl App {
     #[cfg(test)]
     fn new_for_tests() -> Result<Self> {
         let unique = format!(
-            "cvb-test-config-{}.toml",
+            "cg-test-config-{}.toml",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -3679,7 +3683,23 @@ impl App {
         Ok(())
     }
 
+    fn update_footer_visibility(&mut self, viewport_height: u16) {
+        if viewport_height <= 25 {
+            if !self.config.ui.hide_footer && !self.footer_manual_override {
+                self.config.ui.hide_footer = true;
+                self.footer_auto_hidden = true;
+            }
+        } else if self.footer_auto_hidden {
+            self.config.ui.hide_footer = false;
+            self.footer_auto_hidden = false;
+        }
+    }
+
     fn toggle_footer(&mut self) -> Result<()> {
+        if self.footer_auto_hidden {
+            self.footer_auto_hidden = false;
+        }
+        self.footer_manual_override = true;
         self.config.ui.hide_footer = !self.config.ui.hide_footer;
         self.config_store.save(&self.config)?;
         self.status = StatusMessage::success(if self.config.ui.hide_footer {
@@ -5060,7 +5080,7 @@ fn spawn_background_worker(
 )> {
     let runtime = TokioRuntimeBuilder::new_multi_thread()
         .worker_threads(2)
-        .thread_name("cvb-bg")
+        .thread_name("cg-bg")
         .enable_all()
         .build()
         .context("failed to create tokio runtime for background jobs")?;
@@ -5804,7 +5824,7 @@ async fn run_git_push_with_retry_async(repo_root: String, remote_spec: String, t
 
 async fn create_github_release_with_retry_async(repo_root: String, tag_name: String, release_notes: String) -> Result<()> {
     let notes_file = std::env::temp_dir().join(format!(
-        "cvb-release-notes-{}-{}.md",
+        "cg-release-notes-{}-{}.md",
         std::process::id(),
         sanitize_tag_fragment(&tag_name)
     ));
@@ -6701,8 +6721,16 @@ fn main_screen_from_index(index: usize) -> Screen {
     }
 }
 
-fn header_height_for_viewport(total_height: u16) -> u16 {
-    if total_height < 40 { 6 } else { 12 }
+fn header_height_for_viewport(_total_height: u16) -> u16 {
+    if _total_height <= 18 {
+        2
+    } else if _total_height <= 22 {
+        3
+    } else if _total_height < 40 {
+        7
+    } else {
+        9
+    }
 }
 
 fn should_use_recent_changes_tab(area_height: u16, max_tile_height: u16) -> bool {
@@ -6793,9 +6821,11 @@ mod tests {
     }
 
     #[test]
-    fn compact_viewports_use_short_header() {
-        assert_eq!(header_height_for_viewport(39), 6);
-        assert_eq!(header_height_for_viewport(40), 12);
+    fn compact_viewports_use_fixed_header_height() {
+        assert_eq!(header_height_for_viewport(22), 3);
+        assert_eq!(header_height_for_viewport(23), 7);
+        assert_eq!(header_height_for_viewport(39), 7);
+        assert_eq!(header_height_for_viewport(40), 9);
     }
 
     #[test]
@@ -7227,7 +7257,7 @@ mod tests {
     #[test]
     fn cargo_lock_is_staged_for_relative_cargo_manifest_targets() {
         let unique = format!(
-            "cvb-stage-test-{}",
+            "cg-stage-test-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()

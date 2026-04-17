@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
     if cancel.is_cancelled() {
@@ -1580,7 +1580,7 @@ fn highlight_line(line: Line<'static>) -> Line<'static> {
 
 fn write_release_notes_file(notes: &str) -> Result<PathBuf> {
     let file_path = std::env::temp_dir().join(format!(
-        "cvb-release-now-notes-{}-{}.md",
+        "cg-release-now-notes-{}-{}.md",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

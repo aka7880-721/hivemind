@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -58,7 +58,7 @@ pub(super) fn apply_repo_bump_workflow(
 	next_version: &str,
 	workflow: OverviewBumpWorkflow,
 ) -> Result<()> {
-	let commit_message = format!("bump: CVB version bump to {}", next_version);
+	let commit_message = format!("bump: CG version bump to {}", next_version);
 
 	for operation in operations {
 		if !operation.stage_paths.is_empty() {

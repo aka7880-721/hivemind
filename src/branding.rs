@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -19,22 +19,21 @@ pub const LOGO_HALF_BLOCK_BOTTOM: &str = "▄";
 pub const LOGO_FULL_BLOCK: &str = "█";
 pub const TERMINAL_IMAGE_ASPECT_ADJUSTMENT: f32 = 2.0;
 
-pub const ASCII_HEADER: [&str; 4] = [
- r"▄█████  ▄▄▄  ▄▄   ▄▄ ▄▄▄▄▄ ▄▄ ▄▄ ██  ██ ▄▄▄▄▄ ▄▄▄▄   ▄▄▄▄ ▄▄  ▄▄▄  ▄▄  ▄▄ █████▄ ▄▄ ▄▄ ▄▄   ▄▄ ▄▄▄▄  ▄▄▄▄▄ ▄▄▄▄",
- r"██     ██▀██ ██▀▄▀██ ██▄▄  ▀███▀ ██▄▄██ ██▄▄  ██▄█▄ ███▄▄ ██ ██▀██ ███▄██ ██▄▄██ ██ ██ ██▀▄▀██ ██▄█▀ ██▄▄  ██▄█▄",
- r"▀█████ ▀███▀ ██   ██ ██      █    ▀██▀  ██▄▄▄ ██ ██ ▄▄██▀ ██ ▀███▀ ██ ▀██ ██▄▄█▀ ▀███▀ ██   ██ ██    ██▄▄▄ ██ ██",
- r"                                                                                                            {APP_VERSION}",
+pub const ASCII_HEADER: [&str; 3] = [
+ 
+ r"▄█████  ▄▄▄  ▄▄   ▄▄ ▄▄▄▄▄ ▄▄ ▄▄  ▄████  ▄▄ ▄▄▄▄▄▄", 
+ r"██     ██▀██ ██▀▄▀██ ██▄▄  ▀███▀ ██  ▄▄▄ ██   ██ ",  
+ r"▀█████ ▀███▀ ██   ██ ██      █    ▀███▀  ██   ██ {APP_VERSION}",
 ];
 
-pub const NARROW_ASCII_HEADER: [&str; 8] = [
+pub const NARROW_ASCII_HEADER: [&str; 7] = [
  r"                        ",
- r" ██████╗██╗   ██╗██████╗ ",
- r"██╔════╝██║   ██║██╔══██╗",
- r"██║     ██║   ██║██████╔╝",
- r"██║     ╚██╗ ██╔╝██╔══██╗",
- r"╚██████╗ ╚████╔╝ ██████╔╝",
- r" ╚═════╝  ╚═══╝  ╚═════╝ ",
- r"                      {APP_VERSION}",
+ r"██████╗ ██████╗ ",
+ r"██╔════╝██╔════╝ ",
+ r"██║     ██║  ███╗",
+ r"██║     ██║   ██║",
+ r"╚██████╗╚██████╔╝",
+ r" ╚═════╝ ╚═════╝ {APP_VERSION}",
  ];
 
 const HEADER_LOGO_MARGIN: u16 = 4;
@@ -90,25 +89,10 @@ impl PixelLogo {
         render_image(&resized)
     }
 
-    fn fallback_render(max_height: u16) -> PixelLogoRender {
-        let base = [
-            "      /\\      ",
-            "     /  \\     ",
-            "    / /\\ \\    ",
-            "   / /  \\ \\   ",
-            "  /_/____\\_\\  ",
-            "  || [][] ||    ",
-            "  ||      ||    ",
-            "  ||______||    ",
-        ];
-        let line_count = max_height.max(1) as usize;
-        let lines = base
-            .into_iter()
-            .take(line_count)
-            .map(Line::from)
-            .collect::<Vec<_>>();
-        let width = lines.iter().map(|line| line.width() as u16).max().unwrap_or(0);
-        PixelLogoRender { lines, width }
+    fn fallback_render(_max_height: u16) -> PixelLogoRender {
+        let line = Line::from("logo_error");
+        let width = line.width() as u16;
+        PixelLogoRender { lines: vec![line], width }
     }
 }
 

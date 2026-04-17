@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -245,7 +245,7 @@ mod tests {
 
 	#[test]
 	fn std_changelog_memory_paths_target_syncmem_directory() {
-		let repo_root = std::env::temp_dir().join("cvb-mmr-path-test");
+		let repo_root = std::env::temp_dir().join("cg-mmr-path-test");
 		let shared = std_changelog_memory_path(&repo_root.display().to_string(), false);
 		let local = std_changelog_memory_path(&repo_root.display().to_string(), true);
 
@@ -256,7 +256,7 @@ mod tests {
 	#[test]
 	fn save_and_load_std_changelog_memory_round_trips() {
 		let repo_root = std::env::temp_dir().join(format!(
-			"cvb-mmr-roundtrip-{}",
+			"cg-mmr-roundtrip-{}",
 			std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
@@ -321,7 +321,7 @@ mod tests {
 	#[test]
 	fn record_std_changelog_state_updates_shared_and_local_memories() {
 		let repo_root = std::env::temp_dir().join(format!(
-			"cvb-mmr-record-{}",
+			"cg-mmr-record-{}",
 			std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
@@ -347,7 +347,7 @@ mod tests {
 	#[test]
 	fn record_std_changelog_postponed_updates_both_memories() {
 		let repo_root = std::env::temp_dir().join(format!(
-			"cvb-mmr-postponed-{}",
+			"cg-mmr-postponed-{}",
 			std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()

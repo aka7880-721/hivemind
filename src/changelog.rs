@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -14,7 +14,7 @@ use std::{
 use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 
-const FOOTER: &str = "<br>\n\n---\n... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)";
+const FOOTER: &str = "<br>\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
 const TEMP_CHANGELOG_FILE: &str = "changelog_temp.md";
 const HISTORY_DIR_NAME: &str = ".changelogs";
 const HISTORY_SUMMARY_FILE: &str = "README.md";
@@ -1200,7 +1200,7 @@ mod tests {
 		assert!(changelog.markdown.contains("#### 💎 Enhancement"));
 		assert!(changelog.markdown.contains("### ℹ️ Documentation"));
 		assert!(changelog.markdown.contains("Heads-up: this release updates the public dashboard."));
-		assert!(changelog.markdown.contains("... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)"));
+		assert!(changelog.markdown.contains("... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)"));
 	}
 
 	#[test]
@@ -1278,7 +1278,7 @@ mod tests {
 	#[test]
 	fn writes_temp_changelog_to_repo_root() {
 		let repo_root = std::env::temp_dir().join(format!(
-			"cvb-temp-changelog-{}",
+			"cg-temp-changelog-{}",
 			std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
@@ -1298,7 +1298,7 @@ mod tests {
 	#[test]
 	fn archived_changelog_lookup_matches_tag_prefix_variants() {
 		let repo_root = std::env::temp_dir().join(format!(
-			"cvb-history-changelog-{}",
+			"cg-history-changelog-{}",
 			std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
@@ -1320,7 +1320,7 @@ mod tests {
 	#[test]
 	fn archived_summary_keeps_only_newest_duplicate_version() {
 		let repo_root = std::env::temp_dir().join(format!(
-			"cvb-history-summary-{}",
+			"cg-history-summary-{}",
 			std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap_or_default()
