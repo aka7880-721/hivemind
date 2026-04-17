@@ -269,6 +269,8 @@ struct App {
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
+    last_text_input_click_target: Option<TextInputClickTarget>,
+    last_text_input_click_at: Option<Instant>,
     status: StatusMessage,
     last_status_toast_id: u64,
     transient_toaster: ToastEngine<()>,
@@ -358,6 +360,8 @@ impl App {
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
+            last_text_input_click_target: None,
+            last_text_input_click_at: None,
             last_status_toast_id: status.id,
             transient_toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
@@ -1482,9 +1486,37 @@ impl App {
                         }
                     }
                 }
-                if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+
+                if let Some((action, rect)) = self.resolve_hit_target(mouse.column, mouse.row, false) {
+                    let maybe_click_target = self.text_input_click_target(&action);
+                    let mut select_all = false;
+                    if let Some(target) = maybe_click_target {
+                        let now = Instant::now();
+                        if self.last_text_input_click_target == Some(target)
+                            && self
+                                .last_text_input_click_at
+                                .map(|previous| now.duration_since(previous) <= Duration::from_millis(400))
+                                .unwrap_or(false)
+                        {
+                            select_all = true;
+                        }
+                        self.last_text_input_click_target = Some(target);
+                        self.last_text_input_click_at = Some(now);
+                    } else {
+                        self.last_text_input_click_target = None;
+                        self.last_text_input_click_at = None;
+                    }
+
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
+                    }
+
+                    if select_all {
+                        if let Some(input) = self.active_text_input_mut() {
+                            input.select_all();
+                        }
+                    } else if maybe_click_target.is_some() {
+                        self.set_text_input_cursor_from_mouse(rect, mouse.column);
                     }
                 }
             }
@@ -1501,6 +1533,14 @@ impl App {
                         if to_scope != from_scope {
                             self.reorder_dashboard_tile_scope(from_scope, to_scope);
                             self.overview_drag_scope = Some(to_scope);
+                        }
+                    }
+                }
+
+                if let Some((action, rect)) = self.resolve_hit_target(mouse.column, mouse.row, false) {
+                    if let Some(last_target) = self.last_text_input_click_target {
+                        if last_target.same_field_action(&action) {
+                            self.update_text_input_drag_selection(rect, mouse.column);
                         }
                     }
                 }
@@ -2284,7 +2324,7 @@ impl App {
         )
     }
 
-    fn resolve_hit_action(&self, column: u16, row: u16, right_click: bool) -> Option<HitAction> {
+    fn resolve_hit_target(&self, column: u16, row: u16, right_click: bool) -> Option<(HitAction, Rect)> {
         self.hit_targets
             .iter()
             .enumerate()
@@ -2339,10 +2379,57 @@ impl App {
                     return None;
                 }
 
-                Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action))
+                Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action, target.rect))
             })
-            .min_by_key(|(area, reverse_index, _)| (*area, *reverse_index))
-            .map(|(_, _, action)| action)
+            .min_by_key(|(area, reverse_index, _, _)| (*area, *reverse_index))
+            .map(|(_, _, action, rect)| (action, rect))
+    }
+
+    fn resolve_hit_action(&self, column: u16, row: u16, right_click: bool) -> Option<HitAction> {
+        self.resolve_hit_target(column, row, right_click).map(|(action, _)| action)
+    }
+
+    fn text_input_click_target(&self, action: &HitAction) -> Option<TextInputClickTarget> {
+        Some(match action {
+            HitAction::WizardField(field) => TextInputClickTarget::WizardField(*field),
+            HitAction::EditProjectField(field) => TextInputClickTarget::ProjectEditField(*field),
+            HitAction::SelectProjectSettingsField(field) => TextInputClickTarget::ProjectSettingsField(*field),
+            _ => return None,
+        })
+    }
+
+    fn active_text_input_mut(&mut self) -> Option<&mut TextInput> {
+        if matches!(self.screen, Screen::Wizard) {
+            return self.wizard.active_input_mut();
+        }
+
+        if let Some(dialog) = &mut self.project_edit_dialog {
+            return dialog.active_input_mut();
+        }
+
+        if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+            return self.project_settings_state.active_input_mut();
+        }
+
+        None
+    }
+
+    fn set_text_input_cursor_from_mouse(&mut self, rect: Rect, column: u16) {
+        if let Some(input) = self.active_text_input_mut() {
+            let click_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
+            let field_width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
+            let cursor = input.cursor_position_at_click(click_offset, field_width, true);
+            input.begin_selection_at(cursor);
+        }
+    }
+
+    fn update_text_input_drag_selection(&mut self, rect: Rect, column: u16) {
+        if let Some(input) = self.active_text_input_mut() {
+            let click_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
+            let field_width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
+            let cursor = input.cursor_position_at_click(click_offset, field_width, true);
+            input.set_cursor_position(cursor);
+        }
     }
 
     fn schedule_overview_workflow_changelog_preview(
@@ -3823,6 +3910,24 @@ impl HitTarget {
             && column < self.rect.x + self.rect.width
             && row >= self.rect.y
             && row < self.rect.y + self.rect.height
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextInputClickTarget {
+    WizardField(WizardField),
+    ProjectEditField(ProjectEditFocus),
+    ProjectSettingsField(ProjectSettingsFocus),
+}
+
+impl TextInputClickTarget {
+    fn same_field_action(&self, action: &HitAction) -> bool {
+        match (self, action) {
+            (&TextInputClickTarget::WizardField(a), &HitAction::WizardField(b)) => a == b,
+            (&TextInputClickTarget::ProjectEditField(a), &HitAction::EditProjectField(b)) => a == b,
+            (&TextInputClickTarget::ProjectSettingsField(a), &HitAction::SelectProjectSettingsField(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
