@@ -99,6 +99,61 @@ impl App {
 	}
 
 	fn render_header(&mut self, frame: &mut Frame, area: Rect) {
+		if frame.area().height <= 22 {
+			let block = Block::default()
+				.borders(Borders::TOP)
+				.border_style(Style::default().fg(Color::Cyan));
+			frame.render_widget(block, area);
+
+			let title_row = Rect {
+				x: area.x + 1,
+				y: area.y,
+				width: area.width.saturating_sub(2),
+				height: 1,
+			};
+
+			let cols = Layout::default()
+				.direction(Direction::Horizontal)
+				.constraints([
+					Constraint::Percentage(33),
+					Constraint::Percentage(34),
+					Constraint::Percentage(33),
+				])
+				.split(title_row);
+
+			frame.render_widget(
+				Paragraph::new(Span::styled(
+					" © 2026 ComfyHome™ ",
+					Style::default().fg(Color::Cyan),
+				))
+				.alignment(Alignment::Left),
+				cols[0],
+			);
+			frame.render_widget(
+				Paragraph::new(Line::from(vec![
+					Span::styled(
+						" ComfyGit ",
+						Style::default().fg(Color::Indexed(46)).add_modifier(Modifier::BOLD),
+					),
+					Span::styled(
+						format!("v{} ", APP_VERSION),
+						Style::default().fg(Color::Indexed(121)),
+					),
+				]))
+				.alignment(Alignment::Center),
+				cols[1],
+			);
+			frame.render_widget(
+				Paragraph::new(Span::styled(
+					format!(" {} ", SUPPORT_EMAIL.trim()),
+					Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+				))
+				.alignment(Alignment::Right),
+				cols[2],
+			);
+			return;
+		}
+
 		let block = Block::default()
 			.borders(Borders::ALL)
 			.title(" © 2026 ComfyHome™ ")

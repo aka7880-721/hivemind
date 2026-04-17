@@ -6549,7 +6549,9 @@ fn main_screen_from_index(index: usize) -> Screen {
 }
 
 fn header_height_for_viewport(_total_height: u16) -> u16 {
-    if _total_height < 40 {
+    if _total_height <= 22 {
+        3
+    } else if _total_height < 40 {
         7
     } else {
         9
@@ -6645,6 +6647,8 @@ mod tests {
 
     #[test]
     fn compact_viewports_use_fixed_header_height() {
+        assert_eq!(header_height_for_viewport(22), 3);
+        assert_eq!(header_height_for_viewport(23), 7);
         assert_eq!(header_height_for_viewport(39), 7);
         assert_eq!(header_height_for_viewport(40), 9);
     }
