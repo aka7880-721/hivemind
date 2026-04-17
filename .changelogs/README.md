@@ -2,6 +2,51 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.8.2
+2026-04-16
+
+#### What's changed:
+
+### Changed in release
+
+#### 🧩 Features
+
+* enhance ReleaseNowDialog and validation with changelog support and scope context - should fix std and sum ignore during rls   _(93bb74a)_
+
+#### 🐛 Fix(es)
+
+* add remote specification for GitHub release creation and push - fixes build error   _(f34eebb)_
+
+* fixes empty CL in ReleaseNOW!   _(81e1b63)_
+
+---
+
+### Changed in changelog
+
+#### 🧩 Features
+
+* add function to rebuild history summary README from changelog history - should fix std and sum ignore during rls   _(8c422a9)_
+
+#### 🐛 Fix(es)
+
+* implement standard changelog execution with improved decision logic - should fix std and sum ignore during rls   _(da8588c)_
+
+---
+
+### General Improvements:
+
+### 🔧 Maintenance
+
+* CVB version bump to 0.8.2   _(90d7063)_
+
+* CVB version bump to 0.8.1   _(0fe61be)_
+
+### 📝 Other
+
+* Merge pull request #15 from comfy-home/0.8.1   _(2fa1fd2)_
+
+---
+
 ## Changelog 0.7.3
 2026-04-15
 
@@ -12,6 +57,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 * add empty README   _(6bfa96e)_
 
 * update changelog for version 0.7.2   _(bb9500b)_
+
+<br>
+
+---
+... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
 
 ---
 
