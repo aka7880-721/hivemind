@@ -107,6 +107,7 @@ pub(crate) struct ParsedCommit {
 	pub(crate) specific_heading: Option<&'static str>,
 	pub(crate) is_new: bool,
 	pub(crate) is_breaking: bool,
+	pub(crate) is_ignored: bool,
 	pub(crate) message_items: Vec<MessageItem>,
 }
 
@@ -129,6 +130,7 @@ impl ParsedCommit {
 		let mut remainder = raw_subject.as_str().trim();
 		let mut is_breaking = false;
 		let mut is_new = false;
+		let mut is_ignored = false;
 
 		loop {
 			let trimmed = remainder.trim_start();
@@ -139,6 +141,11 @@ impl ParsedCommit {
 			}
 			if let Some(next) = trimmed.strip_prefix('@') {
 				is_new = true;
+				remainder = next;
+				continue;
+			}
+			if let Some(next) = trimmed.strip_prefix('~') {
+				is_ignored = true;
 				remainder = next;
 				continue;
 			}
@@ -158,6 +165,7 @@ impl ParsedCommit {
 			specific_heading,
 			is_new,
 			is_breaking,
+			is_ignored,
 			message_items,
 		}
 	}
@@ -238,8 +246,6 @@ impl ChangelogDocument {
 			lines.push(String::new());
 		}
 
-		render_breaking_section(&mut lines, &self.commits);
-
 		if let Some(release_message) = &self.release_message {
 			lines.push(release_message.clone());
 			lines.push(String::new());
@@ -248,9 +254,17 @@ impl ChangelogDocument {
 		lines.push("#### What's changed:".to_string());
 		lines.push(String::new());
 
-		let non_breaking = self
+		let visible_commits = self
 			.commits
 			.iter()
+			.filter(|commit| !commit.is_ignored)
+			.collect::<Vec<_>>();
+
+		render_breaking_section(&mut lines, &visible_commits);
+
+		let non_breaking = visible_commits
+			.iter()
+			.copied()
 			.filter(|commit| !commit.is_breaking)
 			.collect::<Vec<_>>();
 
@@ -839,8 +853,8 @@ fn parse_nested_list(segment: &str) -> Option<(String, Vec<String>)> {
 	Some((format!("{}:", intro.trim()), items))
 }
 
-fn render_breaking_section(lines: &mut Vec<String>, commits: &[ParsedCommit]) {
-	let breaking = commits.iter().filter(|commit| commit.is_breaking).collect::<Vec<_>>();
+fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
+	let breaking = commits.iter().copied().filter(|commit| commit.is_breaking).collect::<Vec<_>>();
 	if breaking.is_empty() {
 		return;
 	}
@@ -1113,6 +1127,41 @@ mod tests {
 		assert_eq!(parsed.category, None);
 		assert_eq!(parsed.specific, None);
 		assert_eq!(parsed.effective_category(), Category::Other);
+	}
+
+	#[test]
+	fn parses_ignore_modifier_without_category() {
+		let parsed = ParsedCommit::parse("~: ignore this commit", "abc1234");
+
+		assert!(parsed.is_ignored);
+		assert_eq!(parsed.category, None);
+		assert_eq!(parsed.specific, None);
+		assert_eq!(parsed.message_items, vec![MessageItem::Text("ignore this commit".to_string())]);
+	}
+
+	#[test]
+	fn parses_ignore_modifier_with_category() {
+		let parsed = ParsedCommit::parse("~feat: ignore this feature", "abc1234");
+
+		assert!(parsed.is_ignored);
+		assert_eq!(parsed.category, Some(Category::Features));
+		assert_eq!(parsed.message_items, vec![MessageItem::Text("ignore this feature".to_string())]);
+	}
+
+	#[test]
+	fn ignored_commits_are_excluded_from_rendered_changelog() {
+		let changelog = ChangelogDocument::new(
+			"v0.8.0",
+			vec![
+				ParsedCommit::parse("~: ignore this commit", "abc1234"),
+				ParsedCommit::parse("fix: include this commit", "def5678"),
+			],
+		)
+		.with_date(NaiveDate::from_ymd_opt(2026, 4, 17).unwrap())
+		.render_markdown();
+
+		assert!(!changelog.markdown.contains("ignore this commit"));
+		assert!(changelog.markdown.contains("include this commit"));
 	}
 
 	#[test]
