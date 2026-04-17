@@ -9,6 +9,49 @@ fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
     }
     Ok(())
 }
+
+fn stage_release_now_generated_files(repo_root: &str) -> Result<bool> {
+    let mut paths = Vec::new();
+    if Path::new(repo_root).join(".changelogs").is_dir() {
+        paths.push(".changelogs".to_string());
+    }
+    if Path::new(repo_root)
+        .join(".comfygit")
+        .join("syncmem")
+        .join("stdchlg.json")
+        .is_file()
+    {
+        paths.push(".comfygit/syncmem/stdchlg.json".to_string());
+    }
+
+    if paths.is_empty() {
+        return Ok(false);
+    }
+
+    let mut args = vec!["add".to_string(), "--".to_string()];
+    args.extend(paths);
+    let arg_refs = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    run_git_checked(repo_root, &arg_refs)?;
+    Ok(true)
+}
+
+fn has_staged_changes(repo_root: &str) -> Result<bool> {
+    Ok(!run_git(repo_root, &["diff", "--cached", "--quiet", "--exit-code"])?.success)
+}
+
+fn commit_release_now_generated_files(repo_root: &str, tag_name: &str) -> Result<bool> {
+    if !has_staged_changes(repo_root)? {
+        return Ok(false);
+    }
+
+    let commit_message = format!(
+        "ReleaseNOW!: {} has just been released via ComfyGit!",
+        tag_name
+    );
+    run_git_checked(repo_root, &["commit", "-m", &commit_message])?;
+    Ok(true)
+}
+
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
@@ -685,6 +728,41 @@ pub(super) async fn execute_release_now_async(
             emit_progress(vec![format!("Warning: {}", line)]);
         }
         release_notes.extend(std_outcome.summary_notes);
+
+        ensure_not_cancelled(&cancel)?;
+        let repo_root_for_commit = request.repo_root.clone();
+        let tag_name_for_commit = request.tag_name.clone();
+        let remote_spec_for_push = request.scope.remote_spec.clone();
+        let generated_commit_made = run_blocking_job(move || {
+            if stage_release_now_generated_files(&repo_root_for_commit)? {
+                commit_release_now_generated_files(&repo_root_for_commit, &tag_name_for_commit)
+            } else {
+                Ok(false)
+            }
+        })
+        .await?;
+
+        if generated_commit_made {
+            let remote_spec = remote_spec_for_push
+                .ok_or_else(|| anyhow!("ReleaseNOW requires a configured git remote to push generated files"))?;
+            let repo_root_for_branch = request.repo_root.clone();
+            let cancel_for_branch = cancel.clone();
+            let branch_name = run_blocking_job(move || {
+                current_branch_with_cancel(&repo_root_for_branch, Some(cancel_for_branch))
+            })
+            .await?;
+
+            emit_progress(vec![format!("Pushing generated ReleaseNOW files to {}.", remote_spec)]);
+            run_command_with_retry_async(
+                request.repo_root.clone(),
+                "git",
+                vec!["push".to_string(), remote_spec.clone(), branch_name],
+                GIT_PUSH_TIMEOUT,
+                NETWORK_RETRY_ATTEMPTS,
+                "git push",
+            )
+            .await?;
+        }
     }
 
     create_or_update_github_release(

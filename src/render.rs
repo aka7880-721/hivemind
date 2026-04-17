@@ -1174,7 +1174,7 @@ impl App {
 			])
 			.split(inner);
 
-		let (project_name, field_rows_data, show_above, show_below, save_focused, remove_focused, cancel_focused) = {
+		let (project_name, field_rows, show_above, show_below, save_focused, remove_focused, cancel_focused) = {
 			let dialog = self.project_edit_dialog.as_mut().expect("dialog checked above");
 			let (fields, row_height, top, bottom) = dialog.refresh_body_window(sections[1].height);
 			let constraints = vec![Constraint::Length(row_height); fields.len()];
@@ -1182,17 +1182,7 @@ impl App {
 				.direction(Direction::Vertical)
 				.constraints(constraints)
 				.split(sections[1]);
-			let rows = fields
-				.iter()
-				.zip(field_rows.iter())
-				.map(|(field, row)| {
-					let focused = *field == dialog.focus;
-					let (label, action) = dialog.render_field(*field);
-					let side_button = project_edit_form_row_button(*field);
-					let value = dialog.display_value_for_field(*field, focused, visible_field_width(row.width, side_button.is_some()));
-					(*row, label, action, side_button, focused, value)
-				})
-				.collect::<Vec<_>>();
+			let rows = fields.iter().zip(field_rows.iter()).map(|(field, row)| (*field, *row)).collect::<Vec<_>>();
 			(
 				dialog.project_name.clone(),
 				rows,
@@ -1211,7 +1201,15 @@ impl App {
 		];
 		frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), sections[0]);
 
-		for (row, label, action, side_button, focused, value) in field_rows_data {
+		for (field, row) in field_rows {
+			let (label, action, side_button, focused, value) = {
+				let dialog = self.project_edit_dialog.as_ref().expect("dialog checked above");
+				let focused = field == dialog.focus;
+				let (label, action) = dialog.render_field(field);
+				let side_button = project_edit_form_row_button(field);
+				let value = dialog.display_value_for_field(field, focused, visible_field_width(row.width, side_button.is_some()));
+				(label, action, side_button, focused, value)
+			};
 			let button_rect = self.render_form_row(frame, row, label, value, focused, action.clone(), side_button.clone());
 			self.hit_targets.push(HitTarget::new(row, action));
 			if let (Some(rect), Some(button)) = (button_rect, side_button) {
@@ -1624,7 +1622,7 @@ impl App {
 		frame: &mut Frame,
 		area: Rect,
 		label: &'static str,
-		value: String,
+		value: Line,
 		focused: bool,
 		_action: HitAction,
 		side_button: Option<FormRowButton>,
@@ -1665,17 +1663,12 @@ impl App {
 
 		let field_index = 1;
 		let field_area = center_vertically(row[field_index], area.height.min(3));
-		let style = Style::default().fg(Color::Rgb(235, 235, 235));
-		let block = if focused {
-			Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan))
-		} else {
-			Block::default().borders(Borders::ALL)
-		};
-		frame.render_widget(
-			Paragraph::new(Line::from(Span::styled(value, style))).block(block),
-			field_area,
-		);
-
+			let block = if focused {
+				Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan))
+			} else {
+				Block::default().borders(Borders::ALL)
+			};
+			frame.render_widget(Paragraph::new(value).block(block), field_area);
 		if let Some(button) = side_button {
 			let button_area = center_vertically(row[3], area.height.min(3));
 			frame.render_widget(

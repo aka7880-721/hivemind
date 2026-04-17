@@ -8,7 +8,8 @@
 use std::{collections::HashSet, path::Path};
 
 use anyhow::{Result, anyhow, bail};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::text::Line;
 
 use crate::{
 	app::{
@@ -196,35 +197,35 @@ impl ProjectEditDialog {
 		}
 	}
 
-	pub(crate) fn display_value_for_field(&self, field: ProjectEditFocus, focused: bool, max_width: usize) -> String {
+	pub(crate) fn display_value_for_field(&self, field: ProjectEditFocus, focused: bool, max_width: usize) -> Line<'static> {
 		match field {
-			ProjectEditFocus::Name => self.name.display_value_with_width(focused, max_width),
-			ProjectEditFocus::ProjectType => format!("< {} >", self.project_type.display_name()),
-			ProjectEditFocus::ScopeSelection => self.selected_scope_summary(),
+			ProjectEditFocus::Name => self.name.display_line_with_width(focused, max_width),
+			ProjectEditFocus::ProjectType => Line::from(format!("< {} >", self.project_type.display_name())),
+			ProjectEditFocus::ScopeSelection => Line::from(self.selected_scope_summary()),
 			ProjectEditFocus::ScopeName => self
 				.current_scope()
-				.map(|scope| scope.name.display_value_with_width(focused, max_width))
-				.unwrap_or_else(|| "(no scope)".to_string()),
+				.map(|scope| scope.name.display_line_with_width(focused, max_width))
+				.unwrap_or_else(|| Line::from("(no scope)")),
 			ProjectEditFocus::ScopeKind => self
 				.current_scope()
-				.map(|scope| format!("< {} >", scope.scope_kind.display_name()))
-				.unwrap_or_else(|| format!("< {} >", BranchScopeKind::Branch.display_name())),
-			ProjectEditFocus::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
+				.map(|scope| Line::from(format!("< {} >", scope.scope_kind.display_name())))
+				.unwrap_or_else(|| Line::from(format!("< {} >", BranchScopeKind::Branch.display_name()))),
+			ProjectEditFocus::VersionScheme => Line::from(format!("< {} >", self.version_scheme.display_name())),
 			ProjectEditFocus::UnifiedVersioning => {
 				if self.project_type == ProjectType::Branched {
-					format!("< {} >", if self.unified_versioning { "Yes" } else { "No" })
+					Line::from(format!("< {} >", if self.unified_versioning { "Yes" } else { "No" }))
 				} else {
-					"Always yes for all-in-one projects".to_string()
+					Line::from("Always yes for all-in-one projects")
 				}
 			}
-			ProjectEditFocus::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
+			ProjectEditFocus::IntegrationMode => Line::from(format!("< {} >", self.integration_mode.display_name())),
 			ProjectEditFocus::TargetPath => {
 				if self.project_type == ProjectType::Branched {
 					self.current_scope()
-						.map(|scope| scope.target_path.display_value_with_width(focused, max_width))
-						.unwrap_or_default()
+						.map(|scope| scope.target_path.display_line_with_width(focused, max_width))
+						.unwrap_or_else(|| Line::from(String::new()))
 				} else {
-					self.target_path.display_value_with_width(focused, max_width)
+					self.target_path.display_line_with_width(focused, max_width)
 				}
 			}
 			ProjectEditFocus::TargetKey => {
@@ -232,27 +233,27 @@ impl ProjectEditDialog {
 					self.current_scope()
 						.map(|scope| {
 							if scope.target_key_custom {
-								scope.target_key.display_value_with_width(focused, max_width)
+								scope.target_key.display_line_with_width(focused, max_width)
 							} else {
-								format!("< {} >", scope.target_key.value())
+								Line::from(format!("< {} >", scope.target_key.value()))
 							}
 						})
-						.unwrap_or_default()
+						.unwrap_or_else(|| Line::from(String::new()))
 				} else if self.target_key_custom {
-					self.target_key.display_value_with_width(focused, max_width)
+					self.target_key.display_line_with_width(focused, max_width)
 				} else {
-					format!("< {} >", self.target_key.value())
+					Line::from(format!("< {} >", self.target_key.value()))
 				}
 			}
-			ProjectEditFocus::AddScope => "Create a new scope draft".to_string(),
-			ProjectEditFocus::RemoveScope => "Drop the selected scope".to_string(),
-			ProjectEditFocus::MoveScopeUp => "Move the selected scope earlier".to_string(),
-			ProjectEditFocus::MoveScopeDown => "Move the selected scope later".to_string(),
-			ProjectEditFocus::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
-			ProjectEditFocus::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
-			ProjectEditFocus::Save => "Persist project".to_string(),
-			ProjectEditFocus::Remove => "Delete project".to_string(),
-			ProjectEditFocus::Cancel => "Discard changes".to_string(),
+			ProjectEditFocus::AddScope => Line::from("Create a new scope draft"),
+			ProjectEditFocus::RemoveScope => Line::from("Drop the selected scope"),
+			ProjectEditFocus::MoveScopeUp => Line::from("Move the selected scope earlier"),
+			ProjectEditFocus::MoveScopeDown => Line::from("Move the selected scope later"),
+			ProjectEditFocus::RepoRoot => self.repo_root.display_line_with_width(focused, max_width),
+			ProjectEditFocus::RemoteUrl => self.remote_url.display_line_with_width(focused, max_width),
+			ProjectEditFocus::Save => Line::from("Persist project"),
+			ProjectEditFocus::Remove => Line::from("Delete project"),
+			ProjectEditFocus::Cancel => Line::from("Discard changes"),
 		}
 	}
 
@@ -295,23 +296,21 @@ impl ProjectEditDialog {
 			return;
 		};
 		match key.code {
-			KeyCode::Char(character) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => input.insert(character),
-			KeyCode::Backspace => input.backspace(),
-			KeyCode::Delete => input.delete(),
-			KeyCode::Left => input.move_left(),
-			KeyCode::Right => input.move_right(),
-			KeyCode::Home => input.home(),
-			KeyCode::End => input.end(),
+			KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete | KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End => {
+				input.handle_key(key);
+			}
 			_ => {}
 		}
-		if self.focus == ProjectEditFocus::ScopeName {
-			if let Some(scope) = self.current_scope_mut() {
-				scope.sync_label_if_needed();
+		if matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete) {
+			if self.focus == ProjectEditFocus::ScopeName {
+				if let Some(scope) = self.current_scope_mut() {
+					scope.sync_label_if_needed();
+				}
 			}
-		}
-		if self.focus == ProjectEditFocus::TargetPath {
-			self.sync_target_key_preset_with_path();
-			self.prefill_repo_root_from_target_path();
+			if self.focus == ProjectEditFocus::TargetPath {
+				self.sync_target_key_preset_with_path();
+				self.prefill_repo_root_from_target_path();
+			}
 		}
 	}
 
@@ -326,7 +325,7 @@ impl ProjectEditDialog {
 		false
 	}
 
-	fn active_input_mut(&mut self) -> Option<&mut TextInput> {
+	pub(crate) fn active_input_mut(&mut self) -> Option<&mut TextInput> {
 		match self.focus {
 			ProjectEditFocus::Name => Some(&mut self.name),
 			ProjectEditFocus::ScopeName => self.current_scope_mut().map(|scope| &mut scope.name),
