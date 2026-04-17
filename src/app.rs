@@ -3398,6 +3398,9 @@ impl App {
 
     fn save_wizard_project(&mut self) -> Result<()> {
         let project = self.wizard.build_project()?;
+        if let Some(repo) = project.repo.as_ref() {
+            ensure_gitignore_entry(&repo.local_root, ".comfygit/syncmem/stdchlg-local.json")?;
+        }
         self.config.projects.push(project);
         self.config_store.save(&self.config)?;
         self.selected_project = self.config.projects.len().saturating_sub(1);
@@ -5469,6 +5472,34 @@ fn ensure_std_changelog_memory_entry(repo_root: &str, tag_name: &str, branch_nam
     }
 
     record_std_changelog_created(repo_root, tag_name, branch_name)
+}
+
+fn ensure_gitignore_entry(repo_root: &str, entry: &str) -> Result<()> {
+    let gitignore_path = Path::new(repo_root).join(".gitignore");
+    let mut lines = if gitignore_path.exists() {
+        fs::read_to_string(&gitignore_path)
+            .with_context(|| format!("failed to read .gitignore in '{}'", repo_root))?
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    let normalized_entry = entry.trim();
+    if lines.iter().any(|line| line.trim() == normalized_entry) {
+        return Ok(());
+    }
+
+    if !lines.is_empty() && !lines.last().unwrap().is_empty() {
+        lines.push(String::new());
+    }
+    lines.push(normalized_entry.to_string());
+
+    fs::write(&gitignore_path, lines.join("\n") + "\n")
+        .with_context(|| format!("failed to update .gitignore in '{}'", repo_root))?;
+
+    Ok(())
 }
 
 fn replay_postponed_std_changelogs_blocking(
