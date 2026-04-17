@@ -11,7 +11,7 @@ use ratatui::{
 	Frame,
 	layout::{Alignment, Constraint, Direction, Layout, Rect},
 	style::{Color, Style, Stylize},
-	text::{Line, Span},
+	text::{Line, Span, Text},
 	widgets::{Block, Borders, Paragraph},
 };
 use tui_checkbox::Checkbox;
@@ -175,7 +175,7 @@ impl ProjectSettingsState {
 			)
 	}
 
-	fn active_input_mut(&mut self) -> Option<&mut TextInput> {
+	pub(crate) fn active_input_mut(&mut self) -> Option<&mut TextInput> {
 		match self.focus {
 			ProjectSettingsFocus::ChangelogPath => Some(&mut self.changelog_path),
 			ProjectSettingsFocus::ReleaseNowWindows => Some(&mut self.release_now_windows),
@@ -200,14 +200,14 @@ impl ProjectSettingsState {
 		false
 	}
 
-	fn display_value_for_field(&self, field: ProjectSettingsFocus, focused: bool, max_width: usize) -> String {
+	fn display_value_for_field(&self, field: ProjectSettingsFocus, focused: bool, max_width: usize) -> Line<'static> {
 		match field {
-			ProjectSettingsFocus::ChangelogPath => self.changelog_path.display_value_with_width(focused, max_width),
-			ProjectSettingsFocus::ReleaseNowWindows => self.release_now_windows.display_value_with_width(focused, max_width),
-			ProjectSettingsFocus::ReleaseNowLinuxArm => self.release_now_linux_arm.display_value_with_width(focused, max_width),
-			ProjectSettingsFocus::ReleaseNowLinuxAmd => self.release_now_linux_amd.display_value_with_width(focused, max_width),
-			ProjectSettingsFocus::ReleaseNowMacOs => self.release_now_macos.display_value_with_width(focused, max_width),
-			_ => String::new(),
+			ProjectSettingsFocus::ChangelogPath => self.changelog_path.display_line_with_width(focused, max_width),
+			ProjectSettingsFocus::ReleaseNowWindows => self.release_now_windows.display_line_with_width(focused, max_width),
+			ProjectSettingsFocus::ReleaseNowLinuxArm => self.release_now_linux_arm.display_line_with_width(focused, max_width),
+			ProjectSettingsFocus::ReleaseNowLinuxAmd => self.release_now_linux_amd.display_line_with_width(focused, max_width),
+			ProjectSettingsFocus::ReleaseNowMacOs => self.release_now_macos.display_line_with_width(focused, max_width),
+			_ => Line::from(String::new()),
 		}
 	}
 
@@ -735,7 +735,7 @@ fn render_path_form_row(
 	frame: &mut Frame,
 	area: Rect,
 	label: &'static str,
-	value: String,
+	value: Line,
 	focused: bool,
 	side_button: Option<FormRowButton>,
 ) -> Option<Rect> {
@@ -780,7 +780,7 @@ fn render_path_form_row(
 		Block::default().borders(Borders::ALL)
 	};
 	frame.render_widget(
-		Paragraph::new(Line::from(Span::styled(value, Style::default().fg(Color::Rgb(235, 235, 235))))).block(block),
+		Paragraph::new(Text::from(value)).block(block),
 		field_area,
 	);
 

@@ -1,7 +1,8 @@
 use std::{collections::HashSet, path::Path};
 
 use anyhow::{Result, bail};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::text::Line;
 
 use crate::{
 	app::{
@@ -155,35 +156,35 @@ impl ProjectWizard {
 		}
 	}
 
-	pub(crate) fn display_value_for_field(&self, field: WizardField, focused: bool, max_width: usize) -> String {
+	pub(crate) fn display_value_for_field(&self, field: WizardField, focused: bool, max_width: usize) -> Line<'static> {
 		match field {
-			WizardField::Name => self.name.display_value_with_width(focused, max_width),
-			WizardField::ProjectType => format!("< {} >", self.project_type.display_name()),
-			WizardField::ScopeSelection => self.selected_scope_summary(),
+			WizardField::Name => self.name.display_line_with_width(focused, max_width),
+			WizardField::ProjectType => Line::from(format!("< {} >", self.project_type.display_name())),
+			WizardField::ScopeSelection => Line::from(self.selected_scope_summary()),
 			WizardField::ScopeName => self
 				.current_scope()
-				.map(|scope| scope.name.display_value_with_width(focused, max_width))
-				.unwrap_or_else(|| "(no scope)".to_string()),
+				.map(|scope| scope.name.display_line_with_width(focused, max_width))
+				.unwrap_or_else(|| Line::from("(no scope)")),
 			WizardField::ScopeKind => self
 				.current_scope()
-				.map(|scope| format!("< {} >", scope.scope_kind.display_name()))
-				.unwrap_or_else(|| format!("< {} >", BranchScopeKind::Branch.display_name())),
-			WizardField::VersionScheme => format!("< {} >", self.version_scheme.display_name()),
+				.map(|scope| Line::from(format!("< {} >", scope.scope_kind.display_name())))
+				.unwrap_or_else(|| Line::from(format!("< {} >", BranchScopeKind::Branch.display_name()))),
+			WizardField::VersionScheme => Line::from(format!("< {} >", self.version_scheme.display_name())),
 			WizardField::UnifiedVersioning => {
 				if self.project_type == ProjectType::Branched {
-					format!("< {} >", if self.unified_versioning { "Yes" } else { "No" })
+					Line::from(format!("< {} >", if self.unified_versioning { "Yes" } else { "No" }))
 				} else {
-					"Always yes for all-in-one projects".to_string()
+					Line::from("Always yes for all-in-one projects")
 				}
 			}
-			WizardField::IntegrationMode => format!("< {} >", self.integration_mode.display_name()),
+			WizardField::IntegrationMode => Line::from(format!("< {} >", self.integration_mode.display_name())),
 			WizardField::TargetPath => {
 				if self.project_type == ProjectType::Branched {
 					self.current_scope()
-						.map(|scope| scope.target_path.display_value_with_width(focused, max_width))
-						.unwrap_or_default()
+						.map(|scope| scope.target_path.display_line_with_width(focused, max_width))
+						.unwrap_or_else(|| Line::from(String::new()))
 				} else {
-					self.target_path.display_value_with_width(focused, max_width)
+					self.target_path.display_line_with_width(focused, max_width)
 				}
 			}
 			WizardField::TargetKey => {
@@ -191,27 +192,28 @@ impl ProjectWizard {
 					self.current_scope()
 						.map(|scope| {
 							if scope.target_key_custom {
-								scope.target_key.display_value_with_width(focused, max_width)
+								scope.target_key.display_line_with_width(focused, max_width)
 							} else {
-								format!("< {} >", scope.target_key.value())
+								Line::from(format!("< {} >", scope.target_key.value()))
 							}
 						})
-						.unwrap_or_default()
+						.unwrap_or_else(|| Line::from(String::new()))
 				} else if self.target_key_custom {
-					self.target_key.display_value_with_width(focused, max_width)
+					self.target_key.display_line_with_width(focused, max_width)
 				} else {
-					format!("< {} >", self.target_key.value())
+					Line::from(format!("< {} >", self.target_key.value()))
 				}
 			}
-			WizardField::AddScope => "Create a new scope draft".to_string(),
-			WizardField::RemoveScope => "Drop the selected scope".to_string(),
-			WizardField::MoveScopeUp => "Move the selected scope earlier".to_string(),
-			WizardField::MoveScopeDown => "Move the selected scope later".to_string(),
-			WizardField::RepoRoot => self.repo_root.display_value_with_width(focused, max_width),
-			WizardField::RemoteUrl => self.remote_url.display_value_with_width(focused, max_width),
-			WizardField::Validate => "Validate target".to_string(),
-			WizardField::Save => "Persist project".to_string(),
-			WizardField::Cancel => "Discard changes".to_string(),
+			WizardField::AddScope => Line::from("Create a new scope draft"),
+			WizardField::RemoveScope => Line::from("Drop the selected scope"),
+			WizardField::MoveScopeUp => Line::from("Move the selected scope earlier"),
+			WizardField::MoveScopeDown => Line::from("Move the selected scope later"),
+			WizardField::RepoRoot => self.repo_root.display_line_with_width(focused, max_width),
+			WizardField::RemoteUrl => self.remote_url.display_line_with_width(focused, max_width),
+			WizardField::Validate => Line::from("Validate target"),
+			WizardField::Save => Line::from("Persist project"),
+			WizardField::Cancel => Line::from("Discard changes"),
+
 		}
 	}
 
@@ -255,27 +257,17 @@ impl ProjectWizard {
 			return;
 		};
 		match key.code {
-			KeyCode::Char(character) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
-				input.insert(character);
-				self.after_text_edit();
+			KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete | KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End => {
+				input.handle_key(key);
+				if matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete) {
+					self.after_text_edit();
+				}
 			}
-			KeyCode::Backspace => {
-				input.backspace();
-				self.after_text_edit();
-			}
-			KeyCode::Delete => {
-				input.delete();
-				self.after_text_edit();
-			}
-			KeyCode::Left => input.move_left(),
-			KeyCode::Right => input.move_right(),
-			KeyCode::Home => input.home(),
-			KeyCode::End => input.end(),
 			_ => {}
 		}
 	}
 
-	fn active_input_mut(&mut self) -> Option<&mut TextInput> {
+	pub(crate) fn active_input_mut(&mut self) -> Option<&mut TextInput> {
 		match self.focus {
 			WizardField::Name => Some(&mut self.name),
 			WizardField::ScopeName => self.current_scope_mut().map(|scope| &mut scope.name),

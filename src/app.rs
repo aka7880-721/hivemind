@@ -269,6 +269,8 @@ struct App {
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     hit_targets: Vec<HitTarget>,
+    last_text_input_click_target: Option<TextInputClickTarget>,
+    last_text_input_click_at: Option<Instant>,
     status: StatusMessage,
     last_status_toast_id: u64,
     transient_toaster: ToastEngine<()>,
@@ -358,6 +360,8 @@ impl App {
             project_edit_dialog: None,
             browser_dialog: None,
             hit_targets: Vec::new(),
+            last_text_input_click_target: None,
+            last_text_input_click_at: None,
             last_status_toast_id: status.id,
             transient_toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
@@ -470,7 +474,16 @@ impl App {
             return Ok(());
         }
 
-        if key.code == KeyCode::Char('q') && key.modifiers.is_empty() {
+        if key.code == KeyCode::Char('q')
+            && key.modifiers.is_empty()
+            && !(matches!(self.screen, Screen::Wizard) && self.wizard.focus_accepts_text())
+            && !self
+                .project_edit_dialog
+                .as_ref()
+                .map(|dialog| dialog.focus_accepts_text())
+                .unwrap_or(false)
+            && !p_s_s::captures_text_input(self)
+        {
             self.should_quit = true;
             return Ok(());
         }
@@ -1473,9 +1486,37 @@ impl App {
                         }
                     }
                 }
-                if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
+
+                if let Some((action, rect)) = self.resolve_hit_target(mouse.column, mouse.row, false) {
+                    let maybe_click_target = self.text_input_click_target(&action);
+                    let mut select_all = false;
+                    if let Some(target) = maybe_click_target {
+                        let now = Instant::now();
+                        if self.last_text_input_click_target == Some(target)
+                            && self
+                                .last_text_input_click_at
+                                .map(|previous| now.duration_since(previous) <= Duration::from_millis(400))
+                                .unwrap_or(false)
+                        {
+                            select_all = true;
+                        }
+                        self.last_text_input_click_target = Some(target);
+                        self.last_text_input_click_at = Some(now);
+                    } else {
+                        self.last_text_input_click_target = None;
+                        self.last_text_input_click_at = None;
+                    }
+
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
+                    }
+
+                    if select_all {
+                        if let Some(input) = self.active_text_input_mut() {
+                            input.select_all();
+                        }
+                    } else if maybe_click_target.is_some() {
+                        self.set_text_input_cursor_from_mouse(rect, mouse.column);
                     }
                 }
             }
@@ -1492,6 +1533,14 @@ impl App {
                         if to_scope != from_scope {
                             self.reorder_dashboard_tile_scope(from_scope, to_scope);
                             self.overview_drag_scope = Some(to_scope);
+                        }
+                    }
+                }
+
+                if let Some((action, rect)) = self.resolve_hit_target(mouse.column, mouse.row, false) {
+                    if let Some(last_target) = self.last_text_input_click_target {
+                        if last_target.same_field_action(&action) {
+                            self.update_text_input_drag_selection(rect, mouse.column);
                         }
                     }
                 }
@@ -1516,7 +1565,21 @@ impl App {
                         }
                     }
                 }
-                if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, true) {
+                let selected_text = self
+                    .active_text_input_mut()
+                    .and_then(|input| input.selected_text().map(str::to_string));
+                if let Some(selection) = selected_text {
+                    self.copy_text_to_clipboard(&selection);
+                    return;
+                }
+
+                let action = self.resolve_hit_action(mouse.column, mouse.row, true);
+                if action.is_none() && self.active_text_input_mut().is_some() {
+                    self.paste_from_clipboard();
+                    return;
+                }
+
+                if let Some(action) = action {
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
                     }
@@ -2275,7 +2338,7 @@ impl App {
         )
     }
 
-    fn resolve_hit_action(&self, column: u16, row: u16, right_click: bool) -> Option<HitAction> {
+    fn resolve_hit_target(&self, column: u16, row: u16, right_click: bool) -> Option<(HitAction, Rect)> {
         self.hit_targets
             .iter()
             .enumerate()
@@ -2330,10 +2393,57 @@ impl App {
                     return None;
                 }
 
-                Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action))
+                Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action, target.rect))
             })
-            .min_by_key(|(area, reverse_index, _)| (*area, *reverse_index))
-            .map(|(_, _, action)| action)
+            .min_by_key(|(area, reverse_index, _, _)| (*area, *reverse_index))
+            .map(|(_, _, action, rect)| (action, rect))
+    }
+
+    fn resolve_hit_action(&self, column: u16, row: u16, right_click: bool) -> Option<HitAction> {
+        self.resolve_hit_target(column, row, right_click).map(|(action, _)| action)
+    }
+
+    fn text_input_click_target(&self, action: &HitAction) -> Option<TextInputClickTarget> {
+        Some(match action {
+            HitAction::WizardField(field) => TextInputClickTarget::WizardField(*field),
+            HitAction::EditProjectField(field) => TextInputClickTarget::ProjectEditField(*field),
+            HitAction::SelectProjectSettingsField(field) => TextInputClickTarget::ProjectSettingsField(*field),
+            _ => return None,
+        })
+    }
+
+    fn active_text_input_mut(&mut self) -> Option<&mut TextInput> {
+        if matches!(self.screen, Screen::Wizard) {
+            return self.wizard.active_input_mut();
+        }
+
+        if let Some(dialog) = &mut self.project_edit_dialog {
+            return dialog.active_input_mut();
+        }
+
+        if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+            return self.project_settings_state.active_input_mut();
+        }
+
+        None
+    }
+
+    fn set_text_input_cursor_from_mouse(&mut self, rect: Rect, column: u16) {
+        if let Some(input) = self.active_text_input_mut() {
+            let click_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
+            let field_width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
+            let cursor = input.cursor_position_at_click(click_offset, field_width, true);
+            input.begin_selection_at(cursor);
+        }
+    }
+
+    fn update_text_input_drag_selection(&mut self, rect: Rect, column: u16) {
+        if let Some(input) = self.active_text_input_mut() {
+            let click_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
+            let field_width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
+            let cursor = input.cursor_position_at_click(click_offset, field_width, true);
+            input.set_cursor_position(cursor);
+        }
     }
 
     fn schedule_overview_workflow_changelog_preview(
@@ -3398,6 +3508,9 @@ impl App {
 
     fn save_wizard_project(&mut self) -> Result<()> {
         let project = self.wizard.build_project()?;
+        if let Some(repo) = project.repo.as_ref() {
+            ensure_gitignore_entry(&repo.local_root, ".comfygit/syncmem/stdchlg-local.json")?;
+        }
         self.config.projects.push(project);
         self.config_store.save(&self.config)?;
         self.selected_project = self.config.projects.len().saturating_sub(1);
@@ -3637,6 +3750,20 @@ impl App {
 
     fn try_handle_ui_shortcut(&mut self, key: KeyEvent) -> Result<bool> {
         if key.modifiers.is_empty() && matches!(key.code, KeyCode::Char('h') | KeyCode::Char('H')) {
+            if matches!(self.screen, Screen::Wizard) && self.wizard.focus_accepts_text() {
+                return Ok(false);
+            }
+            if self
+                .project_edit_dialog
+                .as_ref()
+                .map(|dialog| dialog.focus_accepts_text())
+                .unwrap_or(false)
+            {
+                return Ok(false);
+            }
+            if p_s_s::captures_text_input(self) {
+                return Ok(false);
+            }
             self.toggle_footer()?;
             return Ok(true);
         }
@@ -3797,6 +3924,24 @@ impl HitTarget {
             && column < self.rect.x + self.rect.width
             && row >= self.rect.y
             && row < self.rect.y + self.rect.height
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextInputClickTarget {
+    WizardField(WizardField),
+    ProjectEditField(ProjectEditFocus),
+    ProjectSettingsField(ProjectSettingsFocus),
+}
+
+impl TextInputClickTarget {
+    fn same_field_action(&self, action: &HitAction) -> bool {
+        match (self, action) {
+            (&TextInputClickTarget::WizardField(a), &HitAction::WizardField(b)) => a == b,
+            (&TextInputClickTarget::ProjectEditField(a), &HitAction::EditProjectField(b)) => a == b,
+            (&TextInputClickTarget::ProjectSettingsField(a), &HitAction::SelectProjectSettingsField(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
@@ -5469,6 +5614,34 @@ fn ensure_std_changelog_memory_entry(repo_root: &str, tag_name: &str, branch_nam
     }
 
     record_std_changelog_created(repo_root, tag_name, branch_name)
+}
+
+fn ensure_gitignore_entry(repo_root: &str, entry: &str) -> Result<()> {
+    let gitignore_path = Path::new(repo_root).join(".gitignore");
+    let mut lines = if gitignore_path.exists() {
+        fs::read_to_string(&gitignore_path)
+            .with_context(|| format!("failed to read .gitignore in '{}'", repo_root))?
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    let normalized_entry = entry.trim();
+    if lines.iter().any(|line| line.trim() == normalized_entry) {
+        return Ok(());
+    }
+
+    if !lines.is_empty() && !lines.last().unwrap().is_empty() {
+        lines.push(String::new());
+    }
+    lines.push(normalized_entry.to_string());
+
+    fs::write(&gitignore_path, lines.join("\n") + "\n")
+        .with_context(|| format!("failed to update .gitignore in '{}'", repo_root))?;
+
+    Ok(())
 }
 
 fn replay_postponed_std_changelogs_blocking(

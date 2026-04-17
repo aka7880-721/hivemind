@@ -8,6 +8,8 @@
 use anyhow::{Result, bail};
 use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 
 use crate::{
     config::{IntegrationMode, ProjectConfig},
@@ -606,74 +608,298 @@ impl BumpDialog {
 pub(crate) struct TextInput {
     pub(crate) value: String,
     cursor: usize,
+    selection_anchor: Option<usize>,
 }
 
 impl TextInput {
     pub(crate) fn with_value(value: impl Into<String>) -> Self {
         let value = value.into();
         let cursor = value.len();
-        Self { value, cursor }
+        Self {
+            value,
+            cursor,
+            selection_anchor: None,
+        }
     }
 
     pub(crate) fn set_value(&mut self, value: impl Into<String>) {
         self.value = value.into();
         self.cursor = self.value.len();
+        self.selection_anchor = None;
     }
 
     pub(crate) fn insert(&mut self, character: char) {
-        self.value.insert(self.cursor, character);
-        self.cursor += character.len_utf8();
+        self.replace_selection(&character.to_string());
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
-        self.value.insert_str(self.cursor, text);
-        self.cursor = (self.cursor + text.len()).min(self.value.len());
+        self.replace_selection(text);
     }
 
     pub(crate) fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor == 0 {
             return;
         }
         let previous = previous_char_boundary(&self.value, self.cursor);
         self.value.drain(previous..self.cursor);
         self.cursor = previous;
+        self.selection_anchor = None;
     }
 
     pub(crate) fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor >= self.value.len() {
             return;
         }
         let next = next_char_boundary(&self.value, self.cursor);
         self.value.drain(self.cursor..next);
+        self.selection_anchor = None;
     }
 
     pub(crate) fn move_left(&mut self) {
+        if let Some(range) = self.selection_range() {
+            self.cursor = range.start;
+            self.selection_anchor = None;
+            return;
+        }
         self.cursor = previous_char_boundary(&self.value, self.cursor);
     }
 
     pub(crate) fn move_right(&mut self) {
+        if let Some(range) = self.selection_range() {
+            self.cursor = range.end;
+            self.selection_anchor = None;
+            return;
+        }
+        self.cursor = next_char_boundary(&self.value, self.cursor);
+    }
+
+    pub(crate) fn move_left_with_selection(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        self.cursor = previous_char_boundary(&self.value, self.cursor);
+    }
+
+    pub(crate) fn move_right_with_selection(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
         self.cursor = next_char_boundary(&self.value, self.cursor);
     }
 
     pub(crate) fn home(&mut self) {
         self.cursor = 0;
+        self.selection_anchor = None;
+    }
+
+    pub(crate) fn home_with_selection(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        self.cursor = 0;
     }
 
     pub(crate) fn end(&mut self) {
         self.cursor = self.value.len();
+        self.selection_anchor = None;
+    }
+
+    pub(crate) fn end_with_selection(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        self.cursor = self.value.len();
+    }
+
+    pub(crate) fn select_all(&mut self) {
+        self.selection_anchor = Some(0);
+        self.cursor = self.value.len();
+    }
+
+    pub(crate) fn selected_text(&self) -> Option<&str> {
+        let range = self.selection_range()?;
+        self.value.get(range)
+    }
+
+    fn selection_range(&self) -> Option<std::ops::Range<usize>> {
+        let anchor = self.selection_anchor?;
+        if anchor == self.cursor {
+            return None;
+        }
+        if anchor < self.cursor {
+            Some(anchor..self.cursor)
+        } else {
+            Some(self.cursor..anchor)
+        }
+    }
+
+    fn delete_selection(&mut self) -> bool {
+        if let Some(range) = self.selection_range() {
+            self.value.drain(range.clone());
+            self.cursor = range.start;
+            self.selection_anchor = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn replace_selection(&mut self, text: &str) {
+        if let Some(range) = self.selection_range() {
+            self.value.replace_range(range.clone(), text);
+            self.cursor = range.start + text.len();
+            self.selection_anchor = None;
+        } else {
+            self.value.insert_str(self.cursor, text);
+            self.cursor = (self.cursor + text.len()).min(self.value.len());
+        }
+    }
+
+    fn char_index_to_byte(&self, char_index: usize) -> usize {
+        self.value
+            .char_indices()
+            .nth(char_index)
+            .map(|(offset, _)| offset)
+            .unwrap_or(self.value.len())
+    }
+
+    fn byte_index_to_char(&self, byte_index: usize) -> usize {
+        self.value[..byte_index.min(self.value.len())].chars().count()
+    }
+
+    fn visible_segment(&self, focused: bool, max_width: usize) -> (usize, usize, Vec<char>, usize) {
+        let chars: Vec<char> = self.value.chars().collect();
+        let total_chars = chars.len();
+        if max_width == 0 {
+            return (0, 0, Vec::new(), 0);
+        }
+
+        let cursor_char_index = self.byte_index_to_char(self.cursor);
+        let (start_char, end_char) = if !focused {
+            let start = total_chars.saturating_sub(max_width);
+            (start, total_chars)
+        } else {
+            let visible_cursor = cursor_char_index.min(total_chars.saturating_sub(1));
+            let mut start = visible_cursor.saturating_sub(max_width.saturating_sub(1));
+            let end = (start + max_width).min(total_chars);
+            if end - start < max_width {
+                start = end.saturating_sub(max_width);
+            }
+            (start, end)
+        };
+
+        let visible_chars = chars[start_char..end_char].to_vec();
+        let visible_cursor = cursor_char_index.saturating_sub(start_char).min(visible_chars.len());
+        (start_char, end_char, visible_chars, visible_cursor)
+    }
+
+    pub(crate) fn cursor_position_at_click(
+        &self,
+        click_offset: usize,
+        field_width: usize,
+        focused: bool,
+    ) -> usize {
+        let (start_char, _, visible_chars, _) = self.visible_segment(focused, field_width);
+        let char_count = click_offset.min(visible_chars.len());
+        self.char_index_to_byte(start_char + char_count)
+    }
+
+    pub(crate) fn set_cursor_position(&mut self, cursor: usize) {
+        self.cursor = cursor.min(self.value.len());
+    }
+
+    pub(crate) fn begin_selection_at(&mut self, cursor: usize) {
+        self.cursor = cursor.min(self.value.len());
+        self.selection_anchor = Some(self.cursor);
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char(character) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => self.insert(character),
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => self.select_all(),
+            KeyCode::Char(character) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+                self.insert(character)
+            }
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),
-            KeyCode::Left => self.move_left(),
-            KeyCode::Right => self.move_right(),
-            KeyCode::Home => self.home(),
-            KeyCode::End => self.end(),
+            KeyCode::Left => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.move_left_with_selection();
+                } else {
+                    self.move_left();
+                }
+            }
+            KeyCode::Right => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.move_right_with_selection();
+                } else {
+                    self.move_right();
+                }
+            }
+            KeyCode::Home => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.home_with_selection();
+                } else {
+                    self.home();
+                }
+            }
+            KeyCode::End => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.end_with_selection();
+                } else {
+                    self.end();
+                }
+            }
             _ => {}
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn display_line(&self, focused: bool) -> Line<'static> {
+        self.display_line_with_width(focused, usize::MAX)
+    }
+
+    pub(crate) fn display_line_with_width(&self, focused: bool, max_width: usize) -> Line<'static> {
+        let style = Style::default().fg(Color::Rgb(235, 235, 235));
+        let cursor_style = Style::default().fg(Color::Rgb(220, 220, 220));
+        let selection_style = Style::default().fg(Color::White).bg(Color::Rgb(40, 70, 120));
+
+        let (start_char, _end_char, visible_chars, visible_cursor) = self.visible_segment(focused, max_width);
+        let selection_range = self.selection_range().map(|range| {
+            let start = self.byte_index_to_char(range.start);
+            let end = self.byte_index_to_char(range.end);
+            start..end
+        });
+
+        let mut spans = Vec::new();
+        let visible_chars_len = visible_chars.len();
+        if focused && visible_cursor == 0 {
+            spans.push(Span::styled("|", cursor_style));
+        }
+
+        for (index, character) in visible_chars.into_iter().enumerate() {
+            if focused && visible_cursor == index {
+                spans.push(Span::styled("|", cursor_style));
+            }
+            let global_index = start_char + index;
+            let span_style = if selection_range.as_ref().map_or(false, |range| range.contains(&global_index)) {
+                selection_style
+            } else {
+                style
+            };
+            spans.push(Span::styled(character.to_string(), span_style));
+        }
+
+        if focused && visible_cursor == visible_chars_len {
+            spans.push(Span::styled("|", cursor_style));
+        }
+
+        Line::from(spans)
     }
 
     pub(crate) fn display_value(&self, focused: bool) -> String {
