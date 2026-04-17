@@ -109,9 +109,9 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		minor_rect: Some(Rect::new(area.x + 1, inner_y + 4, SEMVER_LEFT_WIDTH as u16, 1)),
 		patch_rect: Some(Rect::new(area.x + 1, inner_y + 6, SEMVER_LEFT_WIDTH as u16, 1)),
 		version_rect: None,
-		view_rect: Rect::new(right_x + button_positions[0] as u16, inner_y + 6, 6, 1),
-		bump_rect: Rect::new(right_x + button_positions[1] as u16, inner_y + 6, 6, 1),
-		tag_rect: Rect::new(right_x + button_positions[2] as u16, inner_y + 6, 5, 1),
+		bump_rect: Rect::new(right_x + button_positions[0] as u16, inner_y + 6, 6, 1),
+		tag_rect: Rect::new(right_x + button_positions[1] as u16, inner_y + 6, 6, 1),
+		view_rect: Rect::new(right_x + button_positions[2] as u16, inner_y + 6, 5, 1),
 	}
 }
 
@@ -160,9 +160,9 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		minor_rect: None,
 		patch_rect: None,
 		version_rect: Some(Rect::new(area.x + 1, inner_y + 6, content_width as u16, 1)),
-		view_rect: Rect::new(action_x, inner_y + 3, CALVER_ACTION_WIDTH as u16, 1),
-		bump_rect: Rect::new(action_x, inner_y + 2, CALVER_ACTION_WIDTH as u16, 1),
-		tag_rect: Rect::new(action_x, inner_y + 4, CALVER_ACTION_WIDTH as u16, 1),
+		bump_rect: Rect::new(action_x, inner_y + 3, CALVER_ACTION_WIDTH as u16, 1),
+		view_rect: Rect::new(action_x, inner_y + 4, CALVER_ACTION_WIDTH as u16, 1),
+		tag_rect: Rect::new(action_x, inner_y + 5, CALVER_ACTION_WIDTH as u16, 1),
 	}
 }
 
