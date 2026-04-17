@@ -20,9 +20,9 @@ pub(crate) const SEMVER_TILE_HEIGHT: u16 = 9;
 pub(crate) const CALVER_TILE_HEIGHT: u16 = 9;
 const SEMVER_LEFT_WIDTH: usize = 5;
 const CALVER_ACTION_WIDTH: usize = 6;
-const VIEW_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::LightMagenta);
-const BUMP_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Green);
-const TAG_BUTTON_STYLE: Style = Style::new().fg(Color::White).bg(Color::Yellow);
+const RLS_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Indexed(207));
+const BUMP_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Indexed(046));
+const TAG_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::LightYellow);
 
 pub(crate) struct OverviewTileData {
 	pub(crate) name: String,
@@ -71,8 +71,8 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	let right_width = content_width.saturating_sub(SEMVER_LEFT_WIDTH + 1);
 	let parts = split_semver(&tile.preview_version);
 	let button_slots = space_evenly_positions(right_width, &[6, 6, 5]);
-	let button_positions = [button_slots[0] + 1, button_slots[1] + 1, button_slots[2] + 1];
-	let button_line = build_button_line(right_width, &button_positions, &["rls", "bump", "tag"]);
+	let button_positions = [button_slots[0] + 1, button_slots[1] + 2, button_slots[2] + 2];
+	let button_line = build_button_line(right_width, &button_positions, &["BUMP", "TAG", "RLS"]);
 
 	let rows = [
 		border_top_semver(right_width),
@@ -93,9 +93,9 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		border_style,
 		tile_style,
 		&[
-			StyledRange::new(7 + button_slots[0], 6, VIEW_BUTTON_STYLE),
-			StyledRange::new(7 + button_slots[1], 6, BUMP_BUTTON_STYLE),
-			StyledRange::new(7 + button_slots[2], 5, TAG_BUTTON_STYLE),
+			StyledRange::new(6 + button_positions[0], 6, BUMP_BUTTON_STYLE),
+			StyledRange::new(6 + button_positions[1], 5, TAG_BUTTON_STYLE),
+			StyledRange::new(6 + button_positions[2], 5, RLS_BUTTON_STYLE),
 		],
 	);
 
@@ -109,9 +109,9 @@ fn render_semver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 		minor_rect: Some(Rect::new(area.x + 1, inner_y + 4, SEMVER_LEFT_WIDTH as u16, 1)),
 		patch_rect: Some(Rect::new(area.x + 1, inner_y + 6, SEMVER_LEFT_WIDTH as u16, 1)),
 		version_rect: None,
-		view_rect: Rect::new(right_x + button_slots[0] as u16, inner_y + 6, 6, 1),
-		bump_rect: Rect::new(right_x + button_slots[1] as u16, inner_y + 6, 6, 1),
-		tag_rect: Rect::new(right_x + button_slots[2] as u16, inner_y + 6, 5, 1),
+		view_rect: Rect::new(right_x + button_positions[0] as u16, inner_y + 6, 6, 1),
+		bump_rect: Rect::new(right_x + button_positions[1] as u16, inner_y + 6, 6, 1),
+		tag_rect: Rect::new(right_x + button_positions[2] as u16, inner_y + 6, 5, 1),
 	}
 }
 
@@ -136,7 +136,7 @@ fn render_calver_tile(frame: &mut Frame, area: Rect, tile: &OverviewTileData) ->
 	for (row_offset, label) in [(3_u16, "bump"), (4, "rls"), (5, "tag")].into_iter() {
 		let action_start = 1 + detail_width + 1;
 		let action_style = match label {
-			"rls" => VIEW_BUTTON_STYLE,
+			"rls" => RLS_BUTTON_STYLE,
 			"bump" => BUMP_BUTTON_STYLE,
 			_ => TAG_BUTTON_STYLE,
 		};
