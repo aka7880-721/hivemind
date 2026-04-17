@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -466,7 +466,7 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn locate() -> Result<Self> {
-        let project_dirs = ProjectDirs::from("com", "ComfyHome", "ComfyVersionBumper")
+        let project_dirs = ProjectDirs::from("com", "ComfyHome", "ComfyGit")
             .context("unable to locate the user config directory")?;
         let path = project_dirs.config_dir().join("config.toml");
         Ok(Self { path })

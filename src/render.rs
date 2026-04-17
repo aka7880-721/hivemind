@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -1034,7 +1034,7 @@ impl App {
 			Line::from(match dialog.selected_action() {
 				TagAction::CreateLocal => "Creates a local tag only.",
 				TagAction::CreateAndPush => "Creates the local tag if needed, then pushes it.",
-				TagAction::CreatePushAndRelease => "Creates the tag, pushes it, then publishes a GitHub release with CVB-generated notes.",
+				TagAction::CreatePushAndRelease => "Creates the tag, pushes it, then publishes a GitHub release with CG-generated notes.",
 			}),
 		];
 		frame.render_widget(Paragraph::new(notes).wrap(Wrap { trim: false }), sections[2]);

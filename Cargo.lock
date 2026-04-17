@@ -244,7 +244,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "comfy-version-bumper"
+name = "comfygit"
 version = "0.9.0"
 dependencies = [
  "anyhow",

@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 pub(crate) fn current_branch_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<String> {
     let branch = run_git_checked_with_cancel(repo_root, &["branch", "--show-current"], cancel.clone())?;

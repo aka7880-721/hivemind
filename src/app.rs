@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyVersionBumper License v1.2
+// Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -379,7 +379,7 @@ impl App {
     #[cfg(test)]
     fn new_for_tests() -> Result<Self> {
         let unique = format!(
-            "cvb-test-config-{}.toml",
+            "cg-test-config-{}.toml",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -4935,7 +4935,7 @@ fn spawn_background_worker(
 )> {
     let runtime = TokioRuntimeBuilder::new_multi_thread()
         .worker_threads(2)
-        .thread_name("cvb-bg")
+        .thread_name("cg-bg")
         .enable_all()
         .build()
         .context("failed to create tokio runtime for background jobs")?;
@@ -5651,7 +5651,7 @@ async fn run_git_push_with_retry_async(repo_root: String, remote_spec: String, t
 
 async fn create_github_release_with_retry_async(repo_root: String, tag_name: String, release_notes: String) -> Result<()> {
     let notes_file = std::env::temp_dir().join(format!(
-        "cvb-release-notes-{}-{}.md",
+        "cg-release-notes-{}-{}.md",
         std::process::id(),
         sanitize_tag_fragment(&tag_name)
     ));
@@ -7082,7 +7082,7 @@ mod tests {
     #[test]
     fn cargo_lock_is_staged_for_relative_cargo_manifest_targets() {
         let unique = format!(
-            "cvb-stage-test-{}",
+            "cg-stage-test-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()

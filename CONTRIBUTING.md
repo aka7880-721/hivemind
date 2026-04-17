@@ -1,6 +1,6 @@
-# Contributing to ComfyVersionBumper
+# Contributing to ComfyGit
 
-Thank you for your interest in contributing to ComfyVersionBumper!  
+Thank you for your interest in contributing to ComfyGit!  
 This project welcomes improvements, bug fixes, and enhancements, provided they align with the
 project’s goals and licensing model.
 
@@ -40,7 +40,7 @@ By submitting a PR, you agree to the following:
 ### 3.1 Contribution License Agreement
 All contributions are:
 - Your original work
-- Licensed to ComfyHome™ under the **ComfyVersionBumper License v1.2**
+- Licensed to ComfyHome™ under the **ComfyGit License v1.2**
 - Assigning ComfyHome™ the right to:
   - Use your contribution
   - Modify it
@@ -81,7 +81,7 @@ Features outside this scope may be declined.
 ---
 
 ## 5. Non‑Commercial License Reminder
-This project is distributed under the **ComfyVersionBumper License v1.2**, which:
+This project is distributed under the **ComfyGit License v1.2**, which:
 - Allows non‑commercial use
 - Prohibits commercial use without a separate license
 - Protects Branding Elements and trademarks
@@ -95,4 +95,4 @@ For commercial licensing or questions about contributions, contact:
 
 **dev@comfyhome.io**
 
-Thank you for helping improve ComfyVersionBumper!
+Thank you for helping improve ComfyGit!
