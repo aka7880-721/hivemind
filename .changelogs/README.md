@@ -2,6 +2,47 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.8.3
+2026-04-17
+
+#### What's changed:
+
+### ✨ New Feature: Text Select in input fields
+
+* Implement clipboard copy and paste functionality for selected text using `rightClick` action   _(723c869)_
+
+* Refactor display value methods to return Line type for improved rendering   _(9403a75)_
+
+* Enhance text input handling with click target tracking and selection improvements   _(77bb7ac)_
+
+* Enhance TextInput with selection handling and cursor movement improvements   _(b8e8bdd)_
+
+---
+
+### General Improvements:
+
+### 🧩 Features
+
+* ReleaseNOW! auto-push - implement staging and committing of generated ReleaseNOW files   _(6843d3e)_
+
+* auto-gitignore functionality to ensure .gitignore entry for local changelog syncmem file   _(62e3b68)_
+
+### 🐛 Fix(es)
+
+* Resolved shortcut vs input text focus bug in wizard→enhance quit and shortcut handling in App to respect text input focus states   _(b71da2a)_
+
+### 🔧 Maintenance
+
+* CVB version bump to 0.8.3   _(0a6652c)_
+
+### 📝 Other
+
+* Merge pull request #16 from comfy-home/0.8.3   _(1d9214b)_
+
+* add changelog for version 0.8.2 and standard changelog execution   _(08e13e3)_
+
+---
+
 ## Changelog v0.8.2
 2026-04-16
 
