@@ -722,6 +722,11 @@ impl TextInput {
         self.cursor = self.value.len();
     }
 
+    pub(crate) fn selected_text(&self) -> Option<&str> {
+        let range = self.selection_range()?;
+        self.value.get(range)
+    }
+
     fn selection_range(&self) -> Option<std::ops::Range<usize>> {
         let anchor = self.selection_anchor?;
         if anchor == self.cursor {

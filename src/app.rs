@@ -1565,7 +1565,21 @@ impl App {
                         }
                     }
                 }
-                if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, true) {
+                let selected_text = self
+                    .active_text_input_mut()
+                    .and_then(|input| input.selected_text().map(str::to_string));
+                if let Some(selection) = selected_text {
+                    self.copy_text_to_clipboard(&selection);
+                    return;
+                }
+
+                let action = self.resolve_hit_action(mouse.column, mouse.row, true);
+                if action.is_none() && self.active_text_input_mut().is_some() {
+                    self.paste_from_clipboard();
+                    return;
+                }
+
+                if let Some(action) = action {
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
                     }
