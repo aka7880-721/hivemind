@@ -45,7 +45,7 @@ fn commit_release_now_generated_files(repo_root: &str, tag_name: &str) -> Result
     }
 
     let commit_message = format!(
-        "ReleaseNOW!: {} has just been released via ComfyGit!",
+        "~: ReleaseNOW! → {} has just been released via ComfyGit!",
         tag_name
     );
     run_git_checked(repo_root, &["commit", "-m", &commit_message])?;
