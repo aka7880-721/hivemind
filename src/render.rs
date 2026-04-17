@@ -325,7 +325,6 @@ impl App {
 
 		let overview_body = Block::default()
 			.borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-			.title(" Overview ")
 			.border_style(if self.dashboard_focus == DashboardPane::Overview {
 				Style::default().fg(Color::Cyan)
 			} else {
