@@ -19,12 +19,11 @@ pub const LOGO_HALF_BLOCK_BOTTOM: &str = "▄";
 pub const LOGO_FULL_BLOCK: &str = "█";
 pub const TERMINAL_IMAGE_ASPECT_ADJUSTMENT: f32 = 2.0;
 
-pub const ASCII_HEADER: [&str; 4] = [
+pub const ASCII_HEADER: [&str; 3] = [
  
  r"▄█████  ▄▄▄  ▄▄   ▄▄ ▄▄▄▄▄ ▄▄ ▄▄  ▄████  ▄▄ ▄▄▄▄▄▄", 
  r"██     ██▀██ ██▀▄▀██ ██▄▄  ▀███▀ ██  ▄▄▄ ██   ██ ",  
- r"▀█████ ▀███▀ ██   ██ ██      █    ▀███▀  ██   ██ ",
- r"                                               {APP_VERSION}",
+ r"▀█████ ▀███▀ ██   ██ ██      █    ▀███▀  ██   ██ {APP_VERSION}",
 ];
 
 pub const NARROW_ASCII_HEADER: [&str; 8] = [
