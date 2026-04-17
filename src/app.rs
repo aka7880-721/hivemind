@@ -6549,7 +6549,9 @@ fn main_screen_from_index(index: usize) -> Screen {
 }
 
 fn header_height_for_viewport(_total_height: u16) -> u16 {
-    if _total_height <= 22 {
+    if _total_height <= 18 {
+        2
+    } else if _total_height <= 22 {
         3
     } else if _total_height < 40 {
         7
