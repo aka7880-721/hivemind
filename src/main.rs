@@ -8,6 +8,7 @@
 mod app;
 mod branding;
 mod changelog;
+mod cli;
 mod config;
 mod dialogs;
 mod git;
@@ -22,5 +23,8 @@ mod ui;
 mod versioning;
 
 fn main() -> anyhow::Result<()> {
-    app::run()
+    match cli::dispatch()? {
+        cli::StartupMode::Handled => Ok(()),
+        cli::StartupMode::LaunchTui => app::run(),
+    }
 }
