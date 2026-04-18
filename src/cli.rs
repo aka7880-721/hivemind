@@ -233,7 +233,7 @@ fn find_project_for_cwd<'a>(
         )
     }
 
-    matches.sort_by(|(_, left), (_, right)| path_depth(right).cmp(&path_depth(left)));
+    matches.sort_by_key(|(_, right)| std::cmp::Reverse(path_depth(right)));
     if matches.len() > 1 && path_depth(&matches[0].1) == path_depth(&matches[1].1) {
         bail!("multiple configured projects match the current directory")
     }
@@ -283,7 +283,7 @@ fn find_scope_for_cwd(
         )
     }
 
-    matches.sort_by(|(_, left), (_, right)| path_depth(right).cmp(&path_depth(left)));
+    matches.sort_by_key(|(_, right)| std::cmp::Reverse(path_depth(right)));
     if matches.len() > 1 && path_depth(&matches[0].1) == path_depth(&matches[1].1) {
         bail!(
             "multiple scopes match the current directory; move deeper into a scope before bumping"
