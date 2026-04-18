@@ -7604,6 +7604,7 @@ mod tests {
         let mut app = App::new_for_tests().expect("app should initialize");
         app.config.projects = vec![ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::AllInOne,
             integration_mode: IntegrationMode::LocalOnly,
             unified_versioning: true,
@@ -7637,6 +7638,7 @@ mod tests {
         let mut app = App::new_for_tests().expect("app should initialize");
         app.config.projects = vec![ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::AllInOne,
             integration_mode: IntegrationMode::LocalOnly,
             unified_versioning: true,
@@ -7809,6 +7811,7 @@ mod tests {
         let mut app = App::new_for_tests().expect("app should initialize");
         app.config.projects = vec![ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::LocalOnly,
             unified_versioning: false,
