@@ -352,10 +352,9 @@ impl ProjectEditDialog {
                     self.version_scheme.previous()
                 };
             }
-            ProjectEditFocus::UnifiedVersioning
-                if self.project_type == ProjectType::Branched => {
-                    self.unified_versioning = !self.unified_versioning;
-                }
+            ProjectEditFocus::UnifiedVersioning if self.project_type == ProjectType::Branched => {
+                self.unified_versioning = !self.unified_versioning;
+            }
             ProjectEditFocus::IntegrationMode => {
                 self.integration_mode = if delta >= 0 {
                     self.integration_mode.next()
@@ -390,9 +389,10 @@ impl ProjectEditDialog {
             KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete
         ) {
             if self.focus == ProjectEditFocus::ScopeName
-                && let Some(scope) = self.current_scope_mut() {
-                    scope.sync_label_if_needed();
-                }
+                && let Some(scope) = self.current_scope_mut()
+            {
+                scope.sync_label_if_needed();
+            }
             if self.focus == ProjectEditFocus::TargetPath {
                 self.sync_target_key_preset_with_path();
                 self.prefill_repo_root_from_target_path();
@@ -570,11 +570,12 @@ impl ProjectEditDialog {
     fn sync_target_key_preset_with_path(&mut self) {
         if self.project_type == ProjectType::Branched {
             if let Some(scope) = self.current_scope_mut()
-                && !scope.target_key_custom {
-                    scope
-                        .target_key
-                        .set_value(default_target_key_for_path(scope.target_path.value()));
-                }
+                && !scope.target_key_custom
+            {
+                scope
+                    .target_key
+                    .set_value(default_target_key_for_path(scope.target_path.value()));
+            }
         } else if !self.target_key_custom {
             self.target_key
                 .set_value(default_target_key_for_path(self.target_path.value()));

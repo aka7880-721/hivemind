@@ -1607,14 +1607,8 @@ impl App {
                 );
                 (label, action, side_button, focused, value)
             };
-            let button_rect = self.render_form_row(
-                frame,
-                row,
-                label,
-                value,
-                focused,
-                side_button.clone(),
-            );
+            let button_rect =
+                self.render_form_row(frame, row, label, value, focused, side_button.clone());
             self.hit_targets.push(HitTarget::new(row, action));
             if let (Some(rect), Some(button)) = (button_rect, side_button) {
                 self.hit_targets.push(HitTarget::new(rect, button.action));
@@ -2066,14 +2060,8 @@ impl App {
                 focused,
                 visible_field_width(row.width, side_button.is_some()),
             );
-            let button_rect = self.render_form_row(
-                frame,
-                *row,
-                label,
-                value,
-                focused,
-                side_button.clone(),
-            );
+            let button_rect =
+                self.render_form_row(frame, *row, label, value, focused, side_button.clone());
             self.hit_targets.push(HitTarget::new(*row, action));
             if let (Some(rect), Some(button)) = (button_rect, side_button) {
                 self.hit_targets.push(HitTarget::new(rect, button.action));

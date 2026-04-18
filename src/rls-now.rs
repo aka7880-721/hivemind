@@ -1294,7 +1294,7 @@ async fn create_or_update_github_release(
             ];
             upload_args.extend(artifact_files.iter().cloned());
             upload_args.push("--clobber".to_string());
-        #[allow(clippy::too_many_arguments)]
+            #[allow(clippy::too_many_arguments)]
             run_blocking_streaming_operation(
                 move |progress_tx| {
                     run_command_with_streaming(

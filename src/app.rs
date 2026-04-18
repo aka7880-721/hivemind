@@ -541,24 +541,24 @@ impl App {
                     self.move_project_selection(1);
                 }
             }
-            KeyCode::Left
-                if self.dashboard_focus == DashboardPane::Overview => {
-                    self.move_dashboard_overview_focus(-1)?;
-                }
-            KeyCode::Right
-                if self.dashboard_focus == DashboardPane::Overview => {
-                    self.move_dashboard_overview_focus(1)?;
-                }
+            KeyCode::Left if self.dashboard_focus == DashboardPane::Overview => {
+                self.move_dashboard_overview_focus(-1)?;
+            }
+            KeyCode::Right if self.dashboard_focus == DashboardPane::Overview => {
+                self.move_dashboard_overview_focus(1)?;
+            }
             KeyCode::PageUp
                 if self.dashboard_focus == DashboardPane::Overview
-                    && !self.scroll_dashboard_recent_changes(-6) => {
-                        let _ = self.scroll_dashboard_tiles(-1);
-                    }
+                    && !self.scroll_dashboard_recent_changes(-6) =>
+            {
+                let _ = self.scroll_dashboard_tiles(-1);
+            }
             KeyCode::PageDown
                 if self.dashboard_focus == DashboardPane::Overview
-                    && !self.scroll_dashboard_recent_changes(6) => {
-                        let _ = self.scroll_dashboard_tiles(1);
-                    }
+                    && !self.scroll_dashboard_recent_changes(6) =>
+            {
+                let _ = self.scroll_dashboard_tiles(1);
+            }
             _ => {}
         }
         Ok(())
@@ -713,9 +713,10 @@ impl App {
             KeyCode::F(2) => return self.save_release_now_notes(),
             _ => {
                 if let Some(dialog) = &mut self.release_now_notes_dialog
-                    && let Some(input) = convert_to_textarea_input(key) {
-                        dialog.editor.input(input);
-                    }
+                    && let Some(input) = convert_to_textarea_input(key)
+                {
+                    dialog.editor.input(input);
+                }
             }
         }
 
@@ -955,9 +956,10 @@ impl App {
                     .changelog_preview_dialog
                     .as_mut()
                     .and_then(|dialog| dialog.custom_range.as_mut())
-                    && custom_range.adjust_focused_selection(-1) {
-                        refresh_selection = custom_range.selection();
-                    }
+                    && custom_range.adjust_focused_selection(-1)
+                {
+                    refresh_selection = custom_range.selection();
+                }
             }
             KeyCode::Right
                 if self
@@ -970,9 +972,10 @@ impl App {
                     .changelog_preview_dialog
                     .as_mut()
                     .and_then(|dialog| dialog.custom_range.as_mut())
-                    && custom_range.adjust_focused_selection(1) {
-                        refresh_selection = custom_range.selection();
-                    }
+                    && custom_range.adjust_focused_selection(1)
+                {
+                    refresh_selection = custom_range.selection();
+                }
             }
             KeyCode::Char('r') | KeyCode::Char('R')
                 if self
@@ -1055,27 +1058,24 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('[')
-                if self.recent_changes_dialog.is_some() => {
-                    self.schedule_recent_changes_action(
-                        "Loading git history for the previous scope.",
-                        RecentChangesLoadAction::RotateScope(-1),
-                    )?;
-                }
-            KeyCode::Char(']')
-                if self.recent_changes_dialog.is_some() => {
-                    self.schedule_recent_changes_action(
-                        "Loading git history for the next scope.",
-                        RecentChangesLoadAction::RotateScope(1),
-                    )?;
-                }
-            KeyCode::Char('r') | KeyCode::Char('R')
-                if self.recent_changes_dialog.is_some() => {
-                    self.schedule_recent_changes_action(
-                        "Refreshing git history for the current scope.",
-                        RecentChangesLoadAction::RefreshCurrentScope,
-                    )?;
-                }
+            KeyCode::Char('[') if self.recent_changes_dialog.is_some() => {
+                self.schedule_recent_changes_action(
+                    "Loading git history for the previous scope.",
+                    RecentChangesLoadAction::RotateScope(-1),
+                )?;
+            }
+            KeyCode::Char(']') if self.recent_changes_dialog.is_some() => {
+                self.schedule_recent_changes_action(
+                    "Loading git history for the next scope.",
+                    RecentChangesLoadAction::RotateScope(1),
+                )?;
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') if self.recent_changes_dialog.is_some() => {
+                self.schedule_recent_changes_action(
+                    "Refreshing git history for the current scope.",
+                    RecentChangesLoadAction::RefreshCurrentScope,
+                )?;
+            }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
                     if dialog.active_tab == RecentChangesTab::Recent && dialog.can_select_scope() {
@@ -1141,9 +1141,10 @@ impl App {
             KeyCode::F(2) => return self.save_tag_annotation(),
             _ => {
                 if let Some(dialog) = &mut self.tag_annotation_dialog
-                    && let Some(input) = convert_to_textarea_input(key) {
-                        dialog.editor.input(input);
-                    }
+                    && let Some(input) = convert_to_textarea_input(key)
+                {
+                    dialog.editor.input(input);
+                }
             }
         }
 
@@ -1279,9 +1280,10 @@ impl App {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
-                        && let Err(error) = self.handle_hit_action(action) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
+                    }
                     return;
                 }
                 _ => return,
@@ -1307,9 +1309,10 @@ impl App {
                         return;
                     }
                     if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
-                        && let Err(error) = self.handle_hit_action(action) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
+                    }
                     return;
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
@@ -1333,9 +1336,10 @@ impl App {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
-                        && let Err(error) = self.handle_hit_action(action) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
+                    }
                     return;
                 }
                 MouseEventKind::ScrollUp
@@ -1359,9 +1363,10 @@ impl App {
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
-                        && let Err(error) = self.handle_hit_action(action) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
+                    }
                     return;
                 }
                 MouseEventKind::Down(MouseButton::Right)
@@ -1377,8 +1382,7 @@ impl App {
                     self.scroll_project_edit_body(-1);
                 } else if self.changelog_preview_dialog.is_some() {
                     self.scroll_changelog_preview(-2);
-                } else if self.overview_bump_workflow_dialog.is_some()
-                    || self.tag_dialog.is_some()
+                } else if self.overview_bump_workflow_dialog.is_some() || self.tag_dialog.is_some()
                 {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(-2);
@@ -1431,8 +1435,7 @@ impl App {
                     self.scroll_project_edit_body(1);
                 } else if self.changelog_preview_dialog.is_some() {
                     self.scroll_changelog_preview(2);
-                } else if self.overview_bump_workflow_dialog.is_some()
-                    || self.tag_dialog.is_some()
+                } else if self.overview_bump_workflow_dialog.is_some() || self.tag_dialog.is_some()
                 {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(2);
@@ -1501,9 +1504,10 @@ impl App {
                                 }
                             });
                     if let Some(scope_index) = self.overview_drag_scope
-                        && let Err(error) = self.select_dashboard_overview_scope(scope_index) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                        && let Err(error) = self.select_dashboard_overview_scope(scope_index)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
+                    }
                 }
 
                 if let Some((action, rect)) =
@@ -1557,18 +1561,20 @@ impl App {
                                     .then_some(*scope)
                             });
                     if let Some(to_scope) = target_scope
-                        && to_scope != from_scope {
-                            self.reorder_dashboard_tile_scope(from_scope, to_scope);
-                            self.overview_drag_scope = Some(to_scope);
-                        }
+                        && to_scope != from_scope
+                    {
+                        self.reorder_dashboard_tile_scope(from_scope, to_scope);
+                        self.overview_drag_scope = Some(to_scope);
+                    }
                 }
 
                 if let Some((action, rect)) =
                     self.resolve_hit_target(mouse.column, mouse.row, false)
                     && let Some(last_target) = self.last_text_input_click_target
-                        && last_target.same_field_action(&action) {
-                            self.update_text_input_drag_selection(rect, mouse.column);
-                        }
+                    && last_target.same_field_action(&action)
+                {
+                    self.update_text_input_drag_selection(rect, mouse.column);
+                }
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.overview_drag_scope = None;
@@ -1588,9 +1594,10 @@ impl App {
                                     && mouse.row < rect.y + rect.height)
                                     .then_some(*scope)
                             })
-                        && let Err(error) = self.select_dashboard_overview_scope(scope_index) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                    && let Err(error) = self.select_dashboard_overview_scope(scope_index)
+                {
+                    self.status = StatusMessage::error(error.to_string());
+                }
                 let selected_text = self
                     .active_text_input_mut()
                     .and_then(|input| input.selected_text().map(str::to_string));
@@ -1645,11 +1652,12 @@ impl App {
         }
 
         if let Some(dialog) = &mut self.changelog_preview_dialog
-            && dialog.workflow.is_some() {
-                dialog.release_message.insert_str(text);
-                self.status = StatusMessage::info("Pasted into the release notes.");
-                return;
-            }
+            && dialog.workflow.is_some()
+        {
+            dialog.release_message.insert_str(text);
+            self.status = StatusMessage::info("Pasted into the release notes.");
+            return;
+        }
 
         let sanitized = sanitize_pasted_text(&text);
         if self.insert_text(&sanitized) {
@@ -1672,11 +1680,12 @@ impl App {
                 }
 
                 if let Some(dialog) = &mut self.changelog_preview_dialog
-                    && dialog.workflow.is_some() {
-                        dialog.release_message.insert_str(text);
-                        self.status = StatusMessage::info("Pasted into the release notes.");
-                        return;
-                    }
+                    && dialog.workflow.is_some()
+                {
+                    dialog.release_message.insert_str(text);
+                    self.status = StatusMessage::info("Pasted into the release notes.");
+                    return;
+                }
 
                 let sanitized = sanitize_pasted_text(&text);
                 if self.insert_text(&sanitized) {
@@ -1693,24 +1702,26 @@ impl App {
 
     fn insert_text(&mut self, text: &str) -> bool {
         if let Some(dialog) = &mut self.project_edit_dialog
-            && dialog.insert_text(text) {
-                return true;
-            }
+            && dialog.insert_text(text)
+        {
+            return true;
+        }
 
         if let Some(dialog) = &mut self.tag_dialog {
             dialog.tag_name.insert_str(text);
             return true;
         }
 
-        if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings
-            && p_s_s::insert_project_settings_text(self, text) {
-                return true;
-            }
+        if self.screen == Screen::Dashboard
+            && self.overview_tab == OverviewTab::ProjectSettings
+            && p_s_s::insert_project_settings_text(self, text)
+        {
+            return true;
+        }
 
-        if self.screen == Screen::Wizard
-            && self.wizard.insert_text(text) {
-                return true;
-            }
+        if self.screen == Screen::Wizard && self.wizard.insert_text(text) {
+            return true;
+        }
 
         false
     }
@@ -2240,13 +2251,14 @@ impl App {
                 Ok(output) => self.apply_background_job_output(output)?,
                 Err(error_message) => {
                     if message.kind == BackgroundJobKind::ReleaseNow
-                        && let Some(dialog) = &mut self.release_now_dialog {
-                            if rls_now::is_cancelled_error(&error_message) {
-                                dialog.apply_cancelled(error_message.clone());
-                            } else {
-                                dialog.apply_failure(error_message.clone());
-                            }
+                        && let Some(dialog) = &mut self.release_now_dialog
+                    {
+                        if rls_now::is_cancelled_error(&error_message) {
+                            dialog.apply_cancelled(error_message.clone());
+                        } else {
+                            dialog.apply_failure(error_message.clone());
                         }
+                    }
                     self.status = if message.kind == BackgroundJobKind::ReleaseNow
                         && rls_now::is_cancelled_error(&error_message)
                     {
@@ -2326,18 +2338,19 @@ impl App {
                 prefetched_history_ranges,
             } => {
                 if let Some(dialog) = &mut self.recent_changes_dialog
-                    && dialog.project_name == project_name {
-                        if let (Some(scope_index), Some(range)) =
-                            (next_scope_index, prefetched_recent_range)
-                        {
-                            dialog.apply_prefetched_recent_range(scope_index, range);
-                        }
-                        if let (Some(scope_index), Some(ranges)) =
-                            (history_scope_index, prefetched_history_ranges)
-                        {
-                            dialog.apply_prefetched_history_ranges(scope_index, ranges);
-                        }
+                    && dialog.project_name == project_name
+                {
+                    if let (Some(scope_index), Some(range)) =
+                        (next_scope_index, prefetched_recent_range)
+                    {
+                        dialog.apply_prefetched_recent_range(scope_index, range);
                     }
+                    if let (Some(scope_index), Some(ranges)) =
+                        (history_scope_index, prefetched_history_ranges)
+                    {
+                        dialog.apply_prefetched_history_ranges(scope_index, ranges);
+                    }
+                }
             }
             BackgroundJobOutput::OpenChangelogPreview(dialog) => {
                 self.open_changelog_preview(*dialog)
@@ -6981,8 +6994,7 @@ fn render_annotation_line(
             spans.push(Span::styled(character.to_string(), style));
         }
 
-        if chars.is_empty() || (visible_cursor_col >= chars.len() && chars.len() < content_width)
-        {
+        if chars.is_empty() || (visible_cursor_col >= chars.len() && chars.len() < content_width) {
             spans.push(Span::styled(
                 " ".to_string(),
                 Style::default().fg(Color::Black).bg(Color::Cyan),

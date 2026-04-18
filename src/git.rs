@@ -174,9 +174,10 @@ pub(crate) fn suggested_tag_name_for_scope(
         || scope_index.is_none()
     {
         if let Ok(scopes) = collect_bump_scopes(project)
-            && let Some(version) = shared_bump_version(&scopes) {
-                return format!("v{}", version);
-            }
+            && let Some(version) = shared_bump_version(&scopes)
+        {
+            return format!("v{}", version);
+        }
         return slugify(&project.name);
     }
 
@@ -193,9 +194,10 @@ pub(crate) fn suggested_tag_name_for_scope(
 
     if let Ok(scopes) = collect_bump_scopes(project)
         && let Some(scope) = scopes.get(scope_index)
-            && let Some(version) = &scope.current_version {
-                return format!("{}-v{}", scope_slug, version);
-            }
+        && let Some(version) = &scope.current_version
+    {
+        return format!("{}-v{}", scope_slug, version);
+    }
 
     scope_slug
 }

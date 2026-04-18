@@ -760,14 +760,15 @@ fn parse_prefix_parts(prefix: &str) -> (Option<Category>, Option<String>) {
     }
 
     if let Some(open_index) = trimmed.find('(')
-        && trimmed.ends_with(')') {
-            let category_part = &trimmed[..open_index];
-            let specific_part = &trimmed[open_index + 1..trimmed.len() - 1];
-            return (
-                Category::from_alias(category_part),
-                normalize_specific(specific_part),
-            );
-        }
+        && trimmed.ends_with(')')
+    {
+        let category_part = &trimmed[..open_index];
+        let specific_part = &trimmed[open_index + 1..trimmed.len() - 1];
+        return (
+            Category::from_alias(category_part),
+            normalize_specific(specific_part),
+        );
+    }
 
     (Category::from_alias(trimmed), None)
 }
@@ -1115,9 +1116,10 @@ where
     for commit in commits {
         let commit = commit.borrow();
         if let Some(name) = &commit.specific
-            && !names.iter().any(|existing| existing == name) {
-                names.push(name.clone());
-            }
+            && !names.iter().any(|existing| existing == name)
+        {
+            names.push(name.clone());
+        }
     }
     names
 }
