@@ -19,6 +19,10 @@ license-link = "https://github.com/comfy-home/ComfyGit?tab=License-1-ov-file"
 name = "cg"
 path = "src/main.rs"
 
+[[bin]]
+name = "cg-bin"
+path = "src/bin/cg-bin.rs"
+
 [workspace]
 
 [dependencies]
