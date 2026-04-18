@@ -86,6 +86,8 @@ impl FooterContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub name: String,
+    #[serde(default)]
+    pub alias: String,
     pub project_type: ProjectType,
     pub integration_mode: IntegrationMode,
     pub unified_versioning: bool,
@@ -141,6 +143,10 @@ impl ProjectConfig {
             format!("Project type: {}", self.project_type.display_name()),
             format!("Integration: {}", self.integration_mode.display_name()),
         ];
+
+        if !self.alias.trim().is_empty() {
+            lines.push(format!("Alias: {}", self.alias.trim()));
+        }
 
         if self.project_type == ProjectType::AllInOne {
             lines.push(format!(
@@ -704,6 +710,7 @@ format = "json"
             schema_version: 1,
             projects: vec![ProjectConfig {
                 name: "Example".to_string(),
+                alias: String::new(),
                 project_type: ProjectType::Branched,
                 integration_mode: IntegrationMode::LocalOnly,
                 unified_versioning: true,
@@ -738,6 +745,7 @@ format = "json"
     fn branched_summary_reports_semver_or_mixed_compactly() {
         let semver_project = ProjectConfig {
             name: "Example".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::LocalOnly,
             unified_versioning: false,
@@ -760,6 +768,7 @@ format = "json"
         };
 
         let mixed_project = ProjectConfig {
+            alias: String::new(),
             branches: vec![
                 BranchConfig {
                     version_scheme: VersionScheme::SemVer,
