@@ -1320,6 +1320,7 @@ mod tests {
     fn empty_local_only_project_uses_dashboard_placeholders() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::AllInOne,
             integration_mode: IntegrationMode::LocalOnly,
             unified_versioning: true,
@@ -1355,6 +1356,7 @@ mod tests {
     fn configured_branched_project_keeps_real_scope_versions() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: false,
@@ -1408,6 +1410,7 @@ mod tests {
         };
         app.config.projects = vec![ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::AllInOne,
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: true,
