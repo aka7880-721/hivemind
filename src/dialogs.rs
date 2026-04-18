@@ -14,10 +14,9 @@ use ratatui::text::{Line, Span};
 use crate::{
     config::{IntegrationMode, ProjectConfig},
     git::{
-        GitScopeContext, collect_all_branch_git_scope_contexts, collect_git_scope_contexts,
-        GitCancellation, ensure_git_repo_with_cancel, run_git_checked_with_cancel,
-        run_git_with_cancel,
-        split_output_lines,
+        GitCancellation, GitScopeContext, collect_all_branch_git_scope_contexts,
+        collect_git_scope_contexts, ensure_git_repo_with_cancel, run_git_checked_with_cancel,
+        run_git_with_cancel, split_output_lines,
     },
     targets::{BumpScope, BumpTarget, collect_bump_scopes, shared_bump_version},
     versioning::{BumpAction, VersionScheme},
@@ -59,7 +58,11 @@ pub(crate) fn load_recent_change_range_with_cancel(
 
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
 
-    let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel.clone())?;
+    let describe = run_git_with_cancel(
+        repo_root,
+        &["describe", "--tags", "--abbrev=0"],
+        cancel.clone(),
+    )?;
     let recent_range = if describe.success {
         let tag = describe.stdout.trim().to_string();
         let range = format!("{}..HEAD", tag);
@@ -69,7 +72,10 @@ pub(crate) fn load_recent_change_range_with_cancel(
             cancel.clone(),
         )?;
         let lines = split_output_lines(&output);
-        ChangeRange { label: range, lines }
+        ChangeRange {
+            label: range,
+            lines,
+        }
     } else {
         let output = run_git_checked_owned(
             repo_root,
@@ -141,14 +147,22 @@ pub(crate) fn load_history_ranges_with_cancel(
 
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
 
-    let mut tags = split_output_lines(&run_git_checked_with_cancel(repo_root, &["tag"], cancel.clone())?);
+    let mut tags = split_output_lines(&run_git_checked_with_cancel(
+        repo_root,
+        &["tag"],
+        cancel.clone(),
+    )?);
     crate::git::sort_tags_for_history(&mut tags);
     let mut history_ranges = Vec::new();
     for window in tags.windows(2) {
         let newer = &window[0];
         let older = &window[1];
         let range = format!("{}..{}", older, newer);
-        let output = run_git_checked_with_cancel(repo_root, &["log", "--oneline", "--graph", range.as_str()], cancel.clone())?;
+        let output = run_git_checked_with_cancel(
+            repo_root,
+            &["log", "--oneline", "--graph", range.as_str()],
+            cancel.clone(),
+        )?;
         history_ranges.push(ChangeRange {
             label: range,
             lines: split_output_lines(&output),
@@ -167,7 +181,11 @@ fn build_log_args<const N: usize>(base: [&str; N], pathspecs: &[String]) -> Vec<
     args
 }
 
-fn run_git_checked_owned(repo_root: &str, args: Vec<String>, cancel: Option<GitCancellation>) -> Result<String> {
+fn run_git_checked_owned(
+    repo_root: &str,
+    args: Vec<String>,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_git_checked_with_cancel(repo_root, &arg_refs, cancel)
 }
@@ -177,7 +195,10 @@ impl RecentChangesDialog {
         Self::from_project_with_scope(project, 0)
     }
 
-    pub(crate) fn from_project_with_scope(project: &ProjectConfig, preferred_scope: usize) -> Result<Self> {
+    pub(crate) fn from_project_with_scope(
+        project: &ProjectConfig,
+        preferred_scope: usize,
+    ) -> Result<Self> {
         Self::from_project_with_scope_cancellable(project, preferred_scope, None)
     }
 
@@ -214,15 +235,27 @@ impl RecentChangesDialog {
         &self.scopes[self.selected_scope.min(self.scopes.len().saturating_sub(1))]
     }
 
-    pub(crate) fn refresh_current_scope_cancellable(&mut self, cancel: Option<GitCancellation>) -> Result<()> {
+    pub(crate) fn refresh_current_scope_cancellable(
+        &mut self,
+        cancel: Option<GitCancellation>,
+    ) -> Result<()> {
         let previous_scroll = self.scroll;
         self.reload_selected_scope(false, cancel)?;
-        let max_scroll = self.current_range().lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        let max_scroll = self
+            .current_range()
+            .lines
+            .len()
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16;
         self.scroll = previous_scroll.min(max_scroll);
         Ok(())
     }
 
-    pub(crate) fn rotate_scope_cancellable(&mut self, delta: isize, cancel: Option<GitCancellation>) -> Result<()> {
+    pub(crate) fn rotate_scope_cancellable(
+        &mut self,
+        delta: isize,
+        cancel: Option<GitCancellation>,
+    ) -> Result<()> {
         if !self.can_select_scope() {
             self.selected_scope = 0;
             return Ok(());
@@ -248,9 +281,16 @@ impl RecentChangesDialog {
         self.reload_selected_scope(true, None)
     }
 
-    fn reload_selected_scope(&mut self, reset_navigation: bool, cancel: Option<GitCancellation>) -> Result<()> {
+    fn reload_selected_scope(
+        &mut self,
+        reset_navigation: bool,
+        cancel: Option<GitCancellation>,
+    ) -> Result<()> {
         let previous_tab = self.active_tab;
-        let previous_history_label = self.history_ranges.get(self.history_index).map(|range| range.label.clone());
+        let previous_history_label = self
+            .history_ranges
+            .get(self.history_index)
+            .map(|range| range.label.clone());
         let history_loaded = self.history_loaded;
         if let Some(prefetched) = self
             .prefetched_recent_ranges
@@ -259,7 +299,8 @@ impl RecentChangesDialog {
         {
             self.recent_range = prefetched;
         } else {
-            self.recent_range = load_recent_change_range_with_cancel(self.active_scope(), cancel.clone())?;
+            self.recent_range =
+                load_recent_change_range_with_cancel(self.active_scope(), cancel.clone())?;
         }
         if reset_navigation {
             self.history_ranges.clear();
@@ -277,12 +318,20 @@ impl RecentChangesDialog {
                 {
                     self.history_ranges = prefetched;
                 } else {
-                    self.history_ranges = load_history_ranges_with_cancel(self.active_scope(), cancel)?;
+                    self.history_ranges =
+                        load_history_ranges_with_cancel(self.active_scope(), cancel)?;
                 }
                 self.history_index = previous_history_label
                     .as_ref()
-                    .and_then(|label| self.history_ranges.iter().position(|range| &range.label == label))
-                    .unwrap_or_else(|| self.history_index.min(self.history_ranges.len().saturating_sub(1)));
+                    .and_then(|label| {
+                        self.history_ranges
+                            .iter()
+                            .position(|range| &range.label == label)
+                    })
+                    .unwrap_or_else(|| {
+                        self.history_index
+                            .min(self.history_ranges.len().saturating_sub(1))
+                    });
             } else {
                 self.history_ranges.clear();
                 self.history_index = 0;
@@ -307,7 +356,9 @@ impl RecentChangesDialog {
             self.history_ranges = load_history_ranges_with_cancel(self.active_scope(), cancel)?;
         }
         self.history_loaded = true;
-        self.history_index = self.history_index.min(self.history_ranges.len().saturating_sub(1));
+        self.history_index = self
+            .history_index
+            .min(self.history_ranges.len().saturating_sub(1));
         Ok(())
     }
 
@@ -325,7 +376,11 @@ impl RecentChangesDialog {
         self.switch_tab_cancellable(tab, None)
     }
 
-    pub(crate) fn switch_tab_cancellable(&mut self, tab: RecentChangesTab, cancel: Option<GitCancellation>) -> Result<()> {
+    pub(crate) fn switch_tab_cancellable(
+        &mut self,
+        tab: RecentChangesTab,
+        cancel: Option<GitCancellation>,
+    ) -> Result<()> {
         if tab == RecentChangesTab::History {
             self.ensure_history_loaded_cancellable(cancel)?;
         }
@@ -350,7 +405,11 @@ impl RecentChangesDialog {
         }
     }
 
-    pub(crate) fn apply_prefetched_history_ranges(&mut self, scope_index: usize, ranges: Vec<ChangeRange>) {
+    pub(crate) fn apply_prefetched_history_ranges(
+        &mut self,
+        scope_index: usize,
+        ranges: Vec<ChangeRange>,
+    ) {
         if let Some(slot) = self.prefetched_history_ranges.get_mut(scope_index) {
             *slot = Some(ranges);
         }
@@ -362,7 +421,8 @@ impl RecentChangesDialog {
         }
 
         let next = (self.history_index as isize + delta)
-            .clamp(0, self.history_ranges.len().saturating_sub(1) as isize) as usize;
+            .clamp(0, self.history_ranges.len().saturating_sub(1) as isize)
+            as usize;
         if next != self.history_index {
             self.history_index = next;
             self.scroll = 0;
@@ -370,7 +430,12 @@ impl RecentChangesDialog {
     }
 
     pub(crate) fn scroll_by(&mut self, delta: i16) {
-        let max_scroll = self.current_range().lines.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        let max_scroll = self
+            .current_range()
+            .lines
+            .len()
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16;
         if delta.is_negative() {
             self.scroll = self.scroll.saturating_sub(delta.unsigned_abs());
         } else {
@@ -398,9 +463,14 @@ impl TagDialog {
         preferred_action: Option<TagAction>,
     ) -> Result<Self> {
         let scopes = collect_git_scope_contexts(project)?;
-        let selected_scope = preferred_scope.unwrap_or(0).min(scopes.len().saturating_sub(1));
+        let selected_scope = preferred_scope
+            .unwrap_or(0)
+            .min(scopes.len().saturating_sub(1));
         ensure_git_repo_with_cancel(&scopes[selected_scope].repo_root, None)?;
-        let actions = available_tag_actions(project.integration_mode, scopes[selected_scope].remote_spec.is_some())?;
+        let actions = available_tag_actions(
+            project.integration_mode,
+            scopes[selected_scope].remote_spec.is_some(),
+        )?;
         let action_index = preferred_action
             .and_then(|action| actions.iter().position(|candidate| *candidate == action))
             .unwrap_or(0);
@@ -433,9 +503,13 @@ impl TagDialog {
         let current_action = self.selected_action();
         let len = self.scopes.len() as isize;
         self.selected_scope = (self.selected_scope as isize + delta).rem_euclid(len) as usize;
-        self.tag_name.set_value(self.active_scope().suggested_tag_name.clone());
-        self.actions = available_tag_actions(self.integration_mode, self.active_scope().remote_spec.is_some())
-            .unwrap_or_else(|_| vec![TagAction::CreateLocal]);
+        self.tag_name
+            .set_value(self.active_scope().suggested_tag_name.clone());
+        self.actions = available_tag_actions(
+            self.integration_mode,
+            self.active_scope().remote_spec.is_some(),
+        )
+        .unwrap_or_else(|_| vec![TagAction::CreateLocal]);
         self.action_index = self
             .actions
             .iter()
@@ -458,6 +532,7 @@ impl TagDialog {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum TagAction {
     CreateLocal,
     CreateAndPush,
@@ -474,7 +549,10 @@ impl TagAction {
     }
 }
 
-fn available_tag_actions(integration_mode: IntegrationMode, has_remote: bool) -> Result<Vec<TagAction>> {
+fn available_tag_actions(
+    integration_mode: IntegrationMode,
+    has_remote: bool,
+) -> Result<Vec<TagAction>> {
     match integration_mode {
         IntegrationMode::LocalOnly => bail!("local-only projects do not support git tags"),
         IntegrationMode::GitLocalOnly => Ok(if has_remote {
@@ -542,7 +620,8 @@ impl BumpDialog {
 
     pub(crate) fn current_version_label(&self) -> String {
         if self.unified_versioning {
-            shared_bump_version(&self.scopes).unwrap_or_else(|| "mixed values across scopes".to_string())
+            shared_bump_version(&self.scopes)
+                .unwrap_or_else(|| "mixed values across scopes".to_string())
         } else {
             self.active_scope().version_label().to_string()
         }
@@ -581,12 +660,16 @@ impl BumpDialog {
     pub(crate) fn preview_next_version(&self) -> Result<String> {
         let today = Local::now().date_naive();
         let current_version = if self.unified_versioning {
-            shared_bump_version(&self.scopes)
-                .ok_or_else(|| anyhow::anyhow!("project scopes do not currently share the same version value"))?
+            shared_bump_version(&self.scopes).ok_or_else(|| {
+                anyhow::anyhow!("project scopes do not currently share the same version value")
+            })?
         } else {
             let scope = self.active_scope();
             scope.current_version.clone().ok_or_else(|| {
-                anyhow::anyhow!("targets in '{}' do not currently share the same version value", scope.display_name)
+                anyhow::anyhow!(
+                    "targets in '{}' do not currently share the same version value",
+                    scope.display_name
+                )
             })?
         };
 
@@ -597,7 +680,10 @@ impl BumpDialog {
 
     pub(crate) fn active_targets(&self) -> Vec<&BumpTarget> {
         if self.unified_versioning {
-            self.scopes.iter().flat_map(|scope| scope.targets.iter()).collect()
+            self.scopes
+                .iter()
+                .flat_map(|scope| scope.targets.iter())
+                .collect()
         } else {
             self.active_scope().targets.iter().collect()
         }
@@ -770,7 +856,9 @@ impl TextInput {
     }
 
     fn byte_index_to_char(&self, byte_index: usize) -> usize {
-        self.value[..byte_index.min(self.value.len())].chars().count()
+        self.value[..byte_index.min(self.value.len())]
+            .chars()
+            .count()
     }
 
     fn visible_segment(&self, focused: bool, max_width: usize) -> (usize, usize, Vec<char>, usize) {
@@ -795,7 +883,9 @@ impl TextInput {
         };
 
         let visible_chars = chars[start_char..end_char].to_vec();
-        let visible_cursor = cursor_char_index.saturating_sub(start_char).min(visible_chars.len());
+        let visible_cursor = cursor_char_index
+            .saturating_sub(start_char)
+            .min(visible_chars.len());
         (start_char, end_char, visible_chars, visible_cursor)
     }
 
@@ -821,8 +911,12 @@ impl TextInput {
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => self.select_all(),
-            KeyCode::Char(character) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.select_all()
+            }
+            KeyCode::Char(character)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
                 self.insert(character)
             }
             KeyCode::Backspace => self.backspace(),
@@ -867,9 +961,12 @@ impl TextInput {
     pub(crate) fn display_line_with_width(&self, focused: bool, max_width: usize) -> Line<'static> {
         let style = Style::default().fg(Color::Rgb(235, 235, 235));
         let cursor_style = Style::default().fg(Color::Rgb(220, 220, 220));
-        let selection_style = Style::default().fg(Color::White).bg(Color::Rgb(40, 70, 120));
+        let selection_style = Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(40, 70, 120));
 
-        let (start_char, _end_char, visible_chars, visible_cursor) = self.visible_segment(focused, max_width);
+        let (start_char, _end_char, visible_chars, visible_cursor) =
+            self.visible_segment(focused, max_width);
         let selection_range = self.selection_range().map(|range| {
             let start = self.byte_index_to_char(range.start);
             let end = self.byte_index_to_char(range.end);
@@ -887,7 +984,10 @@ impl TextInput {
                 spans.push(Span::styled("|", cursor_style));
             }
             let global_index = start_char + index;
-            let span_style = if selection_range.as_ref().map_or(false, |range| range.contains(&global_index)) {
+            let span_style = if selection_range
+                .as_ref()
+                .is_some_and(|range| range.contains(&global_index))
+            {
                 selection_style
             } else {
                 style
@@ -1040,7 +1140,12 @@ mod tests {
                 chrono::Local::now().date_naive(),
             )
             .expect("selected action should produce a version");
-        assert_eq!(dialog.preview_next_version().expect("selected scope bump should preview"), expected);
+        assert_eq!(
+            dialog
+                .preview_next_version()
+                .expect("selected scope bump should preview"),
+            expected
+        );
         assert_eq!(dialog.active_targets().len(), 1);
         assert_eq!(dialog.active_targets()[0].path, "api/package.json");
     }
@@ -1070,7 +1175,9 @@ mod tests {
             action_index: 0,
         };
 
-        let error = dialog.preview_next_version().expect_err("mixed unified versions should fail preview");
+        let error = dialog
+            .preview_next_version()
+            .expect_err("mixed unified versions should fail preview");
         assert!(error.to_string().contains("share the same version value"));
     }
 
@@ -1079,7 +1186,10 @@ mod tests {
         let actions = available_tag_actions(IntegrationMode::GitLocalOnly, true)
             .expect("git-local projects with a remote should support push");
 
-        assert_eq!(actions, vec![TagAction::CreateLocal, TagAction::CreateAndPush]);
+        assert_eq!(
+            actions,
+            vec![TagAction::CreateLocal, TagAction::CreateAndPush]
+        );
     }
 
     #[test]
@@ -1094,7 +1204,10 @@ mod tests {
     fn build_log_args_append_scope_pathspecs() {
         let args = super::build_log_args(
             ["log", "--oneline", "--graph", "v1.0.0..HEAD"],
-            &["core/package.json".to_string(), "core/Cargo.toml".to_string()],
+            &[
+                "core/package.json".to_string(),
+                "core/Cargo.toml".to_string(),
+            ],
         );
 
         assert_eq!(

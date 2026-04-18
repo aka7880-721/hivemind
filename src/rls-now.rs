@@ -80,7 +80,8 @@ use crate::{
 
 const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 30);
 const RECENT_BUMP_WINDOW_SECS: i64 = 15 * 60;
-const DEFAULT_RELEASE_NOTES: &str = "# Release Notes\n\nAdd release highlights here before publishing.";
+const DEFAULT_RELEASE_NOTES: &str =
+    "# Release Notes\n\nAdd release highlights here before publishing.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReleaseNowMode {
@@ -138,7 +139,8 @@ impl ReleaseNowDialog {
             selected_option: 0,
             attach_changelog: true,
             release_notes_markdown: validation.release_notes_markdown,
-            release_notes_placeholder: "Edit release notes in Markdown before publishing.".to_string(),
+            release_notes_placeholder: "Edit release notes in Markdown before publishing."
+                .to_string(),
             warning_message: validation.warning_message,
             mode,
             running: false,
@@ -185,7 +187,9 @@ impl ReleaseNowDialog {
     }
 
     pub(super) fn selected_option(&self) -> &ReleaseNowRunOption {
-        &self.options[self.selected_option.min(self.options.len().saturating_sub(1))]
+        &self.options[self
+            .selected_option
+            .min(self.options.len().saturating_sub(1))]
     }
 
     pub(super) fn cycle_option(&mut self, delta: isize) {
@@ -248,7 +252,9 @@ impl ReleaseNowDialog {
         }
 
         self.cancel_requested = true;
-        self.append_log_lines(vec!["Cancellation requested. Waiting for the running command to stop...".to_string()]);
+        self.append_log_lines(vec![
+            "Cancellation requested. Waiting for the running command to stop...".to_string(),
+        ]);
     }
 
     pub(super) fn append_log_lines(&mut self, lines: Vec<String>) {
@@ -403,7 +409,11 @@ impl ReleaseNowDialog {
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
                     Line::from("Recent bump validation did not find a very recent release tag.")
-                        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        .style(
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     Line::raw(""),
                 ];
                 if let Some(message) = &self.warning_message {
@@ -428,12 +438,11 @@ impl ReleaseNowDialog {
                         Line::from("Changelog attachment is disabled for this release.")
                             .style(Style::default().fg(Color::DarkGray)),
                         Line::raw(""),
-                        Line::from(format!(
-                            "Run option: {}",
-                            self.selected_option().label
-                        )),
+                        Line::from(format!("Run option: {}", self.selected_option().label)),
                         Line::from(format!("Tag: {}", self.tag_name)),
-                        Line::from("Enable changelog attachment to preview and edit release notes."),
+                        Line::from(
+                            "Enable changelog attachment to preview and edit release notes.",
+                        ),
                     ]
                 }
             }
@@ -441,23 +450,25 @@ impl ReleaseNowDialog {
                 let mut lines = Vec::new();
                 if let Some(summary) = &self.summary {
                     lines.push(
-                        Line::from(summary.clone())
-                            .style(
-                                Style::default()
-                                    .fg(if self.summary_is_error {
-                                        Color::Red
-                                    } else if self.summary_is_warning {
-                                        Color::Yellow
-                                    } else {
-                                        Color::Green
-                                    })
-                                    .add_modifier(Modifier::BOLD),
-                            ),
+                        Line::from(summary.clone()).style(
+                            Style::default()
+                                .fg(if self.summary_is_error {
+                                    Color::Red
+                                } else if self.summary_is_warning {
+                                    Color::Yellow
+                                } else {
+                                    Color::Green
+                                })
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     );
                     lines.push(Line::raw(""));
                 }
                 if !self.artifact_files.is_empty() {
-                    lines.push(Line::from("Artifacts").style(Style::default().add_modifier(Modifier::BOLD)));
+                    lines.push(
+                        Line::from("Artifacts")
+                            .style(Style::default().add_modifier(Modifier::BOLD)),
+                    );
                     lines.extend(
                         self.artifact_files
                             .iter()
@@ -479,7 +490,10 @@ impl ReleaseNowDialog {
     }
 
     fn log_display_lines(&self) -> Vec<Line<'static>> {
-        self.log_lines.iter().map(|line| ansi_line_to_ratatui(line)).collect()
+        self.log_lines
+            .iter()
+            .map(|line| ansi_line_to_ratatui(line))
+            .collect()
     }
 
     fn body_plain_lines(&self) -> Vec<String> {
@@ -505,14 +519,18 @@ impl ReleaseNowDialog {
                             .collect()
                     }
                 } else if self.attach_changelog {
-                    self.release_notes_markdown.lines().map(|line| line.to_string()).collect()
+                    self.release_notes_markdown
+                        .lines()
+                        .map(|line| line.to_string())
+                        .collect()
                 } else {
                     vec![
                         "Changelog attachment is disabled for this release.".to_string(),
                         String::new(),
                         format!("Run option: {}", self.selected_option().label),
                         format!("Tag: {}", self.tag_name),
-                        "Enable changelog attachment to preview and edit release notes.".to_string(),
+                        "Enable changelog attachment to preview and edit release notes."
+                            .to_string(),
                     ]
                 }
             }
@@ -627,7 +645,8 @@ pub(super) fn validate_release_now(
     let scope_index = scope_index.min(contexts.len().saturating_sub(1));
     let scope = contexts[scope_index].clone();
     let options = collect_release_now_options(project.release_now_for_scope(scope_index))?;
-    let warning_message = build_recent_bump_warning(project, &contexts, scope_index, cancel.clone())?;
+    let warning_message =
+        build_recent_bump_warning(project, &contexts, scope_index, cancel.clone())?;
     let release_notes_markdown = build_release_notes_markdown(&scope.suggested_tag_name, &scope)
         .unwrap_or_else(|_| DEFAULT_RELEASE_NOTES.to_string());
 
@@ -680,44 +699,69 @@ pub(super) async fn execute_release_now_async(
 
     for script in &request.scripts {
         ensure_not_cancelled(&cancel)?;
-        run_script_with_live_logs(&request.repo_root, script, cancel.clone(), &mut emit_progress).await?;
+        run_script_with_live_logs(
+            &request.repo_root,
+            script,
+            cancel.clone(),
+            &mut emit_progress,
+        )
+        .await?;
     }
 
     ensure_not_cancelled(&cancel)?;
-    emit_progress(vec!["Scanning dist/latest for release artifacts...".to_string()]);
+    emit_progress(vec![
+        "Scanning dist/latest for release artifacts...".to_string(),
+    ]);
     let repo_root = request.repo_root.clone();
     let artifact_dirs = request.artifact_dirs.clone();
-    let artifact_files = run_blocking_job(move || discover_artifacts(&repo_root, &artifact_dirs)).await?;
+    let artifact_files =
+        run_blocking_job(move || discover_artifacts(&repo_root, &artifact_dirs)).await?;
     if artifact_files.is_empty() {
         bail!(
             "ReleaseNOW finished running scripts, but no artifacts were found under dist/latest for {}",
             request.selected_option_label
         )
     }
-    emit_progress(vec![format!("Discovered {} artifact(s).", artifact_files.len())]);
+    emit_progress(vec![format!(
+        "Discovered {} artifact(s).",
+        artifact_files.len()
+    )]);
 
     ensure_not_cancelled(&cancel)?;
-    emit_progress(vec![format!("Ensuring local tag '{}' exists.", request.tag_name)]);
+    emit_progress(vec![format!(
+        "Ensuring local tag '{}' exists.",
+        request.tag_name
+    )]);
     let repo_root_for_tag = request.repo_root.clone();
     let tag_name_for_tag = request.tag_name.clone();
-    let created_local_tag = run_blocking_job(move || ensure_local_tag(&repo_root_for_tag, &tag_name_for_tag, None)).await?;
+    let created_local_tag =
+        run_blocking_job(move || ensure_local_tag(&repo_root_for_tag, &tag_name_for_tag, None))
+            .await?;
     emit_progress(vec![if created_local_tag {
         format!("Created local tag '{}'.", request.tag_name)
     } else {
-        format!("Local tag '{}' already exists; reconciling changelog state.", request.tag_name)
+        format!(
+            "Local tag '{}' already exists; reconciling changelog state.",
+            request.tag_name
+        )
     }]);
 
     let mut release_notes = Vec::new();
     if request.changelog_enabled {
         let repo_root_for_branch = request.repo_root.clone();
-        let branch_name = run_blocking_job(move || current_branch_with_cancel(&repo_root_for_branch, None)).await?;
-        emit_progress(vec!["Syncing standard changelog archive, summary, and memory state.".to_string()]);
+        let branch_name =
+            run_blocking_job(move || current_branch_with_cancel(&repo_root_for_branch, None))
+                .await?;
+        emit_progress(vec![
+            "Syncing standard changelog archive, summary, and memory state.".to_string(),
+        ]);
         let std_outcome = execute_standard_changelog_for_tag(
             &request.scope,
             &request.tag_name,
             &branch_name,
             StdChangelogExecutionPolicy::Auto,
-        ).await?;
+        )
+        .await?;
         for line in &std_outcome.summary_notes {
             emit_progress(vec![line.clone()]);
         }
@@ -743,8 +787,9 @@ pub(super) async fn execute_release_now_async(
         .await?;
 
         if generated_commit_made {
-            let remote_spec = remote_spec_for_push
-                .ok_or_else(|| anyhow!("ReleaseNOW requires a configured git remote to push generated files"))?;
+            let remote_spec = remote_spec_for_push.ok_or_else(|| {
+                anyhow!("ReleaseNOW requires a configured git remote to push generated files")
+            })?;
             let repo_root_for_branch = request.repo_root.clone();
             let cancel_for_branch = cancel.clone();
             let branch_name = run_blocking_job(move || {
@@ -752,7 +797,10 @@ pub(super) async fn execute_release_now_async(
             })
             .await?;
 
-            emit_progress(vec![format!("Pushing generated ReleaseNOW files to {}.", remote_spec)]);
+            emit_progress(vec![format!(
+                "Pushing generated ReleaseNOW files to {}.",
+                remote_spec
+            )]);
             run_command_with_retry_async(
                 request.repo_root.clone(),
                 "git",
@@ -836,7 +884,10 @@ fn collect_release_now_options(settings: &ReleaseNowSettings) -> Result<Vec<Rele
     for option in &individual {
         combined_scripts.extend(option.scripts.clone());
         for dir in &option.artifact_dirs {
-            if !combined_artifact_dirs.iter().any(|existing| existing == dir) {
+            if !combined_artifact_dirs
+                .iter()
+                .any(|existing| existing == dir)
+            {
                 combined_artifact_dirs.push(dir.clone());
             }
         }
@@ -905,7 +956,10 @@ fn build_recent_bump_warning(
                     ));
                 }
             }
-            None => warnings.push(format!("- {}: no release tag was found", scope.display_name)),
+            None => warnings.push(format!(
+                "- {}: no release tag was found",
+                scope.display_name
+            )),
         }
     }
 
@@ -919,9 +973,16 @@ fn build_recent_bump_warning(
     }
 }
 
-fn latest_bump_timestamp(scope: &GitScopeContext, cancel: Option<GitCancellation>) -> Result<Option<i64>> {
+fn latest_bump_timestamp(
+    scope: &GitScopeContext,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<i64>> {
     ensure_git_repo_with_cancel(&scope.repo_root, cancel.clone())?;
-    let describe = run_git_with_cancel(&scope.repo_root, &["describe", "--tags", "--abbrev=0"], cancel.clone())?;
+    let describe = run_git_with_cancel(
+        &scope.repo_root,
+        &["describe", "--tags", "--abbrev=0"],
+        cancel.clone(),
+    )?;
     if !describe.success {
         return Ok(None);
     }
@@ -1016,7 +1077,10 @@ fn resolve_script_path(repo_root: &str, script_path: &str) -> Result<PathBuf> {
     if resolved.exists() {
         Ok(resolved)
     } else {
-        bail!("configured ReleaseNOW script '{}' was not found", resolved.display())
+        bail!(
+            "configured ReleaseNOW script '{}' was not found",
+            resolved.display()
+        )
     }
 }
 
@@ -1077,6 +1141,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_command_with_streaming(
     repo_root: &str,
     program: &str,
@@ -1134,7 +1199,10 @@ fn run_command_with_streaming(
             bail!("ReleaseNOW cancelled by user")
         }
 
-        if let Some(status) = child.try_wait().with_context(|| format!("failed to poll {}", action))? {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("failed to poll {}", action))?
+        {
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
             drain_stream_lines(&line_rx, log_label, progress_tx);
@@ -1170,7 +1238,9 @@ fn discover_artifacts(repo_root: &str, artifact_dirs: &[String]) -> Result<Vec<S
 }
 
 fn collect_files_recursive(root: &Path, files: &mut Vec<String>) -> Result<()> {
-    for entry in fs::read_dir(root).with_context(|| format!("failed to read '{}'", root.display()))? {
+    for entry in
+        fs::read_dir(root).with_context(|| format!("failed to read '{}'", root.display()))?
+    {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
@@ -1182,6 +1252,7 @@ fn collect_files_recursive(root: &Path, files: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_or_update_github_release(
     repo_root: &str,
     tag_name: &str,
@@ -1209,13 +1280,21 @@ async fn create_or_update_github_release(
 
     let result = async {
         if release_exists {
-            emit_progress(vec![format!("Updating existing GitHub release '{}'.", tag_name)]);
+            emit_progress(vec![format!(
+                "Updating existing GitHub release '{}'.",
+                tag_name
+            )]);
             let repo_root_owned = repo_root.to_string();
             let upload_cancel = cancel.clone();
 
-            let mut upload_args = vec!["release".to_string(), "upload".to_string(), tag_name.to_string()];
+            let mut upload_args = vec![
+                "release".to_string(),
+                "upload".to_string(),
+                tag_name.to_string(),
+            ];
             upload_args.extend(artifact_files.iter().cloned());
             upload_args.push("--clobber".to_string());
+            #[allow(clippy::too_many_arguments)]
             run_blocking_streaming_operation(
                 move |progress_tx| {
                     run_command_with_streaming(
@@ -1263,12 +1342,21 @@ async fn create_or_update_github_release(
                 .await?;
             }
         } else {
-            let remote_spec = remote_spec.ok_or_else(|| anyhow!("ReleaseNOW requires a configured git remote to publish a GitHub release"))?;
-            emit_progress(vec![format!("Pushing tag '{}' to {}.", tag_name, remote_spec)]);
+            let remote_spec = remote_spec.ok_or_else(|| {
+                anyhow!("ReleaseNOW requires a configured git remote to publish a GitHub release")
+            })?;
+            emit_progress(vec![format!(
+                "Pushing tag '{}' to {}.",
+                tag_name, remote_spec
+            )]);
 
             let repo_root_owned = repo_root.to_string();
             let push_cancel = cancel.clone();
-            let push_args = vec!["push".to_string(), remote_spec.to_string(), tag_name.to_string()];
+            let push_args = vec![
+                "push".to_string(),
+                remote_spec.to_string(),
+                tag_name.to_string(),
+            ];
             run_blocking_streaming_operation(
                 move |progress_tx| {
                     run_command_with_streaming(
@@ -1342,7 +1430,11 @@ where
     thread::spawn(move || read_command_stream(stream, stream_name, line_tx))
 }
 
-fn read_command_stream<R>(stream: R, stream_name: &'static str, line_tx: StdSender<(String, String)>) -> Result<()>
+fn read_command_stream<R>(
+    stream: R,
+    stream_name: &'static str,
+    line_tx: StdSender<(String, String)>,
+) -> Result<()>
 where
     R: std::io::Read,
 {
@@ -1406,7 +1498,11 @@ fn terminate_process_tree(child: &mut std::process::Child) -> Result<()> {
             .stderr(Stdio::null())
             .status();
 
-        if status.as_ref().map(|value| !value.success()).unwrap_or(true) {
+        if status
+            .as_ref()
+            .map(|value| !value.success())
+            .unwrap_or(true)
+        {
             let _ = child.kill();
         }
     } else {
@@ -1488,7 +1584,7 @@ fn ansi_line_to_ratatui(line: &str) -> Line<'static> {
         if ch == '\u{1b}' && chars.peek() == Some(&'[') {
             let _ = chars.next();
             let mut sequence = String::new();
-            while let Some(next) = chars.next() {
+            for next in chars.by_ref() {
                 if next == 'm' {
                     break;
                 }

@@ -7,8 +7,7 @@
 
 use std::{
     collections::HashSet,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -19,9 +18,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use arboard::Clipboard;
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
-        EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-        MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -55,27 +54,27 @@ use crate::{
     branding::{PixelLogo, choose_header_content},
     changelog::{
         ChangelogDocument, archive_changelog_markdown, find_archived_changelog_markdown,
-        rebuild_history_summary_readme,
-        rls_changelog_gen, std_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
+        rebuild_history_summary_readme, rls_changelog_gen, std_changelog_gen,
+        write_changelog_markdown, write_temp_changelog_markdown,
     },
     config::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
         ProjectConfig, ProjectType, RepoConfig, TargetFormat, TargetSpec,
     },
     dialogs::{
-        BumpDialog, RecentChangesDialog, RecentChangesTab, TagDialog, TagAction, TextInput,
-        ChangeRange, load_change_range_for_refs_with_cancel, load_change_range_for_tags_with_cancel, load_history_ranges_with_cancel,
-        load_recent_change_range_with_cancel,
+        BumpDialog, ChangeRange, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog,
+        TextInput, load_change_range_for_refs_with_cancel, load_change_range_for_tags_with_cancel,
+        load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
     },
     git::{
-        GitCancellation, branches_containing_ref_with_cancel, collect_all_branch_git_scope_contexts,
-        current_branch_with_cancel, ensure_gh_available, ensure_local_tag, latest_local_tag_with_cancel,
-        RepoActivitySummary, load_scope_activity_summary_with_cancel, run_git, run_git_checked,
-        sorted_local_tags_with_cancel, split_output_lines,
+        GitCancellation, RepoActivitySummary, branches_containing_ref_with_cancel,
+        collect_all_branch_git_scope_contexts, current_branch_with_cancel, ensure_gh_available,
+        ensure_local_tag, latest_local_tag_with_cancel, load_scope_activity_summary_with_cancel,
+        run_git, run_git_checked, sorted_local_tags_with_cancel, split_output_lines,
     },
     mmr::{
-        load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error, record_std_changelog_generated,
-        record_std_changelog_postponed,
+        load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error,
+        record_std_changelog_generated, record_std_changelog_postponed,
     },
     overview_pg::{OverviewTab, overview_tab_rects, overview_tabs, render_overview_tabs},
     project_edit::{ProjectEditDialog, ProjectEditFocus},
@@ -95,10 +94,10 @@ mod git_flow;
 mod overview;
 #[path = "p-s-s.rs"]
 mod p_s_s;
-#[path = "rls-now.rs"]
-mod rls_now;
 #[path = "render.rs"]
 mod render;
+#[path = "rls-now.rs"]
+mod rls_now;
 
 use self::p_s_s::{ProjectSettingsFocus, ProjectSettingsState, ProjectSettingsTab};
 
@@ -135,8 +134,13 @@ pub fn run() -> Result<()> {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)
-        .context("failed to enter the alternate screen")?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )
+    .context("failed to enter the alternate screen")?;
     Terminal::new(CrosstermBackend::new(stdout)).context("failed to create terminal")
 }
 
@@ -149,7 +153,9 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
         DisableBracketedPaste
     )
     .context("failed to leave the alternate screen")?;
-    terminal.show_cursor().context("failed to show the cursor")?;
+    terminal
+        .show_cursor()
+        .context("failed to show the cursor")?;
     Ok(())
 }
 
@@ -511,7 +517,9 @@ impl App {
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_release_now_with_scope(None)?,
             KeyCode::Char('b') => self.open_bump_dialog()?,
             KeyCode::Char('g') => self.open_recent_changes()?,
-            KeyCode::Char('c') | KeyCode::Char('C') => self.open_dashboard_changelog_preview(None)?,
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                self.open_dashboard_changelog_preview(None)?
+            }
             KeyCode::Char('t') => self.open_tag_dialog()?,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reload_dashboard_overview_data()?,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
@@ -533,29 +541,23 @@ impl App {
                     self.move_project_selection(1);
                 }
             }
-            KeyCode::Left => {
-                if self.dashboard_focus == DashboardPane::Overview {
-                    self.move_dashboard_overview_focus(-1)?;
-                }
+            KeyCode::Left if self.dashboard_focus == DashboardPane::Overview => {
+                self.move_dashboard_overview_focus(-1)?;
             }
-            KeyCode::Right => {
-                if self.dashboard_focus == DashboardPane::Overview {
-                    self.move_dashboard_overview_focus(1)?;
-                }
+            KeyCode::Right if self.dashboard_focus == DashboardPane::Overview => {
+                self.move_dashboard_overview_focus(1)?;
             }
-            KeyCode::PageUp => {
-                if self.dashboard_focus == DashboardPane::Overview {
-                    if !self.scroll_dashboard_recent_changes(-6) {
-                        let _ = self.scroll_dashboard_tiles(-1);
-                    }
-                }
+            KeyCode::PageUp
+                if self.dashboard_focus == DashboardPane::Overview
+                    && !self.scroll_dashboard_recent_changes(-6) =>
+            {
+                let _ = self.scroll_dashboard_tiles(-1);
             }
-            KeyCode::PageDown => {
-                if self.dashboard_focus == DashboardPane::Overview {
-                    if !self.scroll_dashboard_recent_changes(6) {
-                        let _ = self.scroll_dashboard_tiles(1);
-                    }
-                }
+            KeyCode::PageDown
+                if self.dashboard_focus == DashboardPane::Overview
+                    && !self.scroll_dashboard_recent_changes(6) =>
+            {
+                let _ = self.scroll_dashboard_tiles(1);
             }
             _ => {}
         }
@@ -630,7 +632,9 @@ impl App {
                         dialog.proceed_past_warning();
                     }
                 }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.close_release_now_dialog(),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.close_release_now_dialog()
+                }
                 _ => {}
             }
             return Ok(());
@@ -638,7 +642,9 @@ impl App {
 
         if running {
             match key.code {
-                KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::End => self.toggle_release_now_auto_follow(),
+                KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::End => {
+                    self.toggle_release_now_auto_follow()
+                }
                 KeyCode::Char('x') | KeyCode::Char('X') => self.request_cancel_release_now(),
                 KeyCode::Up => self.scroll_release_now(-1),
                 KeyCode::Down => self.scroll_release_now(1),
@@ -706,10 +712,10 @@ impl App {
             }
             KeyCode::F(2) => return self.save_release_now_notes(),
             _ => {
-                if let Some(dialog) = &mut self.release_now_notes_dialog {
-                    if let Some(input) = convert_to_textarea_input(key) {
-                        dialog.editor.input(input);
-                    }
+                if let Some(dialog) = &mut self.release_now_notes_dialog
+                    && let Some(input) = convert_to_textarea_input(key)
+                {
+                    dialog.editor.input(input);
                 }
             }
         }
@@ -730,7 +736,9 @@ impl App {
             KeyCode::Char('t') | KeyCode::Enter | KeyCode::Char(' ') => {
                 self.toggle_tab_hints()?;
             }
-            KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Right => self.cycle_footer_content(1)?,
+            KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Right => {
+                self.cycle_footer_content(1)?
+            }
             KeyCode::Left => self.cycle_footer_content(-1)?,
             _ => {}
         }
@@ -851,7 +859,9 @@ impl App {
             KeyCode::Char('1') => self.select_std_changelog_sub_branch_warning(0),
             KeyCode::Char('2') => self.select_std_changelog_sub_branch_warning(1),
             KeyCode::Char('3') => self.select_std_changelog_sub_branch_warning(2),
-            KeyCode::Enter | KeyCode::F(2) => return self.confirm_std_changelog_sub_branch_warning(),
+            KeyCode::Enter | KeyCode::F(2) => {
+                return self.confirm_std_changelog_sub_branch_warning();
+            }
             _ => {}
         }
         Ok(())
@@ -867,12 +877,13 @@ impl App {
         match key.code {
             KeyCode::Esc => self.cancel_changelog_preview(),
             KeyCode::F(2) => return self.confirm_changelog_preview(),
-            KeyCode::Enter if self
-                .changelog_preview_dialog
-                .as_ref()
-                .is_some_and(|dialog| dialog.workflow.is_none()) =>
+            KeyCode::Enter
+                if self
+                    .changelog_preview_dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.workflow.is_none()) =>
             {
-                return self.confirm_changelog_preview()
+                return self.confirm_changelog_preview();
             }
             KeyCode::Tab
                 if self
@@ -945,10 +956,9 @@ impl App {
                     .changelog_preview_dialog
                     .as_mut()
                     .and_then(|dialog| dialog.custom_range.as_mut())
+                    && custom_range.adjust_focused_selection(-1)
                 {
-                    if custom_range.adjust_focused_selection(-1) {
-                        refresh_selection = custom_range.selection();
-                    }
+                    refresh_selection = custom_range.selection();
                 }
             }
             KeyCode::Right
@@ -962,10 +972,9 @@ impl App {
                     .changelog_preview_dialog
                     .as_mut()
                     .and_then(|dialog| dialog.custom_range.as_mut())
+                    && custom_range.adjust_focused_selection(1)
                 {
-                    if custom_range.adjust_focused_selection(1) {
-                        refresh_selection = custom_range.selection();
-                    }
+                    refresh_selection = custom_range.selection();
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R')
@@ -1049,29 +1058,23 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('[') => {
-                if self.recent_changes_dialog.is_some() {
-                    self.schedule_recent_changes_action(
-                        "Loading git history for the previous scope.",
-                        RecentChangesLoadAction::RotateScope(-1),
-                    )?;
-                }
+            KeyCode::Char('[') if self.recent_changes_dialog.is_some() => {
+                self.schedule_recent_changes_action(
+                    "Loading git history for the previous scope.",
+                    RecentChangesLoadAction::RotateScope(-1),
+                )?;
             }
-            KeyCode::Char(']') => {
-                if self.recent_changes_dialog.is_some() {
-                    self.schedule_recent_changes_action(
-                        "Loading git history for the next scope.",
-                        RecentChangesLoadAction::RotateScope(1),
-                    )?;
-                }
+            KeyCode::Char(']') if self.recent_changes_dialog.is_some() => {
+                self.schedule_recent_changes_action(
+                    "Loading git history for the next scope.",
+                    RecentChangesLoadAction::RotateScope(1),
+                )?;
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                if self.recent_changes_dialog.is_some() {
-                    self.schedule_recent_changes_action(
-                        "Refreshing git history for the current scope.",
-                        RecentChangesLoadAction::RefreshCurrentScope,
-                    )?;
-                }
+            KeyCode::Char('r') | KeyCode::Char('R') if self.recent_changes_dialog.is_some() => {
+                self.schedule_recent_changes_action(
+                    "Refreshing git history for the current scope.",
+                    RecentChangesLoadAction::RefreshCurrentScope,
+                )?;
             }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
@@ -1137,10 +1140,10 @@ impl App {
             }
             KeyCode::F(2) => return self.save_tag_annotation(),
             _ => {
-                if let Some(dialog) = &mut self.tag_annotation_dialog {
-                    if let Some(input) = convert_to_textarea_input(key) {
-                        dialog.editor.input(input);
-                    }
+                if let Some(dialog) = &mut self.tag_annotation_dialog
+                    && let Some(input) = convert_to_textarea_input(key)
+                {
+                    dialog.editor.input(input);
                 }
             }
         }
@@ -1276,10 +1279,10 @@ impl App {
         if self.release_now_notes_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
-                        if let Err(error) = self.handle_hit_action(action) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
                     }
                     return;
                 }
@@ -1305,10 +1308,10 @@ impl App {
                     if in_log_viewport && self.begin_release_now_log_selection(mouse.row) {
                         return;
                     }
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
-                        if let Err(error) = self.handle_hit_action(action) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
                     }
                     return;
                 }
@@ -1332,10 +1335,10 @@ impl App {
         if self.delete_confirmation_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
-                        if let Err(error) = self.handle_hit_action(action) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
                     }
                     return;
                 }
@@ -1359,10 +1362,10 @@ impl App {
                     return;
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
-                        if let Err(error) = self.handle_hit_action(action) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
                     }
                     return;
                 }
@@ -1379,17 +1382,21 @@ impl App {
                     self.scroll_project_edit_body(-1);
                 } else if self.changelog_preview_dialog.is_some() {
                     self.scroll_changelog_preview(-2);
-                } else if self.overview_bump_workflow_dialog.is_some() {
-                } else if self.tag_dialog.is_some() {
+                } else if self.overview_bump_workflow_dialog.is_some() || self.tag_dialog.is_some()
+                {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(-2);
                 } else if self.bump_dialog.is_some() {
                     self.rotate_bump_action(-1);
                 } else if self.screen == Screen::Wizard {
                     self.scroll_wizard_body(-1);
-                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+                } else if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::ProjectSettings
+                {
                     self.scroll_project_settings(-1);
-                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
+                } else if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::Overview
+                {
                     if self
                         .overview_recent_viewport
                         .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
@@ -1413,7 +1420,9 @@ impl App {
                     } else {
                         self.move_project_selection(-1);
                     }
-                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::RecentChanges {
+                } else if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::RecentChanges
+                {
                     if let Some(dialog) = &mut self.overview_recent_changes {
                         dialog.scroll_by(-2);
                     }
@@ -1426,17 +1435,21 @@ impl App {
                     self.scroll_project_edit_body(1);
                 } else if self.changelog_preview_dialog.is_some() {
                     self.scroll_changelog_preview(2);
-                } else if self.overview_bump_workflow_dialog.is_some() {
-                } else if self.tag_dialog.is_some() {
+                } else if self.overview_bump_workflow_dialog.is_some() || self.tag_dialog.is_some()
+                {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(2);
                 } else if self.bump_dialog.is_some() {
                     self.rotate_bump_action(1);
                 } else if self.screen == Screen::Wizard {
                     self.scroll_wizard_body(1);
-                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
+                } else if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::ProjectSettings
+                {
                     self.scroll_project_settings(1);
-                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::Overview {
+                } else if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::Overview
+                {
                     if self
                         .overview_recent_viewport
                         .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
@@ -1460,7 +1473,9 @@ impl App {
                     } else {
                         self.move_project_selection(1);
                     }
-                } else if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::RecentChanges {
+                } else if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::RecentChanges
+                {
                     if let Some(dialog) = &mut self.overview_recent_changes {
                         dialog.scroll_by(2);
                     }
@@ -1473,25 +1488,31 @@ impl App {
                     && self.screen == Screen::Dashboard
                     && self.overview_tab == OverviewTab::Overview
                 {
-                    self.overview_drag_scope = self.overview_tile_rects.iter().rev().find_map(|(rect, scope)| {
-                        if mouse.column >= rect.x
-                            && mouse.column < rect.x + rect.width
-                            && mouse.row >= rect.y
-                            && mouse.row < rect.y + rect.height
-                        {
-                            Some(*scope)
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(scope_index) = self.overview_drag_scope {
-                        if let Err(error) = self.select_dashboard_overview_scope(scope_index) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
+                    self.overview_drag_scope =
+                        self.overview_tile_rects
+                            .iter()
+                            .rev()
+                            .find_map(|(rect, scope)| {
+                                if mouse.column >= rect.x
+                                    && mouse.column < rect.x + rect.width
+                                    && mouse.row >= rect.y
+                                    && mouse.row < rect.y + rect.height
+                                {
+                                    Some(*scope)
+                                } else {
+                                    None
+                                }
+                            });
+                    if let Some(scope_index) = self.overview_drag_scope
+                        && let Err(error) = self.select_dashboard_overview_scope(scope_index)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
                     }
                 }
 
-                if let Some((action, rect)) = self.resolve_hit_target(mouse.column, mouse.row, false) {
+                if let Some((action, rect)) =
+                    self.resolve_hit_target(mouse.column, mouse.row, false)
+                {
                     let maybe_click_target = self.text_input_click_target(&action);
                     let mut select_all = false;
                     if let Some(target) = maybe_click_target {
@@ -1499,7 +1520,9 @@ impl App {
                         if self.last_text_input_click_target == Some(target)
                             && self
                                 .last_text_input_click_at
-                                .map(|previous| now.duration_since(previous) <= Duration::from_millis(400))
+                                .map(|previous| {
+                                    now.duration_since(previous) <= Duration::from_millis(400)
+                                })
                                 .unwrap_or(false)
                         {
                             select_all = true;
@@ -1526,27 +1549,31 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some(from_scope) = self.overview_drag_scope {
-                    let target_scope = self.overview_tile_rects.iter().rev().find_map(|(rect, scope)| {
-                        (mouse.column >= rect.x
-                            && mouse.column < rect.x + rect.width
-                            && mouse.row >= rect.y
-                            && mouse.row < rect.y + rect.height)
-                            .then_some(*scope)
-                    });
-                    if let Some(to_scope) = target_scope {
-                        if to_scope != from_scope {
-                            self.reorder_dashboard_tile_scope(from_scope, to_scope);
-                            self.overview_drag_scope = Some(to_scope);
-                        }
+                    let target_scope =
+                        self.overview_tile_rects
+                            .iter()
+                            .rev()
+                            .find_map(|(rect, scope)| {
+                                (mouse.column >= rect.x
+                                    && mouse.column < rect.x + rect.width
+                                    && mouse.row >= rect.y
+                                    && mouse.row < rect.y + rect.height)
+                                    .then_some(*scope)
+                            });
+                    if let Some(to_scope) = target_scope
+                        && to_scope != from_scope
+                    {
+                        self.reorder_dashboard_tile_scope(from_scope, to_scope);
+                        self.overview_drag_scope = Some(to_scope);
                     }
                 }
 
-                if let Some((action, rect)) = self.resolve_hit_target(mouse.column, mouse.row, false) {
-                    if let Some(last_target) = self.last_text_input_click_target {
-                        if last_target.same_field_action(&action) {
-                            self.update_text_input_drag_selection(rect, mouse.column);
-                        }
-                    }
+                if let Some((action, rect)) =
+                    self.resolve_hit_target(mouse.column, mouse.row, false)
+                    && let Some(last_target) = self.last_text_input_click_target
+                    && last_target.same_field_action(&action)
+                {
+                    self.update_text_input_drag_selection(rect, mouse.column);
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -1556,18 +1583,20 @@ impl App {
                 if self.overview_bump_workflow_dialog.is_none()
                     && self.screen == Screen::Dashboard
                     && self.overview_tab == OverviewTab::Overview
+                    && let Some(scope_index) =
+                        self.overview_tile_rects
+                            .iter()
+                            .rev()
+                            .find_map(|(rect, scope)| {
+                                (mouse.column >= rect.x
+                                    && mouse.column < rect.x + rect.width
+                                    && mouse.row >= rect.y
+                                    && mouse.row < rect.y + rect.height)
+                                    .then_some(*scope)
+                            })
+                    && let Err(error) = self.select_dashboard_overview_scope(scope_index)
                 {
-                    if let Some(scope_index) = self.overview_tile_rects.iter().rev().find_map(|(rect, scope)| {
-                        (mouse.column >= rect.x
-                            && mouse.column < rect.x + rect.width
-                            && mouse.row >= rect.y
-                            && mouse.row < rect.y + rect.height)
-                            .then_some(*scope)
-                    }) {
-                        if let Err(error) = self.select_dashboard_overview_scope(scope_index) {
-                            self.status = StatusMessage::error(error.to_string());
-                        }
-                    }
+                    self.status = StatusMessage::error(error.to_string());
                 }
                 let selected_text = self
                     .active_text_input_mut()
@@ -1602,7 +1631,9 @@ impl App {
                 self.status = StatusMessage::info("Browse cancelled.");
             }
             KeyCode::Enter | KeyCode::F(2) => return self.confirm_browser_selection(),
-            KeyCode::Char('u') | KeyCode::Char('U') => return self.confirm_browser_directory_selection(),
+            KeyCode::Char('u') | KeyCode::Char('U') => {
+                return self.confirm_browser_directory_selection();
+            }
             _ => {
                 if let Some(dialog) = &mut self.browser_dialog {
                     let event = Event::Key(key);
@@ -1620,12 +1651,12 @@ impl App {
             return;
         }
 
-        if let Some(dialog) = &mut self.changelog_preview_dialog {
-            if dialog.workflow.is_some() {
-                dialog.release_message.insert_str(text);
-                self.status = StatusMessage::info("Pasted into the release notes.");
-                return;
-            }
+        if let Some(dialog) = &mut self.changelog_preview_dialog
+            && dialog.workflow.is_some()
+        {
+            dialog.release_message.insert_str(text);
+            self.status = StatusMessage::info("Pasted into the release notes.");
+            return;
         }
 
         let sanitized = sanitize_pasted_text(&text);
@@ -1648,12 +1679,12 @@ impl App {
                     return;
                 }
 
-                if let Some(dialog) = &mut self.changelog_preview_dialog {
-                    if dialog.workflow.is_some() {
-                        dialog.release_message.insert_str(text);
-                        self.status = StatusMessage::info("Pasted into the release notes.");
-                        return;
-                    }
+                if let Some(dialog) = &mut self.changelog_preview_dialog
+                    && dialog.workflow.is_some()
+                {
+                    dialog.release_message.insert_str(text);
+                    self.status = StatusMessage::info("Pasted into the release notes.");
+                    return;
                 }
 
                 let sanitized = sanitize_pasted_text(&text);
@@ -1670,10 +1701,10 @@ impl App {
     }
 
     fn insert_text(&mut self, text: &str) -> bool {
-        if let Some(dialog) = &mut self.project_edit_dialog {
-            if dialog.insert_text(text) {
-                return true;
-            }
+        if let Some(dialog) = &mut self.project_edit_dialog
+            && dialog.insert_text(text)
+        {
+            return true;
         }
 
         if let Some(dialog) = &mut self.tag_dialog {
@@ -1681,16 +1712,15 @@ impl App {
             return true;
         }
 
-        if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
-            if p_s_s::insert_project_settings_text(self, text) {
-                return true;
-            }
+        if self.screen == Screen::Dashboard
+            && self.overview_tab == OverviewTab::ProjectSettings
+            && p_s_s::insert_project_settings_text(self, text)
+        {
+            return true;
         }
 
-        if self.screen == Screen::Wizard {
-            if self.wizard.insert_text(text) {
-                return true;
-            }
+        if self.screen == Screen::Wizard && self.wizard.insert_text(text) {
+            return true;
         }
 
         false
@@ -1717,7 +1747,9 @@ impl App {
                 self.dashboard_focus = DashboardPane::Overview;
                 p_s_s::sync_project_settings_state(self);
             }
-            HitAction::SelectProjectSettingsField(field) => return p_s_s::activate_project_settings_field(self, field),
+            HitAction::SelectProjectSettingsField(field) => {
+                return p_s_s::activate_project_settings_field(self, field);
+            }
             HitAction::BrowseProjectSettingsField(field) => {
                 p_s_s::set_project_settings_focus(self, field);
                 return p_s_s::open_browser_for_project_settings_focus(self);
@@ -1727,7 +1759,9 @@ impl App {
                 self.prime_selected_project_dashboard_data();
                 self.dashboard_focus = DashboardPane::Projects;
             }
-            HitAction::SelectOverviewScope(scope_index) => return self.select_dashboard_overview_scope(scope_index),
+            HitAction::SelectOverviewScope(scope_index) => {
+                return self.select_dashboard_overview_scope(scope_index);
+            }
             HitAction::OpenOverviewReleaseNow(scope_index) => {
                 self.dashboard_focus = DashboardPane::Overview;
                 return self.open_overview_release_now(scope_index);
@@ -1736,29 +1770,43 @@ impl App {
                 self.dashboard_focus = DashboardPane::Overview;
                 return self.begin_overview_bump(scope_index);
             }
-            HitAction::SelectOverviewBumpWorkflow(index) => self.select_overview_bump_workflow(index),
-            HitAction::ConfirmOverviewBumpWorkflow => return self.request_confirm_overview_bump_workflow(),
+            HitAction::SelectOverviewBumpWorkflow(index) => {
+                self.select_overview_bump_workflow(index)
+            }
+            HitAction::ConfirmOverviewBumpWorkflow => {
+                return self.request_confirm_overview_bump_workflow();
+            }
             HitAction::CancelOverviewBumpWorkflow => self.cancel_overview_bump_workflow(),
-            HitAction::SelectOverviewBumpWarningChoice(index) => self.select_overview_bump_warning(index),
-            HitAction::SelectMainBranchWarningChoice(index) => self.select_main_branch_warning(index),
-            HitAction::SelectStdChangelogSubBranchChoice(index) => self.select_std_changelog_sub_branch_warning(index),
+            HitAction::SelectOverviewBumpWarningChoice(index) => {
+                self.select_overview_bump_warning(index)
+            }
+            HitAction::SelectMainBranchWarningChoice(index) => {
+                self.select_main_branch_warning(index)
+            }
+            HitAction::SelectStdChangelogSubBranchChoice(index) => {
+                self.select_std_changelog_sub_branch_warning(index)
+            }
             HitAction::ConfirmChangelogPreview => return self.confirm_changelog_preview(),
             HitAction::SaveChangelogPreview => return self.save_changelog_preview(),
             HitAction::CancelChangelogPreview => self.cancel_changelog_preview(),
             HitAction::ScrollChangelogPreview(delta) => self.scroll_changelog_preview(delta),
             HitAction::AdjustOverviewVersion(scope_index, control, delta) => {
-                return self.adjust_overview_pending_version(scope_index, control, delta)
+                return self.adjust_overview_pending_version(scope_index, control, delta);
             }
             HitAction::ResetOverviewPendingVersion(scope_index) => {
-                return self.reset_overview_pending_version(scope_index)
+                return self.reset_overview_pending_version(scope_index);
             }
-            HitAction::OpenOverviewTagDialog(scope_index) => return self.open_overview_tag_dialog(scope_index),
+            HitAction::OpenOverviewTagDialog(scope_index) => {
+                return self.open_overview_tag_dialog(scope_index);
+            }
             HitAction::EditProjectField(field) => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.focus = field;
                 }
             }
-            HitAction::ProjectEditScopeAction(action) => return self.apply_project_edit_scope_action(action),
+            HitAction::ProjectEditScopeAction(action) => {
+                return self.apply_project_edit_scope_action(action);
+            }
             HitAction::SaveProjectEdit => return self.save_project_edit(),
             HitAction::RemoveProject => return self.remove_project(),
             HitAction::CancelProjectEdit => {
@@ -1796,10 +1844,18 @@ impl App {
             HitAction::ToggleTabHints => return self.toggle_tab_hints(),
             HitAction::ToggleFooter => return self.toggle_footer(),
             HitAction::CycleFooterContent(delta) => return self.cycle_footer_content(delta),
-            HitAction::BrowseWizardTargetPath => return self.open_browser(BrowseTarget::WizardTargetPath),
-            HitAction::BrowseWizardRepoRoot => return self.open_browser(BrowseTarget::WizardRepoRoot),
-            HitAction::BrowseProjectTargetPath => return self.open_browser(BrowseTarget::ProjectEditTargetPath),
-            HitAction::BrowseProjectRepoRoot => return self.open_browser(BrowseTarget::ProjectEditRepoRoot),
+            HitAction::BrowseWizardTargetPath => {
+                return self.open_browser(BrowseTarget::WizardTargetPath);
+            }
+            HitAction::BrowseWizardRepoRoot => {
+                return self.open_browser(BrowseTarget::WizardRepoRoot);
+            }
+            HitAction::BrowseProjectTargetPath => {
+                return self.open_browser(BrowseTarget::ProjectEditTargetPath);
+            }
+            HitAction::BrowseProjectRepoRoot => {
+                return self.open_browser(BrowseTarget::ProjectEditRepoRoot);
+            }
             HitAction::EnableWizardCustomTargetKey => {
                 self.wizard.enable_custom_target_key();
                 self.status = StatusMessage::info("Custom target key input enabled.");
@@ -1830,7 +1886,10 @@ impl App {
                     } else {
                         "Loading git history for the next scope."
                     };
-                    self.schedule_recent_changes_action(message, RecentChangesLoadAction::RotateScope(delta))?;
+                    self.schedule_recent_changes_action(
+                        message,
+                        RecentChangesLoadAction::RotateScope(delta),
+                    )?;
                 }
             }
             HitAction::CycleBumpScope(delta) => self.rotate_bump_scope(delta),
@@ -1876,16 +1935,19 @@ impl App {
     }
 
     fn open_recent_changes(&mut self) -> Result<()> {
-        let preferred_scope = self
-            .selected_project()
-            .ok()
-            .and_then(|project| (!project.unified_versioning).then_some(self.overview_focused_scope));
+        let preferred_scope = self.selected_project().ok().and_then(|project| {
+            (!project.unified_versioning).then_some(self.overview_focused_scope)
+        });
         self.open_recent_changes_with_scope(preferred_scope)
     }
 
     fn open_overview_tag_dialog(&mut self, scope_index: usize) -> Result<()> {
         let project = self.selected_project()?.clone();
-        let preferred_scope = if project.unified_versioning { None } else { Some(scope_index) };
+        let preferred_scope = if project.unified_versioning {
+            None
+        } else {
+            Some(scope_index)
+        };
         self.open_tag_dialog_with_scope(preferred_scope, None)
     }
 
@@ -1897,7 +1959,8 @@ impl App {
         let project = self.selected_project()?.clone();
         let scope_index = preferred_scope.unwrap_or_else(|| {
             if project.project_type == ProjectType::Branched {
-                self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
+                self.overview_focused_scope
+                    .min(project.branches.len().saturating_sub(1))
             } else {
                 0
             }
@@ -1913,9 +1976,13 @@ impl App {
         self.schedule_progress_job(
             " Validating ReleaseNOW ",
             format!("Checking ReleaseNOW prerequisites for {}.", project.name),
-            BackgroundJobRequest::ValidateReleaseNow { project, scope_index },
+            BackgroundJobRequest::ValidateReleaseNow {
+                project,
+                scope_index,
+            },
         )?;
-        self.status = StatusMessage::info("Validating ReleaseNOW prerequisites for the selected scope.");
+        self.status =
+            StatusMessage::info("Validating ReleaseNOW prerequisites for the selected scope.");
         Ok(())
     }
 
@@ -1999,8 +2066,9 @@ impl App {
         }
 
         self.schedule_foreground_job(BackgroundJobRequest::RunReleaseNow { request })?;
-        self.status =
-            StatusMessage::info("Running ReleaseNOW for the selected scope. Live logs will stream into the dialog.");
+        self.status = StatusMessage::info(
+            "Running ReleaseNOW for the selected scope. Live logs will stream into the dialog.",
+        );
         Ok(())
     }
 
@@ -2093,7 +2161,9 @@ impl App {
         if let Some(cancel) = &self.current_release_now_cancel {
             cancel.cancel();
             dialog.mark_cancel_requested();
-            self.status = StatusMessage::warning("Cancelling ReleaseNOW. Waiting for the current step to stop.");
+            self.status = StatusMessage::warning(
+                "Cancelling ReleaseNOW. Waiting for the current step to stop.",
+            );
         }
     }
 
@@ -2102,7 +2172,8 @@ impl App {
             bail!("another background job is already running");
         }
 
-        let request_id = self.schedule_background_job(BackgroundJobPriority::Foreground, request)?;
+        let request_id =
+            self.schedule_background_job(BackgroundJobPriority::Foreground, request)?;
         self.background_job_active = true;
         self.active_foreground_job_id = Some(request_id);
 
@@ -2173,17 +2244,19 @@ impl App {
         }
 
         match message.payload {
-            BackgroundJobMessagePayload::Progress(output) => self.apply_background_job_output(output)?,
+            BackgroundJobMessagePayload::Progress(output) => {
+                self.apply_background_job_output(output)?
+            }
             BackgroundJobMessagePayload::Finished(result) => match result {
                 Ok(output) => self.apply_background_job_output(output)?,
                 Err(error_message) => {
-                    if message.kind == BackgroundJobKind::ReleaseNow {
-                        if let Some(dialog) = &mut self.release_now_dialog {
-                            if rls_now::is_cancelled_error(&error_message) {
-                                dialog.apply_cancelled(error_message.clone());
-                            } else {
-                                dialog.apply_failure(error_message.clone());
-                            }
+                    if message.kind == BackgroundJobKind::ReleaseNow
+                        && let Some(dialog) = &mut self.release_now_dialog
+                    {
+                        if rls_now::is_cancelled_error(&error_message) {
+                            dialog.apply_cancelled(error_message.clone());
+                        } else {
+                            dialog.apply_failure(error_message.clone());
                         }
                     }
                     self.status = if message.kind == BackgroundJobKind::ReleaseNow
@@ -2231,7 +2304,11 @@ impl App {
                 warnings,
             } => {
                 if warnings.is_empty() {
-                    overview::continue_overview_bump_workflow_confirmation(self, scope_index, workflow)?;
+                    overview::continue_overview_bump_workflow_confirmation(
+                        self,
+                        scope_index,
+                        workflow,
+                    )?;
                 } else {
                     self.overview_bump_warning_dialog = Some(OverviewBumpWarningDialog::new(
                         scope_index,
@@ -2260,18 +2337,24 @@ impl App {
                 history_scope_index,
                 prefetched_history_ranges,
             } => {
-                if let Some(dialog) = &mut self.recent_changes_dialog {
-                    if dialog.project_name == project_name {
-                        if let (Some(scope_index), Some(range)) = (next_scope_index, prefetched_recent_range) {
-                            dialog.apply_prefetched_recent_range(scope_index, range);
-                        }
-                        if let (Some(scope_index), Some(ranges)) = (history_scope_index, prefetched_history_ranges) {
-                            dialog.apply_prefetched_history_ranges(scope_index, ranges);
-                        }
+                if let Some(dialog) = &mut self.recent_changes_dialog
+                    && dialog.project_name == project_name
+                {
+                    if let (Some(scope_index), Some(range)) =
+                        (next_scope_index, prefetched_recent_range)
+                    {
+                        dialog.apply_prefetched_recent_range(scope_index, range);
+                    }
+                    if let (Some(scope_index), Some(ranges)) =
+                        (history_scope_index, prefetched_history_ranges)
+                    {
+                        dialog.apply_prefetched_history_ranges(scope_index, ranges);
                     }
                 }
             }
-            BackgroundJobOutput::OpenChangelogPreview(dialog) => self.open_changelog_preview(dialog),
+            BackgroundJobOutput::OpenChangelogPreview(dialog) => {
+                self.open_changelog_preview(*dialog)
+            }
             BackgroundJobOutput::OverviewActivityCache {
                 project_index,
                 summaries,
@@ -2284,10 +2367,13 @@ impl App {
             BackgroundJobOutput::ReleaseNowValidated(validation) => {
                 let project_name = validation.project_name.clone();
                 let warning_pending = validation.warning_message.is_some();
-                self.release_now_dialog = Some(rls_now::ReleaseNowDialog::from_validation(validation));
+                self.release_now_dialog =
+                    Some(rls_now::ReleaseNowDialog::from_validation(validation));
                 self.release_now_notes_dialog = None;
                 self.status = if warning_pending {
-                    StatusMessage::warning("ReleaseNOW found an older-than-expected bump. Confirm before continuing.")
+                    StatusMessage::warning(
+                        "ReleaseNOW found an older-than-expected bump. Confirm before continuing.",
+                    )
                 } else {
                     StatusMessage::info(format!("ReleaseNOW is ready for {}.", project_name))
                 };
@@ -2342,7 +2428,12 @@ impl App {
         )
     }
 
-    fn resolve_hit_target(&self, column: u16, row: u16, right_click: bool) -> Option<(HitAction, Rect)> {
+    fn resolve_hit_target(
+        &self,
+        column: u16,
+        row: u16,
+        right_click: bool,
+    ) -> Option<(HitAction, Rect)> {
         self.hit_targets
             .iter()
             .enumerate()
@@ -2362,13 +2453,19 @@ impl App {
                 }
 
                 if self.delete_confirmation_dialog.is_some()
-                    && !matches!(action, HitAction::ConfirmDeleteRequest | HitAction::CancelDeleteRequest)
+                    && !matches!(
+                        action,
+                        HitAction::ConfirmDeleteRequest | HitAction::CancelDeleteRequest
+                    )
                 {
                     return None;
                 }
 
                 if self.release_now_notes_dialog.is_some()
-                    && !matches!(action, HitAction::SaveReleaseNowNotes | HitAction::CancelReleaseNowNotes)
+                    && !matches!(
+                        action,
+                        HitAction::SaveReleaseNowNotes | HitAction::CancelReleaseNowNotes
+                    )
                 {
                     return None;
                 }
@@ -2397,21 +2494,29 @@ impl App {
                     return None;
                 }
 
-                Some((target.rect.width as u32 * target.rect.height as u32, usize::MAX - index, action, target.rect))
+                Some((
+                    target.rect.width as u32 * target.rect.height as u32,
+                    usize::MAX - index,
+                    action,
+                    target.rect,
+                ))
             })
             .min_by_key(|(area, reverse_index, _, _)| (*area, *reverse_index))
             .map(|(_, _, action, rect)| (action, rect))
     }
 
     fn resolve_hit_action(&self, column: u16, row: u16, right_click: bool) -> Option<HitAction> {
-        self.resolve_hit_target(column, row, right_click).map(|(action, _)| action)
+        self.resolve_hit_target(column, row, right_click)
+            .map(|(action, _)| action)
     }
 
     fn text_input_click_target(&self, action: &HitAction) -> Option<TextInputClickTarget> {
         Some(match action {
-            HitAction::WizardField(field) => TextInputClickTarget::WizardField(*field),
-            HitAction::EditProjectField(field) => TextInputClickTarget::ProjectEditField(*field),
-            HitAction::SelectProjectSettingsField(field) => TextInputClickTarget::ProjectSettingsField(*field),
+            HitAction::WizardField(field) => TextInputClickTarget::Wizard(*field),
+            HitAction::EditProjectField(field) => TextInputClickTarget::ProjectEdit(*field),
+            HitAction::SelectProjectSettingsField(field) => {
+                TextInputClickTarget::ProjectSettings(*field)
+            }
             _ => return None,
         })
     }
@@ -2511,7 +2616,8 @@ impl App {
     fn reload_dashboard_overview_data(&mut self) -> Result<()> {
         let project = self.selected_project()?;
         if !project.integration_mode.requires_repo() {
-            self.status = StatusMessage::info("Selected project has no git-backed dashboard data to reload.");
+            self.status =
+                StatusMessage::info("Selected project has no git-backed dashboard data to reload.");
             return Ok(());
         }
 
@@ -2530,7 +2636,8 @@ impl App {
             }
         }
         self.schedule_refresh_overview_activity_cache()?;
-        self.status = StatusMessage::info("Refreshing dashboard repo data for the selected project.");
+        self.status =
+            StatusMessage::info("Refreshing dashboard repo data for the selected project.");
         Ok(())
     }
 
@@ -2593,10 +2700,14 @@ impl App {
         overview::reset_overview_pending_version(self, scope_index)
     }
 
-    fn open_dashboard_changelog_preview(&mut self, selection: Option<CustomChangelogSelection>) -> Result<()> {
+    fn open_dashboard_changelog_preview(
+        &mut self,
+        selection: Option<CustomChangelogSelection>,
+    ) -> Result<()> {
         let project = self.selected_project()?.clone();
         let scope_index = if project.project_type == ProjectType::Branched {
-            self.overview_focused_scope.min(project.branches.len().saturating_sub(1))
+            self.overview_focused_scope
+                .min(project.branches.len().saturating_sub(1))
         } else {
             0
         };
@@ -2647,7 +2758,8 @@ impl App {
             return Ok(true);
         }
 
-        let affected_scope_indexes = self.affected_scope_indexes_for_pending_bump(pending_action)?;
+        let affected_scope_indexes =
+            self.affected_scope_indexes_for_pending_bump(pending_action)?;
         if affected_scope_indexes.is_empty() {
             return Ok(true);
         }
@@ -2661,11 +2773,15 @@ impl App {
                 pending_action,
             },
         )?;
-        self.status = StatusMessage::info("Checking repositories for non-main branches before continuing.");
+        self.status =
+            StatusMessage::info("Checking repositories for non-main branches before continuing.");
         Ok(false)
     }
 
-    fn affected_scope_indexes_for_pending_bump(&self, pending_action: PendingBumpAction) -> Result<Vec<usize>> {
+    fn affected_scope_indexes_for_pending_bump(
+        &self,
+        pending_action: PendingBumpAction,
+    ) -> Result<Vec<usize>> {
         let project = self.selected_project()?;
         match pending_action {
             PendingBumpAction::Standard => {
@@ -2781,7 +2897,10 @@ impl App {
 
     fn scroll_changelog_preview(&mut self, delta: i16) {
         if let Some(dialog) = &mut self.changelog_preview_dialog {
-            let max_scroll = dialog.preview_line_count().saturating_sub(1).min(u16::MAX as usize) as u16;
+            let max_scroll = dialog
+                .preview_line_count()
+                .saturating_sub(1)
+                .min(u16::MAX as usize) as u16;
             if delta.is_negative() {
                 dialog.scroll = dialog.scroll.saturating_sub(delta.unsigned_abs());
             } else {
@@ -2808,7 +2927,9 @@ impl App {
         overview::execute_overview_bump_workflow(
             self,
             dialog.scope_index,
-            dialog.workflow.expect("workflow preview should execute a workflow"),
+            dialog
+                .workflow
+                .expect("workflow preview should execute a workflow"),
         )?;
         self.overview_bump_warning_dialog = None;
         self.overview_bump_workflow_dialog = None;
@@ -2823,7 +2944,9 @@ impl App {
         let matches = self
             .pending_changelog_write
             .as_ref()
-            .is_some_and(|pending| pending.scope_index == scope_index && pending.workflow == workflow);
+            .is_some_and(|pending| {
+                pending.scope_index == scope_index && pending.workflow == workflow
+            });
         if matches {
             self.pending_changelog_write.take()
         } else {
@@ -2838,7 +2961,11 @@ impl App {
         }
     }
 
-    fn open_tag_dialog_with_scope(&mut self, preferred_scope: Option<usize>, preferred_action: Option<TagAction>) -> Result<()> {
+    fn open_tag_dialog_with_scope(
+        &mut self,
+        preferred_scope: Option<usize>,
+        preferred_action: Option<TagAction>,
+    ) -> Result<()> {
         let project = self.selected_project()?.clone();
         let dialog = TagDialog::from_project(&project, preferred_scope, preferred_action)?;
         self.bump_dialog = None;
@@ -2846,7 +2973,9 @@ impl App {
         self.browser_dialog = None;
         self.tag_annotation_dialog = None;
         self.tag_dialog = Some(dialog);
-        self.status = StatusMessage::info("Review the proposed tag name, add an optional annotation, then run the tag action.");
+        self.status = StatusMessage::info(
+            "Review the proposed tag name, add an optional annotation, then run the tag action.",
+        );
         Ok(())
     }
 
@@ -2905,7 +3034,8 @@ impl App {
         let dialog = ProjectEditDialog::from_project(project_index, project)?;
         self.browser_dialog = None;
         self.project_edit_dialog = Some(dialog);
-        self.status = StatusMessage::info("Amend project settings, then save or remove the project.");
+        self.status =
+            StatusMessage::info("Amend project settings, then save or remove the project.");
         Ok(())
     }
 
@@ -2965,7 +3095,9 @@ impl App {
         let Some(dialog) = self.tag_dialog.clone() else {
             return Ok(());
         };
-        let changelog_enabled = self.selected_project()?.changelog_enabled_for_scope(dialog.selected_scope);
+        let changelog_enabled = self
+            .selected_project()?
+            .changelog_enabled_for_scope(dialog.selected_scope);
 
         let tag_name = dialog.tag_name.value.trim();
         if tag_name.is_empty() {
@@ -3002,16 +3134,20 @@ impl App {
         let Some(previous_tag) = latest_local_tag_with_cancel(repo_root, None)? else {
             return Ok(None);
         };
-        let previous_branches = branches_containing_ref_with_cancel(repo_root, &previous_tag, None)?;
+        let previous_branches =
+            branches_containing_ref_with_cancel(repo_root, &previous_tag, None)?;
         let head_branches = branches_containing_ref_with_cancel(repo_root, "HEAD", None)?;
-        let decision = decide_std_changelog_generation(&previous_tag, &branch_name, &previous_branches, &head_branches);
+        let decision = decide_std_changelog_generation(
+            &previous_tag,
+            &branch_name,
+            &previous_branches,
+            &head_branches,
+        );
 
         match decision {
-            StdChangelogDecision::PostponeOnSubBranch(sub_branch) => Ok(Some(StdChangelogSubBranchDialog::new(
-                request.clone(),
-                previous_tag,
-                sub_branch,
-            ))),
+            StdChangelogDecision::PostponeOnSubBranch(sub_branch) => Ok(Some(
+                StdChangelogSubBranchDialog::new(request.clone(), previous_tag, sub_branch),
+            )),
             _ => Ok(None),
         }
     }
@@ -3019,9 +3155,18 @@ impl App {
     fn schedule_pending_tag_request(&mut self, request: PendingTagRequest) -> Result<()> {
         let tag_name = request.dialog.tag_name.value.trim().to_string();
         let message = match request.dialog.selected_action() {
-            TagAction::CreateLocal => format!("Creating local tag '{}' and generating release notes if needed.", tag_name),
-            TagAction::CreateAndPush => format!("Creating and pushing tag '{}' for the selected scope.", tag_name),
-            TagAction::CreatePushAndRelease => format!("Creating, pushing, and publishing tag '{}' with generated release notes.", tag_name),
+            TagAction::CreateLocal => format!(
+                "Creating local tag '{}' and generating release notes if needed.",
+                tag_name
+            ),
+            TagAction::CreateAndPush => format!(
+                "Creating and pushing tag '{}' for the selected scope.",
+                tag_name
+            ),
+            TagAction::CreatePushAndRelease => format!(
+                "Creating, pushing, and publishing tag '{}' with generated release notes.",
+                tag_name
+            ),
         };
         self.schedule_progress_job(
             " Running Tag Action ",
@@ -3050,7 +3195,8 @@ impl App {
 
     fn cancel_std_changelog_sub_branch_warning(&mut self) {
         self.std_changelog_sub_branch_dialog = None;
-        self.status = StatusMessage::info("Standard changelog decision cancelled. Tag dialog is still open.");
+        self.status =
+            StatusMessage::info("Standard changelog decision cancelled. Tag dialog is still open.");
     }
 
     fn confirm_std_changelog_sub_branch_warning(&mut self) -> Result<()> {
@@ -3122,7 +3268,9 @@ impl App {
         self.project_edit_dialog = None;
         self.browser_dialog = None;
         self.bump_dialog = Some(dialog);
-        self.status = StatusMessage::info("Review the preview, then press Enter to apply the bump for the active target set.");
+        self.status = StatusMessage::info(
+            "Review the preview, then press Enter to apply the bump for the active target set.",
+        );
         Ok(())
     }
 
@@ -3179,7 +3327,9 @@ impl App {
         ));
         if repo_backed {
             self.open_tag_dialog_with_scope(preferred_scope, Some(TagAction::CreateAndPush))?;
-            self.status = StatusMessage::info("Version bump applied. Review the suggested tag-and-push action next.");
+            self.status = StatusMessage::info(
+                "Version bump applied. Review the suggested tag-and-push action next.",
+            );
         } else {
             self.sync_dashboard_overview_after_repo_change();
         }
@@ -3190,7 +3340,8 @@ impl App {
         self.wizard = ProjectWizard::default();
         self.browser_dialog = None;
         self.screen = Screen::Wizard;
-        self.status = StatusMessage::info("Configure a project and read each target file before saving.");
+        self.status =
+            StatusMessage::info("Configure a project and read each target file before saving.");
     }
 
     fn activate_wizard_focus(&mut self) -> Result<()> {
@@ -3296,7 +3447,9 @@ impl App {
                     return self.request_project_deletion(self.selected_project);
                 }
 
-                let scope_index = self.overview_focused_scope.min(project.branches.len().saturating_sub(1));
+                let scope_index = self
+                    .overview_focused_scope
+                    .min(project.branches.len().saturating_sub(1));
                 self.request_scope_deletion(self.selected_project, scope_index)
             }
         }
@@ -3312,7 +3465,8 @@ impl App {
             project_index,
             project.name.clone(),
         ));
-        self.status = StatusMessage::warning(format!("Confirm deletion of project '{}'.", project.name));
+        self.status =
+            StatusMessage::warning(format!("Confirm deletion of project '{}'.", project.name));
         Ok(())
     }
 
@@ -3353,7 +3507,9 @@ impl App {
         self.delete_confirmation_dialog = None;
 
         match dialog.target {
-            DeleteConfirmationTarget::Project { project_index, .. } => self.delete_project_at(project_index),
+            DeleteConfirmationTarget::Project { project_index, .. } => {
+                self.delete_project_at(project_index)
+            }
             DeleteConfirmationTarget::Scope {
                 project_index,
                 scope_index,
@@ -3417,7 +3573,11 @@ impl App {
         Ok(())
     }
 
-    fn delete_last_scope_project(&mut self, project_index: usize, scope_index: usize) -> Result<()> {
+    fn delete_last_scope_project(
+        &mut self,
+        project_index: usize,
+        scope_index: usize,
+    ) -> Result<()> {
         let (project_name, scope_name) = {
             let project = self
                 .config
@@ -3451,7 +3611,8 @@ impl App {
             self.selected_project = 0;
             self.overview_focused_scope = 0;
         } else {
-            self.selected_project = selected_index_hint.min(self.config.projects.len().saturating_sub(1));
+            self.selected_project =
+                selected_index_hint.min(self.config.projects.len().saturating_sub(1));
         }
         self.invalidate_overview_cache();
         self.prime_selected_project_dashboard_data();
@@ -3463,7 +3624,12 @@ impl App {
         let (target_path, target_key) = if self.wizard.project_type == ProjectType::Branched {
             self.wizard
                 .current_scope()
-                .map(|scope| (scope.target_path.value().trim().to_string(), scope.target_key.value().trim().to_string()))
+                .map(|scope| {
+                    (
+                        scope.target_path.value().trim().to_string(),
+                        scope.target_key.value().trim().to_string(),
+                    )
+                })
                 .unwrap_or_default()
         } else {
             (
@@ -3475,12 +3641,12 @@ impl App {
         match probe_target(&target_path, &target_key, self.wizard.version_scheme) {
             Ok(probe) => {
                 self.status = match probe.kind {
-                    ProbeKind::Success => {
-                        StatusMessage::success("Target file is readable and the selected key matches the chosen scheme.")
-                    }
-                    ProbeKind::Warning => {
-                        StatusMessage::warning("Target file is readable, but the detected version does not match the chosen scheme.")
-                    }
+                    ProbeKind::Success => StatusMessage::success(
+                        "Target file is readable and the selected key matches the chosen scheme.",
+                    ),
+                    ProbeKind::Warning => StatusMessage::warning(
+                        "Target file is readable, but the detected version does not match the chosen scheme.",
+                    ),
                     ProbeKind::Error => StatusMessage::error("Target validation failed."),
                 };
                 if self.wizard.project_type == ProjectType::Branched {
@@ -3549,7 +3715,8 @@ impl App {
     fn open_browser(&mut self, target: BrowseTarget) -> Result<()> {
         let dialog = FileBrowserDialog::new(target, self.initial_browser_path(target))?;
         self.browser_dialog = Some(dialog);
-        self.status = StatusMessage::info("Browse to a file or directory, then press Enter to select it.");
+        self.status =
+            StatusMessage::info("Browse to a file or directory, then press Enter to select it.");
         Ok(())
     }
 
@@ -3571,7 +3738,9 @@ impl App {
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
-            | BrowseTarget::ProjectSettingsReleaseNowMacOs => p_s_s::initial_browser_path(self, target).unwrap_or_default(),
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+                p_s_s::initial_browser_path(self, target).unwrap_or_default()
+            }
         }
     }
 
@@ -3598,12 +3767,16 @@ impl App {
         }
 
         if select_directories && !selected.is_dir() {
-            self.status = StatusMessage::warning("Select a directory for Repo root, or press U to use the current file's folder.");
+            self.status = StatusMessage::warning(
+                "Select a directory for Repo root, or press U to use the current file's folder.",
+            );
             return Ok(());
         }
 
         if !select_directories && !selected.is_file() {
-            self.status = StatusMessage::warning("Select a file for Target path. Use Right to enter directories.");
+            self.status = StatusMessage::warning(
+                "Select a file for Target path. Use Right to enter directories.",
+            );
             return Ok(());
         }
 
@@ -3736,7 +3909,9 @@ impl App {
         if self.screen == Screen::Dashboard && self.dashboard_focus == DashboardPane::Overview {
             let target = if let KeyCode::Char(digit @ '1'..='4') = key.code {
                 let index = (digit as u8 - b'1') as usize;
-                overview_tabs(self.overview_show_recent_tab).get(index).copied()
+                overview_tabs(self.overview_show_recent_tab)
+                    .get(index)
+                    .copied()
             } else {
                 None
             };
@@ -3825,15 +4000,19 @@ impl App {
     fn handle_toast_mouse(&mut self, mouse: MouseEvent) -> bool {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let interaction = self
-                    .sticky_toaster
-                    .handle_click(mouse.column, mouse.row, ToastMouseButton::Left);
+                let interaction = self.sticky_toaster.handle_click(
+                    mouse.column,
+                    mouse.row,
+                    ToastMouseButton::Left,
+                );
                 self.handle_toast_interaction(interaction)
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                let interaction = self
-                    .sticky_toaster
-                    .handle_click(mouse.column, mouse.row, ToastMouseButton::Right);
+                let interaction = self.sticky_toaster.handle_click(
+                    mouse.column,
+                    mouse.row,
+                    ToastMouseButton::Right,
+                );
                 self.handle_toast_interaction(interaction)
             }
             _ => false,
@@ -3872,24 +4051,36 @@ impl App {
         self.last_status_toast_id = self.status.id;
         let builder = ToastBuilder::new(self.status.text.clone().into());
         match self.status.kind {
-            StatusKind::Info => self.transient_toaster.show_toast(builder.toast_type(ToastType::Info)),
-            StatusKind::Success => self.transient_toaster.show_toast(builder.toast_type(ToastType::Success)),
-            StatusKind::Warning => self.transient_toaster.show_toast(builder.toast_type(ToastType::Warning)),
-            StatusKind::Error => self.sticky_toaster.show_toast(
-                builder
-                    .toast_type(ToastType::Error)
-                    .keep_on(1),
-            ),
+            StatusKind::Info => self
+                .transient_toaster
+                .show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Success => self
+                .transient_toaster
+                .show_toast(builder.toast_type(ToastType::Success)),
+            StatusKind::Warning => self
+                .transient_toaster
+                .show_toast(builder.toast_type(ToastType::Warning)),
+            StatusKind::Error => self
+                .sticky_toaster
+                .show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
         }
     }
 
     fn show_transient_toast(&mut self, kind: StatusKind, text: impl Into<String>) {
         let builder = ToastBuilder::new(text.into().into());
         match kind {
-            StatusKind::Info => self.transient_toaster.show_toast(builder.toast_type(ToastType::Info)),
-            StatusKind::Success => self.transient_toaster.show_toast(builder.toast_type(ToastType::Success)),
-            StatusKind::Warning => self.transient_toaster.show_toast(builder.toast_type(ToastType::Warning)),
-            StatusKind::Error => self.sticky_toaster.show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
+            StatusKind::Info => self
+                .transient_toaster
+                .show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Success => self
+                .transient_toaster
+                .show_toast(builder.toast_type(ToastType::Success)),
+            StatusKind::Warning => self
+                .transient_toaster
+                .show_toast(builder.toast_type(ToastType::Warning)),
+            StatusKind::Error => self
+                .sticky_toaster
+                .show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
         }
     }
 
@@ -3949,17 +4140,20 @@ impl HitTarget {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TextInputClickTarget {
-    WizardField(WizardField),
-    ProjectEditField(ProjectEditFocus),
-    ProjectSettingsField(ProjectSettingsFocus),
+    Wizard(WizardField),
+    ProjectEdit(ProjectEditFocus),
+    ProjectSettings(ProjectSettingsFocus),
 }
 
 impl TextInputClickTarget {
     fn same_field_action(&self, action: &HitAction) -> bool {
         match (self, action) {
-            (&TextInputClickTarget::WizardField(a), &HitAction::WizardField(b)) => a == b,
-            (&TextInputClickTarget::ProjectEditField(a), &HitAction::EditProjectField(b)) => a == b,
-            (&TextInputClickTarget::ProjectSettingsField(a), &HitAction::SelectProjectSettingsField(b)) => a == b,
+            (&TextInputClickTarget::Wizard(a), &HitAction::WizardField(b)) => a == b,
+            (&TextInputClickTarget::ProjectEdit(a), &HitAction::EditProjectField(b)) => a == b,
+            (
+                &TextInputClickTarget::ProjectSettings(a),
+                &HitAction::SelectProjectSettingsField(b),
+            ) => a == b,
             _ => false,
         }
     }
@@ -4078,7 +4272,11 @@ struct CustomChangelogRangeState {
 }
 
 impl CustomChangelogRangeState {
-    fn new(scope_name: String, tags: Vec<String>, selection: Option<CustomChangelogSelection>) -> Self {
+    fn new(
+        scope_name: String,
+        tags: Vec<String>,
+        selection: Option<CustomChangelogSelection>,
+    ) -> Self {
         let mut state = Self {
             scope_name,
             tags,
@@ -4107,11 +4305,7 @@ impl CustomChangelogRangeState {
     }
 
     fn focus_label(&self, focus: CustomChangelogRangeFocus) -> &'static str {
-        if self.focus == focus {
-            ">"
-        } else {
-            " "
-        }
+        if self.focus == focus { ">" } else { " " }
     }
 
     fn current_from_ref(&self) -> Option<&str> {
@@ -4134,12 +4328,18 @@ impl CustomChangelogRangeState {
     fn selection(&self) -> Option<CustomChangelogSelection> {
         Some(CustomChangelogSelection {
             from_ref: self.current_from_ref()?.to_string(),
-            to_ref: self.to_index.and_then(|index| self.tags.get(index)).cloned(),
+            to_ref: self
+                .to_index
+                .and_then(|index| self.tags.get(index))
+                .cloned(),
         })
     }
 
     fn cycle_focus(&mut self, delta: isize) {
-        let focuses = [CustomChangelogRangeFocus::From, CustomChangelogRangeFocus::To];
+        let focuses = [
+            CustomChangelogRangeFocus::From,
+            CustomChangelogRangeFocus::To,
+        ];
         let current = match self.focus {
             CustomChangelogRangeFocus::From => 0,
             CustomChangelogRangeFocus::To => 1,
@@ -4163,11 +4363,11 @@ impl CustomChangelogRangeState {
         }
     }
 
-    fn from_display(&self) -> String {
+    fn display_from(&self) -> String {
         self.current_from_ref().unwrap_or("<no tags>").to_string()
     }
 
-    fn to_display(&self) -> String {
+    fn display_to(&self) -> String {
         self.current_to_ref().to_string()
     }
 
@@ -4181,7 +4381,10 @@ impl CustomChangelogRangeState {
         self.from_index = self.from_index.min(self.tags.len().saturating_sub(1));
         if self.from_index == 0 {
             self.to_index = None;
-        } else if self.to_index.is_some_and(|to_index| to_index >= self.from_index) {
+        } else if self
+            .to_index
+            .is_some_and(|to_index| to_index >= self.from_index)
+        {
             self.to_index = Some(self.from_index - 1);
         }
     }
@@ -4192,7 +4395,8 @@ impl CustomChangelogRangeState {
             return false;
         }
 
-        let next = (self.from_index as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize;
+        let next =
+            (self.from_index as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize;
         if next == self.from_index {
             return false;
         }
@@ -4205,7 +4409,8 @@ impl CustomChangelogRangeState {
     fn adjust_to(&mut self, delta: isize) -> bool {
         let max_position = self.from_index;
         let current_position = self.to_index.map(|to_index| to_index + 1).unwrap_or(0);
-        let next_position = (current_position as isize + delta).clamp(0, max_position as isize) as usize;
+        let next_position =
+            (current_position as isize + delta).clamp(0, max_position as isize) as usize;
         if next_position == current_position {
             return false;
         }
@@ -4306,7 +4511,8 @@ impl ChangelogPreviewDialog {
             custom_range: None,
             entries,
             release_message: new_release_message_editor(""),
-            release_message_placeholder: "Optional multi-line release notes in Markdown".to_string(),
+            release_message_placeholder: "Optional multi-line release notes in Markdown"
+                .to_string(),
             scroll: 0,
         }
     }
@@ -4326,7 +4532,8 @@ impl ChangelogPreviewDialog {
             custom_range,
             entries,
             release_message: new_release_message_editor(""),
-            release_message_placeholder: "Optional multi-line release notes in Markdown".to_string(),
+            release_message_placeholder: "Optional multi-line release notes in Markdown"
+                .to_string(),
             scroll: 0,
         }
     }
@@ -4360,14 +4567,18 @@ impl ChangelogPreviewDialog {
     }
 
     fn preview_line_count(&self) -> usize {
-        tui_markdown::from_str(&self.combined_preview_markdown()).lines.len()
+        tui_markdown::from_str(&self.combined_preview_markdown())
+            .lines
+            .len()
     }
 
     fn prepare_pending_write(&self) -> PendingChangelogWrite {
         let release_message = self.release_message_value();
         PendingChangelogWrite {
             scope_index: self.scope_index,
-            workflow: self.workflow.expect("workflow preview required to prepare changelog write"),
+            workflow: self
+                .workflow
+                .expect("workflow preview required to prepare changelog write"),
             entries: self
                 .entries
                 .iter()
@@ -4407,7 +4618,9 @@ impl ChangelogPreviewEntry {
         let document = if release_message.trim().is_empty() {
             self.document.clone()
         } else {
-            self.document.clone().with_release_message(release_message.to_string())
+            self.document
+                .clone()
+                .with_release_message(release_message.to_string())
         };
         document.render_markdown().markdown
     }
@@ -4508,7 +4721,7 @@ enum BackgroundJobOutput {
         history_scope_index: Option<usize>,
         prefetched_history_ranges: Option<Vec<ChangeRange>>,
     },
-    OpenChangelogPreview(ChangelogPreviewDialog),
+    OpenChangelogPreview(Box<ChangelogPreviewDialog>),
     OverviewActivityCache {
         project_index: usize,
         summaries: Vec<Option<RepoActivitySummary>>,
@@ -4524,6 +4737,19 @@ enum BackgroundJobOutput {
 }
 
 type BackgroundJobResult = std::result::Result<BackgroundJobOutput, String>;
+type BackgroundWorkerChannels = (
+    TokioRuntime,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedReceiver<BackgroundJobResultMessage>,
+);
+type PrefetchedRecentChanges = (
+    Option<usize>,
+    Option<ChangeRange>,
+    Option<usize>,
+    Option<Vec<ChangeRange>>,
+);
 
 enum BackgroundJobMessagePayload {
     Progress(BackgroundJobOutput),
@@ -4581,16 +4807,19 @@ impl BackgroundJobProgressSink {
 impl BackgroundJobRequest {
     fn kind(&self) -> BackgroundJobKind {
         match self {
-            Self::OpenRecentChanges { .. } | Self::RecentChanges { .. } => BackgroundJobKind::RecentChanges,
+            Self::OpenRecentChanges { .. } | Self::RecentChanges { .. } => {
+                BackgroundJobKind::RecentChanges
+            }
             Self::CheckPendingBumpMainBranch { .. } | Self::CheckOverviewBumpWarnings { .. } => {
                 BackgroundJobKind::RepoScan
             }
             Self::PrefetchRecentChanges { .. } => BackgroundJobKind::RecentChangesPrefetch,
-            Self::OpenDashboardChangelogPreview { .. } | Self::OpenOverviewWorkflowChangelog { .. } => {
-                BackgroundJobKind::ChangelogPreview
-            }
+            Self::OpenDashboardChangelogPreview { .. }
+            | Self::OpenOverviewWorkflowChangelog { .. } => BackgroundJobKind::ChangelogPreview,
             Self::RefreshOverviewActivity { .. } => BackgroundJobKind::OverviewActivity,
-            Self::ValidateReleaseNow { .. } | Self::RunReleaseNow { .. } => BackgroundJobKind::ReleaseNow,
+            Self::ValidateReleaseNow { .. } | Self::RunReleaseNow { .. } => {
+                BackgroundJobKind::ReleaseNow
+            }
             Self::CreateTag { .. } => BackgroundJobKind::TagAction,
         }
     }
@@ -4626,19 +4855,33 @@ impl OverviewBumpWorkflow {
     fn description(self) -> &'static str {
         match self {
             OverviewBumpWorkflow::JustBump => "Writes the updated version files only.",
-            OverviewBumpWorkflow::Commit => "Stages the version files and commits them with the standard bump message.",
-            OverviewBumpWorkflow::CommitAndTag => "Stages and commits the version files, then creates a tag named after the new version.",
-            OverviewBumpWorkflow::CommitAndPush => "Stages and commits the version files, then pushes the bump commit to the configured remote.",
-            OverviewBumpWorkflow::CommitPushAndTag => "Stages and commits the version files, pushes the bump commit, then pushes a tag named after the new version.",
+            OverviewBumpWorkflow::Commit => {
+                "Stages the version files and commits them with the standard bump message."
+            }
+            OverviewBumpWorkflow::CommitAndTag => {
+                "Stages and commits the version files, then creates a tag named after the new version."
+            }
+            OverviewBumpWorkflow::CommitAndPush => {
+                "Stages and commits the version files, then pushes the bump commit to the configured remote."
+            }
+            OverviewBumpWorkflow::CommitPushAndTag => {
+                "Stages and commits the version files, pushes the bump commit, then pushes a tag named after the new version."
+            }
         }
     }
 
     fn requires_push(self) -> bool {
-        matches!(self, OverviewBumpWorkflow::CommitAndPush | OverviewBumpWorkflow::CommitPushAndTag)
+        matches!(
+            self,
+            OverviewBumpWorkflow::CommitAndPush | OverviewBumpWorkflow::CommitPushAndTag
+        )
     }
 
     fn requires_tag(self) -> bool {
-        matches!(self, OverviewBumpWorkflow::CommitAndTag | OverviewBumpWorkflow::CommitPushAndTag)
+        matches!(
+            self,
+            OverviewBumpWorkflow::CommitAndTag | OverviewBumpWorkflow::CommitPushAndTag
+        )
     }
 }
 
@@ -4705,7 +4948,11 @@ struct OverviewBumpWarningDialog {
 }
 
 impl OverviewBumpWarningDialog {
-    fn new(scope_index: usize, workflow: OverviewBumpWorkflow, repos: Vec<UnexpectedStagedRepo>) -> Self {
+    fn new(
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+        repos: Vec<UnexpectedStagedRepo>,
+    ) -> Self {
         Self {
             scope_index,
             workflow,
@@ -4870,12 +5117,23 @@ fn refresh_target_artifacts(target: &BumpTarget, repo_root: Option<&str>) -> Res
         .arg("--manifest-path")
         .arg(&target_path)
         .output()
-        .with_context(|| format!("failed to refresh {} after updating {}", lock_path.display(), target.path))?;
+        .with_context(|| {
+            format!(
+                "failed to refresh {} after updating {}",
+                lock_path.display(),
+                target.path
+            )
+        })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let detail = if stderr.is_empty() { stdout } else { stderr };
-        bail!("failed to refresh {} after updating {}: {}", lock_path.display(), target.path, detail);
+        bail!(
+            "failed to refresh {} after updating {}: {}",
+            lock_path.display(),
+            target.path,
+            detail
+        );
     }
 
     Ok(())
@@ -4980,7 +5238,11 @@ impl ScopeDraft {
         }
     }
 
-    pub(crate) fn build_branch(&self, version_scheme: VersionScheme, require_probe: bool) -> Result<BranchConfig> {
+    pub(crate) fn build_branch(
+        &self,
+        version_scheme: VersionScheme,
+        require_probe: bool,
+    ) -> Result<BranchConfig> {
         let name = self.name.value.trim();
         if name.is_empty() {
             bail!("scope name cannot be empty");
@@ -4998,11 +5260,16 @@ impl ScopeDraft {
 
         let format = if require_probe {
             match &self.last_probe {
-                Some(probe) if matches!(probe.kind, ProbeKind::Success) => probe.format.unwrap_or(self.format),
+                Some(probe) if matches!(probe.kind, ProbeKind::Success) => {
+                    probe.format.unwrap_or(self.format)
+                }
                 Some(_) | None => bail!("scope '{}' must be read successfully before saving", name),
             }
         } else {
-            self.last_probe.as_ref().and_then(|probe| probe.format).unwrap_or(self.format)
+            self.last_probe
+                .as_ref()
+                .and_then(|probe| probe.format)
+                .unwrap_or(self.format)
         };
 
         Ok(BranchConfig {
@@ -5070,14 +5337,7 @@ enum StatusKind {
     Error,
 }
 
-fn spawn_background_worker(
-) -> Result<(
-    TokioRuntime,
-    UnboundedSender<BackgroundJobRequestMessage>,
-    UnboundedSender<BackgroundJobRequestMessage>,
-    UnboundedSender<BackgroundJobRequestMessage>,
-    UnboundedReceiver<BackgroundJobResultMessage>,
-)> {
+fn spawn_background_worker() -> Result<BackgroundWorkerChannels> {
     let runtime = TokioRuntimeBuilder::new_multi_thread()
         .worker_threads(2)
         .thread_name("cg-bg")
@@ -5151,7 +5411,14 @@ async fn run_background_job(
             project,
             preferred_scope,
         } => Ok(BackgroundJobOutput::OpenRecentChanges(
-            run_blocking_job(move || RecentChangesDialog::from_project_with_scope_cancellable(&project, preferred_scope.unwrap_or(0), Some(cancel))).await?,
+            run_blocking_job(move || {
+                RecentChangesDialog::from_project_with_scope_cancellable(
+                    &project,
+                    preferred_scope.unwrap_or(0),
+                    Some(cancel),
+                )
+            })
+            .await?,
         )),
         BackgroundJobRequest::CheckPendingBumpMainBranch {
             project,
@@ -5193,7 +5460,10 @@ async fn run_background_job(
             })
         }
         BackgroundJobRequest::RecentChanges { dialog, action } => {
-            let (dialog, status_message) = run_blocking_job(move || apply_recent_changes_background_action(dialog, action, Some(cancel))).await?;
+            let (dialog, status_message) = run_blocking_job(move || {
+                apply_recent_changes_background_action(dialog, action, Some(cancel))
+            })
+            .await?;
             Ok(BackgroundJobOutput::RecentChanges {
                 dialog,
                 status_message,
@@ -5204,29 +5474,31 @@ async fn run_background_job(
             scope_index,
             pending_versions,
             selection,
-        } => Ok(BackgroundJobOutput::OpenChangelogPreview(
+        } => Ok(BackgroundJobOutput::OpenChangelogPreview(Box::new(
             overview::build_dashboard_changelog_preview_dialog_async(
                 &project,
                 scope_index,
                 &pending_versions,
                 selection,
                 Some(cancel),
-            ).await?,
-        )),
+            )
+            .await?,
+        ))),
         BackgroundJobRequest::OpenOverviewWorkflowChangelog {
             project,
             scope_index,
             workflow,
             pending_versions,
-        } => Ok(BackgroundJobOutput::OpenChangelogPreview(
+        } => Ok(BackgroundJobOutput::OpenChangelogPreview(Box::new(
             overview::build_overview_workflow_changelog_preview_dialog_async(
                 &project,
                 scope_index,
                 workflow,
                 &pending_versions,
                 Some(cancel),
-            ).await?,
-        )),
+            )
+            .await?,
+        ))),
         BackgroundJobRequest::RefreshOverviewActivity {
             project_index,
             project,
@@ -5238,18 +5510,27 @@ async fn run_background_job(
             project,
             scope_index,
         } => Ok(BackgroundJobOutput::ReleaseNowValidated(
-            run_blocking_job(move || rls_now::validate_release_now(&project, scope_index, Some(cancel))).await?,
-        )),
-        BackgroundJobRequest::RunReleaseNow { request } => Ok(BackgroundJobOutput::ReleaseNowCompleted(
-            rls_now::execute_release_now_async(request, cancel, move |lines| {
-                progress.send(BackgroundJobOutput::ReleaseNowLogChunk(lines));
+            run_blocking_job(move || {
+                rls_now::validate_release_now(&project, scope_index, Some(cancel))
             })
             .await?,
         )),
+        BackgroundJobRequest::RunReleaseNow { request } => {
+            Ok(BackgroundJobOutput::ReleaseNowCompleted(
+                rls_now::execute_release_now_async(request, cancel, move |lines| {
+                    progress.send(BackgroundJobOutput::ReleaseNowLogChunk(lines));
+                })
+                .await?,
+            ))
+        }
         BackgroundJobRequest::PrefetchRecentChanges { dialog } => {
             let project_name = dialog.project_name.clone();
-            let (next_scope_index, prefetched_recent_range, history_scope_index, prefetched_history_ranges) =
-                run_blocking_job(move || prefetch_recent_changes(dialog, Some(cancel))).await?;
+            let (
+                next_scope_index,
+                prefetched_recent_range,
+                history_scope_index,
+                prefetched_history_ranges,
+            ) = run_blocking_job(move || prefetch_recent_changes(dialog, Some(cancel))).await?;
             Ok(BackgroundJobOutput::RecentChangesPrefetch {
                 project_name,
                 next_scope_index,
@@ -5263,7 +5544,8 @@ async fn run_background_job(
             changelog_enabled,
             std_changelog_policy,
         } => {
-            let outcome = run_create_tag_job_async(dialog, changelog_enabled, std_changelog_policy).await?;
+            let outcome =
+                run_create_tag_job_async(dialog, changelog_enabled, std_changelog_policy).await?;
             Ok(BackgroundJobOutput::CreateTag {
                 summary: outcome.summary,
                 replay_notices: outcome.replay_notices,
@@ -5289,7 +5571,10 @@ async fn load_overview_activity_summaries_async(
                 .acquire_owned()
                 .await
                 .map_err(|_| anyhow!("activity summary worker pool is unavailable"))?;
-            let summary = run_blocking_job(move || Ok(load_scope_activity_summary_with_cancel(&context, cancel).ok())).await?;
+            let summary = run_blocking_job(move || {
+                Ok(load_scope_activity_summary_with_cancel(&context, cancel).ok())
+            })
+            .await?;
             Ok::<_, anyhow::Error>((index, summary))
         });
     }
@@ -5298,7 +5583,8 @@ async fn load_overview_activity_summaries_async(
     summaries.resize_with(tasks.len(), || None);
 
     while let Some(result) = tasks.join_next().await {
-        let (index, summary) = result.map_err(|error| anyhow!("activity summary task failed: {error}"))??;
+        let (index, summary) =
+            result.map_err(|error| anyhow!("activity summary task failed: {error}"))??;
         if let Some(slot) = summaries.get_mut(index) {
             *slot = summary;
         }
@@ -5333,14 +5619,20 @@ fn apply_recent_changes_background_action(
 fn prefetch_recent_changes(
     dialog: RecentChangesDialog,
     cancel: Option<GitCancellation>,
-) -> Result<(Option<usize>, Option<ChangeRange>, Option<usize>, Option<Vec<ChangeRange>>)> {
+) -> Result<PrefetchedRecentChanges> {
     let next_scope_index = if dialog.can_select_scope() {
         Some((dialog.selected_scope + 1) % dialog.scopes.len())
     } else {
         None
     };
     let prefetched_recent_range = next_scope_index
-        .filter(|index| dialog.prefetched_recent_ranges.get(*index).and_then(|entry| entry.as_ref()).is_none())
+        .filter(|index| {
+            dialog
+                .prefetched_recent_ranges
+                .get(*index)
+                .and_then(|entry| entry.as_ref())
+                .is_none()
+        })
         .map(|index| load_recent_change_range_with_cancel(&dialog.scopes[index], cancel.clone()))
         .transpose()?;
     let history_scope_index = (!dialog.history_loaded
@@ -5349,12 +5641,17 @@ fn prefetch_recent_changes(
             .get(dialog.selected_scope)
             .and_then(|entry| entry.as_ref())
             .is_none())
-        .then_some(dialog.selected_scope);
+    .then_some(dialog.selected_scope);
     let prefetched_history_ranges = history_scope_index
         .map(|index| load_history_ranges_with_cancel(&dialog.scopes[index], cancel))
         .transpose()?;
 
-    Ok((next_scope_index, prefetched_recent_range, history_scope_index, prefetched_history_ranges))
+    Ok((
+        next_scope_index,
+        prefetched_recent_range,
+        history_scope_index,
+        prefetched_history_ranges,
+    ))
 }
 
 struct BackgroundTagOutcome {
@@ -5412,7 +5709,8 @@ async fn run_create_tag_job_async(
     let tag_name = dialog.tag_name.value.trim().to_string();
     let active_scope_for_notes = active_scope.clone();
     let repo_root_for_branch = repo_root.clone();
-    let branch_name = run_blocking_job(move || current_branch_with_cancel(&repo_root_for_branch, None)).await?;
+    let branch_name =
+        run_blocking_job(move || current_branch_with_cancel(&repo_root_for_branch, None)).await?;
     let tag_name_for_create = tag_name.clone();
     let annotation_for_create = annotation.clone();
 
@@ -5427,14 +5725,20 @@ async fn run_create_tag_job_async(
                 Some(annotation_for_create.as_str())
             },
         )
-    }).await?;
+    })
+    .await?;
 
     let mut summary_notes = Vec::new();
     let mut standard_outcome = StandardChangelogExecutionOutcome::default();
 
     let release_notes = if created || matches!(action, TagAction::CreatePushAndRelease) {
         let tag_name_for_notes = tag_name.clone();
-        Some(run_blocking_job(move || build_release_notes_markdown(&tag_name_for_notes, &active_scope_for_notes)).await?)
+        Some(
+            run_blocking_job(move || {
+                build_release_notes_markdown(&tag_name_for_notes, &active_scope_for_notes)
+            })
+            .await?,
+        )
     } else {
         None
     };
@@ -5445,11 +5749,16 @@ async fn run_create_tag_job_async(
             &tag_name,
             &branch_name,
             std_changelog_policy,
-        ).await?;
+        )
+        .await?;
         summary_notes.extend(standard_outcome.summary_notes.clone());
 
-        if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
-            let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+        if matches!(
+            action,
+            TagAction::CreateAndPush | TagAction::CreatePushAndRelease
+        ) {
+            let remote_spec =
+                remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
             run_git_push_with_retry_async(repo_root.clone(), remote_spec, tag_name.clone()).await?;
         }
 
@@ -5458,7 +5767,12 @@ async fn run_create_tag_job_async(
             let release_notes = release_notes
                 .as_deref()
                 .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
-            create_github_release_with_retry_async(repo_root.clone(), tag_name.clone(), release_notes.to_string()).await?;
+            create_github_release_with_retry_async(
+                repo_root.clone(),
+                tag_name.clone(),
+                release_notes.to_string(),
+            )
+            .await?;
         }
 
         let scope_notice = if active_scope.scope_kind.is_some() {
@@ -5467,25 +5781,44 @@ async fn run_create_tag_job_async(
             String::new()
         };
         let summary = match action {
-            TagAction::CreateLocal if created => format!("Created local tag '{}' in {}{}.", tag_name, project_name, scope_notice),
-            TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}{}.", tag_name, project_name, scope_notice),
-            TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}{}.", tag_name, project_name, scope_notice),
-            TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}{}.", tag_name, project_name, scope_notice),
+            TagAction::CreateLocal if created => format!(
+                "Created local tag '{}' in {}{}.",
+                tag_name, project_name, scope_notice
+            ),
+            TagAction::CreateLocal => format!(
+                "Tag '{}' already existed locally in {}{}.",
+                tag_name, project_name, scope_notice
+            ),
+            TagAction::CreateAndPush => format!(
+                "Tag '{}' is present locally and has been pushed for {}{}.",
+                tag_name, project_name, scope_notice
+            ),
+            TagAction::CreatePushAndRelease => format!(
+                "Tag '{}' was created, pushed, and released for {}{}.",
+                tag_name, project_name, scope_notice
+            ),
         };
 
         return Ok(BackgroundTagOutcome {
             summary: if annotation.is_empty() {
                 append_background_tag_summary_notes(summary, &summary_notes)
             } else {
-                append_background_tag_summary_notes(format!("{} Annotation included.", summary), &summary_notes)
+                append_background_tag_summary_notes(
+                    format!("{} Annotation included.", summary),
+                    &summary_notes,
+                )
             },
             replay_notices: standard_outcome.replay_notices,
             replay_errors: standard_outcome.replay_errors,
         });
     }
 
-    if matches!(action, TagAction::CreateAndPush | TagAction::CreatePushAndRelease) {
-        let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+    if matches!(
+        action,
+        TagAction::CreateAndPush | TagAction::CreatePushAndRelease
+    ) {
+        let remote_spec =
+            remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
         run_git_push_with_retry_async(repo_root.clone(), remote_spec, tag_name.clone()).await?;
     }
 
@@ -5494,7 +5827,12 @@ async fn run_create_tag_job_async(
         let release_notes = release_notes
             .as_deref()
             .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
-        create_github_release_with_retry_async(repo_root.clone(), tag_name.clone(), release_notes.to_string()).await?;
+        create_github_release_with_retry_async(
+            repo_root.clone(),
+            tag_name.clone(),
+            release_notes.to_string(),
+        )
+        .await?;
     }
 
     let scope_notice = if active_scope.scope_kind.is_some() {
@@ -5503,17 +5841,32 @@ async fn run_create_tag_job_async(
         String::new()
     };
     let summary = match action {
-        TagAction::CreateLocal if created => format!("Created local tag '{}' in {}{}.", tag_name, project_name, scope_notice),
-        TagAction::CreateLocal => format!("Tag '{}' already existed locally in {}{}.", tag_name, project_name, scope_notice),
-        TagAction::CreateAndPush => format!("Tag '{}' is present locally and has been pushed for {}{}.", tag_name, project_name, scope_notice),
-        TagAction::CreatePushAndRelease => format!("Tag '{}' was created, pushed, and released for {}{}.", tag_name, project_name, scope_notice),
+        TagAction::CreateLocal if created => format!(
+            "Created local tag '{}' in {}{}.",
+            tag_name, project_name, scope_notice
+        ),
+        TagAction::CreateLocal => format!(
+            "Tag '{}' already existed locally in {}{}.",
+            tag_name, project_name, scope_notice
+        ),
+        TagAction::CreateAndPush => format!(
+            "Tag '{}' is present locally and has been pushed for {}{}.",
+            tag_name, project_name, scope_notice
+        ),
+        TagAction::CreatePushAndRelease => format!(
+            "Tag '{}' was created, pushed, and released for {}{}.",
+            tag_name, project_name, scope_notice
+        ),
     };
 
     Ok(BackgroundTagOutcome {
         summary: if annotation.is_empty() {
             append_background_tag_summary_notes(summary, &summary_notes)
         } else {
-            append_background_tag_summary_notes(format!("{} Annotation included.", summary), &summary_notes)
+            append_background_tag_summary_notes(
+                format!("{} Annotation included.", summary),
+                &summary_notes,
+            )
         },
         replay_notices: standard_outcome.replay_notices,
         replay_errors: standard_outcome.replay_errors,
@@ -5538,8 +5891,14 @@ async fn execute_standard_changelog_for_tag(
     let tag_name = tag_name.to_string();
     let branch_name = branch_name.to_string();
     run_blocking_job(move || {
-        execute_standard_changelog_for_tag_blocking(&scope, &tag_name, &branch_name, std_changelog_policy)
-    }).await
+        execute_standard_changelog_for_tag_blocking(
+            &scope,
+            &tag_name,
+            &branch_name,
+            std_changelog_policy,
+        )
+    })
+    .await
 }
 
 fn execute_standard_changelog_for_tag_blocking(
@@ -5555,12 +5914,20 @@ fn execute_standard_changelog_for_tag_blocking(
     let previous_tag = previous_tag_for_replay(&sorted_tags, tag_name);
     let decision = match std_changelog_policy {
         StdChangelogExecutionPolicy::ForceGenerate => StdChangelogDecision::Generate,
-        StdChangelogExecutionPolicy::ForcePostpone => StdChangelogDecision::PostponeOnSubBranch(branch_name.to_string()),
+        StdChangelogExecutionPolicy::ForcePostpone => {
+            StdChangelogDecision::PostponeOnSubBranch(branch_name.to_string())
+        }
         StdChangelogExecutionPolicy::Auto => {
             if let Some(previous_tag) = previous_tag.as_deref() {
-                let previous_branches = branches_containing_ref_with_cancel(repo_root, previous_tag, None)?;
+                let previous_branches =
+                    branches_containing_ref_with_cancel(repo_root, previous_tag, None)?;
                 let new_branches = branches_containing_ref_with_cancel(repo_root, tag_name, None)?;
-                decide_std_changelog_generation(previous_tag, branch_name, &previous_branches, &new_branches)
+                decide_std_changelog_generation(
+                    previous_tag,
+                    branch_name,
+                    &previous_branches,
+                    &new_branches,
+                )
             } else {
                 StdChangelogDecision::SkipNoPreviousTag
             }
@@ -5574,7 +5941,8 @@ fn execute_standard_changelog_for_tag_blocking(
                 rebuild_history_summary_readme(repo_root)?;
                 record_std_changelog_generated(repo_root, tag_name, branch_name)?;
             } else if let Some(previous_tag) = previous_tag.as_deref() {
-                let range = load_change_range_for_tags_with_cancel(scope, previous_tag, tag_name, None)?;
+                let range =
+                    load_change_range_for_tags_with_cancel(scope, previous_tag, tag_name, None)?;
                 if range.lines.is_empty() {
                     let reason = "standard changelog range was empty".to_string();
                     record_std_changelog_error(repo_root, tag_name, branch_name, &reason)?;
@@ -5585,7 +5953,10 @@ fn execute_standard_changelog_for_tag_blocking(
                     record_std_changelog_generated(repo_root, tag_name, branch_name)?;
                 }
             } else {
-                outcome.summary_notes.push("Standard changelog was not generated because no previous tag was found.".to_string());
+                outcome.summary_notes.push(
+                    "Standard changelog was not generated because no previous tag was found."
+                        .to_string(),
+                );
             }
         }
         StdChangelogDecision::IgnoreNotOnMain => {
@@ -5599,7 +5970,10 @@ fn execute_standard_changelog_for_tag_blocking(
             ));
         }
         StdChangelogDecision::SkipNoPreviousTag => {
-            outcome.summary_notes.push("Standard changelog was not generated because no previous tag was found.".to_string());
+            outcome.summary_notes.push(
+                "Standard changelog was not generated because no previous tag was found."
+                    .to_string(),
+            );
         }
     }
 
@@ -5625,7 +5999,11 @@ fn execute_standard_changelog_for_tag_blocking(
     Ok(outcome)
 }
 
-fn ensure_std_changelog_memory_entry(repo_root: &str, tag_name: &str, branch_name: &str) -> Result<()> {
+fn ensure_std_changelog_memory_entry(
+    repo_root: &str,
+    tag_name: &str,
+    branch_name: &str,
+) -> Result<()> {
     let memory = load_merged_std_changelog_memory(repo_root)?;
     if memory.entries.iter().any(|entry| {
         entry.tag_from.trim() == tag_name.trim() && entry.tag_origin.trim() == branch_name.trim()
@@ -5682,14 +6060,18 @@ fn replay_postponed_std_changelogs_blocking(
         .collect::<Vec<_>>();
     postponed.sort_by(|left, right| left.ts.cmp(&right.ts));
     if postponed.is_empty() {
-		return Ok(PostponedReplayOutcome::default());
+        return Ok(PostponedReplayOutcome::default());
     }
 
     let sorted_tags = sorted_local_tags_with_cancel(repo_root, None)?;
     let mut outcome = PostponedReplayOutcome::default();
     for entry in postponed {
-        let mainline_branches = branches_containing_ref_with_cancel(repo_root, &entry.tag_from, None)?;
-        if !mainline_branches.iter().any(|branch| is_mainline_branch(branch)) {
+        let mainline_branches =
+            branches_containing_ref_with_cancel(repo_root, &entry.tag_from, None)?;
+        if !mainline_branches
+            .iter()
+            .any(|branch| is_mainline_branch(branch))
+        {
             continue;
         }
 
@@ -5702,29 +6084,41 @@ fn replay_postponed_std_changelogs_blocking(
         let Some(previous_tag) = previous_tag_for_replay(&sorted_tags, &entry.tag_from) else {
             let reason = "no previous tag found for postponed replay".to_string();
             record_std_changelog_error(repo_root, &entry.tag_from, &entry.tag_origin, &reason)?;
-            outcome.errors.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
+            outcome.errors.push(format!(
+                "Postponed changelog '{}' could not be replayed: {}.",
+                entry.tag_from, reason
+            ));
             continue;
         };
 
-        let range = load_change_range_for_tags_with_cancel(scope, &previous_tag, &entry.tag_from, None)?;
+        let range =
+            load_change_range_for_tags_with_cancel(scope, &previous_tag, &entry.tag_from, None)?;
         if range.lines.is_empty() {
             let reason = "replayed postponed changelog range was empty".to_string();
             record_std_changelog_error(repo_root, &entry.tag_from, &entry.tag_origin, &reason)?;
-            outcome.errors.push(format!("Postponed changelog '{}' could not be replayed: {}.", entry.tag_from, reason));
+            outcome.errors.push(format!(
+                "Postponed changelog '{}' could not be replayed: {}.",
+                entry.tag_from, reason
+            ));
             continue;
         }
 
         let markdown = std_changelog_gen(entry.tag_from.clone(), &range.lines).markdown;
         archive_changelog_markdown(repo_root, &entry.tag_from, &markdown)?;
         record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
-        outcome.notices.push(format!("Replayed postponed changelog '{}' after it reached main/master lineage.", entry.tag_from));
+        outcome.notices.push(format!(
+            "Replayed postponed changelog '{}' after it reached main/master lineage.",
+            entry.tag_from
+        ));
     }
 
     Ok(outcome)
 }
 
 fn previous_tag_for_replay(sorted_tags: &[String], tag_name: &str) -> Option<String> {
-    let index = sorted_tags.iter().position(|candidate| candidate.trim() == tag_name.trim())?;
+    let index = sorted_tags
+        .iter()
+        .position(|candidate| candidate.trim() == tag_name.trim())?;
     sorted_tags.get(index + 1).cloned()
 }
 
@@ -5738,7 +6132,9 @@ fn decide_std_changelog_generation(
         return StdChangelogDecision::Generate;
     }
 
-    let previous_has_main = previous_branches.iter().any(|branch| is_mainline_branch(branch));
+    let previous_has_main = previous_branches
+        .iter()
+        .any(|branch| is_mainline_branch(branch));
     let new_has_main = new_branches.iter().any(|branch| is_mainline_branch(branch));
     if previous_has_main && new_has_main {
         return StdChangelogDecision::Generate;
@@ -5776,20 +6172,33 @@ fn is_mainline_branch(branch: &str) -> bool {
     normalized.eq_ignore_ascii_case("main") || normalized.eq_ignore_ascii_case("master")
 }
 
-fn build_release_notes_markdown(tag_name: &str, scope: &crate::git::GitScopeContext) -> Result<String> {
+fn build_release_notes_markdown(
+    tag_name: &str,
+    scope: &crate::git::GitScopeContext,
+) -> Result<String> {
     if let Some(markdown) = find_archived_changelog_markdown(&scope.repo_root, tag_name)? {
         return Ok(markdown);
     }
 
     let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
-    if let Some(last_public_release) = last_public_release.filter(|tag| tag.trim() != tag_name.trim()) {
+    if let Some(last_public_release) =
+        last_public_release.filter(|tag| tag.trim() != tag_name.trim())
+    {
         let local_tags = sorted_local_tags_with_cancel(&scope.repo_root, None)?;
-        let release_range = if local_tags.iter().any(|candidate| candidate.trim() == tag_name.trim()) {
+        let release_range = if local_tags
+            .iter()
+            .any(|candidate| candidate.trim() == tag_name.trim())
+        {
             load_change_range_for_tags_with_cancel(scope, &last_public_release, tag_name, None)?
         } else {
             load_change_range_for_refs_with_cancel(scope, &last_public_release, "HEAD", None)?
         };
-        return Ok(rls_changelog_gen(tag_name.to_string(), &release_range.lines, Some(&last_public_release)).markdown);
+        return Ok(rls_changelog_gen(
+            tag_name.to_string(),
+            &release_range.lines,
+            Some(&last_public_release),
+        )
+        .markdown);
     }
 
     let recent_range = load_recent_change_range_with_cancel(scope, None)?;
@@ -5800,7 +6209,16 @@ fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
     ensure_gh_available()?;
     let output = Command::new("gh")
         .current_dir(repo_root)
-        .args(["release", "list", "--limit", "1", "--json", "tagName", "--jq", ".[].tagName"])
+        .args([
+            "release",
+            "list",
+            "--limit",
+            "1",
+            "--json",
+            "tagName",
+            "--jq",
+            ".[].tagName",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -5817,19 +6235,39 @@ fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
     Ok((!tag.is_empty()).then_some(tag))
 }
 
-async fn run_git_push_with_retry_async(repo_root: String, remote_spec: String, tag_name: String) -> Result<()> {
+async fn run_git_push_with_retry_async(
+    repo_root: String,
+    remote_spec: String,
+    tag_name: String,
+) -> Result<()> {
     let args = vec!["push".to_string(), remote_spec, tag_name];
-    run_command_with_retry_async(repo_root, "git", args, GIT_PUSH_TIMEOUT, NETWORK_RETRY_ATTEMPTS, "git push").await
+    run_command_with_retry_async(
+        repo_root,
+        "git",
+        args,
+        GIT_PUSH_TIMEOUT,
+        NETWORK_RETRY_ATTEMPTS,
+        "git push",
+    )
+    .await
 }
 
-async fn create_github_release_with_retry_async(repo_root: String, tag_name: String, release_notes: String) -> Result<()> {
+async fn create_github_release_with_retry_async(
+    repo_root: String,
+    tag_name: String,
+    release_notes: String,
+) -> Result<()> {
     let notes_file = std::env::temp_dir().join(format!(
         "cg-release-notes-{}-{}.md",
         std::process::id(),
         sanitize_tag_fragment(&tag_name)
     ));
-    fs::write(&notes_file, &release_notes)
-        .with_context(|| format!("failed to write release notes to '{}'", notes_file.display()))?;
+    fs::write(&notes_file, &release_notes).with_context(|| {
+        format!(
+            "failed to write release notes to '{}'",
+            notes_file.display()
+        )
+    })?;
 
     let notes_file_string = notes_file.to_string_lossy().into_owned();
     let args = vec![
@@ -5846,11 +6284,17 @@ async fn create_github_release_with_retry_async(repo_root: String, tag_name: Str
         GH_RELEASE_TIMEOUT,
         NETWORK_RETRY_ATTEMPTS,
         "gh release create",
-    ).await;
+    )
+    .await;
     let cleanup_result = fs::remove_file(&notes_file);
 
     release_result?;
-    cleanup_result.with_context(|| format!("failed to remove temporary release notes file '{}'", notes_file.display()))?;
+    cleanup_result.with_context(|| {
+        format!(
+            "failed to remove temporary release notes file '{}'",
+            notes_file.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -5869,8 +6313,16 @@ async fn run_command_with_retry_async(
         let repo_root_for_attempt = repo_root.clone();
         let args_for_attempt = args.clone();
         match run_blocking_job(move || {
-            run_command_checked_with_timeout(&repo_root_for_attempt, program, &args_for_attempt, timeout, action)
-        }).await {
+            run_command_checked_with_timeout(
+                &repo_root_for_attempt,
+                program,
+                &args_for_attempt,
+                timeout,
+                action,
+            )
+        })
+        .await
+        {
             Ok(()) => return Ok(()),
             Err(error) => {
                 last_error = Some(error);
@@ -5904,7 +6356,10 @@ fn run_command_checked_with_timeout(
     let started_at = Instant::now();
 
     loop {
-        if let Some(status) = child.try_wait().with_context(|| format!("failed to poll {action}"))? {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("failed to poll {action}"))?
+        {
             let output = child
                 .wait_with_output()
                 .with_context(|| format!("failed to collect output for {action}"))?;
@@ -5969,15 +6424,21 @@ impl App {
                 self.current_recent_changes_cancel = None;
             }
             BackgroundJobKind::RepoScan => {}
-            BackgroundJobKind::RecentChangesPrefetch if self.current_recent_changes_prefetch_job_id == Some(id) => {
+            BackgroundJobKind::RecentChangesPrefetch
+                if self.current_recent_changes_prefetch_job_id == Some(id) =>
+            {
                 self.current_recent_changes_prefetch_job_id = None;
                 self.current_recent_changes_prefetch_cancel = None;
             }
-            BackgroundJobKind::ChangelogPreview if self.current_changelog_preview_job_id == Some(id) => {
+            BackgroundJobKind::ChangelogPreview
+                if self.current_changelog_preview_job_id == Some(id) =>
+            {
                 self.current_changelog_preview_job_id = None;
                 self.current_changelog_preview_cancel = None;
             }
-            BackgroundJobKind::OverviewActivity if self.current_overview_activity_job_id == Some(id) => {
+            BackgroundJobKind::OverviewActivity
+                if self.current_overview_activity_job_id == Some(id) =>
+            {
                 self.current_overview_activity_job_id = None;
                 self.current_overview_activity_cancel = None;
             }
@@ -5991,11 +6452,19 @@ impl App {
 
     fn is_background_result_stale(&self, message: &BackgroundJobResultMessage) -> bool {
         match message.kind {
-            BackgroundJobKind::RecentChanges => self.current_recent_changes_job_id != Some(message.id),
+            BackgroundJobKind::RecentChanges => {
+                self.current_recent_changes_job_id != Some(message.id)
+            }
             BackgroundJobKind::RepoScan => false,
-            BackgroundJobKind::RecentChangesPrefetch => self.current_recent_changes_prefetch_job_id != Some(message.id),
-            BackgroundJobKind::ChangelogPreview => self.current_changelog_preview_job_id != Some(message.id),
-            BackgroundJobKind::OverviewActivity => self.current_overview_activity_job_id != Some(message.id),
+            BackgroundJobKind::RecentChangesPrefetch => {
+                self.current_recent_changes_prefetch_job_id != Some(message.id)
+            }
+            BackgroundJobKind::ChangelogPreview => {
+                self.current_changelog_preview_job_id != Some(message.id)
+            }
+            BackgroundJobKind::OverviewActivity => {
+                self.current_overview_activity_job_id != Some(message.id)
+            }
             BackgroundJobKind::ReleaseNow => self.current_release_now_job_id != Some(message.id),
             BackgroundJobKind::TagAction => false,
         }
@@ -6174,13 +6643,21 @@ impl App {
 }
 
 fn sanitize_pasted_text(text: &str) -> String {
-    text.chars().filter(|character| *character != '\r' && *character != '\n').collect()
+    text.chars()
+        .filter(|character| *character != '\r' && *character != '\n')
+        .collect()
 }
 
 fn sanitize_tag_fragment(text: &str) -> String {
     let sanitized = text
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
         .collect::<String>();
     sanitized.trim_matches('-').to_string()
 }
@@ -6268,7 +6745,11 @@ impl FileBrowserDialog {
             target,
             BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot
         );
-        let explorer = configure_file_explorer(FileExplorerBuilder::default(), &initial_path, select_directories)?;
+        let explorer = configure_file_explorer(
+            FileExplorerBuilder::default(),
+            &initial_path,
+            select_directories,
+        )?;
         let title = match target {
             BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot => "Browse Repo Root",
             BrowseTarget::ProjectSettingsChangelogPath => "Browse Changelog Path",
@@ -6300,17 +6781,29 @@ fn configure_file_explorer(
 
     let path = PathBuf::from(initial);
     if path.is_file() && !select_directories {
-        return builder.working_file(path).build().map_err(anyhow::Error::from);
+        return builder
+            .working_file(path)
+            .build()
+            .map_err(anyhow::Error::from);
     }
     if path.is_dir() {
         if select_directories {
-            return builder.working_file(path).build().map_err(anyhow::Error::from);
+            return builder
+                .working_file(path)
+                .build()
+                .map_err(anyhow::Error::from);
         }
-        return builder.working_dir(path).build().map_err(anyhow::Error::from);
+        return builder
+            .working_dir(path)
+            .build()
+            .map_err(anyhow::Error::from);
     }
 
     if let Some(parent) = path.parent().filter(|parent| parent.is_dir()) {
-        return builder.working_dir(parent.to_path_buf()).build().map_err(anyhow::Error::from);
+        return builder
+            .working_dir(parent.to_path_buf())
+            .build()
+            .map_err(anyhow::Error::from);
     }
 
     builder.build().map_err(anyhow::Error::from)
@@ -6366,7 +6859,9 @@ fn colorize_git_log_line(line: &str, graph_base_column: usize) -> Line<'static> 
             spans.push(Span::styled(
                 character.to_string(),
                 Style::default()
-                    .fg(git_branch_color(index.saturating_sub(graph_base_column) / 2))
+                    .fg(git_branch_color(
+                        index.saturating_sub(graph_base_column) / 2,
+                    ))
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
@@ -6393,8 +6888,9 @@ fn git_hash_color(prefix: &str, graph_base_column: usize) -> Option<Color> {
         .into_iter()
         .rev()
         .find_map(|(index, character)| {
-            is_git_graph_character(character)
-                .then_some(git_branch_color(index.saturating_sub(graph_base_column) / 2))
+            is_git_graph_character(character).then_some(git_branch_color(
+                index.saturating_sub(graph_base_column) / 2,
+            ))
         })
 }
 
@@ -6432,7 +6928,11 @@ fn find_commit_hash_range(line: &str) -> Option<(usize, usize)> {
             continue;
         }
 
-        let end_byte = if end < indices.len() { indices[end].0 } else { line.len() };
+        let end_byte = if end < indices.len() {
+            indices[end].0
+        } else {
+            line.len()
+        };
         return Some((*byte_index, end_byte));
     }
 
@@ -6478,7 +6978,8 @@ fn render_annotation_line(
         Style::default().fg(Color::DarkGray),
     )];
 
-    let (visible_text, visible_cursor_col) = annotation_visible_segment(line, active_cursor_col.unwrap_or(0), content_width);
+    let (visible_text, visible_cursor_col) =
+        annotation_visible_segment(line, active_cursor_col.unwrap_or(0), content_width);
     if active_cursor_col.is_some() {
         let chars = visible_text.chars().collect::<Vec<_>>();
         let highlight_index = visible_cursor_col.min(content_width.saturating_sub(1));
@@ -6493,10 +6994,11 @@ fn render_annotation_line(
             spans.push(Span::styled(character.to_string(), style));
         }
 
-        if chars.is_empty() {
-            spans.push(Span::styled(" ".to_string(), Style::default().fg(Color::Black).bg(Color::Cyan)));
-        } else if visible_cursor_col >= chars.len() && chars.len() < content_width {
-            spans.push(Span::styled(" ".to_string(), Style::default().fg(Color::Black).bg(Color::Cyan)));
+        if chars.is_empty() || (visible_cursor_col >= chars.len() && chars.len() < content_width) {
+            spans.push(Span::styled(
+                " ".to_string(),
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ));
         }
     } else {
         spans.push(Span::raw(visible_text));
@@ -6511,7 +7013,9 @@ fn annotation_visible_segment(line: &str, cursor_col: usize, width: usize) -> (S
         return (String::new(), 0);
     }
 
-    let start = cursor_col.saturating_sub(width.saturating_sub(1)).min(characters.len().saturating_sub(width));
+    let start = cursor_col
+        .saturating_sub(width.saturating_sub(1))
+        .min(characters.len().saturating_sub(width));
     let end = (start + width).min(characters.len());
     let visible = characters[start..end].iter().collect::<String>();
     (visible, cursor_col.saturating_sub(start))
@@ -6531,7 +7035,12 @@ pub(crate) fn dialog_visible_rows(viewport_height: u16, row_height: u16) -> usiz
     (viewport_height / row_height.max(1)).max(1) as usize
 }
 
-pub(crate) fn clamp_dialog_scroll(scroll_offset: &mut usize, total_rows: usize, visible_rows: usize, focus_index: Option<usize>) {
+pub(crate) fn clamp_dialog_scroll(
+    scroll_offset: &mut usize,
+    total_rows: usize,
+    visible_rows: usize,
+    focus_index: Option<usize>,
+) {
     let visible_rows = visible_rows.max(1);
     let max_scroll = total_rows.saturating_sub(visible_rows);
     *scroll_offset = (*scroll_offset).min(max_scroll);
@@ -6545,7 +7054,12 @@ pub(crate) fn clamp_dialog_scroll(scroll_offset: &mut usize, total_rows: usize, 
     }
 }
 
-fn render_vertical_overflow_indicators(frame: &mut Frame, area: Rect, show_above: bool, show_below: bool) {
+fn render_vertical_overflow_indicators(
+    frame: &mut Frame,
+    area: Rect,
+    show_above: bool,
+    show_below: bool,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -6559,9 +7073,11 @@ fn render_vertical_overflow_indicators(frame: &mut Frame, area: Rect, show_above
             height: 1,
         };
         frame.render_widget(
-            Paragraph::new("↑↑↑")
-                .alignment(Alignment::Right)
-                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Paragraph::new("↑↑↑").alignment(Alignment::Right).style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             top_rect,
         );
     }
@@ -6574,9 +7090,11 @@ fn render_vertical_overflow_indicators(frame: &mut Frame, area: Rect, show_above
             height: 1,
         };
         frame.render_widget(
-            Paragraph::new("↓↓↓")
-                .alignment(Alignment::Right)
-                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Paragraph::new("↓↓↓").alignment(Alignment::Right).style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             bottom_rect,
         );
     }
@@ -6622,25 +7140,43 @@ pub(crate) fn cycle_target_key_preset(path: &str, current: &str, delta: i32) -> 
         .iter()
         .position(|preset| *preset == current.trim())
         .unwrap_or(0) as i32;
-    let next_index = (current_index + if delta >= 0 { 1 } else { -1 })
-        .rem_euclid(presets.len() as i32) as usize;
+    let next_index =
+        (current_index + if delta >= 0 { 1 } else { -1 }).rem_euclid(presets.len() as i32) as usize;
     presets[next_index].to_string()
 }
 
 fn wizard_form_row_button(field: WizardField) -> Option<FormRowButton> {
     match field {
-        WizardField::TargetPath => Some(FormRowButton::new("Browse", HitAction::BrowseWizardTargetPath)),
-        WizardField::TargetKey => Some(FormRowButton::new("Custom", HitAction::EnableWizardCustomTargetKey)),
-        WizardField::RepoRoot => Some(FormRowButton::new("Browse", HitAction::BrowseWizardRepoRoot)),
+        WizardField::TargetPath => Some(FormRowButton::new(
+            "Browse",
+            HitAction::BrowseWizardTargetPath,
+        )),
+        WizardField::TargetKey => Some(FormRowButton::new(
+            "Custom",
+            HitAction::EnableWizardCustomTargetKey,
+        )),
+        WizardField::RepoRoot => Some(FormRowButton::new(
+            "Browse",
+            HitAction::BrowseWizardRepoRoot,
+        )),
         _ => None,
     }
 }
 
 fn project_edit_form_row_button(field: ProjectEditFocus) -> Option<FormRowButton> {
     match field {
-        ProjectEditFocus::TargetPath => Some(FormRowButton::new("Browse", HitAction::BrowseProjectTargetPath)),
-        ProjectEditFocus::TargetKey => Some(FormRowButton::new("Custom", HitAction::EnableProjectCustomTargetKey)),
-        ProjectEditFocus::RepoRoot => Some(FormRowButton::new("Browse", HitAction::BrowseProjectRepoRoot)),
+        ProjectEditFocus::TargetPath => Some(FormRowButton::new(
+            "Browse",
+            HitAction::BrowseProjectTargetPath,
+        )),
+        ProjectEditFocus::TargetKey => Some(FormRowButton::new(
+            "Custom",
+            HitAction::EnableProjectCustomTargetKey,
+        )),
+        ProjectEditFocus::RepoRoot => Some(FormRowButton::new(
+            "Browse",
+            HitAction::BrowseProjectRepoRoot,
+        )),
         _ => None,
     }
 }
@@ -6665,10 +7201,17 @@ fn adjust_pending_version_value(
     }
 }
 
-fn adjust_semver_overview_value(current: &str, control: OverviewVersionControl, delta: i32) -> Result<String> {
+fn adjust_semver_overview_value(
+    current: &str,
+    control: OverviewVersionControl,
+    delta: i32,
+) -> Result<String> {
     let mut parts = current
         .split('.')
-        .map(|part| part.parse::<i32>().map_err(|_| anyhow!("invalid semver component '{}'", part)))
+        .map(|part| {
+            part.parse::<i32>()
+                .map_err(|_| anyhow!("invalid semver component '{}'", part))
+        })
         .collect::<Result<Vec<_>>>()?;
     if parts.len() != 3 {
         bail!("overview semver editing requires MAJOR.MINOR.PATCH");
@@ -6696,11 +7239,20 @@ fn adjust_semver_overview_value(current: &str, control: OverviewVersionControl, 
 fn adjust_numeric_tail_overview_value(current: &str, delta: i32) -> Result<String> {
     let mut parts = current
         .split('.')
-        .map(|part| part.parse::<i32>().map_err(|_| anyhow!("invalid numeric component '{}'", part)))
+        .map(|part| {
+            part.parse::<i32>()
+                .map_err(|_| anyhow!("invalid numeric component '{}'", part))
+        })
         .collect::<Result<Vec<_>>>()?;
-    let last = parts.last_mut().ok_or_else(|| anyhow!("overview version is empty"))?;
+    let last = parts
+        .last_mut()
+        .ok_or_else(|| anyhow!("overview version is empty"))?;
     *last = (*last + delta).max(0);
-    Ok(parts.into_iter().map(|part| part.to_string()).collect::<Vec<_>>().join("."))
+    Ok(parts
+        .into_iter()
+        .map(|part| part.to_string())
+        .collect::<Vec<_>>()
+        .join("."))
 }
 
 fn browser_visible_range(total: usize, selected: usize, height: usize) -> (usize, usize) {
@@ -6708,7 +7260,9 @@ fn browser_visible_range(total: usize, selected: usize, height: usize) -> (usize
         return (0, 0);
     }
 
-    let start = selected.saturating_sub(height / 2).min(total.saturating_sub(height));
+    let start = selected
+        .saturating_sub(height / 2)
+        .min(total.saturating_sub(height));
     let end = (start + height).min(total);
     (start, end)
 }
@@ -6759,7 +7313,9 @@ fn ui_settings_footer_line() -> Line<'static> {
 fn shortcut_token(token: &str) -> Vec<Span<'static>> {
     vec![Span::styled(
         token.to_string(),
-        Style::default().fg(SHORTCUT_HINT_COLOR).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(SHORTCUT_HINT_COLOR)
+            .add_modifier(Modifier::BOLD),
     )]
 }
 
@@ -6806,18 +7362,23 @@ mod tests {
 
     #[test]
     fn editing_repo_root_does_not_invalidate_target_probe() {
-        let mut wizard = ProjectWizard::default();
-        wizard.last_probe = Some(TargetProbe {
-            kind: ProbeKind::Success,
-            message: "ok".to_string(),
-            version: Some("1.2.3".to_string()),
-            format: Some(TargetFormat::Json),
-        });
-        wizard.focus = WizardField::RepoRoot;
+        let mut wizard = ProjectWizard {
+            last_probe: Some(TargetProbe {
+                kind: ProbeKind::Success,
+                message: "ok".to_string(),
+                version: Some("1.2.3".to_string()),
+                format: Some(TargetFormat::Json),
+            }),
+            focus: WizardField::RepoRoot,
+            ..ProjectWizard::default()
+        };
 
         wizard.insert_text("C:/repo");
 
-        assert!(matches!(wizard.last_probe.as_ref().map(|probe| probe.kind), Some(ProbeKind::Success)));
+        assert!(matches!(
+            wizard.last_probe.as_ref().map(|probe| probe.kind),
+            Some(ProbeKind::Success)
+        ));
     }
 
     #[test]
@@ -6858,19 +7419,25 @@ mod tests {
         let pending_write = dialog.prepare_pending_write();
 
         assert!(markdown.contains("Intro line\n\n- bullet item"));
-        assert!(pending_write.entries[0].markdown.contains("Intro line\n\n- bullet item"));
+        assert!(
+            pending_write.entries[0]
+                .markdown
+                .contains("Intro line\n\n- bullet item")
+        );
     }
 
     #[test]
     fn editing_target_path_invalidates_target_probe() {
-        let mut wizard = ProjectWizard::default();
-        wizard.last_probe = Some(TargetProbe {
-            kind: ProbeKind::Success,
-            message: "ok".to_string(),
-            version: Some("1.2.3".to_string()),
-            format: Some(TargetFormat::Json),
-        });
-        wizard.focus = WizardField::TargetPath;
+        let mut wizard = ProjectWizard {
+            last_probe: Some(TargetProbe {
+                kind: ProbeKind::Success,
+                message: "ok".to_string(),
+                version: Some("1.2.3".to_string()),
+                format: Some(TargetFormat::Json),
+            }),
+            focus: WizardField::TargetPath,
+            ..ProjectWizard::default()
+        };
 
         wizard.insert_text("C:/repo/package.json");
 
@@ -6879,8 +7446,10 @@ mod tests {
 
     #[test]
     fn branched_wizard_builds_multiple_scopes() {
-        let mut wizard = ProjectWizard::default();
-        wizard.project_type = ProjectType::Branched;
+        let mut wizard = ProjectWizard {
+            project_type: ProjectType::Branched,
+            ..ProjectWizard::default()
+        };
         wizard.name.set_value("demo-service");
 
         {
@@ -6911,7 +7480,9 @@ mod tests {
             });
         }
 
-        let project = wizard.build_project().expect("branched project should build");
+        let project = wizard
+            .build_project()
+            .expect("branched project should build");
 
         assert_eq!(project.project_type, ProjectType::Branched);
         assert!(!project.unified_versioning);
@@ -6924,8 +7495,10 @@ mod tests {
 
     #[test]
     fn branched_wizard_rejects_duplicate_scope_names() {
-        let mut wizard = ProjectWizard::default();
-        wizard.project_type = ProjectType::Branched;
+        let mut wizard = ProjectWizard {
+            project_type: ProjectType::Branched,
+            ..ProjectWizard::default()
+        };
         wizard.name.set_value("demo-service");
 
         {
@@ -6955,16 +7528,20 @@ mod tests {
             });
         }
 
-        let error = wizard.build_project().expect_err("duplicate scope names should fail");
+        let error = wizard
+            .build_project()
+            .expect_err("duplicate scope names should fail");
         assert!(error.to_string().contains("unique"));
     }
 
     #[test]
     fn wizard_body_window_keeps_focused_field_visible_when_viewport_is_short() {
-        let mut wizard = ProjectWizard::default();
-        wizard.project_type = ProjectType::Branched;
-        wizard.integration_mode = IntegrationMode::GitHubEnabled;
-        wizard.focus = WizardField::RemoteUrl;
+        let mut wizard = ProjectWizard {
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitHubEnabled,
+            focus: WizardField::RemoteUrl,
+            ..ProjectWizard::default()
+        };
 
         let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
 
@@ -6976,8 +7553,10 @@ mod tests {
 
     #[test]
     fn target_key_switches_to_toml_default_when_target_path_changes() {
-        let mut wizard = ProjectWizard::default();
-        wizard.focus = WizardField::TargetPath;
+        let mut wizard = ProjectWizard {
+            focus: WizardField::TargetPath,
+            ..ProjectWizard::default()
+        };
 
         wizard.insert_text("C:/repo/Cargo.toml");
 
@@ -6989,8 +7568,11 @@ mod tests {
     fn browser_modal_hit_resolution_ignores_background_targets() {
         let mut app = App::new_for_tests().expect("app should initialize");
         app.browser_dialog = Some(
-            FileBrowserDialog::new(BrowseTarget::ProjectSettingsReleaseNowWindows, String::new())
-                .expect("browser dialog should build"),
+            FileBrowserDialog::new(
+                BrowseTarget::ProjectSettingsReleaseNowWindows,
+                String::new(),
+            )
+            .expect("browser dialog should build"),
         );
         app.hit_targets.push(HitTarget::new(
             Rect {
@@ -7096,7 +7678,11 @@ mod tests {
     fn custom_changelog_range_defaults_to_latest_tag_to_head() {
         let state = CustomChangelogRangeState::new(
             "main".to_string(),
-            vec!["v1.2.0".to_string(), "v1.1.0".to_string(), "v1.0.0".to_string()],
+            vec![
+                "v1.2.0".to_string(),
+                "v1.1.0".to_string(),
+                "v1.0.0".to_string(),
+            ],
             None,
         );
 
@@ -7109,7 +7695,11 @@ mod tests {
     fn custom_changelog_range_keeps_to_ref_newer_than_from_ref() {
         let mut state = CustomChangelogRangeState::new(
             "main".to_string(),
-            vec!["v1.2.0".to_string(), "v1.1.0".to_string(), "v1.0.0".to_string()],
+            vec![
+                "v1.2.0".to_string(),
+                "v1.1.0".to_string(),
+                "v1.0.0".to_string(),
+            ],
             Some(CustomChangelogSelection {
                 from_ref: "v1.0.0".to_string(),
                 to_ref: Some("v1.2.0".to_string()),
@@ -7130,41 +7720,47 @@ mod tests {
         assert_eq!(state.current_to_ref(), "HEAD");
     }
 
-        #[test]
-        fn std_changelog_decision_ignores_when_new_tag_is_not_on_main() {
-            let decision = decide_std_changelog_generation(
-                "v0.7.3",
-                "feature-a",
-                &["main".to_string()],
-                &["feature-a".to_string()],
-            );
+    #[test]
+    fn std_changelog_decision_ignores_when_new_tag_is_not_on_main() {
+        let decision = decide_std_changelog_generation(
+            "v0.7.3",
+            "feature-a",
+            &["main".to_string()],
+            &["feature-a".to_string()],
+        );
 
-            assert_eq!(decision, StdChangelogDecision::IgnoreNotOnMain);
-        }
+        assert_eq!(decision, StdChangelogDecision::IgnoreNotOnMain);
+    }
 
-        #[test]
-        fn std_changelog_decision_postpones_when_tags_share_single_sub_branch() {
-            let decision = decide_std_changelog_generation(
-                "v0.7.3",
-                "feature-a",
-                &["feature-a".to_string()],
-                &["feature-a".to_string()],
-            );
+    #[test]
+    fn std_changelog_decision_postpones_when_tags_share_single_sub_branch() {
+        let decision = decide_std_changelog_generation(
+            "v0.7.3",
+            "feature-a",
+            &["feature-a".to_string()],
+            &["feature-a".to_string()],
+        );
 
-            assert_eq!(decision, StdChangelogDecision::PostponeOnSubBranch("feature-a".to_string()));
-        }
+        assert_eq!(
+            decision,
+            StdChangelogDecision::PostponeOnSubBranch("feature-a".to_string())
+        );
+    }
 
-        #[test]
-        fn std_changelog_decision_normalizes_branch_markers() {
-            let decision = decide_std_changelog_generation(
-                "v0.7.3",
-                "feature-a",
-                &["* feature-a".to_string()],
-                &["feature-a".to_string()],
-            );
+    #[test]
+    fn std_changelog_decision_normalizes_branch_markers() {
+        let decision = decide_std_changelog_generation(
+            "v0.7.3",
+            "feature-a",
+            &["* feature-a".to_string()],
+            &["feature-a".to_string()],
+        );
 
-            assert_eq!(decision, StdChangelogDecision::PostponeOnSubBranch("feature-a".to_string()));
-        }
+        assert_eq!(
+            decision,
+            StdChangelogDecision::PostponeOnSubBranch("feature-a".to_string())
+        );
+    }
 
     #[test]
     fn std_changelog_sub_branch_dialog_defaults_to_postpone() {
@@ -7187,7 +7783,10 @@ mod tests {
             "feature-a".to_string(),
         );
 
-        assert!(matches!(dialog.selected_choice(), StdChangelogSubBranchChoice::Postpone));
+        assert!(matches!(
+            dialog.selected_choice(),
+            StdChangelogSubBranchChoice::Postpone
+        ));
     }
 
     #[test]
@@ -7198,11 +7797,14 @@ mod tests {
             "v0.7.3".to_string(),
         ];
 
-        assert_eq!(previous_tag_for_replay(&tags, "v0.7.4"), Some("v0.7.3".to_string()));
+        assert_eq!(
+            previous_tag_for_replay(&tags, "v0.7.4"),
+            Some("v0.7.3".to_string())
+        );
         assert_eq!(previous_tag_for_replay(&tags, "v0.7.3"), None);
     }
 
-        #[test]
+    #[test]
     fn dashboard_delete_shortcut_removes_focused_scope_for_branched_projects() {
         let mut app = App::new_for_tests().expect("app should initialize");
         app.config.projects = vec![ProjectConfig {
@@ -7266,7 +7868,11 @@ mod tests {
         let repo_root = std::env::temp_dir().join(unique);
         let crate_dir = repo_root.join("core");
         std::fs::create_dir_all(&crate_dir).expect("crate dir");
-        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\nname='demo'\nversion='1.2.3'\n").expect("manifest");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[package]\nname='demo'\nversion='1.2.3'\n",
+        )
+        .expect("manifest");
         std::fs::write(crate_dir.join("Cargo.lock"), "# lock\n").expect("lockfile");
 
         let targets = vec![BumpTarget {
@@ -7277,17 +7883,23 @@ mod tests {
             current_version: "1.2.3".to_string(),
         }];
 
-        let staged = git_flow::collect_stage_paths_for_targets(&repo_root.display().to_string(), &targets);
+        let staged =
+            git_flow::collect_stage_paths_for_targets(&repo_root.display().to_string(), &targets);
 
-        assert_eq!(staged, vec!["core/Cargo.toml".to_string(), "core/Cargo.lock".to_string()]);
+        assert_eq!(
+            staged,
+            vec!["core/Cargo.toml".to_string(), "core/Cargo.lock".to_string()]
+        );
 
         let _ = std::fs::remove_dir_all(repo_root);
     }
 
     #[test]
     fn custom_target_key_mode_enables_text_entry() {
-        let mut wizard = ProjectWizard::default();
-        wizard.focus = WizardField::TargetKey;
+        let mut wizard = ProjectWizard {
+            focus: WizardField::TargetKey,
+            ..ProjectWizard::default()
+        };
 
         assert!(!wizard.focus_accepts_text());
 

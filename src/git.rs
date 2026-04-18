@@ -3,8 +3,12 @@
 //
 // Licensed under the ComfyGit License v1.2
 //
-pub(crate) fn current_branch_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<String> {
-    let branch = run_git_checked_with_cancel(repo_root, &["branch", "--show-current"], cancel.clone())?;
+pub(crate) fn current_branch_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let branch =
+        run_git_checked_with_cancel(repo_root, &["branch", "--show-current"], cancel.clone())?;
     let branch = branch.trim();
     if !branch.is_empty() {
         return Ok(branch.to_string());
@@ -14,14 +18,19 @@ pub(crate) fn current_branch_with_cancel(repo_root: &str, cancel: Option<GitCanc
     Ok(format!("detached ({})", head.trim()))
 }
 
-pub(crate) fn switch_to_main_branch(repo_root: &str, remote_spec: Option<&str>, sync_remote: bool) -> Result<()> {
+pub(crate) fn switch_to_main_branch(
+    repo_root: &str,
+    remote_spec: Option<&str>,
+    sync_remote: bool,
+) -> Result<()> {
     let switch_output = run_git(repo_root, &["switch", "main"])?;
     if !switch_output.success {
         run_git_checked(repo_root, &["checkout", "main"])?;
     }
 
     if sync_remote {
-        let remote_spec = remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+        let remote_spec =
+            remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
         run_git_checked(repo_root, &["pull", "--ff-only", remote_spec, "main"])?;
     }
 
@@ -30,11 +39,13 @@ pub(crate) fn switch_to_main_branch(repo_root: &str, remote_spec: Option<&str>, 
 // For details, see the LICENSE file in the repository root.
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
-
 use std::{
     path::Path,
     process::{Command, Stdio},
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -99,7 +110,10 @@ pub(crate) struct RepoActivitySummary {
 }
 
 fn build_git_args(base: &[&str], pathspecs: &[String]) -> Vec<String> {
-    let mut args = base.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
+    let mut args = base
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
     if !pathspecs.is_empty() {
         args.push("--".to_string());
         args.extend(pathspecs.iter().cloned());
@@ -108,18 +122,17 @@ fn build_git_args(base: &[&str], pathspecs: &[String]) -> Vec<String> {
 }
 
 fn derive_repo_root_from_targets(specs: &[TargetSpec]) -> Option<String> {
-    specs.iter()
-        .find_map(|target| {
-            let trimmed = target.path.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
+    specs.iter().find_map(|target| {
+        let trimmed = target.path.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
 
-            Path::new(trimmed)
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .map(|parent| parent.display().to_string())
-        })
+        Path::new(trimmed)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| parent.display().to_string())
+    })
 }
 
 fn resolve_scope_repo_root(
@@ -136,14 +149,15 @@ fn resolve_scope_repo_root(
     if let Some(repo) = project_repo {
         return Ok(repo.local_root.clone());
     }
-    bail!("scope does not have a git repository configured and no repo root could be derived from its target paths")
+    bail!(
+        "scope does not have a git repository configured and no repo root could be derived from its target paths"
+    )
 }
 
 pub(crate) fn project_repo_root(project: &ProjectConfig) -> Result<String> {
-    let repo = project
-        .repo
-        .as_ref()
-        .ok_or_else(|| anyhow!("this project is local-only and has no git repository configured"))?;
+    let repo = project.repo.as_ref().ok_or_else(|| {
+        anyhow!("this project is local-only and has no git repository configured")
+    })?;
     Ok(repo.local_root.clone())
 }
 
@@ -151,12 +165,18 @@ pub(crate) fn suggested_tag_name(project: &ProjectConfig) -> String {
     suggested_tag_name_for_scope(project, None)
 }
 
-pub(crate) fn suggested_tag_name_for_scope(project: &ProjectConfig, scope_index: Option<usize>) -> String {
-    if project.project_type == ProjectType::AllInOne || project.unified_versioning || scope_index.is_none() {
-        if let Ok(scopes) = collect_bump_scopes(project) {
-            if let Some(version) = shared_bump_version(&scopes) {
-                return format!("v{}", version);
-            }
+pub(crate) fn suggested_tag_name_for_scope(
+    project: &ProjectConfig,
+    scope_index: Option<usize>,
+) -> String {
+    if project.project_type == ProjectType::AllInOne
+        || project.unified_versioning
+        || scope_index.is_none()
+    {
+        if let Ok(scopes) = collect_bump_scopes(project)
+            && let Some(version) = shared_bump_version(&scopes)
+        {
+            return format!("v{}", version);
         }
         return slugify(&project.name);
     }
@@ -172,12 +192,11 @@ pub(crate) fn suggested_tag_name_for_scope(project: &ProjectConfig, scope_index:
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| slugify(&project.name));
 
-    if let Ok(scopes) = collect_bump_scopes(project) {
-        if let Some(scope) = scopes.get(scope_index) {
-            if let Some(version) = &scope.current_version {
-                return format!("{}-v{}", scope_slug, version);
-            }
-        }
+    if let Ok(scopes) = collect_bump_scopes(project)
+        && let Some(scope) = scopes.get(scope_index)
+        && let Some(version) = &scope.current_version
+    {
+        return format!("{}-v{}", scope_slug, version);
     }
 
     scope_slug
@@ -186,7 +205,10 @@ pub(crate) fn suggested_tag_name_for_scope(project: &ProjectConfig, scope_index:
 pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<GitScopeContext>> {
     if project.project_type == ProjectType::AllInOne {
         let repo_root = project_repo_root(project)?;
-        let remote_spec = project.repo.as_ref().and_then(|repo| repo.remote_url.clone());
+        let remote_spec = project
+            .repo
+            .as_ref()
+            .and_then(|repo| repo.remote_url.clone());
         return Ok(vec![GitScopeContext {
             display_name: project.name.clone(),
             scope_kind: None,
@@ -202,7 +224,8 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             .branches
             .first()
             .ok_or_else(|| anyhow!("branched project does not contain any scopes"))?;
-        let repo_root = resolve_scope_repo_root(project.repo.as_ref(), branch.repo.as_ref(), &branch.targets)?;
+        let repo_root =
+            resolve_scope_repo_root(project.repo.as_ref(), branch.repo.as_ref(), &branch.targets)?;
         let remote_spec = branch
             .repo
             .as_ref()
@@ -223,7 +246,11 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
         .iter()
         .enumerate()
         .map(|(index, branch)| {
-            let repo_root = resolve_scope_repo_root(project.repo.as_ref(), branch.repo.as_ref(), &branch.targets)?;
+            let repo_root = resolve_scope_repo_root(
+                project.repo.as_ref(),
+                branch.repo.as_ref(),
+                &branch.targets,
+            )?;
             let repo = branch.repo.as_ref().or(project.repo.as_ref());
             Ok(GitScopeContext {
                 display_name: branch.display_name().to_string(),
@@ -237,7 +264,9 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
         .collect()
 }
 
-pub(crate) fn collect_all_branch_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<GitScopeContext>> {
+pub(crate) fn collect_all_branch_git_scope_contexts(
+    project: &ProjectConfig,
+) -> Result<Vec<GitScopeContext>> {
     if project.project_type == ProjectType::AllInOne || project.branches.len() <= 1 {
         return collect_git_scope_contexts(project);
     }
@@ -247,7 +276,11 @@ pub(crate) fn collect_all_branch_git_scope_contexts(project: &ProjectConfig) -> 
         .iter()
         .enumerate()
         .map(|(index, branch)| {
-            let repo_root = resolve_scope_repo_root(project.repo.as_ref(), branch.repo.as_ref(), &branch.targets)?;
+            let repo_root = resolve_scope_repo_root(
+                project.repo.as_ref(),
+                branch.repo.as_ref(),
+                &branch.targets,
+            )?;
             let repo = branch.repo.as_ref().or(project.repo.as_ref());
             Ok(GitScopeContext {
                 display_name: branch.display_name().to_string(),
@@ -302,7 +335,12 @@ fn activity_filter_for_target(path: &str) -> Option<String> {
 
 fn normalize_pathspec(repo_root: &Path, path: &str) -> Option<String> {
     let normalized = path.replace('\\', "/");
-    let repo_root_str = repo_root.display().to_string().replace('\\', "/").trim_end_matches('/').to_string();
+    let repo_root_str = repo_root
+        .display()
+        .to_string()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
 
     let relative = if Path::new(&normalized).is_absolute() {
         if let Ok(stripped) = Path::new(&normalized).strip_prefix(repo_root) {
@@ -325,18 +363,27 @@ fn normalize_pathspec(repo_root: &Path, path: &str) -> Option<String> {
     (!relative.is_empty()).then_some(relative)
 }
 
-
 fn slugify(value: &str) -> String {
     value
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '-' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()
 }
 
-pub(crate) fn ensure_git_repo_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
-    let output = run_git_checked_with_cancel(repo_root, &["rev-parse", "--is-inside-work-tree"], cancel)?;
+pub(crate) fn ensure_git_repo_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let output =
+        run_git_checked_with_cancel(repo_root, &["rev-parse", "--is-inside-work-tree"], cancel)?;
     if output.trim() == "true" {
         Ok(())
     } else {
@@ -344,7 +391,11 @@ pub(crate) fn ensure_git_repo_with_cancel(repo_root: &str, cancel: Option<GitCan
     }
 }
 
-pub(crate) fn ensure_local_tag(repo_root: &str, tag_name: &str, annotation: Option<&str>) -> Result<bool> {
+pub(crate) fn ensure_local_tag(
+    repo_root: &str,
+    tag_name: &str,
+    annotation: Option<&str>,
+) -> Result<bool> {
     let existing = run_git_checked(repo_root, &["tag", "--list", tag_name])?;
     if existing.lines().any(|line| line.trim() == tag_name) {
         Ok(false)
@@ -395,7 +446,10 @@ pub(crate) fn run_git_with_cancel(
             bail!("git {:?} cancelled in {}", args, repo_root);
         }
 
-        if let Some(status) = child.try_wait().with_context(|| format!("failed to poll git in {}", repo_root))? {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("failed to poll git in {}", repo_root))?
+        {
             let output = child
                 .wait_with_output()
                 .with_context(|| format!("failed to collect git output in {}", repo_root))?;
@@ -449,7 +503,11 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
     let pathspecs = scope.git_pathspecs();
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
 
-    let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel.clone())?;
+    let describe = run_git_with_cancel(
+        repo_root,
+        &["describe", "--tags", "--abbrev=0"],
+        cancel.clone(),
+    )?;
     let (commits_since_tag_label, last_bump_label) = if describe.success {
         let tag = describe.stdout.trim().to_string();
         let range = format!("{}..HEAD", tag);
@@ -460,10 +518,15 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
         )?
         .trim()
         .to_string();
-        let tag_timestamp = run_git_checked_with_cancel(repo_root, &["log", "-1", "--format=%ct", &tag], cancel.clone())?;
+        let tag_timestamp = run_git_checked_with_cancel(
+            repo_root,
+            &["log", "-1", "--format=%ct", &tag],
+            cancel.clone(),
+        )?;
         (
             format!("{}c ahd", count),
-            format_relative_git_timestamp(tag_timestamp.trim()).unwrap_or_else(|| "n/a".to_string()),
+            format_relative_git_timestamp(tag_timestamp.trim())
+                .unwrap_or_else(|| "n/a".to_string()),
         )
     } else {
         ("no tags".to_string(), "n/a".to_string())
@@ -506,206 +569,6 @@ fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
     Some(label)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        config::{BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec},
-        versioning::VersionScheme,
-    };
-
-    #[test]
-    fn collect_git_scope_contexts_prefers_branch_repo_overrides() {
-        let project = ProjectConfig {
-            name: "demo".to_string(),
-            project_type: ProjectType::Branched,
-            integration_mode: IntegrationMode::GitHubEnabled,
-            unified_versioning: false,
-            version_scheme: VersionScheme::SemVer,
-            changelog: ChangelogSettings::default(),
-			release_now: crate::config::ReleaseNowSettings::default(),
-            targets: Vec::new(),
-            branches: vec![
-                BranchConfig {
-                    name: "core".to_string(),
-                    label: "Core".to_string(),
-                    scope_kind: BranchScopeKind::Module,
-                    repo: Some(RepoConfig {
-                        local_root: "C:/repo/core".to_string(),
-                        remote_url: Some("origin-core".to_string()),
-                    }),
-                    changelog_enabled: false,
-					changelog_path: None,
-					release_now: crate::config::ReleaseNowSettings::default(),
-                    version_scheme: VersionScheme::SemVer,
-                    targets: vec![TargetSpec {
-                        label: "Version".to_string(),
-                        path: "missing-core.toml".to_string(),
-                        key_path: "package.version".to_string(),
-                        format: TargetFormat::Toml,
-                    }],
-                },
-                BranchConfig {
-                    name: "api".to_string(),
-                    label: "API".to_string(),
-                    scope_kind: BranchScopeKind::Service,
-                    repo: None,
-                    changelog_enabled: false,
-					changelog_path: None,
-					release_now: crate::config::ReleaseNowSettings::default(),
-                    version_scheme: VersionScheme::SemVer,
-                    targets: vec![TargetSpec {
-                        label: "Version".to_string(),
-                        path: "missing-api.json".to_string(),
-                        key_path: "version".to_string(),
-                        format: TargetFormat::Json,
-                    }],
-                },
-            ],
-            repo: Some(RepoConfig {
-                local_root: "C:/repo/project".to_string(),
-                remote_url: Some("origin-project".to_string()),
-            }),
-        };
-
-        let scopes = collect_git_scope_contexts(&project).expect("scoped git contexts should resolve");
-
-        assert_eq!(scopes.len(), 2);
-        assert_eq!(scopes[0].repo_root, "C:/repo/core");
-        assert_eq!(scopes[0].remote_spec.as_deref(), Some("origin-core"));
-        assert!(scopes[0].path_filters.is_empty());
-        assert_eq!(scopes[1].repo_root, "C:/repo/project");
-        assert_eq!(scopes[1].remote_spec.as_deref(), Some("origin-project"));
-        assert_eq!(scopes[1].suggested_tag_name, "api");
-        assert!(scopes[1].path_filters.is_empty());
-    }
-
-    #[test]
-    fn collect_all_branch_git_scope_contexts_keeps_scopes_for_unified_projects() {
-        let project = ProjectConfig {
-            name: "demo".to_string(),
-            project_type: ProjectType::Branched,
-            integration_mode: IntegrationMode::GitLocalOnly,
-            unified_versioning: true,
-            version_scheme: VersionScheme::SemVer,
-            changelog: ChangelogSettings::default(),
-			release_now: crate::config::ReleaseNowSettings::default(),
-            targets: Vec::new(),
-            branches: vec![
-                BranchConfig {
-                    name: "core".to_string(),
-                    label: "Core".to_string(),
-                    scope_kind: BranchScopeKind::Branch,
-                    repo: Some(RepoConfig {
-                        local_root: "C:/repo/core".to_string(),
-                        remote_url: None,
-                    }),
-                    changelog_enabled: false,
-					changelog_path: None,
-					release_now: crate::config::ReleaseNowSettings::default(),
-                    version_scheme: VersionScheme::SemVer,
-                    targets: vec![TargetSpec {
-                        label: "Version".to_string(),
-                        path: "core/Cargo.toml".to_string(),
-                        key_path: "package.version".to_string(),
-                        format: TargetFormat::Toml,
-                    }],
-                },
-                BranchConfig {
-                    name: "api".to_string(),
-                    label: "API".to_string(),
-                    scope_kind: BranchScopeKind::Service,
-                    repo: Some(RepoConfig {
-                        local_root: "C:/repo/api".to_string(),
-                        remote_url: None,
-                    }),
-                    changelog_enabled: false,
-					changelog_path: None,
-					release_now: crate::config::ReleaseNowSettings::default(),
-                    version_scheme: VersionScheme::SemVer,
-                    targets: vec![TargetSpec {
-                        label: "Version".to_string(),
-                        path: "api/package.json".to_string(),
-                        key_path: "version".to_string(),
-                        format: TargetFormat::Json,
-                    }],
-                },
-            ],
-            repo: None,
-        };
-
-        let scopes = collect_all_branch_git_scope_contexts(&project).expect("all branch scopes should resolve");
-
-        assert_eq!(scopes.len(), 2);
-        assert_eq!(scopes[0].display_name, "Core");
-        assert_eq!(scopes[1].display_name, "API");
-        assert_eq!(scopes[0].path_filters, vec!["core"]);
-        assert_eq!(scopes[1].path_filters, vec!["api"]);
-    }
-
-    #[test]
-    fn git_pathspecs_normalize_inside_repo_paths() {
-        let scope = GitScopeContext {
-            display_name: "Core".to_string(),
-            scope_kind: Some(BranchScopeKind::Module),
-            repo_root: "C:/repo".to_string(),
-            remote_spec: None,
-            suggested_tag_name: "core-v1.2.3".to_string(),
-            path_filters: vec!["C:/repo/core".to_string(), "core\\nested".to_string()],
-        };
-
-        assert_eq!(scope.git_pathspecs(), vec!["core", "core/nested"]);
-    }
-
-    #[test]
-    fn collect_scope_context_derives_repo_root_from_target_path() {
-        let project = ProjectConfig {
-            name: "demo".to_string(),
-            project_type: ProjectType::Branched,
-            integration_mode: IntegrationMode::GitLocalOnly,
-            unified_versioning: false,
-            version_scheme: VersionScheme::SemVer,
-            changelog: ChangelogSettings::default(),
-			release_now: crate::config::ReleaseNowSettings::default(),
-            targets: Vec::new(),
-            branches: vec![BranchConfig {
-                name: "core".to_string(),
-                label: "Core".to_string(),
-                scope_kind: BranchScopeKind::Branch,
-                repo: None,
-                changelog_enabled: false,
-				changelog_path: None,
-				release_now: crate::config::ReleaseNowSettings::default(),
-                version_scheme: VersionScheme::SemVer,
-                targets: vec![TargetSpec {
-                    label: "Version".to_string(),
-                    path: "C:/repo/core/Cargo.toml".to_string(),
-                    key_path: "package.version".to_string(),
-                    format: TargetFormat::Toml,
-                }],
-            }],
-            repo: Some(RepoConfig {
-                local_root: "C:/repo".to_string(),
-                remote_url: Some("origin".to_string()),
-            }),
-        };
-
-        let scopes = collect_all_branch_git_scope_contexts(&project).expect("scope contexts");
-
-        assert_eq!(scopes[0].repo_root, "C:/repo/core");
-    }
-
-    #[test]
-    fn relative_git_timestamps_are_compacted() {
-        let now = Local::now().timestamp();
-        let two_days_ago = (now - 60 * 60 * 24 * 2).to_string();
-
-        let formatted = format_relative_git_timestamp(&two_days_ago).expect("timestamp should format");
-
-        assert_eq!(formatted, "2d ago");
-    }
-}
-
 fn run_git_checked_owned_with_cancel(
     repo_root: &str,
     args: Vec<String>,
@@ -715,7 +578,10 @@ fn run_git_checked_owned_with_cancel(
     run_git_checked_with_cancel(repo_root, &arg_refs, cancel)
 }
 
-pub(crate) fn latest_local_tag_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<Option<String>> {
+pub(crate) fn latest_local_tag_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<String>> {
     let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel)?;
     if !describe.success {
         return Ok(None);
@@ -732,13 +598,21 @@ pub(crate) fn branches_containing_ref_with_cancel(
 ) -> Result<Vec<String>> {
     let output = run_git_checked_with_cancel(
         repo_root,
-        &["branch", "--contains", ref_name, "--format=%(refname:short)"],
+        &[
+            "branch",
+            "--contains",
+            ref_name,
+            "--format=%(refname:short)",
+        ],
         cancel,
     )?;
     Ok(split_output_lines(&output))
 }
 
-pub(crate) fn sorted_local_tags_with_cancel(repo_root: &str, cancel: Option<GitCancellation>) -> Result<Vec<String>> {
+pub(crate) fn sorted_local_tags_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<String>> {
     let output = run_git_checked_with_cancel(repo_root, &["tag"], cancel)?;
     let mut tags = split_output_lines(&output);
     sort_tags_for_history(&mut tags);
@@ -751,8 +625,10 @@ pub(crate) fn sort_tags_for_history(tags: &mut [String]) {
 
 fn compare_history_tags(left: &str, right: &str) -> std::cmp::Ordering {
     match (history_tag_components(left), history_tag_components(right)) {
-        (Some(left_components), Some(right_components)) => compare_tag_components(&left_components, &right_components)
-            .then_with(|| left.cmp(right)),
+        (Some(left_components), Some(right_components)) => {
+            compare_tag_components(&left_components, &right_components)
+                .then_with(|| left.cmp(right))
+        }
         (Some(_), None) => std::cmp::Ordering::Greater,
         (None, Some(_)) => std::cmp::Ordering::Less,
         (None, None) => left.cmp(right),
@@ -798,4 +674,209 @@ fn history_tag_components(tag: &str) -> Option<Vec<u64>> {
         .collect::<Option<Vec<_>>>();
 
     components.filter(|components| !components.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::{
+            BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec,
+        },
+        versioning::VersionScheme,
+    };
+
+    #[test]
+    fn collect_git_scope_contexts_prefers_branch_repo_overrides() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitHubEnabled,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Module,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/repo/core".to_string(),
+                        remote_url: Some("origin-core".to_string()),
+                    }),
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "missing-core.toml".to_string(),
+                        key_path: "package.version".to_string(),
+                        format: TargetFormat::Toml,
+                    }],
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    label: "API".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    repo: None,
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "missing-api.json".to_string(),
+                        key_path: "version".to_string(),
+                        format: TargetFormat::Json,
+                    }],
+                },
+            ],
+            repo: Some(RepoConfig {
+                local_root: "C:/repo/project".to_string(),
+                remote_url: Some("origin-project".to_string()),
+            }),
+        };
+
+        let scopes =
+            collect_git_scope_contexts(&project).expect("scoped git contexts should resolve");
+
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].repo_root, "C:/repo/core");
+        assert_eq!(scopes[0].remote_spec.as_deref(), Some("origin-core"));
+        assert!(scopes[0].path_filters.is_empty());
+        assert_eq!(scopes[1].repo_root, "C:/repo/project");
+        assert_eq!(scopes[1].remote_spec.as_deref(), Some("origin-project"));
+        assert_eq!(scopes[1].suggested_tag_name, "api");
+        assert!(scopes[1].path_filters.is_empty());
+    }
+
+    #[test]
+    fn collect_all_branch_git_scope_contexts_keeps_scopes_for_unified_projects() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/repo/core".to_string(),
+                        remote_url: None,
+                    }),
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "core/Cargo.toml".to_string(),
+                        key_path: "package.version".to_string(),
+                        format: TargetFormat::Toml,
+                    }],
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    label: "API".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/repo/api".to_string(),
+                        remote_url: None,
+                    }),
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "api/package.json".to_string(),
+                        key_path: "version".to_string(),
+                        format: TargetFormat::Json,
+                    }],
+                },
+            ],
+            repo: None,
+        };
+
+        let scopes = collect_all_branch_git_scope_contexts(&project)
+            .expect("all branch scopes should resolve");
+
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].display_name, "Core");
+        assert_eq!(scopes[1].display_name, "API");
+        assert_eq!(scopes[0].path_filters, vec!["core"]);
+        assert_eq!(scopes[1].path_filters, vec!["api"]);
+    }
+
+    #[test]
+    fn git_pathspecs_normalize_inside_repo_paths() {
+        let scope = GitScopeContext {
+            display_name: "Core".to_string(),
+            scope_kind: Some(BranchScopeKind::Module),
+            repo_root: "C:/repo".to_string(),
+            remote_spec: None,
+            suggested_tag_name: "core-v1.2.3".to_string(),
+            path_filters: vec!["C:/repo/core".to_string(), "core\\nested".to_string()],
+        };
+
+        assert_eq!(scope.git_pathspecs(), vec!["core", "core/nested"]);
+    }
+
+    #[test]
+    fn collect_scope_context_derives_repo_root_from_target_path() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: vec![BranchConfig {
+                name: "core".to_string(),
+                label: "Core".to_string(),
+                scope_kind: BranchScopeKind::Branch,
+                repo: None,
+                changelog_enabled: false,
+                changelog_path: None,
+                release_now: crate::config::ReleaseNowSettings::default(),
+                version_scheme: VersionScheme::SemVer,
+                targets: vec![TargetSpec {
+                    label: "Version".to_string(),
+                    path: "C:/repo/core/Cargo.toml".to_string(),
+                    key_path: "package.version".to_string(),
+                    format: TargetFormat::Toml,
+                }],
+            }],
+            repo: Some(RepoConfig {
+                local_root: "C:/repo".to_string(),
+                remote_url: Some("origin".to_string()),
+            }),
+        };
+
+        let scopes = collect_all_branch_git_scope_contexts(&project).expect("scope contexts");
+
+        assert_eq!(scopes[0].repo_root, "C:/repo/core");
+    }
+
+    #[test]
+    fn relative_git_timestamps_are_compacted() {
+        let now = Local::now().timestamp();
+        let two_days_ago = (now - 60 * 60 * 24 * 2).to_string();
+
+        let formatted =
+            format_relative_git_timestamp(&two_days_ago).expect("timestamp should format");
+
+        assert_eq!(formatted, "2d ago");
+    }
 }
