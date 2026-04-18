@@ -313,11 +313,10 @@ fn expand_toml_key_path<'a>(value: &'a toml::Value, key_path: &'a str) -> Cow<'a
         return Cow::Borrowed(key_path);
     }
 
-    if let Some(package) = value.get("package") {
-        if package.get(key_path).is_some() {
+    if let Some(package) = value.get("package")
+        && package.get(key_path).is_some() {
             return Cow::Owned(format!("package.{}", key_path));
         }
-    }
 
     Cow::Borrowed(key_path)
 }

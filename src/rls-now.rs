@@ -1141,6 +1141,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_command_with_streaming(
     repo_root: &str,
     program: &str,
@@ -1251,6 +1252,7 @@ fn collect_files_recursive(root: &Path, files: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_or_update_github_release(
     repo_root: &str,
     tag_name: &str,
@@ -1292,6 +1294,7 @@ async fn create_or_update_github_release(
             ];
             upload_args.extend(artifact_files.iter().cloned());
             upload_args.push("--clobber".to_string());
+        #[allow(clippy::too_many_arguments)]
             run_blocking_streaming_operation(
                 move |progress_tx| {
                     run_command_with_streaming(
@@ -1581,7 +1584,7 @@ fn ansi_line_to_ratatui(line: &str) -> Line<'static> {
         if ch == '\u{1b}' && chars.peek() == Some(&'[') {
             let _ = chars.next();
             let mut sequence = String::new();
-            while let Some(next) = chars.next() {
+            for next in chars.by_ref() {
                 if next == 'm' {
                     break;
                 }

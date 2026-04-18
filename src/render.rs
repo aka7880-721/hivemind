@@ -499,7 +499,6 @@ impl App {
     }
 
     #[allow(dead_code)]
-
     fn render_dashboard_overview(&mut self, frame: &mut Frame, area: Rect) {
         overview::render_dashboard_overview(self, frame, area);
     }
@@ -1059,9 +1058,9 @@ impl App {
             header.push(Line::from(format!(
                 "{} From: {}    {} To: {}",
                 custom_range.focus_label(CustomChangelogRangeFocus::From),
-                custom_range.from_display(),
+                custom_range.display_from(),
                 custom_range.focus_label(CustomChangelogRangeFocus::To),
-                custom_range.to_display(),
+                custom_range.display_to(),
             )));
             header.push(Line::from("Tab switches From/To, Left/Right changes the selected ref, 1/2 focuses From or To, Ctrl+S saves changelog_temp.md, and Enter/F2 closes the preview."));
         } else {
@@ -1614,7 +1613,6 @@ impl App {
                 label,
                 value,
                 focused,
-                action.clone(),
                 side_button.clone(),
             );
             self.hit_targets.push(HitTarget::new(row, action));
@@ -2074,7 +2072,6 @@ impl App {
                 label,
                 value,
                 focused,
-                action.clone(),
                 side_button.clone(),
             );
             self.hit_targets.push(HitTarget::new(*row, action));
@@ -2225,7 +2222,6 @@ impl App {
         label: &'static str,
         value: Line,
         focused: bool,
-        _action: HitAction,
         side_button: Option<FormRowButton>,
     ) -> Option<Rect> {
         let label_area = center_vertically(

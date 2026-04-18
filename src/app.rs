@@ -541,30 +541,24 @@ impl App {
                     self.move_project_selection(1);
                 }
             }
-            KeyCode::Left => {
-                if self.dashboard_focus == DashboardPane::Overview {
+            KeyCode::Left
+                if self.dashboard_focus == DashboardPane::Overview => {
                     self.move_dashboard_overview_focus(-1)?;
                 }
-            }
-            KeyCode::Right => {
-                if self.dashboard_focus == DashboardPane::Overview {
+            KeyCode::Right
+                if self.dashboard_focus == DashboardPane::Overview => {
                     self.move_dashboard_overview_focus(1)?;
                 }
-            }
-            KeyCode::PageUp => {
-                if self.dashboard_focus == DashboardPane::Overview {
-                    if !self.scroll_dashboard_recent_changes(-6) {
+            KeyCode::PageUp
+                if self.dashboard_focus == DashboardPane::Overview
+                    && !self.scroll_dashboard_recent_changes(-6) => {
                         let _ = self.scroll_dashboard_tiles(-1);
                     }
-                }
-            }
-            KeyCode::PageDown => {
-                if self.dashboard_focus == DashboardPane::Overview {
-                    if !self.scroll_dashboard_recent_changes(6) {
+            KeyCode::PageDown
+                if self.dashboard_focus == DashboardPane::Overview
+                    && !self.scroll_dashboard_recent_changes(6) => {
                         let _ = self.scroll_dashboard_tiles(1);
                     }
-                }
-            }
             _ => {}
         }
         Ok(())
@@ -718,11 +712,10 @@ impl App {
             }
             KeyCode::F(2) => return self.save_release_now_notes(),
             _ => {
-                if let Some(dialog) = &mut self.release_now_notes_dialog {
-                    if let Some(input) = convert_to_textarea_input(key) {
+                if let Some(dialog) = &mut self.release_now_notes_dialog
+                    && let Some(input) = convert_to_textarea_input(key) {
                         dialog.editor.input(input);
                     }
-                }
             }
         }
 
@@ -962,11 +955,9 @@ impl App {
                     .changelog_preview_dialog
                     .as_mut()
                     .and_then(|dialog| dialog.custom_range.as_mut())
-                {
-                    if custom_range.adjust_focused_selection(-1) {
+                    && custom_range.adjust_focused_selection(-1) {
                         refresh_selection = custom_range.selection();
                     }
-                }
             }
             KeyCode::Right
                 if self
@@ -979,11 +970,9 @@ impl App {
                     .changelog_preview_dialog
                     .as_mut()
                     .and_then(|dialog| dialog.custom_range.as_mut())
-                {
-                    if custom_range.adjust_focused_selection(1) {
+                    && custom_range.adjust_focused_selection(1) {
                         refresh_selection = custom_range.selection();
                     }
-                }
             }
             KeyCode::Char('r') | KeyCode::Char('R')
                 if self
@@ -1066,30 +1055,27 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('[') => {
-                if self.recent_changes_dialog.is_some() {
+            KeyCode::Char('[')
+                if self.recent_changes_dialog.is_some() => {
                     self.schedule_recent_changes_action(
                         "Loading git history for the previous scope.",
                         RecentChangesLoadAction::RotateScope(-1),
                     )?;
                 }
-            }
-            KeyCode::Char(']') => {
-                if self.recent_changes_dialog.is_some() {
+            KeyCode::Char(']')
+                if self.recent_changes_dialog.is_some() => {
                     self.schedule_recent_changes_action(
                         "Loading git history for the next scope.",
                         RecentChangesLoadAction::RotateScope(1),
                     )?;
                 }
-            }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                if self.recent_changes_dialog.is_some() {
+            KeyCode::Char('r') | KeyCode::Char('R')
+                if self.recent_changes_dialog.is_some() => {
                     self.schedule_recent_changes_action(
                         "Refreshing git history for the current scope.",
                         RecentChangesLoadAction::RefreshCurrentScope,
                     )?;
                 }
-            }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.recent_changes_dialog {
                     if dialog.active_tab == RecentChangesTab::Recent && dialog.can_select_scope() {
@@ -1154,11 +1140,10 @@ impl App {
             }
             KeyCode::F(2) => return self.save_tag_annotation(),
             _ => {
-                if let Some(dialog) = &mut self.tag_annotation_dialog {
-                    if let Some(input) = convert_to_textarea_input(key) {
+                if let Some(dialog) = &mut self.tag_annotation_dialog
+                    && let Some(input) = convert_to_textarea_input(key) {
                         dialog.editor.input(input);
                     }
-                }
             }
         }
 
@@ -1293,11 +1278,10 @@ impl App {
         if self.release_now_notes_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
-                        if let Err(error) = self.handle_hit_action(action) {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action) {
                             self.status = StatusMessage::error(error.to_string());
                         }
-                    }
                     return;
                 }
                 _ => return,
@@ -1322,11 +1306,10 @@ impl App {
                     if in_log_viewport && self.begin_release_now_log_selection(mouse.row) {
                         return;
                     }
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
-                        if let Err(error) = self.handle_hit_action(action) {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action) {
                             self.status = StatusMessage::error(error.to_string());
                         }
-                    }
                     return;
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
@@ -1349,11 +1332,10 @@ impl App {
         if self.delete_confirmation_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
-                        if let Err(error) = self.handle_hit_action(action) {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action) {
                             self.status = StatusMessage::error(error.to_string());
                         }
-                    }
                     return;
                 }
                 MouseEventKind::ScrollUp
@@ -1376,11 +1358,10 @@ impl App {
                     return;
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false) {
-                        if let Err(error) = self.handle_hit_action(action) {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action) {
                             self.status = StatusMessage::error(error.to_string());
                         }
-                    }
                     return;
                 }
                 MouseEventKind::Down(MouseButton::Right)
@@ -1396,8 +1377,9 @@ impl App {
                     self.scroll_project_edit_body(-1);
                 } else if self.changelog_preview_dialog.is_some() {
                     self.scroll_changelog_preview(-2);
-                } else if self.overview_bump_workflow_dialog.is_some() {
-                } else if self.tag_dialog.is_some() {
+                } else if self.overview_bump_workflow_dialog.is_some()
+                    || self.tag_dialog.is_some()
+                {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(-2);
                 } else if self.bump_dialog.is_some() {
@@ -1449,8 +1431,9 @@ impl App {
                     self.scroll_project_edit_body(1);
                 } else if self.changelog_preview_dialog.is_some() {
                     self.scroll_changelog_preview(2);
-                } else if self.overview_bump_workflow_dialog.is_some() {
-                } else if self.tag_dialog.is_some() {
+                } else if self.overview_bump_workflow_dialog.is_some()
+                    || self.tag_dialog.is_some()
+                {
                 } else if self.recent_changes_dialog.is_some() {
                     self.scroll_recent_changes(2);
                 } else if self.bump_dialog.is_some() {
@@ -1517,11 +1500,10 @@ impl App {
                                     None
                                 }
                             });
-                    if let Some(scope_index) = self.overview_drag_scope {
-                        if let Err(error) = self.select_dashboard_overview_scope(scope_index) {
+                    if let Some(scope_index) = self.overview_drag_scope
+                        && let Err(error) = self.select_dashboard_overview_scope(scope_index) {
                             self.status = StatusMessage::error(error.to_string());
                         }
-                    }
                 }
 
                 if let Some((action, rect)) =
@@ -1574,23 +1556,19 @@ impl App {
                                     && mouse.row < rect.y + rect.height)
                                     .then_some(*scope)
                             });
-                    if let Some(to_scope) = target_scope {
-                        if to_scope != from_scope {
+                    if let Some(to_scope) = target_scope
+                        && to_scope != from_scope {
                             self.reorder_dashboard_tile_scope(from_scope, to_scope);
                             self.overview_drag_scope = Some(to_scope);
                         }
-                    }
                 }
 
                 if let Some((action, rect)) =
                     self.resolve_hit_target(mouse.column, mouse.row, false)
-                {
-                    if let Some(last_target) = self.last_text_input_click_target {
-                        if last_target.same_field_action(&action) {
+                    && let Some(last_target) = self.last_text_input_click_target
+                        && last_target.same_field_action(&action) {
                             self.update_text_input_drag_selection(rect, mouse.column);
                         }
-                    }
-                }
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.overview_drag_scope = None;
@@ -1599,8 +1577,7 @@ impl App {
                 if self.overview_bump_workflow_dialog.is_none()
                     && self.screen == Screen::Dashboard
                     && self.overview_tab == OverviewTab::Overview
-                {
-                    if let Some(scope_index) =
+                    && let Some(scope_index) =
                         self.overview_tile_rects
                             .iter()
                             .rev()
@@ -1611,12 +1588,9 @@ impl App {
                                     && mouse.row < rect.y + rect.height)
                                     .then_some(*scope)
                             })
-                    {
-                        if let Err(error) = self.select_dashboard_overview_scope(scope_index) {
+                        && let Err(error) = self.select_dashboard_overview_scope(scope_index) {
                             self.status = StatusMessage::error(error.to_string());
                         }
-                    }
-                }
                 let selected_text = self
                     .active_text_input_mut()
                     .and_then(|input| input.selected_text().map(str::to_string));
@@ -1670,13 +1644,12 @@ impl App {
             return;
         }
 
-        if let Some(dialog) = &mut self.changelog_preview_dialog {
-            if dialog.workflow.is_some() {
+        if let Some(dialog) = &mut self.changelog_preview_dialog
+            && dialog.workflow.is_some() {
                 dialog.release_message.insert_str(text);
                 self.status = StatusMessage::info("Pasted into the release notes.");
                 return;
             }
-        }
 
         let sanitized = sanitize_pasted_text(&text);
         if self.insert_text(&sanitized) {
@@ -1698,13 +1671,12 @@ impl App {
                     return;
                 }
 
-                if let Some(dialog) = &mut self.changelog_preview_dialog {
-                    if dialog.workflow.is_some() {
+                if let Some(dialog) = &mut self.changelog_preview_dialog
+                    && dialog.workflow.is_some() {
                         dialog.release_message.insert_str(text);
                         self.status = StatusMessage::info("Pasted into the release notes.");
                         return;
                     }
-                }
 
                 let sanitized = sanitize_pasted_text(&text);
                 if self.insert_text(&sanitized) {
@@ -1720,28 +1692,25 @@ impl App {
     }
 
     fn insert_text(&mut self, text: &str) -> bool {
-        if let Some(dialog) = &mut self.project_edit_dialog {
-            if dialog.insert_text(text) {
+        if let Some(dialog) = &mut self.project_edit_dialog
+            && dialog.insert_text(text) {
                 return true;
             }
-        }
 
         if let Some(dialog) = &mut self.tag_dialog {
             dialog.tag_name.insert_str(text);
             return true;
         }
 
-        if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
-            if p_s_s::insert_project_settings_text(self, text) {
+        if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings
+            && p_s_s::insert_project_settings_text(self, text) {
                 return true;
             }
-        }
 
-        if self.screen == Screen::Wizard {
-            if self.wizard.insert_text(text) {
+        if self.screen == Screen::Wizard
+            && self.wizard.insert_text(text) {
                 return true;
             }
-        }
 
         false
     }
@@ -2270,15 +2239,14 @@ impl App {
             BackgroundJobMessagePayload::Finished(result) => match result {
                 Ok(output) => self.apply_background_job_output(output)?,
                 Err(error_message) => {
-                    if message.kind == BackgroundJobKind::ReleaseNow {
-                        if let Some(dialog) = &mut self.release_now_dialog {
+                    if message.kind == BackgroundJobKind::ReleaseNow
+                        && let Some(dialog) = &mut self.release_now_dialog {
                             if rls_now::is_cancelled_error(&error_message) {
                                 dialog.apply_cancelled(error_message.clone());
                             } else {
                                 dialog.apply_failure(error_message.clone());
                             }
                         }
-                    }
                     self.status = if message.kind == BackgroundJobKind::ReleaseNow
                         && rls_now::is_cancelled_error(&error_message)
                     {
@@ -2357,8 +2325,8 @@ impl App {
                 history_scope_index,
                 prefetched_history_ranges,
             } => {
-                if let Some(dialog) = &mut self.recent_changes_dialog {
-                    if dialog.project_name == project_name {
+                if let Some(dialog) = &mut self.recent_changes_dialog
+                    && dialog.project_name == project_name {
                         if let (Some(scope_index), Some(range)) =
                             (next_scope_index, prefetched_recent_range)
                         {
@@ -2370,10 +2338,9 @@ impl App {
                             dialog.apply_prefetched_history_ranges(scope_index, ranges);
                         }
                     }
-                }
             }
             BackgroundJobOutput::OpenChangelogPreview(dialog) => {
-                self.open_changelog_preview(dialog)
+                self.open_changelog_preview(*dialog)
             }
             BackgroundJobOutput::OverviewActivityCache {
                 project_index,
@@ -2532,10 +2499,10 @@ impl App {
 
     fn text_input_click_target(&self, action: &HitAction) -> Option<TextInputClickTarget> {
         Some(match action {
-            HitAction::WizardField(field) => TextInputClickTarget::WizardField(*field),
-            HitAction::EditProjectField(field) => TextInputClickTarget::ProjectEditField(*field),
+            HitAction::WizardField(field) => TextInputClickTarget::Wizard(*field),
+            HitAction::EditProjectField(field) => TextInputClickTarget::ProjectEdit(*field),
             HitAction::SelectProjectSettingsField(field) => {
-                TextInputClickTarget::ProjectSettingsField(*field)
+                TextInputClickTarget::ProjectSettings(*field)
             }
             _ => return None,
         })
@@ -4160,18 +4127,18 @@ impl HitTarget {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TextInputClickTarget {
-    WizardField(WizardField),
-    ProjectEditField(ProjectEditFocus),
-    ProjectSettingsField(ProjectSettingsFocus),
+    Wizard(WizardField),
+    ProjectEdit(ProjectEditFocus),
+    ProjectSettings(ProjectSettingsFocus),
 }
 
 impl TextInputClickTarget {
     fn same_field_action(&self, action: &HitAction) -> bool {
         match (self, action) {
-            (&TextInputClickTarget::WizardField(a), &HitAction::WizardField(b)) => a == b,
-            (&TextInputClickTarget::ProjectEditField(a), &HitAction::EditProjectField(b)) => a == b,
+            (&TextInputClickTarget::Wizard(a), &HitAction::WizardField(b)) => a == b,
+            (&TextInputClickTarget::ProjectEdit(a), &HitAction::EditProjectField(b)) => a == b,
             (
-                &TextInputClickTarget::ProjectSettingsField(a),
+                &TextInputClickTarget::ProjectSettings(a),
                 &HitAction::SelectProjectSettingsField(b),
             ) => a == b,
             _ => false,
@@ -4383,11 +4350,11 @@ impl CustomChangelogRangeState {
         }
     }
 
-    fn from_display(&self) -> String {
+    fn display_from(&self) -> String {
         self.current_from_ref().unwrap_or("<no tags>").to_string()
     }
 
-    fn to_display(&self) -> String {
+    fn display_to(&self) -> String {
         self.current_to_ref().to_string()
     }
 
@@ -4741,7 +4708,7 @@ enum BackgroundJobOutput {
         history_scope_index: Option<usize>,
         prefetched_history_ranges: Option<Vec<ChangeRange>>,
     },
-    OpenChangelogPreview(ChangelogPreviewDialog),
+    OpenChangelogPreview(Box<ChangelogPreviewDialog>),
     OverviewActivityCache {
         project_index: usize,
         summaries: Vec<Option<RepoActivitySummary>>,
@@ -4757,6 +4724,19 @@ enum BackgroundJobOutput {
 }
 
 type BackgroundJobResult = std::result::Result<BackgroundJobOutput, String>;
+type BackgroundWorkerChannels = (
+    TokioRuntime,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedSender<BackgroundJobRequestMessage>,
+    UnboundedReceiver<BackgroundJobResultMessage>,
+);
+type PrefetchedRecentChanges = (
+    Option<usize>,
+    Option<ChangeRange>,
+    Option<usize>,
+    Option<Vec<ChangeRange>>,
+);
 
 enum BackgroundJobMessagePayload {
     Progress(BackgroundJobOutput),
@@ -5344,13 +5324,7 @@ enum StatusKind {
     Error,
 }
 
-fn spawn_background_worker() -> Result<(
-    TokioRuntime,
-    UnboundedSender<BackgroundJobRequestMessage>,
-    UnboundedSender<BackgroundJobRequestMessage>,
-    UnboundedSender<BackgroundJobRequestMessage>,
-    UnboundedReceiver<BackgroundJobResultMessage>,
-)> {
+fn spawn_background_worker() -> Result<BackgroundWorkerChannels> {
     let runtime = TokioRuntimeBuilder::new_multi_thread()
         .worker_threads(2)
         .thread_name("cg-bg")
@@ -5487,7 +5461,7 @@ async fn run_background_job(
             scope_index,
             pending_versions,
             selection,
-        } => Ok(BackgroundJobOutput::OpenChangelogPreview(
+        } => Ok(BackgroundJobOutput::OpenChangelogPreview(Box::new(
             overview::build_dashboard_changelog_preview_dialog_async(
                 &project,
                 scope_index,
@@ -5496,13 +5470,13 @@ async fn run_background_job(
                 Some(cancel),
             )
             .await?,
-        )),
+        ))),
         BackgroundJobRequest::OpenOverviewWorkflowChangelog {
             project,
             scope_index,
             workflow,
             pending_versions,
-        } => Ok(BackgroundJobOutput::OpenChangelogPreview(
+        } => Ok(BackgroundJobOutput::OpenChangelogPreview(Box::new(
             overview::build_overview_workflow_changelog_preview_dialog_async(
                 &project,
                 scope_index,
@@ -5511,7 +5485,7 @@ async fn run_background_job(
                 Some(cancel),
             )
             .await?,
-        )),
+        ))),
         BackgroundJobRequest::RefreshOverviewActivity {
             project_index,
             project,
@@ -5632,12 +5606,7 @@ fn apply_recent_changes_background_action(
 fn prefetch_recent_changes(
     dialog: RecentChangesDialog,
     cancel: Option<GitCancellation>,
-) -> Result<(
-    Option<usize>,
-    Option<ChangeRange>,
-    Option<usize>,
-    Option<Vec<ChangeRange>>,
-)> {
+) -> Result<PrefetchedRecentChanges> {
     let next_scope_index = if dialog.can_select_scope() {
         Some((dialog.selected_scope + 1) % dialog.scopes.len())
     } else {
@@ -7012,12 +6981,8 @@ fn render_annotation_line(
             spans.push(Span::styled(character.to_string(), style));
         }
 
-        if chars.is_empty() {
-            spans.push(Span::styled(
-                " ".to_string(),
-                Style::default().fg(Color::Black).bg(Color::Cyan),
-            ));
-        } else if visible_cursor_col >= chars.len() && chars.len() < content_width {
+        if chars.is_empty() || (visible_cursor_col >= chars.len() && chars.len() < content_width)
+        {
             spans.push(Span::styled(
                 " ".to_string(),
                 Style::default().fg(Color::Black).bg(Color::Cyan),
@@ -7385,14 +7350,16 @@ mod tests {
 
     #[test]
     fn editing_repo_root_does_not_invalidate_target_probe() {
-        let mut wizard = ProjectWizard::default();
-        wizard.last_probe = Some(TargetProbe {
-            kind: ProbeKind::Success,
-            message: "ok".to_string(),
-            version: Some("1.2.3".to_string()),
-            format: Some(TargetFormat::Json),
-        });
-        wizard.focus = WizardField::RepoRoot;
+        let mut wizard = ProjectWizard {
+            last_probe: Some(TargetProbe {
+                kind: ProbeKind::Success,
+                message: "ok".to_string(),
+                version: Some("1.2.3".to_string()),
+                format: Some(TargetFormat::Json),
+            }),
+            focus: WizardField::RepoRoot,
+            ..ProjectWizard::default()
+        };
 
         wizard.insert_text("C:/repo");
 
@@ -7449,14 +7416,16 @@ mod tests {
 
     #[test]
     fn editing_target_path_invalidates_target_probe() {
-        let mut wizard = ProjectWizard::default();
-        wizard.last_probe = Some(TargetProbe {
-            kind: ProbeKind::Success,
-            message: "ok".to_string(),
-            version: Some("1.2.3".to_string()),
-            format: Some(TargetFormat::Json),
-        });
-        wizard.focus = WizardField::TargetPath;
+        let mut wizard = ProjectWizard {
+            last_probe: Some(TargetProbe {
+                kind: ProbeKind::Success,
+                message: "ok".to_string(),
+                version: Some("1.2.3".to_string()),
+                format: Some(TargetFormat::Json),
+            }),
+            focus: WizardField::TargetPath,
+            ..ProjectWizard::default()
+        };
 
         wizard.insert_text("C:/repo/package.json");
 
@@ -7465,8 +7434,10 @@ mod tests {
 
     #[test]
     fn branched_wizard_builds_multiple_scopes() {
-        let mut wizard = ProjectWizard::default();
-        wizard.project_type = ProjectType::Branched;
+        let mut wizard = ProjectWizard {
+            project_type: ProjectType::Branched,
+            ..ProjectWizard::default()
+        };
         wizard.name.set_value("demo-service");
 
         {
@@ -7512,8 +7483,10 @@ mod tests {
 
     #[test]
     fn branched_wizard_rejects_duplicate_scope_names() {
-        let mut wizard = ProjectWizard::default();
-        wizard.project_type = ProjectType::Branched;
+        let mut wizard = ProjectWizard {
+            project_type: ProjectType::Branched,
+            ..ProjectWizard::default()
+        };
         wizard.name.set_value("demo-service");
 
         {
@@ -7551,10 +7524,12 @@ mod tests {
 
     #[test]
     fn wizard_body_window_keeps_focused_field_visible_when_viewport_is_short() {
-        let mut wizard = ProjectWizard::default();
-        wizard.project_type = ProjectType::Branched;
-        wizard.integration_mode = IntegrationMode::GitHubEnabled;
-        wizard.focus = WizardField::RemoteUrl;
+        let mut wizard = ProjectWizard {
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitHubEnabled,
+            focus: WizardField::RemoteUrl,
+            ..ProjectWizard::default()
+        };
 
         let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
 
@@ -7566,8 +7541,10 @@ mod tests {
 
     #[test]
     fn target_key_switches_to_toml_default_when_target_path_changes() {
-        let mut wizard = ProjectWizard::default();
-        wizard.focus = WizardField::TargetPath;
+        let mut wizard = ProjectWizard {
+            focus: WizardField::TargetPath,
+            ..ProjectWizard::default()
+        };
 
         wizard.insert_text("C:/repo/Cargo.toml");
 
@@ -7907,8 +7884,10 @@ mod tests {
 
     #[test]
     fn custom_target_key_mode_enables_text_entry() {
-        let mut wizard = ProjectWizard::default();
-        wizard.focus = WizardField::TargetKey;
+        let mut wizard = ProjectWizard {
+            focus: WizardField::TargetKey,
+            ..ProjectWizard::default()
+        };
 
         assert!(!wizard.focus_accepts_text());
 

@@ -173,11 +173,10 @@ pub(crate) fn suggested_tag_name_for_scope(
         || project.unified_versioning
         || scope_index.is_none()
     {
-        if let Ok(scopes) = collect_bump_scopes(project) {
-            if let Some(version) = shared_bump_version(&scopes) {
+        if let Ok(scopes) = collect_bump_scopes(project)
+            && let Some(version) = shared_bump_version(&scopes) {
                 return format!("v{}", version);
             }
-        }
         return slugify(&project.name);
     }
 
@@ -192,13 +191,11 @@ pub(crate) fn suggested_tag_name_for_scope(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| slugify(&project.name));
 
-    if let Ok(scopes) = collect_bump_scopes(project) {
-        if let Some(scope) = scopes.get(scope_index) {
-            if let Some(version) = &scope.current_version {
+    if let Ok(scopes) = collect_bump_scopes(project)
+        && let Some(scope) = scopes.get(scope_index)
+            && let Some(version) = &scope.current_version {
                 return format!("{}-v{}", scope_slug, version);
             }
-        }
-    }
 
     scope_slug
 }
@@ -570,6 +567,113 @@ fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
     Some(label)
 }
 
+fn run_git_checked_owned_with_cancel(
+    repo_root: &str,
+    args: Vec<String>,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_checked_with_cancel(repo_root, &arg_refs, cancel)
+}
+
+pub(crate) fn latest_local_tag_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<String>> {
+    let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel)?;
+    if !describe.success {
+        return Ok(None);
+    }
+
+    let tag = describe.stdout.trim().to_string();
+    Ok((!tag.is_empty()).then_some(tag))
+}
+
+pub(crate) fn branches_containing_ref_with_cancel(
+    repo_root: &str,
+    ref_name: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<String>> {
+    let output = run_git_checked_with_cancel(
+        repo_root,
+        &[
+            "branch",
+            "--contains",
+            ref_name,
+            "--format=%(refname:short)",
+        ],
+        cancel,
+    )?;
+    Ok(split_output_lines(&output))
+}
+
+pub(crate) fn sorted_local_tags_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<String>> {
+    let output = run_git_checked_with_cancel(repo_root, &["tag"], cancel)?;
+    let mut tags = split_output_lines(&output);
+    sort_tags_for_history(&mut tags);
+    Ok(tags)
+}
+
+pub(crate) fn sort_tags_for_history(tags: &mut [String]) {
+    tags.sort_by(|left, right| compare_history_tags(right, left));
+}
+
+fn compare_history_tags(left: &str, right: &str) -> std::cmp::Ordering {
+    match (history_tag_components(left), history_tag_components(right)) {
+        (Some(left_components), Some(right_components)) => {
+            compare_tag_components(&left_components, &right_components)
+                .then_with(|| left.cmp(right))
+        }
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (None, None) => left.cmp(right),
+    }
+}
+
+fn compare_tag_components(left: &[u64], right: &[u64]) -> std::cmp::Ordering {
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let left_part = left.get(index).copied().unwrap_or(0);
+        let right_part = right.get(index).copied().unwrap_or(0);
+        match left_part.cmp(&right_part) {
+            std::cmp::Ordering::Equal => continue,
+            ordering => return ordering,
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn history_tag_components(tag: &str) -> Option<Vec<u64>> {
+    let trimmed = tag.trim();
+    let trimmed = trimmed
+        .strip_prefix('v')
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed);
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let components = trimmed
+        .split('.')
+        .map(|segment| {
+            let digits = segment
+                .chars()
+                .take_while(|character| character.is_ascii_digit())
+                .collect::<String>();
+            if digits.is_empty() {
+                None
+            } else {
+                digits.parse::<u64>().ok()
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+
+    components.filter(|components| !components.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -773,111 +877,4 @@ mod tests {
 
         assert_eq!(formatted, "2d ago");
     }
-}
-
-fn run_git_checked_owned_with_cancel(
-    repo_root: &str,
-    args: Vec<String>,
-    cancel: Option<GitCancellation>,
-) -> Result<String> {
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_checked_with_cancel(repo_root, &arg_refs, cancel)
-}
-
-pub(crate) fn latest_local_tag_with_cancel(
-    repo_root: &str,
-    cancel: Option<GitCancellation>,
-) -> Result<Option<String>> {
-    let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel)?;
-    if !describe.success {
-        return Ok(None);
-    }
-
-    let tag = describe.stdout.trim().to_string();
-    Ok((!tag.is_empty()).then_some(tag))
-}
-
-pub(crate) fn branches_containing_ref_with_cancel(
-    repo_root: &str,
-    ref_name: &str,
-    cancel: Option<GitCancellation>,
-) -> Result<Vec<String>> {
-    let output = run_git_checked_with_cancel(
-        repo_root,
-        &[
-            "branch",
-            "--contains",
-            ref_name,
-            "--format=%(refname:short)",
-        ],
-        cancel,
-    )?;
-    Ok(split_output_lines(&output))
-}
-
-pub(crate) fn sorted_local_tags_with_cancel(
-    repo_root: &str,
-    cancel: Option<GitCancellation>,
-) -> Result<Vec<String>> {
-    let output = run_git_checked_with_cancel(repo_root, &["tag"], cancel)?;
-    let mut tags = split_output_lines(&output);
-    sort_tags_for_history(&mut tags);
-    Ok(tags)
-}
-
-pub(crate) fn sort_tags_for_history(tags: &mut [String]) {
-    tags.sort_by(|left, right| compare_history_tags(right, left));
-}
-
-fn compare_history_tags(left: &str, right: &str) -> std::cmp::Ordering {
-    match (history_tag_components(left), history_tag_components(right)) {
-        (Some(left_components), Some(right_components)) => {
-            compare_tag_components(&left_components, &right_components)
-                .then_with(|| left.cmp(right))
-        }
-        (Some(_), None) => std::cmp::Ordering::Greater,
-        (None, Some(_)) => std::cmp::Ordering::Less,
-        (None, None) => left.cmp(right),
-    }
-}
-
-fn compare_tag_components(left: &[u64], right: &[u64]) -> std::cmp::Ordering {
-    let max_len = left.len().max(right.len());
-    for index in 0..max_len {
-        let left_part = left.get(index).copied().unwrap_or(0);
-        let right_part = right.get(index).copied().unwrap_or(0);
-        match left_part.cmp(&right_part) {
-            std::cmp::Ordering::Equal => continue,
-            ordering => return ordering,
-        }
-    }
-    std::cmp::Ordering::Equal
-}
-
-fn history_tag_components(tag: &str) -> Option<Vec<u64>> {
-    let trimmed = tag.trim();
-    let trimmed = trimmed
-        .strip_prefix('v')
-        .or_else(|| trimmed.strip_prefix('V'))
-        .unwrap_or(trimmed);
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let components = trimmed
-        .split('.')
-        .map(|segment| {
-            let digits = segment
-                .chars()
-                .take_while(|character| character.is_ascii_digit())
-                .collect::<String>();
-            if digits.is_empty() {
-                None
-            } else {
-                digits.parse::<u64>().ok()
-            }
-        })
-        .collect::<Option<Vec<_>>>();
-
-    components.filter(|components| !components.is_empty())
 }

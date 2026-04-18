@@ -532,6 +532,7 @@ impl TagDialog {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum TagAction {
     CreateLocal,
     CreateAndPush,
@@ -985,7 +986,7 @@ impl TextInput {
             let global_index = start_char + index;
             let span_style = if selection_range
                 .as_ref()
-                .map_or(false, |range| range.contains(&global_index))
+                .is_some_and(|range| range.contains(&global_index))
             {
                 selection_style
             } else {

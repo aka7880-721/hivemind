@@ -6,12 +6,14 @@ rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
 authors = ["ComfyHome™ <dev@comfyhome.io>"]
 license = "SA-PS"
-license-link = "https://github.com/comfy-home/ComfyGit?tab=License-1-ov-file"
 homepage = "https://github.com/comfy-home/ComfyGit"
 repository = "https://github.com/comfy-home/ComfyGit"
 readme = "README.md"
 keywords = ["tui", "cli", "ratatui", "comfy", "comfyhome", "versioning", "version-management", "release-management", "version-bump", "git", "changelog", "semantic-versioning", "semver", "calver"]
 categories = ["development-tools", "command-line-utilities", "command-line-interface"]
+
+[package.metadata]
+license-link = "https://github.com/comfy-home/ComfyGit?tab=License-1-ov-file"
 
 [[bin]]
 name = "cg"

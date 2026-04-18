@@ -295,11 +295,10 @@ impl ProjectWizard {
                 };
                 self.clear_validation_results();
             }
-            WizardField::UnifiedVersioning => {
-                if self.project_type == ProjectType::Branched {
+            WizardField::UnifiedVersioning
+                if self.project_type == ProjectType::Branched => {
                     self.unified_versioning = !self.unified_versioning;
                 }
-            }
             WizardField::IntegrationMode => {
                 self.integration_mode = if delta >= 0 {
                     self.integration_mode.next()
@@ -386,11 +385,10 @@ impl ProjectWizard {
                 self.last_probe = None;
             }
         }
-        if self.focus == WizardField::ScopeName {
-            if let Some(scope) = self.current_scope_mut() {
+        if self.focus == WizardField::ScopeName
+            && let Some(scope) = self.current_scope_mut() {
                 scope.sync_label_if_needed();
             }
-        }
         if self.focus == WizardField::TargetPath {
             self.sync_target_key_preset_with_path();
             self.prefill_repo_root_from_target_path();
@@ -527,13 +525,12 @@ impl ProjectWizard {
 
     fn sync_target_key_preset_with_path(&mut self) {
         if self.project_type == ProjectType::Branched {
-            if let Some(scope) = self.current_scope_mut() {
-                if !scope.target_key_custom {
+            if let Some(scope) = self.current_scope_mut()
+                && !scope.target_key_custom {
                     scope
                         .target_key
                         .set_value(default_target_key_for_path(scope.target_path.value()));
                 }
-            }
         } else if !self.target_key_custom {
             self.target_key
                 .set_value(default_target_key_for_path(self.target_path.value()));

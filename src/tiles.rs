@@ -21,7 +21,7 @@ pub(crate) const CALVER_TILE_HEIGHT: u16 = 9;
 const SEMVER_LEFT_WIDTH: usize = 5;
 const CALVER_ACTION_WIDTH: usize = 6;
 const RLS_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Indexed(207));
-const BUMP_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Indexed(046));
+const BUMP_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Indexed(46));
 const TAG_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::LightYellow);
 
 pub(crate) struct OverviewTileData {
@@ -404,7 +404,7 @@ fn split_semver(version: &str) -> [String; 3] {
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     [
-        parts.get(0).cloned().unwrap_or_else(|| "?".to_string()),
+        parts.first().cloned().unwrap_or_else(|| "?".to_string()),
         parts.get(1).cloned().unwrap_or_else(|| "?".to_string()),
         parts.get(2).cloned().unwrap_or_else(|| "?".to_string()),
     ]

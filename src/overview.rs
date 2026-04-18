@@ -660,124 +660,6 @@ struct OverviewPlaceholderData {
     last_commit_label: &'static str,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{BranchConfig, ChangelogSettings, ReleaseNowSettings};
-
-    #[test]
-    fn empty_local_only_project_uses_dashboard_placeholders() {
-        let project = ProjectConfig {
-            name: "demo".to_string(),
-            project_type: ProjectType::AllInOne,
-            integration_mode: IntegrationMode::LocalOnly,
-            unified_versioning: true,
-            version_scheme: VersionScheme::SemVer,
-            changelog: ChangelogSettings::default(),
-            release_now: ReleaseNowSettings::default(),
-            targets: Vec::new(),
-            branches: Vec::new(),
-            repo: None,
-        };
-        let scope = BumpScope {
-            display_name: "demo".to_string(),
-            scope_kind: None,
-            scheme: VersionScheme::SemVer,
-            current_version: None,
-            targets: Vec::new(),
-        };
-
-        assert!(uses_dashboard_placeholder(&project));
-        assert_eq!(
-            resolved_scope_preview_version(&scope, true),
-            PLACEHOLDER_VERSION
-        );
-        let placeholder =
-            placeholder_activity(&scope, &project).expect("placeholder data should exist");
-        assert_eq!(
-            placeholder.commits_since_tag_label,
-            PLACEHOLDER_COMMITS_AHEAD
-        );
-    }
-
-    #[test]
-    fn configured_branched_project_keeps_real_scope_versions() {
-        let project = ProjectConfig {
-            name: "demo".to_string(),
-            project_type: ProjectType::Branched,
-            integration_mode: IntegrationMode::GitLocalOnly,
-            unified_versioning: false,
-            version_scheme: VersionScheme::SemVer,
-            changelog: ChangelogSettings::default(),
-            release_now: ReleaseNowSettings::default(),
-            targets: Vec::new(),
-            branches: vec![BranchConfig {
-                name: "core".to_string(),
-                label: String::new(),
-                scope_kind: BranchScopeKind::Branch,
-                repo: None,
-                changelog_enabled: false,
-                changelog_path: None,
-                release_now: ReleaseNowSettings::default(),
-                version_scheme: VersionScheme::SemVer,
-                targets: vec![TargetSpec {
-                    label: "Cargo".to_string(),
-                    path: "Cargo.toml".to_string(),
-                    key_path: "package.version".to_string(),
-                    format: TargetFormat::Toml,
-                }],
-            }],
-            repo: None,
-        };
-        let scope = BumpScope {
-            display_name: "core".to_string(),
-            scope_kind: Some(BranchScopeKind::Branch),
-            scheme: VersionScheme::SemVer,
-            current_version: Some("2.4.6".to_string()),
-            targets: vec![BumpTarget {
-                label: "Cargo".to_string(),
-                path: "Cargo.toml".to_string(),
-                key_path: "package.version".to_string(),
-                format: TargetFormat::Toml,
-                current_version: "2.4.6".to_string(),
-            }],
-        };
-
-        assert!(!uses_dashboard_placeholder(&project));
-        assert_eq!(resolved_scope_preview_version(&scope, false), "2.4.6");
-        assert!(placeholder_activity(&scope, &project).is_none());
-    }
-
-    #[test]
-    fn changelog_preview_opens_only_for_tag_workflows() {
-        let mut app = App::new_for_tests().expect("app should initialize");
-        let mut changelog = ChangelogSettings::default();
-        changelog.enabled = true;
-        app.config.projects = vec![ProjectConfig {
-            name: "demo".to_string(),
-            project_type: ProjectType::AllInOne,
-            integration_mode: IntegrationMode::GitLocalOnly,
-            unified_versioning: true,
-            version_scheme: VersionScheme::SemVer,
-            changelog,
-            release_now: ReleaseNowSettings::default(),
-            targets: Vec::new(),
-            branches: Vec::new(),
-            repo: None,
-        }];
-        app.selected_project = 0;
-
-        assert!(
-            !should_open_overview_changelog_preview(&mut app, 0, OverviewBumpWorkflow::Commit)
-                .expect("check should succeed")
-        );
-        assert!(
-            should_open_overview_changelog_preview(&mut app, 0, OverviewBumpWorkflow::CommitAndTag)
-                .expect("check should succeed")
-        );
-    }
-}
-
 pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<()> {
     let project = app.selected_project()?.clone();
     if !project.integration_mode.requires_repo() {
@@ -1427,4 +1309,124 @@ async fn collect_preview_entries_async(
     }
 
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{BranchConfig, ChangelogSettings, ReleaseNowSettings};
+
+    #[test]
+    fn empty_local_only_project_uses_dashboard_placeholders() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+        };
+        let scope = BumpScope {
+            display_name: "demo".to_string(),
+            scope_kind: None,
+            scheme: VersionScheme::SemVer,
+            current_version: None,
+            targets: Vec::new(),
+        };
+
+        assert!(uses_dashboard_placeholder(&project));
+        assert_eq!(
+            resolved_scope_preview_version(&scope, true),
+            PLACEHOLDER_VERSION
+        );
+        let placeholder =
+            placeholder_activity(&scope, &project).expect("placeholder data should exist");
+        assert_eq!(
+            placeholder.commits_since_tag_label,
+            PLACEHOLDER_COMMITS_AHEAD
+        );
+    }
+
+    #[test]
+    fn configured_branched_project_keeps_real_scope_versions() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: vec![BranchConfig {
+                name: "core".to_string(),
+                label: String::new(),
+                scope_kind: BranchScopeKind::Branch,
+                repo: None,
+                changelog_enabled: false,
+                changelog_path: None,
+                release_now: ReleaseNowSettings::default(),
+                version_scheme: VersionScheme::SemVer,
+                targets: vec![TargetSpec {
+                    label: "Cargo".to_string(),
+                    path: "Cargo.toml".to_string(),
+                    key_path: "package.version".to_string(),
+                    format: TargetFormat::Toml,
+                }],
+            }],
+            repo: None,
+        };
+        let scope = BumpScope {
+            display_name: "core".to_string(),
+            scope_kind: Some(BranchScopeKind::Branch),
+            scheme: VersionScheme::SemVer,
+            current_version: Some("2.4.6".to_string()),
+            targets: vec![BumpTarget {
+                label: "Cargo".to_string(),
+                path: "Cargo.toml".to_string(),
+                key_path: "package.version".to_string(),
+                format: TargetFormat::Toml,
+                current_version: "2.4.6".to_string(),
+            }],
+        };
+
+        assert!(!uses_dashboard_placeholder(&project));
+        assert_eq!(resolved_scope_preview_version(&scope, false), "2.4.6");
+        assert!(placeholder_activity(&scope, &project).is_none());
+    }
+
+    #[test]
+    fn changelog_preview_opens_only_for_tag_workflows() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        let changelog = ChangelogSettings {
+            enabled: true,
+            ..ChangelogSettings::default()
+        };
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog,
+            release_now: ReleaseNowSettings::default(),
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+        }];
+        app.selected_project = 0;
+
+        assert!(
+            !should_open_overview_changelog_preview(&mut app, 0, OverviewBumpWorkflow::Commit)
+                .expect("check should succeed")
+        );
+        assert!(
+            should_open_overview_changelog_preview(&mut app, 0, OverviewBumpWorkflow::CommitAndTag)
+                .expect("check should succeed")
+        );
+    }
 }
