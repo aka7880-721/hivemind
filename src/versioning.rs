@@ -40,7 +40,8 @@ pub enum VersionScheme {
 }
 
 impl VersionScheme {
-    pub const SEMVER_ACTIONS: [BumpAction; 3] = [BumpAction::Major, BumpAction::Minor, BumpAction::Patch];
+    pub const SEMVER_ACTIONS: [BumpAction; 3] =
+        [BumpAction::Major, BumpAction::Minor, BumpAction::Patch];
     pub const CALVER_ACTIONS: [BumpAction; 1] = [BumpAction::Auto];
     pub const HYBRID_MINOR_PATCH_ACTIONS: [BumpAction; 2] = [BumpAction::Minor, BumpAction::Patch];
     pub const HYBRID_PATCH_ACTIONS: [BumpAction; 1] = [BumpAction::Patch];
@@ -80,7 +81,9 @@ impl VersionScheme {
         match self {
             VersionScheme::SemVer => "MAJOR.MINOR.PATCH",
             VersionScheme::CalVerYearMonthMicro => "Year, month, then micro increment",
-            VersionScheme::CalVerShortYearMonthMicro => "Two-digit year, month, then micro increment",
+            VersionScheme::CalVerShortYearMonthMicro => {
+                "Two-digit year, month, then micro increment"
+            }
             VersionScheme::CalVerYearMonthDayMicro => "Year, month, day, then micro increment",
             VersionScheme::HybridYearMinorPatch => "Year followed by minor and patch counters",
             VersionScheme::HybridYearPatch => "Year followed by a single patch counter",
@@ -88,32 +91,49 @@ impl VersionScheme {
     }
 
     pub fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|candidate| *candidate == self).unwrap_or(0);
+        let index = Self::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .unwrap_or(0);
         Self::ALL[(index + 1) % Self::ALL.len()]
     }
 
     pub fn previous(self) -> Self {
-        let index = Self::ALL.iter().position(|candidate| *candidate == self).unwrap_or(0);
+        let index = Self::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .unwrap_or(0);
         Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()]
     }
 
     pub fn validate(self, value: &str) -> Result<(), String> {
         match self {
-            VersionScheme::SemVer => validate_parts(value, &[PartRule::Any, PartRule::Any, PartRule::Any]),
-            VersionScheme::CalVerYearMonthMicro => {
-                validate_parts(value, &[PartRule::Digits(4), PartRule::Month, PartRule::Any])
+            VersionScheme::SemVer => {
+                validate_parts(value, &[PartRule::Any, PartRule::Any, PartRule::Any])
             }
-            VersionScheme::CalVerShortYearMonthMicro => {
-                validate_parts(value, &[PartRule::Digits(2), PartRule::Month, PartRule::Any])
-            }
+            VersionScheme::CalVerYearMonthMicro => validate_parts(
+                value,
+                &[PartRule::Digits(4), PartRule::Month, PartRule::Any],
+            ),
+            VersionScheme::CalVerShortYearMonthMicro => validate_parts(
+                value,
+                &[PartRule::Digits(2), PartRule::Month, PartRule::Any],
+            ),
             VersionScheme::CalVerYearMonthDayMicro => validate_parts(
                 value,
-                &[PartRule::Digits(4), PartRule::Month, PartRule::Day, PartRule::Any],
+                &[
+                    PartRule::Digits(4),
+                    PartRule::Month,
+                    PartRule::Day,
+                    PartRule::Any,
+                ],
             ),
             VersionScheme::HybridYearMinorPatch => {
                 validate_parts(value, &[PartRule::Digits(4), PartRule::Any, PartRule::Any])
             }
-            VersionScheme::HybridYearPatch => validate_parts(value, &[PartRule::Digits(4), PartRule::Any]),
+            VersionScheme::HybridYearPatch => {
+                validate_parts(value, &[PartRule::Digits(4), PartRule::Any])
+            }
         }
     }
 
@@ -132,10 +152,18 @@ impl VersionScheme {
         self.validate(value)?;
         match self {
             VersionScheme::SemVer => bump_semver(value, action),
-            VersionScheme::CalVerYearMonthMicro => bump_calver_year_month_micro(value, action, today),
-            VersionScheme::CalVerShortYearMonthMicro => bump_calver_short_year_month_micro(value, action, today),
-            VersionScheme::CalVerYearMonthDayMicro => bump_calver_year_month_day_micro(value, action, today),
-            VersionScheme::HybridYearMinorPatch => bump_hybrid_year_minor_patch(value, action, today),
+            VersionScheme::CalVerYearMonthMicro => {
+                bump_calver_year_month_micro(value, action, today)
+            }
+            VersionScheme::CalVerShortYearMonthMicro => {
+                bump_calver_short_year_month_micro(value, action, today)
+            }
+            VersionScheme::CalVerYearMonthDayMicro => {
+                bump_calver_year_month_day_micro(value, action, today)
+            }
+            VersionScheme::HybridYearMinorPatch => {
+                bump_hybrid_year_minor_patch(value, action, today)
+            }
             VersionScheme::HybridYearPatch => bump_hybrid_year_patch(value, action, today),
         }
     }
@@ -168,13 +196,17 @@ fn validate_parts(value: &str, rules: &[PartRule]) -> Result<(), String> {
                 }
             }
             PartRule::Month => {
-                let month = part.parse::<u32>().map_err(|_| "invalid month value".to_string())?;
+                let month = part
+                    .parse::<u32>()
+                    .map_err(|_| "invalid month value".to_string())?;
                 if !(1..=12).contains(&month) {
                     return Err("month must be between 1 and 12".to_string());
                 }
             }
             PartRule::Day => {
-                let day = part.parse::<u32>().map_err(|_| "invalid day value".to_string())?;
+                let day = part
+                    .parse::<u32>()
+                    .map_err(|_| "invalid day value".to_string())?;
                 if !(1..=31).contains(&day) {
                     return Err("day must be between 1 and 31".to_string());
                 }
@@ -201,7 +233,11 @@ fn bump_semver(value: &str, action: BumpAction) -> Result<String, String> {
     Ok(format!("{}.{}.{}", bumped[0], bumped[1], bumped[2]))
 }
 
-fn bump_calver_year_month_micro(value: &str, action: BumpAction, today: NaiveDate) -> Result<String, String> {
+fn bump_calver_year_month_micro(
+    value: &str,
+    action: BumpAction,
+    today: NaiveDate,
+) -> Result<String, String> {
     require_action(action, &[BumpAction::Auto])?;
     let parts = parse_numeric_parts(value)?;
     let [year, month, micro]: [u32; 3] = parts
@@ -209,11 +245,22 @@ fn bump_calver_year_month_micro(value: &str, action: BumpAction, today: NaiveDat
         .map_err(|_| "expected 3 calver components".to_string())?;
     let current_year = today.year() as u32;
     let current_month = today.month();
-    let next_micro = if year == current_year && month == current_month { micro + 1 } else { 0 };
-    Ok(format!("{:04}.{:02}.{}", current_year, current_month, next_micro))
+    let next_micro = if year == current_year && month == current_month {
+        micro + 1
+    } else {
+        0
+    };
+    Ok(format!(
+        "{:04}.{:02}.{}",
+        current_year, current_month, next_micro
+    ))
 }
 
-fn bump_calver_short_year_month_micro(value: &str, action: BumpAction, today: NaiveDate) -> Result<String, String> {
+fn bump_calver_short_year_month_micro(
+    value: &str,
+    action: BumpAction,
+    today: NaiveDate,
+) -> Result<String, String> {
     require_action(action, &[BumpAction::Auto])?;
     let parts = parse_numeric_parts(value)?;
     let [year, month, micro]: [u32; 3] = parts
@@ -221,11 +268,22 @@ fn bump_calver_short_year_month_micro(value: &str, action: BumpAction, today: Na
         .map_err(|_| "expected 3 calver components".to_string())?;
     let current_year = (today.year() % 100) as u32;
     let current_month = today.month();
-    let next_micro = if year == current_year && month == current_month { micro + 1 } else { 0 };
-    Ok(format!("{:02}.{:02}.{}", current_year, current_month, next_micro))
+    let next_micro = if year == current_year && month == current_month {
+        micro + 1
+    } else {
+        0
+    };
+    Ok(format!(
+        "{:02}.{:02}.{}",
+        current_year, current_month, next_micro
+    ))
 }
 
-fn bump_calver_year_month_day_micro(value: &str, action: BumpAction, today: NaiveDate) -> Result<String, String> {
+fn bump_calver_year_month_day_micro(
+    value: &str,
+    action: BumpAction,
+    today: NaiveDate,
+) -> Result<String, String> {
     require_action(action, &[BumpAction::Auto])?;
     let parts = parse_numeric_parts(value)?;
     let [year, month, day, micro]: [u32; 4] = parts
@@ -239,10 +297,17 @@ fn bump_calver_year_month_day_micro(value: &str, action: BumpAction, today: Naiv
     } else {
         0
     };
-    Ok(format!("{:04}.{:02}.{:02}.{}", current_year, current_month, current_day, next_micro))
+    Ok(format!(
+        "{:04}.{:02}.{:02}.{}",
+        current_year, current_month, current_day, next_micro
+    ))
 }
 
-fn bump_hybrid_year_minor_patch(value: &str, action: BumpAction, today: NaiveDate) -> Result<String, String> {
+fn bump_hybrid_year_minor_patch(
+    value: &str,
+    action: BumpAction,
+    today: NaiveDate,
+) -> Result<String, String> {
     require_action(action, &[BumpAction::Minor, BumpAction::Patch])?;
     let parts = parse_numeric_parts(value)?;
     let [year, minor, patch]: [u32; 3] = parts
@@ -267,7 +332,11 @@ fn bump_hybrid_year_minor_patch(value: &str, action: BumpAction, today: NaiveDat
     Ok(format!("{:04}.{}.{}", current_year, next_minor, next_patch))
 }
 
-fn bump_hybrid_year_patch(value: &str, action: BumpAction, today: NaiveDate) -> Result<String, String> {
+fn bump_hybrid_year_patch(
+    value: &str,
+    action: BumpAction,
+    today: NaiveDate,
+) -> Result<String, String> {
     require_action(action, &[BumpAction::Patch])?;
     let parts = parse_numeric_parts(value)?;
     let [year, patch]: [u32; 2] = parts
@@ -282,14 +351,20 @@ fn require_action(action: BumpAction, allowed: &[BumpAction]) -> Result<(), Stri
     if allowed.contains(&action) {
         Ok(())
     } else {
-        Err(format!("{} bump is not supported for this version scheme", action.display_name()))
+        Err(format!(
+            "{} bump is not supported for this version scheme",
+            action.display_name()
+        ))
     }
 }
 
 fn parse_numeric_parts(value: &str) -> Result<Vec<u32>, String> {
     value
         .split('.')
-        .map(|part| part.parse::<u32>().map_err(|_| format!("invalid numeric component '{}'", part)))
+        .map(|part| {
+            part.parse::<u32>()
+                .map_err(|_| format!("invalid numeric component '{}'", part))
+        })
         .collect()
 }
 
@@ -307,8 +382,16 @@ mod tests {
 
     #[test]
     fn calver_requires_month_range() {
-        assert!(VersionScheme::CalVerYearMonthMicro.validate("2026.04.1").is_ok());
-        assert!(VersionScheme::CalVerYearMonthMicro.validate("2026.13.1").is_err());
+        assert!(
+            VersionScheme::CalVerYearMonthMicro
+                .validate("2026.04.1")
+                .is_ok()
+        );
+        assert!(
+            VersionScheme::CalVerYearMonthMicro
+                .validate("2026.13.1")
+                .is_err()
+        );
     }
 
     #[test]
@@ -319,28 +402,42 @@ mod tests {
 
     #[test]
     fn year_month_day_calver_requires_four_parts() {
-        assert!(VersionScheme::CalVerYearMonthDayMicro.validate("2026.04.06.2").is_ok());
-        assert!(VersionScheme::CalVerYearMonthDayMicro.validate("2026.04.2").is_err());
+        assert!(
+            VersionScheme::CalVerYearMonthDayMicro
+                .validate("2026.04.06.2")
+                .is_ok()
+        );
+        assert!(
+            VersionScheme::CalVerYearMonthDayMicro
+                .validate("2026.04.2")
+                .is_err()
+        );
     }
 
     #[test]
     fn semver_patch_bump_increments_patch() {
         let today = NaiveDate::from_ymd_opt(2026, 4, 6).unwrap();
-        let bumped = VersionScheme::SemVer.bump("1.2.3", BumpAction::Patch, today).unwrap();
+        let bumped = VersionScheme::SemVer
+            .bump("1.2.3", BumpAction::Patch, today)
+            .unwrap();
         assert_eq!(bumped, "1.2.4");
     }
 
     #[test]
     fn calver_auto_rolls_to_current_month_and_resets_micro() {
         let today = NaiveDate::from_ymd_opt(2026, 4, 6).unwrap();
-        let bumped = VersionScheme::CalVerYearMonthMicro.bump("2026.03.8", BumpAction::Auto, today).unwrap();
+        let bumped = VersionScheme::CalVerYearMonthMicro
+            .bump("2026.03.8", BumpAction::Auto, today)
+            .unwrap();
         assert_eq!(bumped, "2026.04.0");
     }
 
     #[test]
     fn hybrid_minor_patch_rolls_year_forward() {
         let today = NaiveDate::from_ymd_opt(2026, 4, 6).unwrap();
-        let bumped = VersionScheme::HybridYearMinorPatch.bump("2025.7.4", BumpAction::Patch, today).unwrap();
+        let bumped = VersionScheme::HybridYearMinorPatch
+            .bump("2025.7.4", BumpAction::Patch, today)
+            .unwrap();
         assert_eq!(bumped, "2026.0.1");
     }
 }

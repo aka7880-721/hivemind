@@ -65,7 +65,11 @@ struct TargetValue {
     format: TargetFormat,
 }
 
-pub(crate) fn probe_target(path: &str, key_path: &str, scheme: VersionScheme) -> Result<TargetProbe> {
+pub(crate) fn probe_target(
+    path: &str,
+    key_path: &str,
+    scheme: VersionScheme,
+) -> Result<TargetProbe> {
     if path.is_empty() {
         bail!("target path is empty");
     }
@@ -143,10 +147,15 @@ pub(crate) fn shared_bump_version(scopes: &[BumpScope]) -> Option<String> {
 }
 
 pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Result<()> {
-    let content = fs::read_to_string(&target.path).with_context(|| format!("failed to read {}", target.path))?;
+    let content = fs::read_to_string(&target.path)
+        .with_context(|| format!("failed to read {}", target.path))?;
     match target.format {
-        TargetFormat::Json => write_json_value(&target.path, &content, &target.key_path, new_version),
-        TargetFormat::Toml => write_toml_value(&target.path, &content, &target.key_path, new_version),
+        TargetFormat::Json => {
+            write_json_value(&target.path, &content, &target.key_path, new_version)
+        }
+        TargetFormat::Toml => {
+            write_toml_value(&target.path, &content, &target.key_path, new_version)
+        }
         TargetFormat::Auto => bail!("cannot write target with unresolved format"),
     }
 }
@@ -189,7 +198,11 @@ fn build_bump_scope(
     let current_version = targets
         .first()
         .map(|target| target.current_version.clone())
-        .filter(|current| targets.iter().all(|target| target.current_version == *current));
+        .filter(|current| {
+            targets
+                .iter()
+                .all(|target| target.current_version == *current)
+        });
 
     Ok(BumpScope {
         display_name,
@@ -215,7 +228,9 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
             } else if toml::from_str::<toml::Value>(content).is_ok() {
                 Ok(TargetFormat::Toml)
             } else {
-                Err(anyhow!("unable to detect JSON or TOML format from target file"))
+                Err(anyhow!(
+                    "unable to detect JSON or TOML format from target file"
+                ))
             }
         }
     }
@@ -225,14 +240,17 @@ fn write_json_value(path: &str, content: &str, key_path: &str, new_value: &str) 
     let mut value = serde_json::from_str::<JsonValue>(content).context("invalid JSON target")?;
     let located = locate_json_value_mut(&mut value, key_path)?;
     *located = JsonValue::String(new_value.to_string());
-    let mut rendered = serde_json::to_string_pretty(&value).context("failed to serialize JSON target")?;
+    let mut rendered =
+        serde_json::to_string_pretty(&value).context("failed to serialize JSON target")?;
     rendered.push('\n');
     fs::write(path, rendered).with_context(|| format!("failed to write {}", path))?;
     Ok(())
 }
 
 fn write_toml_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
-    let mut document = content.parse::<DocumentMut>().context("invalid TOML target")?;
+    let mut document = content
+        .parse::<DocumentMut>()
+        .context("invalid TOML target")?;
     let target_key = if locate_toml_item_mut(document.as_item_mut(), key_path).is_ok() {
         key_path.to_string()
     } else if !key_path.contains('.') {
@@ -262,22 +280,28 @@ fn write_toml_value(path: &str, content: &str, key_path: &str, new_value: &str) 
 fn extract_json_value(content: &str, key_path: &str) -> Result<String> {
     let value = serde_json::from_str::<JsonValue>(content).context("invalid JSON target")?;
     let located = key_path.split('.').try_fold(&value, |current, segment| {
-        current.get(segment).ok_or_else(|| anyhow!("missing key '{}'", key_path))
+        current
+            .get(segment)
+            .ok_or_else(|| anyhow!("missing key '{}'", key_path))
     })?;
-    located
-        .as_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("key '{}' is present, but its value is not a string", key_path))
+    located.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+        anyhow!(
+            "key '{}' is present, but its value is not a string",
+            key_path
+        )
+    })
 }
 
 fn extract_toml_value(content: &str, key_path: &str) -> Result<String> {
     let value = toml::from_str::<toml::Value>(content).context("invalid TOML target")?;
     let key_path = expand_toml_key_path(&value, key_path);
     let located = locate_toml_value(&value, &key_path)?;
-    located
-        .as_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("key '{}' is present, but its value is not a string", key_path))
+    located.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+        anyhow!(
+            "key '{}' is present, but its value is not a string",
+            key_path
+        )
+    })
 }
 
 fn expand_toml_key_path<'a>(value: &'a toml::Value, key_path: &'a str) -> Cow<'a, str> {
@@ -308,7 +332,10 @@ fn locate_toml_value<'a>(value: &'a toml::Value, key_path: &str) -> Result<&'a t
     Ok(current)
 }
 
-fn locate_json_value_mut<'a>(value: &'a mut JsonValue, key_path: &str) -> Result<&'a mut JsonValue> {
+fn locate_json_value_mut<'a>(
+    value: &'a mut JsonValue,
+    key_path: &str,
+) -> Result<&'a mut JsonValue> {
     let mut current = value;
     for segment in key_path.split('.') {
         current = current
@@ -340,7 +367,8 @@ name = "comfy-version-bumper"
 version = "0.1.0"
 edition = "2024"
 "#;
-        let resolved = extract_toml_value(content, "version").expect("should resolve package.version");
+        let resolved =
+            extract_toml_value(content, "version").expect("should resolve package.version");
         assert_eq!(resolved, "0.1.0");
     }
 

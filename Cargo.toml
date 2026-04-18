@@ -2,7 +2,7 @@
 name = "comfygit"
 version = "0.9.1"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
 authors = ["ComfyHome™ <dev@comfyhome.io>"]
 license = "SA-PS"

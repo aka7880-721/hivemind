@@ -105,7 +105,11 @@ pub struct ProjectConfig {
 impl ProjectConfig {
     pub fn summary(&self) -> String {
         match self.project_type {
-            ProjectType::AllInOne => format!("{} | {}", self.project_type.display_name(), self.version_scheme.display_name()),
+            ProjectType::AllInOne => format!(
+                "{} | {}",
+                self.project_type.display_name(),
+                self.version_scheme.display_name()
+            ),
             ProjectType::Branched => format!(
                 "{} | {} scope{} | {}",
                 self.project_type.display_name(),
@@ -139,13 +143,25 @@ impl ProjectConfig {
         ];
 
         if self.project_type == ProjectType::AllInOne {
-            lines.push(format!("Version scheme: {}", self.version_scheme.display_name()));
+            lines.push(format!(
+                "Version scheme: {}",
+                self.version_scheme.display_name()
+            ));
             for target in &self.targets {
-                lines.push(format!("Target: {} -> {} [{}]", target.path, target.key_path, target.format.display_name()));
+                lines.push(format!(
+                    "Target: {} -> {} [{}]",
+                    target.path,
+                    target.key_path,
+                    target.format.display_name()
+                ));
             }
             lines.push(format!(
                 "Changelog: {}",
-                if self.changelog.enabled { "Enabled" } else { "Disabled" }
+                if self.changelog.enabled {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
             ));
         } else {
             for (scope_index, branch) in self.branches.iter().enumerate() {
@@ -170,7 +186,12 @@ impl ProjectConfig {
                     }
                 }
                 for target in &branch.targets {
-                    lines.push(format!("  {} -> {} [{}]", target.path, target.key_path, target.format.display_name()));
+                    lines.push(format!(
+                        "  {} -> {} [{}]",
+                        target.path,
+                        target.key_path,
+                        target.format.display_name()
+                    ));
                 }
             }
         }
@@ -182,7 +203,10 @@ impl ProjectConfig {
             }
         }
 
-        lines.push(format!("Changelog path: {}", self.changelog.effective_path()));
+        lines.push(format!(
+            "Changelog path: {}",
+            self.changelog.effective_path()
+        ));
 
         lines
     }
@@ -236,7 +260,11 @@ impl ProjectConfig {
                 if let Some(branch) = self.branches.get_mut(scope_index) {
                     branch.changelog_enabled = enabled;
                 }
-                self.changelog.enabled = self.branches.first().map(|branch| branch.changelog_enabled).unwrap_or(false);
+                self.changelog.enabled = self
+                    .branches
+                    .first()
+                    .map(|branch| branch.changelog_enabled)
+                    .unwrap_or(false);
             }
         }
     }
@@ -495,7 +523,10 @@ impl ConfigStore {
 
     pub fn save(&self, config: &AppConfig) -> Result<()> {
         if config.schema_version != SCHEMA_VERSION {
-            bail!("unsupported config schema version {}", config.schema_version);
+            bail!(
+                "unsupported config schema version {}",
+                config.schema_version
+            );
         }
 
         if let Some(parent) = self.path.parent() {
@@ -512,7 +543,10 @@ impl ConfigStore {
 fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
     let original_schema_version = config.schema_version;
     if config.schema_version > SCHEMA_VERSION {
-        bail!("unsupported config schema version {}", config.schema_version);
+        bail!(
+            "unsupported config schema version {}",
+            config.schema_version
+        );
     }
 
     let mut changed = false;
@@ -572,8 +606,8 @@ mod tests {
             scope_kind: BranchScopeKind::Branch,
             repo: None,
             changelog_enabled: false,
-			changelog_path: None,
-			release_now: ReleaseNowSettings::default(),
+            changelog_path: None,
+            release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
             targets: Vec::new(),
         };
@@ -620,7 +654,10 @@ format = "json"
         assert!(!branch.changelog_enabled);
         assert_eq!(branch.targets.len(), 1);
         assert!(!config.projects[0].changelog.enabled);
-        assert_eq!(config.projects[0].changelog.effective_path(), DEFAULT_CHANGELOG_PATH);
+        assert_eq!(
+            config.projects[0].changelog.effective_path(),
+            DEFAULT_CHANGELOG_PATH
+        );
     }
 
     #[test]
@@ -672,7 +709,7 @@ format = "json"
                 unified_versioning: true,
                 version_scheme: VersionScheme::SemVer,
                 changelog: ChangelogSettings::default(),
-				release_now: ReleaseNowSettings::default(),
+                release_now: ReleaseNowSettings::default(),
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),
                     path: "package.json".to_string(),
@@ -691,7 +728,10 @@ format = "json"
         assert!(migrated.projects[0].targets.is_empty());
         assert_eq!(migrated.projects[0].branches.len(), 1);
         assert_eq!(migrated.projects[0].branches[0].name, "core");
-        assert_eq!(migrated.projects[0].branches[0].targets[0].path, "package.json");
+        assert_eq!(
+            migrated.projects[0].branches[0].targets[0].path,
+            "package.json"
+        );
     }
 
     #[test]
@@ -703,7 +743,7 @@ format = "json"
             unified_versioning: false,
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
-			release_now: ReleaseNowSettings::default(),
+            release_now: ReleaseNowSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
@@ -711,8 +751,8 @@ format = "json"
                 scope_kind: BranchScopeKind::Branch,
                 repo: None,
                 changelog_enabled: false,
-				changelog_path: None,
-				release_now: ReleaseNowSettings::default(),
+                changelog_path: None,
+                release_now: ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: Vec::new(),
             }],
@@ -731,8 +771,8 @@ format = "json"
                     scope_kind: BranchScopeKind::Service,
                     repo: None,
                     changelog_enabled: false,
-					changelog_path: None,
-					release_now: ReleaseNowSettings::default(),
+                    changelog_path: None,
+                    release_now: ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::CalVerYearMonthMicro,
                     targets: Vec::new(),
                 },

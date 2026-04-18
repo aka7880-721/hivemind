@@ -20,21 +20,20 @@ pub const LOGO_FULL_BLOCK: &str = "█";
 pub const TERMINAL_IMAGE_ASPECT_ADJUSTMENT: f32 = 2.0;
 
 pub const ASCII_HEADER: [&str; 3] = [
- 
- r"▄█████  ▄▄▄  ▄▄   ▄▄ ▄▄▄▄▄ ▄▄ ▄▄  ▄████  ▄▄ ▄▄▄▄▄▄", 
- r"██     ██▀██ ██▀▄▀██ ██▄▄  ▀███▀ ██  ▄▄▄ ██   ██ ",  
- r"▀█████ ▀███▀ ██   ██ ██      █    ▀███▀  ██   ██ {APP_VERSION}",
+    r"▄█████  ▄▄▄  ▄▄   ▄▄ ▄▄▄▄▄ ▄▄ ▄▄  ▄████  ▄▄ ▄▄▄▄▄▄",
+    r"██     ██▀██ ██▀▄▀██ ██▄▄  ▀███▀ ██  ▄▄▄ ██   ██ ",
+    r"▀█████ ▀███▀ ██   ██ ██      █    ▀███▀  ██   ██ {APP_VERSION}",
 ];
 
 pub const NARROW_ASCII_HEADER: [&str; 7] = [
- r"                        ",
- r"██████╗ ██████╗ ",
- r"██╔════╝██╔════╝ ",
- r"██║     ██║  ███╗",
- r"██║     ██║   ██║",
- r"╚██████╗╚██████╔╝",
- r" ╚═════╝ ╚═════╝ {APP_VERSION}",
- ];
+    r"                        ",
+    r"██████╗ ██████╗ ",
+    r"██╔════╝██╔════╝ ",
+    r"██║     ██║  ███╗",
+    r"██║     ██║   ██║",
+    r"╚██████╗╚██████╔╝",
+    r" ╚═════╝ ╚═════╝ {APP_VERSION}",
+];
 
 const HEADER_LOGO_MARGIN: u16 = 4;
 const HEADER_LOGO_GAP: u16 = 6;
@@ -92,7 +91,10 @@ impl PixelLogo {
     fn fallback_render(_max_height: u16) -> PixelLogoRender {
         let line = Line::from("logo_error");
         let width = line.width() as u16;
-        PixelLogoRender { lines: vec![line], width }
+        PixelLogoRender {
+            lines: vec![line],
+            width,
+        }
     }
 }
 
@@ -134,11 +136,17 @@ impl HeaderContent {
     }
 }
 
-pub fn choose_header_content(inner_width: u16, logo_width: u16, version_label: &str) -> HeaderContent {
+pub fn choose_header_content(
+    inner_width: u16,
+    logo_width: u16,
+    version_label: &str,
+) -> HeaderContent {
     let wide_banner = build_header_banner(&ASCII_HEADER, version_label);
     let narrow_banner = build_header_banner(&NARROW_ASCII_HEADER, version_label);
-    let wide_with_logo_width = HEADER_LOGO_MARGIN + logo_width + HEADER_LOGO_GAP + wide_banner.width();
-    let narrow_with_logo_width = HEADER_LOGO_MARGIN + logo_width + HEADER_LOGO_GAP + narrow_banner.width();
+    let wide_with_logo_width =
+        HEADER_LOGO_MARGIN + logo_width + HEADER_LOGO_GAP + wide_banner.width();
+    let narrow_with_logo_width =
+        HEADER_LOGO_MARGIN + logo_width + HEADER_LOGO_GAP + narrow_banner.width();
 
     if inner_width >= wide_with_logo_width {
         HeaderContent {
@@ -180,7 +188,10 @@ fn build_header_banner(lines: &[&str], version_label: &str) -> HeaderBanner {
                 let suffix = &line[index + "{APP_VERSION}".len()..];
                 let spans = vec![
                     Span::styled(prefix.to_string(), Style::default().fg(Color::White).bold()),
-                    Span::styled(version_label.to_string(), Style::default().fg(Color::Cyan).bold()),
+                    Span::styled(
+                        version_label.to_string(),
+                        Style::default().fg(Color::Cyan).bold(),
+                    ),
                     Span::styled(suffix.to_string(), Style::default().fg(Color::White).bold()),
                 ];
                 Line::from(spans)
@@ -192,7 +203,11 @@ fn build_header_banner(lines: &[&str], version_label: &str) -> HeaderBanner {
             }
         })
         .collect::<Vec<_>>();
-    let width = rendered.iter().map(|line| line.width() as u16).max().unwrap_or(0);
+    let width = rendered
+        .iter()
+        .map(|line| line.width() as u16)
+        .max()
+        .unwrap_or(0);
 
     HeaderBanner {
         lines: rendered,
@@ -244,7 +259,9 @@ fn render_image(image: &RgbaImage) -> PixelLogoRender {
 }
 
 fn load_image(bytes: &[u8]) -> Option<RgbaImage> {
-    let decoded = ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
+    let decoded = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
     let image = decoded.decode().ok()?;
     Some(image.to_rgba8())
 }
