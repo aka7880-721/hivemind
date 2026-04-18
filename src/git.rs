@@ -690,6 +690,7 @@ mod tests {
     fn collect_git_scope_contexts_prefers_branch_repo_overrides() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::GitHubEnabled,
             unified_versioning: false,
@@ -757,6 +758,7 @@ mod tests {
     fn collect_all_branch_git_scope_contexts_keeps_scopes_for_unified_projects() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: true,
@@ -835,6 +837,7 @@ mod tests {
     fn collect_scope_context_derives_repo_root_from_target_path() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: false,
