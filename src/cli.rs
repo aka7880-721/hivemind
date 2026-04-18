@@ -53,7 +53,7 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             Ok(StartupMode::Handled)
         }
         [command] if is_tui(command) => Ok(StartupMode::LaunchTui),
-        [command, lookup] if command == "cd" => {
+        [command, lookup] if command == "pwd" => {
             let config = load_config()?;
             let project = find_project_by_lookup(&config.projects, lookup)?;
             println!("{}", project_root(project)?.display());
@@ -85,10 +85,10 @@ fn is_tui(value: &str) -> bool {
 fn print_usage() {
     println!("ComfyGit {}", APP_VERSION);
     println!("Usage:");
-    println!("  cg -v|--version   Show version and GitHub update status");
-    println!("  cg tui             Launch the TUI");
-    println!("  cg cd <alias>      Print the configured project root for shell cd wrappers");
-    println!("  cg bmp <action>    Bump the project in the current working directory");
+    println!("  cg -v|--version           Show version and GitHub update status");
+    println!("  cg tui                   Launch the TUI");
+    println!("  cg pwd <alias>            Print the configured project root path");
+    println!("  cg bmp <action>          Bump the project in the current working directory");
     println!("Actions: maj|major, min|minor, pat|patch, auto|cal");
 }
 
