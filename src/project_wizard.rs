@@ -597,6 +597,7 @@ impl ProjectWizard {
             };
             ProjectConfig {
                 name: self.name.value.trim().to_string(),
+                alias: String::new(),
                 project_type: ProjectType::AllInOne,
                 integration_mode: self.integration_mode,
                 unified_versioning: true,
@@ -610,6 +611,7 @@ impl ProjectWizard {
         } else {
             ProjectConfig {
                 name: self.name.value.trim().to_string(),
+                alias: String::new(),
                 project_type: ProjectType::Branched,
                 integration_mode: self.integration_mode,
                 unified_versioning: self.unified_versioning,
