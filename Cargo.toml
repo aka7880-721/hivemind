@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.9.2"
+version = "0.10.7"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -19,6 +19,10 @@ license-link = "https://github.com/comfy-home/ComfyGit?tab=License-1-ov-file"
 name = "cg"
 path = "src/main.rs"
 
+[[bin]]
+name = "ComfyGit"
+path = "src/bin/cg-bin.rs"
+
 [workspace]
 
 [dependencies]
@@ -33,6 +37,7 @@ ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
 ratatui-explorer = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 toml = "1"
 toml_edit = "0.25"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

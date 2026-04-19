@@ -686,19 +686,7 @@ pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<(
             .map(|scope| scope.display_name.clone())
             .unwrap_or_else(|| project.name.clone())
     };
-    let options = match project.integration_mode {
-        IntegrationMode::LocalOnly => vec![OverviewBumpWorkflow::JustBump],
-        IntegrationMode::GitLocalOnly => vec![
-            OverviewBumpWorkflow::JustBump,
-            OverviewBumpWorkflow::Commit,
-            OverviewBumpWorkflow::CommitAndTag,
-        ],
-        IntegrationMode::GitHubEnabled => vec![
-            OverviewBumpWorkflow::JustBump,
-            OverviewBumpWorkflow::CommitAndPush,
-            OverviewBumpWorkflow::CommitPushAndTag,
-        ],
-    };
+    let options = overview_bump_workflow_options(project.integration_mode);
 
     app.overview_bump_workflow_dialog = Some(OverviewBumpWorkflowDialog::new(
         project.name,
@@ -725,6 +713,7 @@ pub(super) fn rotate_overview_bump_workflow(app: &mut App, delta: isize) {
 
 pub(super) fn cancel_overview_bump_workflow(app: &mut App) {
     app.overview_bump_workflow_dialog = None;
+    app.overview_branch_bump_dialog = None;
     app.status = StatusMessage::info("Tile bump action cancelled.");
 }
 
@@ -742,6 +731,7 @@ pub(super) fn rotate_overview_bump_warning(app: &mut App, delta: isize) {
 
 pub(super) fn cancel_overview_bump_warning(app: &mut App) {
     app.overview_bump_warning_dialog = None;
+    app.overview_branch_bump_dialog = None;
     app.overview_bump_workflow_dialog = None;
     app.status = StatusMessage::info("Tile bump action cancelled.");
 }
@@ -940,8 +930,21 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
     let Some(dialog) = app.overview_bump_workflow_dialog.clone() else {
         return Ok(());
     };
+    let workflow = dialog.selected_workflow();
 
-    if dialog.selected_workflow() != OverviewBumpWorkflow::JustBump {
+    if workflow.requires_branch() {
+        app.overview_branch_bump_dialog = Some(OverviewBranchBumpDialog::new(
+            dialog.project_name,
+            dialog.scope_label,
+            dialog.next_version,
+            dialog.scope_index,
+            workflow,
+        ));
+        app.status = StatusMessage::info("Enter the new branch name for the bump workflow.");
+        return Ok(());
+    }
+
+    if workflow != OverviewBumpWorkflow::JustBump {
         let project = app.selected_project()?.clone();
         app.schedule_progress_job(
             " Checking Staged Files ",
@@ -949,7 +952,7 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
             BackgroundJobRequest::CheckOverviewBumpWarnings {
                 project,
                 scope_index: dialog.scope_index,
-                workflow: dialog.selected_workflow(),
+                workflow,
             },
         )?;
         app.status = StatusMessage::info(
@@ -958,16 +961,44 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
         return Ok(());
     }
 
-    continue_overview_bump_workflow_confirmation(
-        app,
-        dialog.scope_index,
-        dialog.selected_workflow(),
-    )
+    continue_overview_bump_workflow_confirmation(app, dialog.scope_index, workflow)
+}
+
+pub(super) fn confirm_overview_branch_bump(app: &mut App) -> Result<()> {
+    let Some(dialog) = app.overview_branch_bump_dialog.clone() else {
+        return Ok(());
+    };
+
+    if dialog.branch_name.value.trim().is_empty() {
+        bail!("branch name cannot be empty");
+    }
+
+    let project = app.selected_project()?.clone();
+    app.schedule_progress_job(
+        " Checking Staged Files ",
+        "Checking repositories for previously staged files before committing the bump.",
+        BackgroundJobRequest::CheckOverviewBumpWarnings {
+            project,
+            scope_index: dialog.scope_index,
+            workflow: dialog.workflow,
+        },
+    )?;
+    app.status = StatusMessage::info(
+        "Checking repositories for previously staged files before committing the bump.",
+    );
+    Ok(())
 }
 
 pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
     let Some(dialog) = app.overview_bump_warning_dialog.clone() else {
         return Ok(());
+    };
+    let branch_name = if dialog.workflow.requires_branch() {
+        app.overview_branch_bump_dialog
+            .as_ref()
+            .map(|branch_dialog| branch_dialog.branch_name.value.trim().to_string())
+    } else {
+        None
     };
 
     match dialog.selected_choice() {
@@ -980,8 +1011,14 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
                 app.overview_bump_warning_dialog = None;
                 return Ok(());
             }
-            execute_overview_bump_workflow(app, dialog.scope_index, dialog.workflow)?;
+            execute_overview_bump_workflow(
+                app,
+                dialog.scope_index,
+                dialog.workflow,
+                branch_name.as_deref(),
+            )?;
             app.overview_bump_warning_dialog = None;
+            app.overview_branch_bump_dialog = None;
             app.overview_bump_workflow_dialog = None;
         }
         OverviewBumpWarningChoice::UnstageExtras => {
@@ -996,8 +1033,14 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
                 app.overview_bump_warning_dialog = None;
                 return Ok(());
             }
-            execute_overview_bump_workflow(app, dialog.scope_index, dialog.workflow)?;
+            execute_overview_bump_workflow(
+                app,
+                dialog.scope_index,
+                dialog.workflow,
+                branch_name.as_deref(),
+            )?;
             app.overview_bump_warning_dialog = None;
+            app.overview_branch_bump_dialog = None;
             app.overview_bump_workflow_dialog = None;
         }
         OverviewBumpWarningChoice::Cancel => cancel_overview_bump_warning(app),
@@ -1032,7 +1075,16 @@ pub(super) fn continue_overview_bump_workflow_confirmation(
         return Ok(());
     }
 
-    execute_overview_bump_workflow(app, scope_index, workflow)?;
+    let branch_name = if workflow.requires_branch() {
+        app.overview_branch_bump_dialog
+            .as_ref()
+            .map(|dialog| dialog.branch_name.value.trim().to_string())
+    } else {
+        None
+    };
+
+    execute_overview_bump_workflow(app, scope_index, workflow, branch_name.as_deref())?;
+    app.overview_branch_bump_dialog = None;
     app.overview_bump_workflow_dialog = None;
     Ok(())
 }
@@ -1041,6 +1093,7 @@ pub(super) fn execute_overview_bump_workflow(
     app: &mut App,
     scope_index: usize,
     workflow: OverviewBumpWorkflow,
+    branch_name: Option<&str>,
 ) -> Result<()> {
     let project = app.selected_project()?.clone();
     let scopes = collect_bump_scopes(&project)?;
@@ -1106,11 +1159,12 @@ pub(super) fn execute_overview_bump_workflow(
                 );
             }
         }
-        apply_repo_bump_workflow(&repo_operations, &next_version, workflow)?;
+        apply_repo_bump_workflow(&repo_operations, &next_version, workflow, branch_name)?;
     }
 
     app.sync_dashboard_overview_after_repo_change();
 
+    app.overview_branch_bump_dialog = None;
     let target_count = affected_scope_indexes
         .iter()
         .filter_map(|index| scopes.get(*index))
@@ -1320,6 +1374,7 @@ mod tests {
     fn empty_local_only_project_uses_dashboard_placeholders() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::AllInOne,
             integration_mode: IntegrationMode::LocalOnly,
             unified_versioning: true,
@@ -1355,6 +1410,7 @@ mod tests {
     fn configured_branched_project_keeps_real_scope_versions() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: false,
@@ -1408,6 +1464,7 @@ mod tests {
         };
         app.config.projects = vec![ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::AllInOne,
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: true,

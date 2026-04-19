@@ -8,7 +8,8 @@
 /// Git-related workflow operations for applying version bumps across repositories, managing staged changes, and ensuring tag consistency.
 use super::*;
 use crate::git::{
-    GitCancellation, current_branch_with_cancel, run_git_checked_with_cancel, switch_to_main_branch,
+    GitCancellation, create_branch_and_switch, current_branch_with_cancel,
+    run_git_checked_with_cancel, switch_to_main_branch,
 };
 
 #[derive(Clone)]
@@ -18,7 +19,7 @@ pub(super) struct RepoBranchState {
     pub(super) remote_spec: Option<String>,
 }
 
-pub(super) fn collect_repo_bump_operations(
+pub(crate) fn collect_repo_bump_operations(
     _project: &ProjectConfig,
     scopes: &[BumpScope],
     git_contexts: &[crate::git::GitScopeContext],
@@ -63,14 +64,22 @@ pub(super) fn collect_repo_bump_operations(
     Ok(operations)
 }
 
-pub(super) fn apply_repo_bump_workflow(
+pub(crate) fn apply_repo_bump_workflow(
     operations: &[RepoBumpOperation],
     next_version: &str,
     workflow: OverviewBumpWorkflow,
+    branch_name: Option<&str>,
 ) -> Result<()> {
     let commit_message = format!("bump: CG version bump to {}", next_version);
+    let trimmed_branch_name = branch_name.map(str::trim).filter(|name| !name.is_empty());
 
     for operation in operations {
+        if workflow.requires_branch() {
+            let branch_name = trimmed_branch_name
+                .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
+            create_branch_and_switch(&operation.repo_root, branch_name)?;
+        }
+
         if !operation.stage_paths.is_empty() {
             let mut add_args = vec!["add".to_string(), "--".to_string()];
             add_args.extend(operation.stage_paths.iter().cloned());
@@ -90,7 +99,16 @@ pub(super) fn apply_repo_bump_workflow(
                 .remote_spec
                 .as_deref()
                 .ok_or_else(|| anyhow!("no remote is configured for this project"))?;
-            run_git_checked(&operation.repo_root, &["push", remote_spec])?;
+            if workflow.requires_branch() {
+                let branch_name = trimmed_branch_name
+                    .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
+                run_git_checked(
+                    &operation.repo_root,
+                    &["push", "-u", remote_spec, branch_name],
+                )?;
+            } else {
+                run_git_checked(&operation.repo_root, &["push", remote_spec])?;
+            }
             if workflow.requires_tag() {
                 run_git_checked(&operation.repo_root, &["push", remote_spec, next_version])?;
             }

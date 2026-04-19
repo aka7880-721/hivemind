@@ -36,6 +36,15 @@ pub(crate) fn switch_to_main_branch(
 
     Ok(())
 }
+
+pub(crate) fn create_branch_and_switch(repo_root: &str, branch_name: &str) -> Result<()> {
+    let switch_output = run_git(repo_root, &["switch", "-c", branch_name])?;
+    if !switch_output.success {
+        run_git_checked(repo_root, &["checkout", "-b", branch_name])?;
+    }
+
+    Ok(())
+}
 // For details, see the LICENSE file in the repository root.
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
@@ -690,6 +699,7 @@ mod tests {
     fn collect_git_scope_contexts_prefers_branch_repo_overrides() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::GitHubEnabled,
             unified_versioning: false,
@@ -757,6 +767,7 @@ mod tests {
     fn collect_all_branch_git_scope_contexts_keeps_scopes_for_unified_projects() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: true,
@@ -835,6 +846,7 @@ mod tests {
     fn collect_scope_context_derives_repo_root_from_target_path() {
         let project = ProjectConfig {
             name: "demo".to_string(),
+            alias: String::new(),
             project_type: ProjectType::Branched,
             integration_mode: IntegrationMode::GitLocalOnly,
             unified_versioning: false,

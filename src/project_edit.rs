@@ -854,6 +854,7 @@ mod tests {
     fn apply_updates_changelog_path_without_overwriting_enabled_state() {
         let mut project = ProjectConfig {
             name: "Example".to_string(),
+            alias: String::new(),
             project_type: ProjectType::AllInOne,
             integration_mode: IntegrationMode::LocalOnly,
             unified_versioning: true,
@@ -887,6 +888,7 @@ mod tests {
             0,
             &ProjectConfig {
                 name: "demo".to_string(),
+                alias: String::new(),
                 project_type: ProjectType::AllInOne,
                 version_scheme: VersionScheme::SemVer,
                 unified_versioning: true,
@@ -926,6 +928,7 @@ mod tests {
             0,
             &ProjectConfig {
                 name: "demo".to_string(),
+                alias: String::new(),
                 project_type: ProjectType::Branched,
                 version_scheme: VersionScheme::SemVer,
                 unified_versioning: false,

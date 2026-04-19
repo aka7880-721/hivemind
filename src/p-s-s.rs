@@ -43,6 +43,7 @@ impl ProjectSettingsTab {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectSettingsFocus {
+    Alias,
     ChangelogEnabled,
     ChangelogPath,
     ReleaseNowEnabled,
@@ -59,6 +60,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) scroll: u16,
     pub(crate) viewport_height: u16,
     pub(crate) follow_focus: bool,
+    pub(crate) alias: TextInput,
     pub(crate) changelog_path: TextInput,
     pub(crate) release_now_windows: TextInput,
     pub(crate) release_now_linux_arm: TextInput,
@@ -70,10 +72,11 @@ impl Default for ProjectSettingsState {
     fn default() -> Self {
         Self {
             binding: None,
-            focus: ProjectSettingsFocus::ChangelogEnabled,
+            focus: ProjectSettingsFocus::Alias,
             scroll: 0,
             viewport_height: 0,
             follow_focus: true,
+            alias: TextInput::with_value(""),
             changelog_path: TextInput::with_value(DEFAULT_CHANGELOG_PATH),
             release_now_windows: TextInput::with_value(""),
             release_now_linux_arm: TextInput::with_value(""),
@@ -99,6 +102,7 @@ impl ProjectSettingsState {
         self.binding = Some((project_index, scope_index));
         self.scroll = 0;
         self.follow_focus = true;
+        self.alias.set_value(project.alias.clone());
         self.changelog_path
             .set_value(project.changelog_path_for_scope(scope_index).to_string());
         self.release_now_windows
@@ -120,7 +124,10 @@ impl ProjectSettingsState {
     ) -> Vec<ProjectSettingsFocus> {
         match tab {
             ProjectSettingsTab::General => {
-                let mut fields = vec![ProjectSettingsFocus::ChangelogEnabled];
+                let mut fields = vec![
+                    ProjectSettingsFocus::Alias,
+                    ProjectSettingsFocus::ChangelogEnabled,
+                ];
                 if project.changelog_enabled_for_scope(scope_index) {
                     fields.push(ProjectSettingsFocus::ChangelogPath);
                 }
@@ -149,9 +156,7 @@ impl ProjectSettingsState {
     ) {
         let fields = self.visible_fields(tab, project, scope_index);
         if !fields.contains(&self.focus) {
-            self.focus = *fields
-                .first()
-                .unwrap_or(&ProjectSettingsFocus::ChangelogEnabled);
+            self.focus = *fields.first().unwrap_or(&ProjectSettingsFocus::Alias);
             self.follow_focus = true;
         }
     }
@@ -191,7 +196,8 @@ impl ProjectSettingsState {
             .contains(&self.focus)
             && matches!(
                 self.focus,
-                ProjectSettingsFocus::ChangelogPath
+                ProjectSettingsFocus::Alias
+                    | ProjectSettingsFocus::ChangelogPath
                     | ProjectSettingsFocus::ReleaseNowWindows
                     | ProjectSettingsFocus::ReleaseNowLinuxArm
                     | ProjectSettingsFocus::ReleaseNowLinuxAmd
@@ -201,6 +207,7 @@ impl ProjectSettingsState {
 
     pub(crate) fn active_input_mut(&mut self) -> Option<&mut TextInput> {
         match self.focus {
+            ProjectSettingsFocus::Alias => Some(&mut self.alias),
             ProjectSettingsFocus::ChangelogPath => Some(&mut self.changelog_path),
             ProjectSettingsFocus::ReleaseNowWindows => Some(&mut self.release_now_windows),
             ProjectSettingsFocus::ReleaseNowLinuxArm => Some(&mut self.release_now_linux_arm),
@@ -231,6 +238,7 @@ impl ProjectSettingsState {
         max_width: usize,
     ) -> Line<'static> {
         match field {
+            ProjectSettingsFocus::Alias => self.alias.display_line_with_width(focused, max_width),
             ProjectSettingsFocus::ChangelogPath => self
                 .changelog_path
                 .display_line_with_width(focused, max_width),
@@ -811,6 +819,8 @@ fn build_rows(
 
 fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
     let mut rows = vec![
+        ProjectSettingsRow::Path(ProjectSettingsFocus::Alias),
+        ProjectSettingsRow::Spacer(1),
         ProjectSettingsRow::Text(
             Line::from(format!(
                 "Selected scope: {}",
@@ -1016,14 +1026,17 @@ fn render_path_row(
     focused: bool,
 ) {
     let inset = control_inset(area);
-    let side_button = Some(FormRowButton::new(
-        "Browse",
-        HitAction::BrowseProjectSettingsField(field),
-    ));
+    let side_button = match field {
+        ProjectSettingsFocus::Alias => None,
+        _ => Some(FormRowButton::new(
+            "Browse",
+            HitAction::BrowseProjectSettingsField(field),
+        )),
+    };
     let value = app.project_settings_state.display_value_for_field(
         field,
         focused,
-        visible_field_width(inset.width, true),
+        visible_field_width(inset.width, side_button.is_some()),
     );
     let button_rect = render_path_form_row(
         frame,
@@ -1063,6 +1076,7 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
 
 fn field_label(field: ProjectSettingsFocus) -> &'static str {
     match field {
+        ProjectSettingsFocus::Alias => "Alias",
         ProjectSettingsFocus::ChangelogPath => "Changelog path",
         ProjectSettingsFocus::ReleaseNowWindows => "Windows",
         ProjectSettingsFocus::ReleaseNowLinuxArm => "Linux ARM",
@@ -1137,6 +1151,7 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
         return Ok(());
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    let alias = app.project_settings_state.alias.value().trim().to_string();
     let changelog_path = app
         .project_settings_state
         .changelog_path
@@ -1168,6 +1183,7 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
         .projects
         .get_mut(app.selected_project)
         .expect("selected project checked above");
+    active_project.alias = alias;
     active_project.set_changelog_path_for_scope(scope_index, changelog_path);
     let release_now = active_project.release_now_for_scope_mut(scope_index);
     release_now.windows_script = windows_script;
