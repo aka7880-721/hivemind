@@ -36,6 +36,15 @@ pub(crate) fn switch_to_main_branch(
 
     Ok(())
 }
+
+pub(crate) fn create_branch_and_switch(repo_root: &str, branch_name: &str) -> Result<()> {
+    let switch_output = run_git(repo_root, &["switch", "-c", branch_name])?;
+    if !switch_output.success {
+        run_git_checked(repo_root, &["checkout", "-b", branch_name])?;
+    }
+
+    Ok(())
+}
 // For details, see the LICENSE file in the repository root.
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
