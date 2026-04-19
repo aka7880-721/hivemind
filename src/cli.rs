@@ -73,11 +73,11 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             println!("{}", project_root(project)?.display());
             Ok(StartupMode::Handled)
         }
-        [command, action] if command == "bmp" => {
+        [command, action] if is_bump_command(command) => {
             run_bump(action, None)?;
             Ok(StartupMode::Handled)
         }
-        [command, action, option] if command == "bmp" => {
+        [command, action, option] if is_bump_command(command) => {
             run_bump(action, Some(option))?;
             Ok(StartupMode::Handled)
         }
@@ -100,6 +100,10 @@ fn is_tui(value: &str) -> bool {
     matches!(value, "tui" | "ui")
 }
 
+fn is_bump_command(value: &str) -> bool {
+    matches!(value, "bmp" | "bump" | "bp" | "bum")
+}
+
 fn print_usage() {
     println!("ComfyGit {}", APP_VERSION);
     println!("Usage:");
@@ -107,7 +111,9 @@ fn print_usage() {
     println!("  cg tui                   Launch the TUI");
     println!("  cg pwd <alias>            Print the configured project root path");
     println!("  cg pwd -all               Print all configured repo root directories");
-    println!("  cg bmp <action> [option] Bump the project in the current working directory");
+    println!(
+        "  cg bmp|bump|bp|bum <action> [option]  Bump the project in the current working directory"
+    );
     println!("Actions: maj|major, min|minor, pat|patch, auto|cal");
     println!(
         "Options: 1=Just bump, 2=Bump & Commit, 3=Bump & Commit & Push, 4=Branch & Bump & Commit & Push"
@@ -757,6 +763,15 @@ mod tests {
             parse_cli_bump_option(Some("4")).expect("option 4 should parse"),
             OverviewBumpWorkflow::BranchCommitAndPush
         );
+    }
+
+    #[test]
+    fn is_bump_command_accepts_synonyms() {
+        assert!(is_bump_command("bmp"));
+        assert!(is_bump_command("bump"));
+        assert!(is_bump_command("bp"));
+        assert!(is_bump_command("bum"));
+        assert!(!is_bump_command("bom"));
     }
 
     #[test]
