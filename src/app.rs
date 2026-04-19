@@ -89,7 +89,7 @@ use crate::{
 };
 
 #[path = "git_flow.rs"]
-mod git_flow;
+pub(crate) mod git_flow;
 #[path = "overview.rs"]
 mod overview;
 #[path = "p-s-s.rs"]
@@ -239,6 +239,7 @@ struct App {
     wizard: ProjectWizard,
     bump_dialog: Option<BumpDialog>,
     overview_bump_workflow_dialog: Option<OverviewBumpWorkflowDialog>,
+    overview_branch_bump_dialog: Option<OverviewBranchBumpDialog>,
     overview_bump_warning_dialog: Option<OverviewBumpWarningDialog>,
     main_branch_warning_dialog: Option<MainBranchWarningDialog>,
     std_changelog_sub_branch_dialog: Option<StdChangelogSubBranchDialog>,
@@ -332,6 +333,7 @@ impl App {
             wizard: ProjectWizard::default(),
             bump_dialog: None,
             overview_bump_workflow_dialog: None,
+            overview_branch_bump_dialog: None,
             overview_bump_warning_dialog: None,
             main_branch_warning_dialog: None,
             std_changelog_sub_branch_dialog: None,
@@ -459,6 +461,10 @@ impl App {
 
         if self.overview_bump_warning_dialog.is_some() {
             return self.handle_overview_bump_warning_key(key);
+        }
+
+        if self.overview_branch_bump_dialog.is_some() {
+            return self.handle_overview_branch_bump_key(key);
         }
 
         if self.overview_bump_workflow_dialog.is_some() {
@@ -817,7 +823,54 @@ impl App {
             KeyCode::Char('1') => self.select_overview_bump_workflow(0),
             KeyCode::Char('2') => self.select_overview_bump_workflow(1),
             KeyCode::Char('3') => self.select_overview_bump_workflow(2),
+            KeyCode::Char('4') => self.select_overview_bump_workflow(3),
             KeyCode::Enter | KeyCode::F(2) => return self.request_confirm_overview_bump_workflow(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_overview_branch_bump_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_overview_branch_bump(),
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_overview_branch_bump(),
+            KeyCode::Backspace => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.branch_name.backspace();
+                }
+            }
+            KeyCode::Delete => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.branch_name.delete();
+                }
+            }
+            KeyCode::Left => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.branch_name.move_left();
+                }
+            }
+            KeyCode::Right => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.branch_name.move_right();
+                }
+            }
+            KeyCode::Home => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.branch_name.home();
+                }
+            }
+            KeyCode::End => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.branch_name.end();
+                }
+            }
+            KeyCode::Char(character)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.branch_name.insert(character);
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -1899,6 +1952,8 @@ impl App {
                 self.bump_dialog = None;
                 self.status = StatusMessage::info("Bump preview closed.");
             }
+            HitAction::ConfirmOverviewBranchBump => return self.confirm_overview_branch_bump(),
+            HitAction::CancelOverviewBranchBump => self.cancel_overview_branch_bump(),
             HitAction::CloseRecentChanges => {
                 self.recent_changes_dialog = None;
                 self.cancel_background_job_kind(BackgroundJobKind::RecentChanges);
@@ -2752,6 +2807,15 @@ impl App {
         overview::confirm_overview_bump_warning(self)
     }
 
+    fn confirm_overview_branch_bump(&mut self) -> Result<()> {
+        overview::confirm_overview_branch_bump(self)
+    }
+
+    fn cancel_overview_branch_bump(&mut self) {
+        self.overview_branch_bump_dialog = None;
+        self.status = StatusMessage::info("Tile bump action cancelled.");
+    }
+
     fn are_we_on_main(&mut self, pending_action: PendingBumpAction) -> Result<bool> {
         let project = self.selected_project()?.clone();
         if !project.integration_mode.requires_repo() {
@@ -2924,14 +2988,24 @@ impl App {
         self.pending_changelog_write = Some(dialog.prepare_pending_write());
         self.cancel_background_job_kind(BackgroundJobKind::ChangelogPreview);
         self.current_changelog_preview_job_id = None;
+        let branch_name = dialog
+            .workflow
+            .filter(|workflow| workflow.requires_branch())
+            .and_then(|_| {
+                self.overview_branch_bump_dialog
+                    .as_ref()
+                    .map(|branch_dialog| branch_dialog.branch_name.value.trim().to_string())
+            });
         overview::execute_overview_bump_workflow(
             self,
             dialog.scope_index,
             dialog
                 .workflow
                 .expect("workflow preview should execute a workflow"),
+            branch_name.as_deref(),
         )?;
         self.overview_bump_warning_dialog = None;
+        self.overview_branch_bump_dialog = None;
         self.overview_bump_workflow_dialog = None;
         Ok(())
     }
@@ -4223,6 +4297,8 @@ pub(crate) enum HitAction {
     CycleBumpScope(isize),
     ApplyBump,
     CancelBump,
+    ConfirmOverviewBranchBump,
+    CancelOverviewBranchBump,
     CreateTag,
     SaveTagAnnotation,
     CancelTagAnnotation,
@@ -4832,13 +4908,33 @@ enum RecentChangesLoadAction {
     SwitchTab(RecentChangesTab),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum OverviewBumpWorkflow {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverviewBumpWorkflow {
     JustBump,
     Commit,
     CommitAndTag,
     CommitAndPush,
+    BranchCommitAndPush,
     CommitPushAndTag,
+}
+
+pub(crate) fn overview_bump_workflow_options(
+    integration_mode: IntegrationMode,
+) -> Vec<OverviewBumpWorkflow> {
+    match integration_mode {
+        IntegrationMode::LocalOnly => vec![OverviewBumpWorkflow::JustBump],
+        IntegrationMode::GitLocalOnly => vec![
+            OverviewBumpWorkflow::JustBump,
+            OverviewBumpWorkflow::Commit,
+            OverviewBumpWorkflow::CommitAndTag,
+        ],
+        IntegrationMode::GitHubEnabled => vec![
+            OverviewBumpWorkflow::JustBump,
+            OverviewBumpWorkflow::CommitAndPush,
+            OverviewBumpWorkflow::CommitPushAndTag,
+            OverviewBumpWorkflow::BranchCommitAndPush,
+        ],
+    }
 }
 
 impl OverviewBumpWorkflow {
@@ -4848,6 +4944,7 @@ impl OverviewBumpWorkflow {
             OverviewBumpWorkflow::Commit => "Bump & Commit",
             OverviewBumpWorkflow::CommitAndTag => "Bump & Commit & Tag",
             OverviewBumpWorkflow::CommitAndPush => "Bump & Commit & Push",
+            OverviewBumpWorkflow::BranchCommitAndPush => "Branch & Bump & Commit & Push",
             OverviewBumpWorkflow::CommitPushAndTag => "Bump & Commit & Push & Tag",
         }
     }
@@ -4864,6 +4961,9 @@ impl OverviewBumpWorkflow {
             OverviewBumpWorkflow::CommitAndPush => {
                 "Stages and commits the version files, then pushes the bump commit to the configured remote."
             }
+            OverviewBumpWorkflow::BranchCommitAndPush => {
+                "Creates a new branch, stages and commits the version files there, then pushes the new branch to the configured remote."
+            }
             OverviewBumpWorkflow::CommitPushAndTag => {
                 "Stages and commits the version files, pushes the bump commit, then pushes a tag named after the new version."
             }
@@ -4873,7 +4973,9 @@ impl OverviewBumpWorkflow {
     fn requires_push(self) -> bool {
         matches!(
             self,
-            OverviewBumpWorkflow::CommitAndPush | OverviewBumpWorkflow::CommitPushAndTag
+            OverviewBumpWorkflow::CommitAndPush
+                | OverviewBumpWorkflow::BranchCommitAndPush
+                | OverviewBumpWorkflow::CommitPushAndTag
         )
     }
 
@@ -4883,10 +4985,14 @@ impl OverviewBumpWorkflow {
             OverviewBumpWorkflow::CommitAndTag | OverviewBumpWorkflow::CommitPushAndTag
         )
     }
+
+    pub(crate) fn requires_branch(self) -> bool {
+        matches!(self, OverviewBumpWorkflow::BranchCommitAndPush)
+    }
 }
 
 #[derive(Clone)]
-struct RepoBumpOperation {
+pub(crate) struct RepoBumpOperation {
     repo_root: String,
     remote_spec: Option<String>,
     stage_paths: Vec<String>,
@@ -4900,6 +5006,35 @@ struct OverviewBumpWorkflowDialog {
     scope_index: usize,
     options: Vec<OverviewBumpWorkflow>,
     selected: usize,
+}
+
+#[derive(Clone)]
+struct OverviewBranchBumpDialog {
+    project_name: String,
+    scope_label: String,
+    next_version: String,
+    scope_index: usize,
+    workflow: OverviewBumpWorkflow,
+    branch_name: TextInput,
+}
+
+impl OverviewBranchBumpDialog {
+    fn new(
+        project_name: String,
+        scope_label: String,
+        next_version: String,
+        scope_index: usize,
+        workflow: OverviewBumpWorkflow,
+    ) -> Self {
+        Self {
+            project_name,
+            scope_label,
+            next_version,
+            scope_index,
+            workflow,
+            branch_name: TextInput::with_value(""),
+        }
+    }
 }
 
 impl OverviewBumpWorkflowDialog {
