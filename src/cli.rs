@@ -8,6 +8,7 @@
 use std::{
     cmp::Ordering,
     env, fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -19,10 +20,15 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 
 use crate::{
+    app::{
+        OverviewBumpWorkflow,
+        git_flow::{apply_repo_bump_workflow, collect_repo_bump_operations},
+    },
     config::{
         AppConfig, BranchConfig, ConfigStore, ProjectConfig, ProjectType, RepoConfig, TargetFormat,
         TargetSpec,
     },
+    git::collect_all_branch_git_scope_contexts,
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -60,7 +66,11 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             Ok(StartupMode::Handled)
         }
         [command, action] if command == "bmp" => {
-            run_bump(action)?;
+            run_bump(action, None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, option] if command == "bmp" => {
+            run_bump(action, Some(option))?;
             Ok(StartupMode::Handled)
         }
         _ => {
@@ -88,8 +98,11 @@ fn print_usage() {
     println!("  cg -v|--version           Show version and GitHub update status");
     println!("  cg tui                   Launch the TUI");
     println!("  cg pwd <alias>            Print the configured project root path");
-    println!("  cg bmp <action>          Bump the project in the current working directory");
+    println!("  cg bmp <action> [option] Bump the project in the current working directory");
     println!("Actions: maj|major, min|minor, pat|patch, auto|cal");
+    println!(
+        "Options: 1=Just bump, 2=Bump & Commit, 3=Bump & Commit & Push, 4=Branch & Bump & Commit & Push"
+    );
 }
 
 fn print_version_status() {
@@ -103,7 +116,7 @@ fn print_version_status() {
     }
 }
 
-fn run_bump(action_name: &str) -> Result<()> {
+fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
     let config = load_config()?;
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
@@ -115,6 +128,7 @@ fn run_bump(action_name: &str) -> Result<()> {
     }
 
     let action = parse_bump_action(action_name)?;
+    let workflow = parse_cli_bump_option(option_name)?;
     let affected_indexes = affected_scope_indexes(project, &resolved_project, &cwd, scopes.len())?;
     let scope_index = *affected_indexes
         .first()
@@ -153,6 +167,31 @@ fn run_bump(action_name: &str) -> Result<()> {
         }
     }
 
+    if workflow != OverviewBumpWorkflow::JustBump {
+        if !project.integration_mode.requires_repo() {
+            bail!("selected bump option requires a git-backed project")
+        }
+
+        let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
+        let repo_operations = collect_repo_bump_operations(
+            &resolved_project,
+            &scopes,
+            &git_contexts,
+            &affected_indexes,
+        )?;
+        let branch_name = if workflow.requires_branch() {
+            Some(prompt_branch_name()?)
+        } else {
+            None
+        };
+        apply_repo_bump_workflow(
+            &repo_operations,
+            &next_version,
+            workflow,
+            branch_name.as_deref(),
+        )?;
+    }
+
     if project.project_type == ProjectType::AllInOne || project.unified_versioning {
         println!(
             "Updated {} target{} in {} from {} to {}.",
@@ -175,6 +214,36 @@ fn run_bump(action_name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_cli_bump_option(value: Option<&str>) -> Result<OverviewBumpWorkflow> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(OverviewBumpWorkflow::JustBump),
+        Some("1") => Ok(OverviewBumpWorkflow::JustBump),
+        Some("2") => Ok(OverviewBumpWorkflow::Commit),
+        Some("3") => Ok(OverviewBumpWorkflow::CommitAndPush),
+        Some("4") => Ok(OverviewBumpWorkflow::BranchCommitAndPush),
+        Some(other) => bail!("unsupported bump option '{}'; expected 1-4", other),
+    }
+}
+
+fn prompt_branch_name() -> Result<String> {
+    print!("Enter branch name: ");
+    io::stdout()
+        .flush()
+        .context("failed to flush branch name prompt")?;
+
+    let mut branch_name = String::new();
+    io::stdin()
+        .read_line(&mut branch_name)
+        .context("failed to read branch name")?;
+
+    let branch_name = branch_name.trim().to_string();
+    if branch_name.is_empty() {
+        bail!("branch name cannot be empty")
+    }
+
+    Ok(branch_name)
 }
 
 fn load_config() -> Result<AppConfig> {
@@ -627,6 +696,30 @@ mod tests {
         assert_eq!(
             parse_bump_action("cal").expect("cal should parse"),
             BumpAction::Auto
+        );
+    }
+
+    #[test]
+    fn parse_cli_bump_option_maps_supported_workflows() {
+        assert_eq!(
+            parse_cli_bump_option(None).expect("default option should parse"),
+            OverviewBumpWorkflow::JustBump
+        );
+        assert_eq!(
+            parse_cli_bump_option(Some("1")).expect("option 1 should parse"),
+            OverviewBumpWorkflow::JustBump
+        );
+        assert_eq!(
+            parse_cli_bump_option(Some("2")).expect("option 2 should parse"),
+            OverviewBumpWorkflow::Commit
+        );
+        assert_eq!(
+            parse_cli_bump_option(Some("3")).expect("option 3 should parse"),
+            OverviewBumpWorkflow::CommitAndPush
+        );
+        assert_eq!(
+            parse_cli_bump_option(Some("4")).expect("option 4 should parse"),
+            OverviewBumpWorkflow::BranchCommitAndPush
         );
     }
 
