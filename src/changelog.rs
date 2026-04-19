@@ -720,10 +720,16 @@ fn normalize_alias(alias: &str) -> String {
 }
 
 fn split_prefix_and_message(input: &str) -> (&str, &str) {
-    match input.find(':') {
-        Some(index) => (&input[..index], input[index + 1..].trim()),
-        None => (input.trim(), input.trim()),
+    let mut depth = 0;
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            ':' if depth == 0 => return (&input[..index], input[index + 1..].trim()),
+            _ => {}
+        }
     }
+    (input.trim(), input.trim())
 }
 
 fn parse_prefix(prefix: &str) -> (Option<Category>, Option<String>, Option<&'static str>) {
@@ -1309,6 +1315,18 @@ mod tests {
         assert_eq!(feature.specific.as_deref(), Some("Tiles"));
         assert_eq!(enhancement.specific_heading, Some("Enhancement"));
         assert_eq!(enhancement.specific.as_deref(), Some("Changelog Preview"));
+    }
+
+    #[test]
+    fn parses_dotted_new_specific_heading_with_internal_colon() {
+        let parsed = ParsedCommit::parse(
+            "@.enh(CLI & bmp: Branch b4 bmp, bmp CLI options): add overview branch bump dialog",
+            "abc1234",
+        );
+
+        assert_eq!(parsed.specific_heading, Some("Enhancement"));
+        assert_eq!(parsed.specific.as_deref(), Some("CLI & bmp: Branch b4 bmp, bmp CLI options"));
+        assert_eq!(parsed.message_items, vec![MessageItem::Text("add overview branch bump dialog".to_string())]);
     }
 
     #[test]
