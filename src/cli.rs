@@ -7,6 +7,7 @@
 
 use std::{
     cmp::Ordering,
+    collections::HashSet,
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -59,17 +60,24 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             Ok(StartupMode::Handled)
         }
         [command] if is_tui(command) => Ok(StartupMode::LaunchTui),
+        [command, option] if command == "pwd" && option == "-all" => {
+            let config = load_config()?;
+            for root in all_configured_repo_roots(&config.projects) {
+                println!("{}", root.display());
+            }
+            Ok(StartupMode::Handled)
+        }
         [command, lookup] if command == "pwd" => {
             let config = load_config()?;
             let project = find_project_by_lookup(&config.projects, lookup)?;
             println!("{}", project_root(project)?.display());
             Ok(StartupMode::Handled)
         }
-        [command, action] if command == "bmp" => {
+        [command, action] if is_bump_command(command) => {
             run_bump(action, None)?;
             Ok(StartupMode::Handled)
         }
-        [command, action, option] if command == "bmp" => {
+        [command, action, option] if is_bump_command(command) => {
             run_bump(action, Some(option))?;
             Ok(StartupMode::Handled)
         }
@@ -92,17 +100,35 @@ fn is_tui(value: &str) -> bool {
     matches!(value, "tui" | "ui")
 }
 
+fn is_bump_command(value: &str) -> bool {
+    matches!(value, "bmp" | "bump" | "bp" | "bum")
+}
+
 fn print_usage() {
     println!("ComfyGit {}", APP_VERSION);
     println!("Usage:");
     println!("  cg -v|--version           Show version and GitHub update status");
-    println!("  cg tui                   Launch the TUI");
+    println!("  ---------------           --------------------------------------------------");
     println!("  cg pwd <alias>            Print the configured project root path");
-    println!("  cg bmp <action> [option] Bump the project in the current working directory");
-    println!("Actions: maj|major, min|minor, pat|patch, auto|cal");
+    println!("  cg pwd -all               Print all configured repo root directories");
+    println!("  ---------------           --------------------------------------------------");
     println!(
-        "Options: 1=Just bump, 2=Bump & Commit, 3=Bump & Commit & Push, 4=Branch & Bump & Commit & Push"
+        "  cg bmp <action>           performs a simple version bump for the project in the current working directory"
     );
+    println!("          actions: major | minor | Patch | Auto | Cal ");
+    println!("          synonyms:");
+    println!("            major: maj | mj | mjr | big | .");
+    println!("            minor: min | mnr | mr | mn | small | sml | ..");
+    println!("            patch: pat | ptch | ph | pth | mini | ...");
+    println!("  cg bmp <action> <option>  --------------------------------------------------");
+    println!(
+        "  cg bmp <action> <option>  Bump the project in the current working directory as per options available in TUI"
+    );
+    println!("          options:           --------------------------------------------------");
+    println!("             1 → Just bump the version");
+    println!("             2 → Bump & Commit (locally)");
+    println!("             3 → Bump & Commit & Push");
+    println!("             4 → Branch & Bump & Commit & Push (will prompt for branch name)");
 }
 
 fn print_version_status() {
@@ -248,6 +274,33 @@ fn prompt_branch_name() -> Result<String> {
 
 fn load_config() -> Result<AppConfig> {
     ConfigStore::locate()?.load()
+}
+
+fn all_configured_repo_roots(projects: &[ProjectConfig]) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut roots = Vec::new();
+
+    for project in projects {
+        if let Some(repo) = project.repo.as_ref() {
+            let path = best_effort_canonicalize(&repo_root_path(repo));
+            if seen.insert(path.clone()) {
+                roots.push(path);
+            }
+        }
+
+        if project.project_type == ProjectType::Branched {
+            for branch in &project.branches {
+                if let Some(repo) = branch.repo.as_ref() {
+                    let path = best_effort_canonicalize(&repo_root_path(repo));
+                    if seen.insert(path.clone()) {
+                        roots.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    roots
 }
 
 fn find_project_by_lookup<'a>(
@@ -488,9 +541,9 @@ fn absolutize_targets(targets: &mut [TargetSpec], base_root: Option<&Path>) {
 
 fn parse_bump_action(value: &str) -> Result<BumpAction> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "maj" | "major" => Ok(BumpAction::Major),
-        "min" | "minor" => Ok(BumpAction::Minor),
-        "pat" | "patch" => Ok(BumpAction::Patch),
+        "maj" | "major" | "mj" | "mjr" | "big" | "." => Ok(BumpAction::Major),
+        "min" | "minor" | "mnr" | "mr" | "mn" | "small" | "sml" | ".." => Ok(BumpAction::Minor),
+        "pat" | "patch" | "ptch" | "ph" | "pth" | "mini" | "..." => Ok(BumpAction::Patch),
         "auto" | "cal" => Ok(BumpAction::Auto),
         _ => bail!("unsupported bump action '{}'", value),
     }
@@ -698,7 +751,71 @@ mod tests {
             BumpAction::Auto
         );
     }
+    #[test]
+    fn parse_bump_action_accepts_synonyms() {
+        assert_eq!(
+            parse_bump_action("mj").expect("mj should parse"),
+            BumpAction::Major
+        );
+        assert_eq!(
+            parse_bump_action("mjr").expect("mjr should parse"),
+            BumpAction::Major
+        );
+        assert_eq!(
+            parse_bump_action("big").expect("big should parse"),
+            BumpAction::Major
+        );
+        assert_eq!(
+            parse_bump_action(".").expect(". should parse"),
+            BumpAction::Major
+        );
 
+        assert_eq!(
+            parse_bump_action("mnr").expect("mnr should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("mr").expect("mr should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("mn").expect("mn should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("small").expect("small should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("sml").expect("sml should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("..").expect(".. should parse"),
+            BumpAction::Minor
+        );
+
+        assert_eq!(
+            parse_bump_action("ptch").expect("ptch should parse"),
+            BumpAction::Patch
+        );
+        assert_eq!(
+            parse_bump_action("ph").expect("ph should parse"),
+            BumpAction::Patch
+        );
+        assert_eq!(
+            parse_bump_action("pth").expect("pth should parse"),
+            BumpAction::Patch
+        );
+        assert_eq!(
+            parse_bump_action("mini").expect("mini should parse"),
+            BumpAction::Patch
+        );
+        assert_eq!(
+            parse_bump_action("...").expect("... should parse"),
+            BumpAction::Patch
+        );
+    }
     #[test]
     fn parse_cli_bump_option_maps_supported_workflows() {
         assert_eq!(
@@ -724,6 +841,15 @@ mod tests {
     }
 
     #[test]
+    fn is_bump_command_accepts_synonyms() {
+        assert!(is_bump_command("bmp"));
+        assert!(is_bump_command("bump"));
+        assert!(is_bump_command("bp"));
+        assert!(is_bump_command("bum"));
+        assert!(!is_bump_command("bom"));
+    }
+
+    #[test]
     fn lookup_prefers_alias_before_name() {
         let projects = vec![
             sample_project("alpha", "core"),
@@ -733,6 +859,46 @@ mod tests {
         let matched = find_project_by_lookup(&projects, "core").expect("alias should match");
 
         assert_eq!(matched.name, "alpha");
+    }
+
+    #[test]
+    fn all_configured_repo_roots_returns_distinct_repo_roots() {
+        let mut project1 = sample_project("alpha", "core");
+        project1.project_type = ProjectType::Branched;
+        project1.unified_versioning = false;
+        project1.targets.clear();
+        project1.branches = vec![BranchConfig {
+            name: "svc".to_string(),
+            label: "Service".to_string(),
+            scope_kind: BranchScopeKind::Service,
+            repo: Some(RepoConfig {
+                local_root: "C:/repo/service".to_string(),
+                remote_url: None,
+            }),
+            changelog_enabled: false,
+            changelog_path: None,
+            release_now: ReleaseNowSettings::default(),
+            version_scheme: VersionScheme::SemVer,
+            targets: vec![TargetSpec {
+                label: "Version".to_string(),
+                path: "C:/repo/service/Cargo.toml".to_string(),
+                key_path: "package.version".to_string(),
+                format: TargetFormat::Toml,
+            }],
+        }];
+
+        let mut project2 = sample_project("beta", "beta");
+        project2.repo = Some(RepoConfig {
+            local_root: "C:/repo/beta".to_string(),
+            remote_url: None,
+        });
+
+        let roots = all_configured_repo_roots(&[project1, project2]);
+
+        assert_eq!(roots.len(), 3);
+        assert!(roots.contains(&PathBuf::from("C:/repo")));
+        assert!(roots.contains(&PathBuf::from("C:/repo/service")));
+        assert!(roots.contains(&PathBuf::from("C:/repo/beta")));
     }
 
     #[test]
