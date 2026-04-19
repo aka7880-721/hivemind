@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cg_bin="$script_dir/cg-bin"
+
+if [ ! -x "$cg_bin" ]; then
+  cg_bin="cg-bin"
+fi
+
+if [ "$#" -gt 0 ] && [ "$1" = "cd" ]; then
+  printf '%s\n' "ComfyGit shell integration is not active in this shell. Open a new shell or run the install-shell-integration script." >&2
+  exit 1
+fi
+
+exec "$cg_bin" "$@"
