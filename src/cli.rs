@@ -113,14 +113,22 @@ fn print_usage() {
     println!("  cg pwd -all               Print all configured repo root directories");
     println!("  ---------------           --------------------------------------------------");
     println!(
-        "  cg bmp|bump|bp|bum <action> [option]  Bump the project in the current working directory"
+        "  cg bmp <action>           performs a simple version bump for the project in the current working directory"
     );
+    println!("          actions: major | minor | Patch | Auto | Cal ");
+    println!("          synonyms:");
+    println!("            major: maj | mj | mjr | big | .");
+    println!("            minor: min | mnr | mr | mn | small | sml | ..");
+    println!("            patch: pat | ptch | ph | pth | mini | ...");
+    println!("  cg bmp <action> <option>  --------------------------------------------------");
     println!(
-        "Actions: maj|major|mj|mjr|big|., min|minor|mnr|mr|mn|sml|small|.., pat|patch|ptch|ph|pth|mini|..., auto|cal"
+        "  cg bmp <action> <option>  Bump the project in the current working directory as per options available in TUI"
     );
-    println!(
-        "Options: 1=Just bump, 2=Bump & Commit, 3=Bump & Commit & Push, 4=Branch & Bump & Commit & Push"
-    );
+    println!("          options:           --------------------------------------------------");
+    println!("             1 → Just bump the version");
+    println!("             2 → Bump & Commit (locally)");
+    println!("             3 → Bump & Commit & Push");
+    println!("             4 → Branch & Bump & Commit & Push (will prompt for branch name)");
 }
 
 fn print_version_status() {
@@ -534,7 +542,7 @@ fn absolutize_targets(targets: &mut [TargetSpec], base_root: Option<&Path>) {
 fn parse_bump_action(value: &str) -> Result<BumpAction> {
     match value.trim().to_ascii_lowercase().as_str() {
         "maj" | "major" | "mj" | "mjr" | "big" | "." => Ok(BumpAction::Major),
-        "min" | "minor" | "mnr" | "mr" | "mn" | "small" | ".." => Ok(BumpAction::Minor),
+        "min" | "minor" | "mnr" | "mr" | "mn" | "small" | "sml" | ".." => Ok(BumpAction::Minor),
         "pat" | "patch" | "ptch" | "ph" | "pth" | "mini" | "..." => Ok(BumpAction::Patch),
         "auto" | "cal" => Ok(BumpAction::Auto),
         _ => bail!("unsupported bump action '{}'", value),
