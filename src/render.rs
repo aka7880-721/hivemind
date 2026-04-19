@@ -44,6 +44,9 @@ impl App {
         if self.overview_bump_workflow_dialog.is_some() {
             self.render_overview_bump_workflow_dialog(frame, frame.area());
         }
+        if self.overview_branch_bump_dialog.is_some() {
+            self.render_overview_branch_bump_dialog(frame, frame.area());
+        }
         if self.overview_bump_warning_dialog.is_some() {
             self.render_overview_bump_warning_dialog(frame, frame.area());
         }
@@ -758,6 +761,89 @@ impl App {
                     "Cancel",
                     false,
                     HitAction::CancelOverviewBumpWorkflow,
+                    Style::default().fg(Color::White).bg(Color::Red),
+                ),
+            ],
+        );
+    }
+
+    fn render_overview_branch_bump_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.overview_branch_bump_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 72, 16);
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Branch Bump ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Length(3),
+                Constraint::Min(2),
+                Constraint::Length(BUTTON_ROW_HEIGHT),
+            ])
+            .split(inner);
+
+        let header = vec![
+            Line::from(format!("Project: {}", dialog.project_name)).bold(),
+            Line::from(format!("Scope: {}", dialog.scope_label)),
+            Line::from(format!("Next version: {}", dialog.next_version)).style(
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Line::from(format!("Workflow: {}", dialog.workflow.display_name())),
+        ];
+        frame.render_widget(
+            Paragraph::new(header).wrap(Wrap { trim: false }),
+            sections[0],
+        );
+
+        let input_row = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(20), Constraint::Min(10)])
+            .split(sections[1]);
+        frame.render_widget(Paragraph::new("Branch name"), input_row[0]);
+        let input_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" value ")
+            .border_style(Style::default().fg(Color::Cyan));
+        frame.render_widget(
+            Paragraph::new(dialog.branch_name.display_value(true))
+                .block(input_block)
+                .style(Style::default().fg(Color::White)),
+            input_row[1],
+        );
+
+        frame.render_widget(
+            Paragraph::new(
+                "Create the branch first, then run the bump, commit, and push workflow.",
+            )
+            .wrap(Wrap { trim: false }),
+            sections[2],
+        );
+
+        self.render_button_row(
+            frame,
+            sections[3],
+            &[
+                DialogButton::new(
+                    "Run",
+                    false,
+                    HitAction::ConfirmOverviewBranchBump,
+                    Style::default().fg(Color::Black).bg(Color::Green),
+                ),
+                DialogButton::new(
+                    "Cancel",
+                    false,
+                    HitAction::CancelOverviewBranchBump,
                     Style::default().fg(Color::White).bg(Color::Red),
                 ),
             ],
