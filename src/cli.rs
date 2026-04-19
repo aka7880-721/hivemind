@@ -108,13 +108,16 @@ fn print_usage() {
     println!("ComfyGit {}", APP_VERSION);
     println!("Usage:");
     println!("  cg -v|--version           Show version and GitHub update status");
-    println!("  cg tui                   Launch the TUI");
+    println!("  ---------------           --------------------------------------------------");
     println!("  cg pwd <alias>            Print the configured project root path");
     println!("  cg pwd -all               Print all configured repo root directories");
+    println!("  ---------------           --------------------------------------------------");
     println!(
         "  cg bmp|bump|bp|bum <action> [option]  Bump the project in the current working directory"
     );
-    println!("Actions: maj|major, min|minor, pat|patch, auto|cal");
+    println!(
+        "Actions: maj|major|mj|mjr|big|., min|minor|mnr|mr|mn|sml|small|.., pat|patch|ptch|ph|pth|mini|..., auto|cal"
+    );
     println!(
         "Options: 1=Just bump, 2=Bump & Commit, 3=Bump & Commit & Push, 4=Branch & Bump & Commit & Push"
     );
@@ -530,9 +533,9 @@ fn absolutize_targets(targets: &mut [TargetSpec], base_root: Option<&Path>) {
 
 fn parse_bump_action(value: &str) -> Result<BumpAction> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "maj" | "major" => Ok(BumpAction::Major),
-        "min" | "minor" => Ok(BumpAction::Minor),
-        "pat" | "patch" => Ok(BumpAction::Patch),
+        "maj" | "major" | "mj" | "mjr" | "big" | "." => Ok(BumpAction::Major),
+        "min" | "minor" | "mnr" | "mr" | "mn" | "small" | ".." => Ok(BumpAction::Minor),
+        "pat" | "patch" | "ptch" | "ph" | "pth" | "mini" | "..." => Ok(BumpAction::Patch),
         "auto" | "cal" => Ok(BumpAction::Auto),
         _ => bail!("unsupported bump action '{}'", value),
     }
@@ -740,7 +743,71 @@ mod tests {
             BumpAction::Auto
         );
     }
+    #[test]
+    fn parse_bump_action_accepts_synonyms() {
+        assert_eq!(
+            parse_bump_action("mj").expect("mj should parse"),
+            BumpAction::Major
+        );
+        assert_eq!(
+            parse_bump_action("mjr").expect("mjr should parse"),
+            BumpAction::Major
+        );
+        assert_eq!(
+            parse_bump_action("big").expect("big should parse"),
+            BumpAction::Major
+        );
+        assert_eq!(
+            parse_bump_action(".").expect(". should parse"),
+            BumpAction::Major
+        );
 
+        assert_eq!(
+            parse_bump_action("mnr").expect("mnr should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("mr").expect("mr should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("mn").expect("mn should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("small").expect("small should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("sml").expect("sml should parse"),
+            BumpAction::Minor
+        );
+        assert_eq!(
+            parse_bump_action("..").expect(".. should parse"),
+            BumpAction::Minor
+        );
+
+        assert_eq!(
+            parse_bump_action("ptch").expect("ptch should parse"),
+            BumpAction::Patch
+        );
+        assert_eq!(
+            parse_bump_action("ph").expect("ph should parse"),
+            BumpAction::Patch
+        );
+        assert_eq!(
+            parse_bump_action("pth").expect("pth should parse"),
+            BumpAction::Patch
+        );
+        assert_eq!(
+            parse_bump_action("mini").expect("mini should parse"),
+            BumpAction::Patch
+        );
+        assert_eq!(
+            parse_bump_action("...").expect("... should parse"),
+            BumpAction::Patch
+        );
+    }
     #[test]
     fn parse_cli_bump_option_maps_supported_workflows() {
         assert_eq!(
