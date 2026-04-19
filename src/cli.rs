@@ -7,6 +7,7 @@
 
 use std::{
     cmp::Ordering,
+    collections::HashSet,
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -59,6 +60,13 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             Ok(StartupMode::Handled)
         }
         [command] if is_tui(command) => Ok(StartupMode::LaunchTui),
+        [command, option] if command == "pwd" && option == "-all" => {
+            let config = load_config()?;
+            for root in all_configured_repo_roots(&config.projects) {
+                println!("{}", root.display());
+            }
+            Ok(StartupMode::Handled)
+        }
         [command, lookup] if command == "pwd" => {
             let config = load_config()?;
             let project = find_project_by_lookup(&config.projects, lookup)?;
@@ -98,6 +106,7 @@ fn print_usage() {
     println!("  cg -v|--version           Show version and GitHub update status");
     println!("  cg tui                   Launch the TUI");
     println!("  cg pwd <alias>            Print the configured project root path");
+    println!("  cg pwd -all               Print all configured repo root directories");
     println!("  cg bmp <action> [option] Bump the project in the current working directory");
     println!("Actions: maj|major, min|minor, pat|patch, auto|cal");
     println!(
@@ -248,6 +257,33 @@ fn prompt_branch_name() -> Result<String> {
 
 fn load_config() -> Result<AppConfig> {
     ConfigStore::locate()?.load()
+}
+
+fn all_configured_repo_roots(projects: &[ProjectConfig]) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut roots = Vec::new();
+
+    for project in projects {
+        if let Some(repo) = project.repo.as_ref() {
+            let path = best_effort_canonicalize(&repo_root_path(repo));
+            if seen.insert(path.clone()) {
+                roots.push(path);
+            }
+        }
+
+        if project.project_type == ProjectType::Branched {
+            for branch in &project.branches {
+                if let Some(repo) = branch.repo.as_ref() {
+                    let path = best_effort_canonicalize(&repo_root_path(repo));
+                    if seen.insert(path.clone()) {
+                        roots.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    roots
 }
 
 fn find_project_by_lookup<'a>(
@@ -733,6 +769,46 @@ mod tests {
         let matched = find_project_by_lookup(&projects, "core").expect("alias should match");
 
         assert_eq!(matched.name, "alpha");
+    }
+
+    #[test]
+    fn all_configured_repo_roots_returns_distinct_repo_roots() {
+        let mut project1 = sample_project("alpha", "core");
+        project1.project_type = ProjectType::Branched;
+        project1.unified_versioning = false;
+        project1.targets.clear();
+        project1.branches = vec![BranchConfig {
+            name: "svc".to_string(),
+            label: "Service".to_string(),
+            scope_kind: BranchScopeKind::Service,
+            repo: Some(RepoConfig {
+                local_root: "C:/repo/service".to_string(),
+                remote_url: None,
+            }),
+            changelog_enabled: false,
+            changelog_path: None,
+            release_now: ReleaseNowSettings::default(),
+            version_scheme: VersionScheme::SemVer,
+            targets: vec![TargetSpec {
+                label: "Version".to_string(),
+                path: "C:/repo/service/Cargo.toml".to_string(),
+                key_path: "package.version".to_string(),
+                format: TargetFormat::Toml,
+            }],
+        }];
+
+        let mut project2 = sample_project("beta", "beta");
+        project2.repo = Some(RepoConfig {
+            local_root: "C:/repo/beta".to_string(),
+            remote_url: None,
+        });
+
+        let roots = all_configured_repo_roots(&[project1, project2]);
+
+        assert_eq!(roots.len(), 3);
+        assert!(roots.contains(&PathBuf::from("C:/repo")));
+        assert!(roots.contains(&PathBuf::from("C:/repo/service")));
+        assert!(roots.contains(&PathBuf::from("C:/repo/beta")));
     }
 
     #[test]

@@ -1325,8 +1325,16 @@ mod tests {
         );
 
         assert_eq!(parsed.specific_heading, Some("Enhancement"));
-        assert_eq!(parsed.specific.as_deref(), Some("CLI & bmp: Branch b4 bmp, bmp CLI options"));
-        assert_eq!(parsed.message_items, vec![MessageItem::Text("add overview branch bump dialog".to_string())]);
+        assert_eq!(
+            parsed.specific.as_deref(),
+            Some("CLI & bmp: Branch b4 bmp, bmp CLI options")
+        );
+        assert_eq!(
+            parsed.message_items,
+            vec![MessageItem::Text(
+                "add overview branch bump dialog".to_string()
+            )]
+        );
     }
 
     #[test]
