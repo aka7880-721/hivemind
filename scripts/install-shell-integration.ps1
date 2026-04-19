@@ -6,9 +6,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $BinDir) {
-    $cgBinCommand = Get-Command cg-bin -ErrorAction SilentlyContinue
-    if ($cgBinCommand) {
-        $BinDir = Split-Path $cgBinCommand.Source -Parent
+    $cgCommand = Get-Command ComfyGit -ErrorAction SilentlyContinue
+    if ($cgCommand) {
+        $BinDir = Split-Path $cgCommand.Source -Parent
     } else {
         $BinDir = Join-Path $HOME '.cargo/bin'
     }
@@ -22,7 +22,7 @@ $cgCmdTarget = Join-Path $BinDir 'cg.cmd'
 $cgModuleRoot = Join-Path $HOME 'Documents/PowerShell/Modules/ComfyGit'
 $cgModuleTarget = Join-Path $cgModuleRoot 'ComfyGit.psm1'
 $legacyExe = Join-Path $BinDir 'cg.exe'
-$delegateExe = Join-Path $BinDir 'cg-bin.exe'
+$delegateExe = Join-Path $BinDir 'ComfyGit.exe'
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 Copy-Item -Path $cgPs1Source -Destination $cgPs1Target -Force
@@ -32,6 +32,15 @@ Copy-Item -Path $cgModuleSource -Destination $cgModuleTarget -Force
 
 if ((Test-Path $legacyExe) -and (Test-Path $delegateExe)) {
     Remove-Item -Force -Path $legacyExe
+}
+
+if (Test-Path $cgModuleTarget) {
+    try {
+        Import-Module -Force $cgModuleTarget -ErrorAction Stop
+        Write-Host "Imported ComfyGit PowerShell module into this session." -ForegroundColor Green
+    } catch {
+        Write-Host "Installed the ComfyGit PowerShell module, but automatic import failed in this session." -ForegroundColor Yellow
+    }
 }
 
 Write-Host "Installed ComfyGit PowerShell wrapper to $cgPs1Target" -ForegroundColor Green

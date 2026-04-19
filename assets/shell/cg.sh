@@ -7,10 +7,10 @@ cg() {
       return 2
     fi
 
-    target_dir="$(command cg-bin pwd "$2")" || return $?
+    target_dir="$(command ComfyGit pwd "$2")" || return $?
     cd "$target_dir" || return $?
     return 0
   fi
 
-  command cg-bin "$@"
+  command ComfyGit "$@"
 }

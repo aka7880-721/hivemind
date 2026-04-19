@@ -2,10 +2,10 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cg_bin="$script_dir/cg-bin"
+cg_bin="$script_dir/ComfyGit"
 
 if [ ! -x "$cg_bin" ]; then
-  cg_bin="cg-bin"
+  cg_bin="ComfyGit"
 fi
 
 if [ "$#" -gt 0 ] && [ "$1" = "cd" ]; then

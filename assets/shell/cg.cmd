@@ -1,8 +1,8 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-set "CG_BIN=%~dp0cg-bin.exe"
-if not exist "%CG_BIN%" set "CG_BIN=cg-bin.exe"
+set "CG_BIN=%~dp0ComfyGit.exe"
+if not exist "%CG_BIN%" set "CG_BIN=ComfyGit.exe"
 
 if /I "%~1"=="cd" (
     if "%~2"=="" (

@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "comfygit"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "anyhow",
  "arboard",

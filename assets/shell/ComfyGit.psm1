@@ -7,7 +7,7 @@ function cg {
             return
         }
 
-        $targetDir = & cg-bin pwd $Arguments[1]
+        $targetDir = & ComfyGit pwd $Arguments[1]
         if ($LASTEXITCODE -ne 0) {
             return
         }
@@ -16,7 +16,7 @@ function cg {
         return
     }
 
-    & cg-bin @Arguments
+    & ComfyGit @Arguments
 }
 
 Export-ModuleMember -Function cg

@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.10.4"
+version = "0.10.5"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -20,7 +20,7 @@ name = "cg"
 path = "src/main.rs"
 
 [[bin]]
-name = "cg-bin"
+name = "ComfyGit"
 path = "src/bin/cg-bin.rs"
 
 [workspace]

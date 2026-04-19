@@ -38,8 +38,8 @@ if [ "$(id -u)" -eq 0 ] && [ "${COMFYGIT_INSTALL_AS_USER:-0}" != "1" ]; then
 fi
 
 if [ -z "$bin_dir" ]; then
-  if command -v cg-bin >/dev/null 2>&1; then
-    bin_dir=$(dirname "$(command -v cg-bin)")
+  if command -v ComfyGit >/dev/null 2>&1; then
+    bin_dir=$(dirname "$(command -v ComfyGit)")
   else
     bin_dir="$HOME/.cargo/bin"
   fi

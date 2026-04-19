@@ -1,8 +1,8 @@
 $Arguments = $args
 
-$cgBin = Join-Path $PSScriptRoot 'cg-bin.exe'
+$cgBin = Join-Path $PSScriptRoot 'ComfyGit.exe'
 if (-not (Test-Path $cgBin)) {
-    $cgBin = 'cg-bin'
+    $cgBin = 'ComfyGit'
 }
 
 if ($Arguments.Count -gt 0 -and $Arguments[0] -eq 'cd') {
