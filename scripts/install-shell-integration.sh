@@ -49,6 +49,8 @@ mkdir -p "$target_dir"
 mkdir -p "$bin_dir"
 cp "$shell_asset_dir/cg" "$bin_dir/cg"
 chmod +x "$bin_dir/cg"
+cp "$shell_asset_dir/cg" "$bin_dir/comfygit"
+chmod +x "$bin_dir/comfygit"
 cp "$shell_asset_dir/cg.sh" "$target_file"
 
 append_once() {
@@ -69,4 +71,5 @@ append_once "$HOME/.zshrc" ". \"$target_file\""
 
 printf '%s\n' "Installed ComfyGit shell integration to $target_file"
 printf '%s\n' "Installed the cg launcher wrapper to $bin_dir/cg"
+printf '%s\n' "Installed the comfygit launcher wrapper to $bin_dir/comfygit"
 printf '%s\n' "Open a new bash or zsh session to enable real 'cg cd <alias>' support."

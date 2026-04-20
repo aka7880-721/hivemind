@@ -43,6 +43,8 @@ impl ProjectSettingsTab {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectSettingsFocus {
+    CustomMainBranchEnabled,
+    CustomMainBranchName,
     Alias,
     ChangelogEnabled,
     ChangelogPath,
@@ -60,6 +62,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) scroll: u16,
     pub(crate) viewport_height: u16,
     pub(crate) follow_focus: bool,
+    pub(crate) custom_main_branch_name: TextInput,
     pub(crate) alias: TextInput,
     pub(crate) changelog_path: TextInput,
     pub(crate) release_now_windows: TextInput,
@@ -72,10 +75,11 @@ impl Default for ProjectSettingsState {
     fn default() -> Self {
         Self {
             binding: None,
-            focus: ProjectSettingsFocus::Alias,
+            focus: ProjectSettingsFocus::CustomMainBranchEnabled,
             scroll: 0,
             viewport_height: 0,
             follow_focus: true,
+            custom_main_branch_name: TextInput::with_value(""),
             alias: TextInput::with_value(""),
             changelog_path: TextInput::with_value(DEFAULT_CHANGELOG_PATH),
             release_now_windows: TextInput::with_value(""),
@@ -102,6 +106,8 @@ impl ProjectSettingsState {
         self.binding = Some((project_index, scope_index));
         self.scroll = 0;
         self.follow_focus = true;
+        self.custom_main_branch_name
+            .set_value(project.repo_custom_main_branch_value_for_scope(scope_index));
         self.alias.set_value(project.alias.clone());
         self.changelog_path
             .set_value(project.changelog_path_for_scope(scope_index).to_string());
@@ -124,10 +130,15 @@ impl ProjectSettingsState {
     ) -> Vec<ProjectSettingsFocus> {
         match tab {
             ProjectSettingsTab::General => {
-                let mut fields = vec![
-                    ProjectSettingsFocus::Alias,
-                    ProjectSettingsFocus::ChangelogEnabled,
-                ];
+                let mut fields = Vec::new();
+                if project.integration_mode.requires_repo() {
+                    fields.push(ProjectSettingsFocus::CustomMainBranchEnabled);
+                    if project.repo_has_custom_main_branch_for_scope(scope_index) {
+                        fields.push(ProjectSettingsFocus::CustomMainBranchName);
+                    }
+                }
+                fields.push(ProjectSettingsFocus::Alias);
+                fields.push(ProjectSettingsFocus::ChangelogEnabled);
                 if project.changelog_enabled_for_scope(scope_index) {
                     fields.push(ProjectSettingsFocus::ChangelogPath);
                 }
@@ -196,7 +207,8 @@ impl ProjectSettingsState {
             .contains(&self.focus)
             && matches!(
                 self.focus,
-                ProjectSettingsFocus::Alias
+                ProjectSettingsFocus::CustomMainBranchName
+                    | ProjectSettingsFocus::Alias
                     | ProjectSettingsFocus::ChangelogPath
                     | ProjectSettingsFocus::ReleaseNowWindows
                     | ProjectSettingsFocus::ReleaseNowLinuxArm
@@ -207,6 +219,7 @@ impl ProjectSettingsState {
 
     pub(crate) fn active_input_mut(&mut self) -> Option<&mut TextInput> {
         match self.focus {
+            ProjectSettingsFocus::CustomMainBranchName => Some(&mut self.custom_main_branch_name),
             ProjectSettingsFocus::Alias => Some(&mut self.alias),
             ProjectSettingsFocus::ChangelogPath => Some(&mut self.changelog_path),
             ProjectSettingsFocus::ReleaseNowWindows => Some(&mut self.release_now_windows),
@@ -238,6 +251,9 @@ impl ProjectSettingsState {
         max_width: usize,
     ) -> Line<'static> {
         match field {
+            ProjectSettingsFocus::CustomMainBranchName => self
+                .custom_main_branch_name
+                .display_line_with_width(focused, max_width),
             ProjectSettingsFocus::Alias => self.alias.display_line_with_width(focused, max_width),
             ProjectSettingsFocus::ChangelogPath => self
                 .changelog_path
@@ -818,7 +834,19 @@ fn build_rows(
 }
 
 fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
-    let mut rows = vec![
+    let mut rows = Vec::new();
+    if project.integration_mode.requires_repo() {
+        rows.push(ProjectSettingsRow::Checkbox(
+            ProjectSettingsFocus::CustomMainBranchEnabled,
+        ));
+        if project.repo_has_custom_main_branch_for_scope(scope_index) {
+            rows.push(ProjectSettingsRow::Path(
+                ProjectSettingsFocus::CustomMainBranchName,
+            ));
+        }
+        rows.push(ProjectSettingsRow::Spacer(1));
+    }
+    rows.extend([
         ProjectSettingsRow::Path(ProjectSettingsFocus::Alias),
         ProjectSettingsRow::Spacer(1),
         ProjectSettingsRow::Text(
@@ -835,7 +863,7 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
         ProjectSettingsRow::Text(Line::from(format!("Project: {}", project.name))),
         ProjectSettingsRow::Spacer(1),
         ProjectSettingsRow::Checkbox(ProjectSettingsFocus::ChangelogEnabled),
-    ];
+    ]);
     if project.changelog_enabled_for_scope(scope_index) {
         rows.push(ProjectSettingsRow::Path(
             ProjectSettingsFocus::ChangelogPath,
@@ -1027,7 +1055,7 @@ fn render_path_row(
 ) {
     let inset = control_inset(area);
     let side_button = match field {
-        ProjectSettingsFocus::Alias => None,
+        ProjectSettingsFocus::Alias | ProjectSettingsFocus::CustomMainBranchName => None,
         _ => Some(FormRowButton::new(
             "Browse",
             HitAction::BrowseProjectSettingsField(field),
@@ -1066,6 +1094,9 @@ fn control_inset(area: Rect) -> Rect {
 
 fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
     match field {
+        ProjectSettingsFocus::CustomMainBranchEnabled => {
+            "This repo has a custom named main branch."
+        }
         ProjectSettingsFocus::ChangelogEnabled => "Changelog Generation",
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
@@ -1076,6 +1107,7 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
 
 fn field_label(field: ProjectSettingsFocus) -> &'static str {
     match field {
+        ProjectSettingsFocus::CustomMainBranchName => "Custom main branch",
         ProjectSettingsFocus::Alias => "Alias",
         ProjectSettingsFocus::ChangelogPath => "Changelog path",
         ProjectSettingsFocus::ReleaseNowWindows => "Windows",
@@ -1089,7 +1121,9 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
 fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
     matches!(
         field,
-        ProjectSettingsFocus::ChangelogEnabled | ProjectSettingsFocus::ReleaseNowEnabled
+        ProjectSettingsFocus::CustomMainBranchEnabled
+            | ProjectSettingsFocus::ChangelogEnabled
+            | ProjectSettingsFocus::ReleaseNowEnabled
     )
 }
 
@@ -1106,6 +1140,24 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
         .expect("selected project checked above");
 
     match app.project_settings_state.focus {
+        ProjectSettingsFocus::CustomMainBranchEnabled => {
+            let next_enabled = !active_project.repo_has_custom_main_branch_for_scope(scope_index);
+            let custom_main_branch = app
+                .project_settings_state
+                .custom_main_branch_name
+                .value()
+                .to_string();
+            active_project.set_repo_custom_main_branch_for_scope(
+                scope_index,
+                next_enabled,
+                custom_main_branch,
+            )?;
+            app.status = super::StatusMessage::success(format!(
+                "Custom main branch {} for {}.",
+                if next_enabled { "enabled" } else { "disabled" },
+                scope_name
+            ));
+        }
         ProjectSettingsFocus::ChangelogEnabled => {
             let next_enabled = !active_project.changelog_enabled_for_scope(scope_index);
             active_project.set_changelog_enabled_for_scope(scope_index, next_enabled);
@@ -1151,6 +1203,11 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
         return Ok(());
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    let custom_main_branch = app
+        .project_settings_state
+        .custom_main_branch_name
+        .value()
+        .to_string();
     let alias = app.project_settings_state.alias.value().trim().to_string();
     let changelog_path = app
         .project_settings_state
@@ -1183,6 +1240,18 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
         .projects
         .get_mut(app.selected_project)
         .expect("selected project checked above");
+    let custom_main_branch_enabled =
+        active_project.repo_has_custom_main_branch_for_scope(scope_index);
+    if active_project.integration_mode.requires_repo()
+        && (custom_main_branch_enabled
+            || active_project.repo_config_for_scope(scope_index).is_some())
+    {
+        active_project.set_repo_custom_main_branch_for_scope(
+            scope_index,
+            custom_main_branch_enabled,
+            custom_main_branch,
+        )?;
+    }
     active_project.alias = alias;
     active_project.set_changelog_path_for_scope(scope_index, changelog_path);
     let release_now = active_project.release_now_for_scope_mut(scope_index);

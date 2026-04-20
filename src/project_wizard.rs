@@ -567,6 +567,7 @@ impl ProjectWizard {
             Some(RepoConfig {
                 local_root: root.to_string(),
                 remote_url: remote,
+                ..RepoConfig::default()
             })
         } else {
             None

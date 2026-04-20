@@ -23,13 +23,19 @@ use serde::Deserialize;
 use crate::{
     app::{
         OverviewBumpWorkflow,
-        git_flow::{apply_repo_bump_workflow, collect_repo_bump_operations},
+        git_flow::{
+            apply_repo_bump_workflow, collect_non_main_repo_states, collect_repo_bump_operations,
+        },
     },
     config::{
         AppConfig, BranchConfig, ConfigStore, ProjectConfig, ProjectType, RepoConfig, TargetFormat,
         TargetSpec,
     },
-    git::collect_all_branch_git_scope_contexts,
+    git::{
+        collect_all_branch_git_scope_contexts, current_branch_with_cancel,
+        latest_local_tag_with_cancel, load_scope_activity_summary_with_cancel, run_git,
+        run_git_checked, split_output_lines,
+    },
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -59,8 +65,16 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             print_version_status();
             Ok(StartupMode::Handled)
         }
+        [command] if is_branch_command(command) => {
+            print_branch_status()?;
+            Ok(StartupMode::Handled)
+        }
+        [command, lookup] if is_project_version_command(command) => {
+            print_project_version(lookup)?;
+            Ok(StartupMode::Handled)
+        }
         [command] if is_tui(command) => Ok(StartupMode::LaunchTui),
-        [command, option] if command == "pwd" && option == "-all" => {
+        [command, option] if command == "pwd" && matches!(option.as_str(), "-all" | "all") => {
             let config = load_config()?;
             for root in all_configured_repo_roots(&config.projects) {
                 println!("{}", root.display());
@@ -104,35 +118,71 @@ fn is_bump_command(value: &str) -> bool {
     matches!(value, "bmp" | "bump" | "bp" | "bum")
 }
 
+fn is_branch_command(value: &str) -> bool {
+    matches!(value, "branch" | "br" | "brn" | "brnch")
+}
+
+fn is_project_version_command(value: &str) -> bool {
+    value == "v"
+}
+
 fn print_usage() {
-    println!("ComfyGit {}", APP_VERSION);
-    println!("Usage:");
-    println!("  cg -v|--version           Show version and GitHub update status");
-    println!("  ---------------           --------------------------------------------------");
-    println!("  cg pwd <alias>            Print the configured project root path");
-    println!("  cg pwd -all               Print all configured repo root directories");
-    println!("  ---------------           --------------------------------------------------");
+    println!(" ");
     println!(
-        "  cg bmp <action>           performs a simple version bump for the project in the current working directory"
+        "ComfyGit {} | © 2026 ComfyHome™ | support@comfyhome.io",
+        APP_VERSION
+    );
+    println!(" ");
+    println!("Available:");
+    println!(" ");
+    println!("  ↓ Command / CATEGORY ↓     ↓ Description ↓");
+    println!(" ");
+    println!("  GENERAL COMMANDS:");
+    println!(" ");
+    println!("  cg | comfygit              Launch the interactive TUI");
+    println!("  cg -v | --version          Show version and GitHub update status");
+    println!("  ---------------            --------------------------------------------------");
+    println!("  <alias>                    Set in TUI: ");
+    println!("                                 Projects → Project Settings → General → Alias");
+    println!("  ---------------            --------------------------------------------------");
+    println!("  cg pwd <alias>             Print the configured project root path");
+    println!("  cg pwd -all | all          Print all configured repo root directories");
+    println!("  ---------------            --------------------------------------------------");
+    println!(
+        "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
+    );
+    println!("  cg branch                  Show the current branch and a compact branch tree");
+    println!("  cg v <alias>               Show project version, last bump, and last release");
+    println!(" ");
+    println!("  BUMPING COMMANDS:");
+    println!(" ");
+    println!(
+        "  cg bmp <action>            Performs a simple version bump for the project in the current working directory"
     );
     println!("          actions: major | minor | Patch | Auto | Cal ");
     println!("          synonyms:");
     println!("            major: maj | mj | mjr | big | .");
     println!("            minor: min | mnr | mr | mn | small | sml | ..");
     println!("            patch: pat | ptch | ph | pth | mini | ...");
-    println!("  cg bmp <action> <option>  --------------------------------------------------");
+    println!(" ");
     println!(
-        "  cg bmp <action> <option>  Bump the project in the current working directory as per options available in TUI"
+        "  cg bmp <action> <option>   Bump the project in the current working directory as per options available in TUI"
     );
-    println!("          options:           --------------------------------------------------");
+    println!("          options:");
     println!("             1 → Just bump the version");
     println!("             2 → Bump & Commit (locally)");
     println!("             3 → Bump & Commit & Push");
     println!("             4 → Branch & Bump & Commit & Push (will prompt for branch name)");
+    println!(" ");
 }
 
 fn print_version_status() {
-    println!("ComfyGit {}", APP_VERSION);
+    println!(" ");
+    println!(
+        "ComfyGit {} | © 2026 ComfyHome™ | support@comfyhome.io",
+        APP_VERSION
+    );
+    println!(" ");
     match github_release_status() {
         ReleaseStatus::UpToDate => println!("GitHub status: Up to date!"),
         ReleaseStatus::UpdateAvailable(version) => {
@@ -140,6 +190,84 @@ fn print_version_status() {
         }
         ReleaseStatus::Unavailable => println!("GitHub status: Version check unavailable."),
     }
+    println!(" ");
+}
+
+fn print_branch_status() -> Result<()> {
+    let config = load_config()?;
+    let cwd =
+        best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
+    let project = find_project_for_cwd(&config.projects, &cwd)?;
+    let resolved_project = resolve_project_target_paths(project)?;
+    let scope_index = if project.project_type == ProjectType::AllInOne || project.unified_versioning
+    {
+        0
+    } else {
+        find_scope_for_cwd(project, &resolved_project, &cwd)?
+    };
+    let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
+    let context = git_contexts
+        .get(scope_index)
+        .or_else(|| git_contexts.first())
+        .ok_or_else(|| anyhow!("git scope metadata is unavailable for the current branch view"))?;
+    let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
+    let diagram = load_branch_diagram(
+        &context.repo_root,
+        &current_branch,
+        context.main_branch_name.as_deref(),
+    )?;
+
+    println!();
+    println!("current branch: {}", current_branch);
+    println!();
+    println!("{}", render_branch_tree(diagram.as_ref()));
+    println!();
+    Ok(())
+}
+
+fn print_project_version(lookup: &str) -> Result<()> {
+    let config = load_config()?;
+    let project = find_project_by_lookup(&config.projects, lookup)?;
+    let resolved_project = resolve_project_target_paths(project)?;
+    let scopes = collect_bump_scopes(&resolved_project)?;
+    if scopes.is_empty() {
+        bail!("the matched project does not contain any bump targets")
+    }
+
+    let current_version = shared_bump_version(&scopes)
+        .or_else(|| {
+            scopes
+                .first()
+                .and_then(|scope| scope.current_version.clone())
+        })
+        .unwrap_or_else(|| "mixed values".to_string());
+
+    let git_context = collect_all_branch_git_scope_contexts(&resolved_project)
+        .ok()
+        .and_then(|contexts| contexts.into_iter().next());
+    let (last_bump, last_release) = if let Some(context) = git_context {
+        let last_bump = load_scope_activity_summary_with_cancel(&context, None)
+            .map(|summary| summary.last_bump_label)
+            .unwrap_or_else(|_| "n/a".to_string());
+        let last_release = latest_public_release_tag_for_repo(&context.repo_root)
+            .or_else(|| {
+                latest_local_tag_with_cancel(&context.repo_root, None)
+                    .ok()
+                    .flatten()
+            })
+            .unwrap_or_else(|| "n/a".to_string());
+        (last_bump, last_release)
+    } else {
+        ("n/a".to_string(), "n/a".to_string())
+    };
+
+    println!();
+    println!("Project Name: {}", project.name);
+    println!("Current Version: {}", current_version);
+    println!("Last Bump: {}", last_bump);
+    println!("Last Release: {}", last_release);
+    println!();
+    Ok(())
 }
 
 fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
@@ -181,6 +309,53 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
         .bump(&current_version, action, Local::now().date_naive())
         .map_err(anyhow::Error::msg)?;
 
+    let mut repo_operations = Vec::new();
+    if workflow != OverviewBumpWorkflow::JustBump {
+        if !project.integration_mode.requires_repo() {
+            bail!("selected bump option requires a git-backed project")
+        }
+
+        let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
+        repo_operations = collect_repo_bump_operations(
+            &resolved_project,
+            &scopes,
+            &git_contexts,
+            &affected_indexes,
+        )?;
+
+        if workflow.requires_branch() {
+            let non_main_repo_states = collect_non_main_repo_states(
+                &resolved_project,
+                &scopes,
+                &git_contexts,
+                &affected_indexes,
+            )?;
+            if !non_main_repo_states.is_empty() {
+                println!("Just to check: Are you aware you are currently on a NON-MAIN branch?");
+                println!("You are here:");
+                for state in &non_main_repo_states {
+                    let repo_name = Path::new(&state.repo_root)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&state.repo_root);
+                    println!("  {} -> {}", repo_name, state.current_branch);
+                }
+
+                if !prompt_confirm_default_yes(
+                    "Press ENTER or Y to ignore and continue; N to cancel: ",
+                )? {
+                    bail!("Cancelled by user");
+                }
+            }
+        }
+    }
+
+    let branch_name = if workflow.requires_branch() {
+        Some(prompt_branch_name()?)
+    } else {
+        None
+    };
+
     let mut updated_targets = 0usize;
     for index in &affected_indexes {
         let scope = scopes
@@ -194,22 +369,6 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
     }
 
     if workflow != OverviewBumpWorkflow::JustBump {
-        if !project.integration_mode.requires_repo() {
-            bail!("selected bump option requires a git-backed project")
-        }
-
-        let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
-        let repo_operations = collect_repo_bump_operations(
-            &resolved_project,
-            &scopes,
-            &git_contexts,
-            &affected_indexes,
-        )?;
-        let branch_name = if workflow.requires_branch() {
-            Some(prompt_branch_name()?)
-        } else {
-            None
-        };
         apply_repo_bump_workflow(
             &repo_operations,
             &next_version,
@@ -270,6 +429,496 @@ fn prompt_branch_name() -> Result<String> {
     }
 
     Ok(branch_name)
+}
+
+fn prompt_confirm_default_yes(prompt: &str) -> Result<bool> {
+    loop {
+        print!("{}", prompt);
+        io::stdout().flush().context("failed to flush prompt")?;
+
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read response")?;
+
+        match answer.trim().to_lowercase().as_str() {
+            "" | "y" => return Ok(true),
+            "n" => return Ok(false),
+            other => {
+                println!("Please answer Y or N. Received: {}", other);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchRef {
+    name: String,
+    refname: String,
+    object_id: String,
+    root_distance: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BranchDiagramState {
+    Main,
+    Current,
+    Open,
+    Merged,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchDiagramNode {
+    name: String,
+    state: BranchDiagramState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchDiagramSegment {
+    branch: BranchDiagramNode,
+    merged: Vec<BranchDiagramNode>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchDiagram {
+    root: BranchDiagramNode,
+    path: Vec<BranchDiagramSegment>,
+}
+
+fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
+    let output = run_git_checked(
+        repo_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)|%(refname)|%(objectname)",
+            "refs/heads",
+        ],
+    )?;
+    let mut branches = split_output_lines(&output)
+        .into_iter()
+        .filter_map(|line| {
+            let mut parts = line.split('|');
+            let name = parts.next()?.trim();
+            let refname = parts.next()?.trim();
+            let object_id = parts.next()?.trim();
+            let name = name.trim();
+            if name.is_empty() || refname.is_empty() || object_id.is_empty() {
+                return None;
+            }
+
+            Some(BranchRef {
+                name: name.to_string(),
+                refname: refname.to_string(),
+                object_id: object_id.to_string(),
+                root_distance: 0,
+            })
+        })
+        .collect::<Vec<_>>();
+    branches.sort_by_cached_key(|branch| normalize_lookup(&branch.name));
+    branches.dedup_by(|left, right| left.name.eq_ignore_ascii_case(&right.name));
+    Ok(branches)
+}
+
+fn load_branch_diagram(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> Result<Option<BranchDiagram>> {
+    let mut branches = list_local_branch_refs(repo_root)?;
+    if branches.is_empty() {
+        return Ok(None);
+    }
+
+    let root_index = branches
+        .iter()
+        .position(|branch| {
+            custom_main_branch.is_some_and(|custom| branch.name.eq_ignore_ascii_case(custom.trim()))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case("main"))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case("master"))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+        })
+        .unwrap_or(0);
+    let root_branch = branches.remove(root_index);
+
+    for branch in &mut branches {
+        branch.root_distance =
+            branch_unique_commit_count(repo_root, &root_branch.refname, &branch.refname)?;
+    }
+
+    let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
+        root_branch.clone()
+    } else {
+        branches
+            .iter()
+            .find(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+            .cloned()
+            .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
+    };
+
+    let first_parent_commits = first_parent_commit_ids(repo_root, &current_ref.refname)?;
+    let mut family_branches = Vec::new();
+    for branch in branches {
+        if !is_branch_ancestor(repo_root, &branch.refname, &current_ref.refname)? {
+            continue;
+        }
+
+        if is_branch_ancestor(repo_root, &branch.refname, &root_branch.refname)? {
+            continue;
+        }
+
+        family_branches.push(branch);
+    }
+
+    let mut path_branches = family_branches
+        .iter()
+        .filter(|branch| first_parent_commits.contains(&branch.object_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !root_branch.name.eq_ignore_ascii_case(current_branch)
+        && path_branches
+            .iter()
+            .all(|branch| !branch.name.eq_ignore_ascii_case(current_branch))
+    {
+        path_branches.push(current_ref.clone());
+    }
+
+    path_branches.sort_by(|left, right| {
+        let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
+        let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
+        left.root_distance
+            .cmp(&right.root_distance)
+            .then_with(|| left_is_current.cmp(&right_is_current).reverse())
+            .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
+    });
+
+    let mut path = path_branches
+        .iter()
+        .map(|branch| BranchDiagramSegment {
+            branch: BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state: if branch.name.eq_ignore_ascii_case(current_branch) {
+                    BranchDiagramState::Current
+                } else {
+                    BranchDiagramState::Open
+                },
+            },
+            merged: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+
+    for branch in family_branches {
+        if path_branches
+            .iter()
+            .any(|path_branch| path_branch.object_id == branch.object_id)
+        {
+            continue;
+        }
+
+        let mut best_attachment = None;
+        for (index, path_branch) in path_branches.iter().enumerate() {
+            if !is_branch_ancestor(repo_root, &branch.refname, &path_branch.refname)? {
+                continue;
+            }
+
+            let distance = commit_distance(repo_root, &branch.refname, &path_branch.refname)?;
+            if distance == 0 {
+                continue;
+            }
+
+            match best_attachment {
+                Some((_, best_distance)) if distance >= best_distance => {}
+                _ => best_attachment = Some((index, distance)),
+            }
+        }
+
+        if let Some((index, _)) = best_attachment {
+            path[index].merged.push(BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state: BranchDiagramState::Merged,
+            });
+        }
+    }
+
+    for segment in &mut path {
+        segment.merged.sort_by(|left, right| {
+            normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name))
+        });
+    }
+
+    Ok(Some(BranchDiagram {
+        root: BranchDiagramNode {
+            name: display_branch_name(&root_branch.name),
+            state: BranchDiagramState::Main,
+        },
+        path,
+    }))
+}
+
+fn first_parent_commit_ids(repo_root: &str, branch_ref: &str) -> Result<HashSet<String>> {
+    let output = run_git_checked(repo_root, &["rev-list", "--first-parent", branch_ref])?;
+    Ok(split_output_lines(&output).into_iter().collect())
+}
+
+fn is_branch_ancestor(repo_root: &str, ancestor_ref: &str, descendant_ref: &str) -> Result<bool> {
+    let output = run_git(
+        repo_root,
+        &["merge-base", "--is-ancestor", ancestor_ref, descendant_ref],
+    )?;
+    Ok(output.success)
+}
+
+fn branch_unique_commit_count(repo_root: &str, base_ref: &str, branch_ref: &str) -> Result<usize> {
+    commit_distance(repo_root, base_ref, branch_ref)
+}
+
+fn commit_distance(repo_root: &str, base_ref: &str, branch_ref: &str) -> Result<usize> {
+    let range = format!("{}..{}", base_ref, branch_ref);
+    let output = run_git_checked(repo_root, &["rev-list", "--count", &range])?;
+    output
+        .trim()
+        .parse::<usize>()
+        .with_context(|| format!("failed to parse git ancestry distance for {}", range))
+}
+
+fn display_branch_name(branch: &str) -> String {
+    branch.strip_prefix("heads/").unwrap_or(branch).to_string()
+}
+
+fn render_branch_tree(diagram: Option<&BranchDiagram>) -> String {
+    let Some(diagram) = diagram else {
+        return "(no local branches)".to_string();
+    };
+
+    let (arrow_column, segment_layouts) = compute_branch_diagram_layout(diagram);
+    let mut lines = vec![render_aligned_arrow_line(
+        "",
+        &format_branch_label(&diagram.root),
+        plain_branch_label(&diagram.root).len() + 1,
+        arrow_column,
+    )];
+    render_branch_segments(&mut lines, &diagram.path, &segment_layouts, arrow_column);
+
+    lines.join("\n")
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchDiagramSegmentLayout {
+    anchor_column: usize,
+    merge_column: Option<usize>,
+    continuation_column: Option<usize>,
+}
+
+fn compute_branch_diagram_layout(
+    diagram: &BranchDiagram,
+) -> (usize, Vec<BranchDiagramSegmentLayout>) {
+    const MIN_RIGHT_TAIL: usize = 17;
+    const MIN_JUNCTION_GAP: usize = 12;
+
+    let root_start = plain_branch_label(&diagram.root).len() + 1;
+    let mut arrow_column = root_start + MIN_RIGHT_TAIL;
+    let mut layouts = Vec::with_capacity(diagram.path.len());
+    let mut anchor_column = 0usize;
+
+    for (index, segment) in diagram.path.iter().enumerate() {
+        let path_start = anchor_column + 3 + plain_branch_label(&segment.branch).len() + 1;
+        let has_more_path = index + 1 < diagram.path.len();
+        let has_merged = !segment.merged.is_empty();
+        let merge_column = has_merged.then(|| {
+            let merged_start = segment
+                .merged
+                .iter()
+                .map(|merged| anchor_column + 6 + plain_branch_label(merged).len() + 1)
+                .max()
+                .unwrap_or(path_start);
+            path_start.max(merged_start) + MIN_JUNCTION_GAP
+        });
+        let continuation_column = if has_more_path {
+            Some(merge_column.unwrap_or(path_start + MIN_JUNCTION_GAP) + usize::from(has_merged))
+        } else {
+            None
+        };
+
+        let line_arrow_column = continuation_column
+            .map(|column| column + MIN_RIGHT_TAIL + 1)
+            .or_else(|| merge_column.map(|column| column + MIN_RIGHT_TAIL + 1))
+            .unwrap_or(path_start + MIN_RIGHT_TAIL);
+        arrow_column = arrow_column.max(line_arrow_column);
+        layouts.push(BranchDiagramSegmentLayout {
+            anchor_column,
+            merge_column,
+            continuation_column,
+        });
+
+        if let Some(next_anchor_column) = continuation_column {
+            anchor_column = next_anchor_column;
+        }
+    }
+
+    (arrow_column, layouts)
+}
+
+fn render_branch_segments(
+    lines: &mut Vec<String>,
+    segments: &[BranchDiagramSegment],
+    layouts: &[BranchDiagramSegmentLayout],
+    arrow_column: usize,
+) {
+    for (index, segment) in segments.iter().enumerate() {
+        let layout = &layouts[index];
+        let path_prefix = " ".repeat(layout.anchor_column);
+        let has_more_path = index + 1 < segments.len();
+        let has_merged = !segment.merged.is_empty();
+        let path_label = format_branch_label(&segment.branch);
+        let path_start = layout.anchor_column + 3 + plain_branch_label(&segment.branch).len() + 1;
+
+        match (layout.merge_column, layout.continuation_column) {
+            (Some(merge_column), Some(continuation_column)) => {
+                lines.push(format!(
+                    "{}└─ {} {}┬┬{}>",
+                    path_prefix,
+                    path_label,
+                    branch_diagram_fill(path_start, merge_column),
+                    branch_diagram_fill(continuation_column + 1, arrow_column)
+                ));
+            }
+            (Some(merge_column), None) => {
+                debug_assert!(!has_more_path);
+                lines.push(format!(
+                    "{}└─ {} {}┬{}>",
+                    path_prefix,
+                    path_label,
+                    branch_diagram_fill(path_start, merge_column),
+                    branch_diagram_fill(merge_column + 1, arrow_column)
+                ));
+            }
+            (None, Some(continuation_column)) => {
+                debug_assert!(has_more_path);
+                lines.push(format!(
+                    "{}└─ {} {}┬{}>",
+                    path_prefix,
+                    path_label,
+                    branch_diagram_fill(path_start, continuation_column),
+                    branch_diagram_fill(continuation_column + 1, arrow_column)
+                ));
+            }
+            (None, None) => {
+                debug_assert!(!has_more_path && !has_merged);
+                lines.push(format!(
+                    "{}└─ {} {}>",
+                    path_prefix,
+                    path_label,
+                    branch_diagram_fill(path_start, arrow_column)
+                ));
+            }
+        }
+
+        for (merged_index, merged) in segment.merged.iter().enumerate() {
+            let merged_prefix = format!("{}   ", path_prefix);
+            let merged_start = layout.anchor_column + 6 + plain_branch_label(merged).len() + 1;
+            let merge_column = layout
+                .merge_column
+                .expect("merged segments require a merge column");
+            let starter = if merged_index + 1 == segment.merged.len() {
+                "└─ "
+            } else {
+                "├─ "
+            };
+            let close = if merged_index + 1 == segment.merged.len() {
+                '┘'
+            } else {
+                '┤'
+            };
+
+            if layout.continuation_column.is_some() {
+                lines.push(format!(
+                    "{}{}{} {}{}│",
+                    merged_prefix,
+                    starter,
+                    format_branch_label(merged),
+                    branch_diagram_fill(merged_start, merge_column),
+                    close
+                ));
+            } else {
+                lines.push(format!(
+                    "{}{}{} {}{}",
+                    merged_prefix,
+                    starter,
+                    format_branch_label(merged),
+                    branch_diagram_fill(merged_start, merge_column),
+                    close
+                ));
+            }
+        }
+    }
+}
+
+fn render_aligned_arrow_line(
+    prefix: &str,
+    label: &str,
+    start_column: usize,
+    arrow_column: usize,
+) -> String {
+    format!(
+        "{}{} {}>",
+        prefix,
+        label,
+        branch_diagram_fill(start_column, arrow_column)
+    )
+}
+
+fn branch_diagram_fill(start_column: usize, target_column: usize) -> String {
+    let count = target_column.saturating_sub(start_column);
+    "─".repeat(count)
+}
+
+fn plain_branch_label(branch: &BranchDiagramNode) -> String {
+    branch.name.clone()
+}
+
+fn format_branch_label(branch: &BranchDiagramNode) -> String {
+    let plain = plain_branch_label(branch);
+
+    match branch.state {
+        BranchDiagramState::Main => format!("\x1b[32m{}\x1b[0m", plain),
+        BranchDiagramState::Current => format!("\x1b[33m{}\x1b[0m", plain),
+        BranchDiagramState::Open => format!("\x1b[92m{}\x1b[0m", plain),
+        BranchDiagramState::Merged => format!("\x1b[94m{}\x1b[0m", plain),
+    }
+}
+
+fn latest_public_release_tag_for_repo(repo_root: &str) -> Option<String> {
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .args([
+            "release",
+            "list",
+            "--limit",
+            "1",
+            "--json",
+            "tagName",
+            "--jq",
+            ".[].tagName",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!tag.is_empty()).then_some(tag)
 }
 
 fn load_config() -> Result<AppConfig> {
@@ -728,6 +1377,7 @@ mod tests {
             repo: Some(RepoConfig {
                 local_root: "C:/repo".to_string(),
                 remote_url: None,
+                ..RepoConfig::default()
             }),
         }
     }
@@ -850,6 +1500,190 @@ mod tests {
     }
 
     #[test]
+    fn is_branch_command_accepts_requested_synonyms() {
+        assert!(is_branch_command("branch"));
+        assert!(is_branch_command("br"));
+        assert!(is_branch_command("brn"));
+        assert!(is_branch_command("brnch"));
+        assert!(!is_branch_command("bran"));
+    }
+
+    #[test]
+    fn is_project_version_command_accepts_short_form() {
+        assert!(is_project_version_command("v"));
+        assert!(!is_project_version_command("version"));
+    }
+
+    #[test]
+    fn render_branch_tree_highlights_main_and_current_branch() {
+        let tree = render_branch_tree(Some(&BranchDiagram {
+            root: BranchDiagramNode {
+                name: "main".to_string(),
+                state: BranchDiagramState::Main,
+            },
+            path: vec![
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "feature/base".to_string(),
+                        state: BranchDiagramState::Open,
+                    },
+                    merged: vec![BranchDiagramNode {
+                        name: "release/0.10".to_string(),
+                        state: BranchDiagramState::Merged,
+                    }],
+                },
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "feature/payments".to_string(),
+                        state: BranchDiagramState::Current,
+                    },
+                    merged: Vec::new(),
+                },
+            ],
+        }));
+
+        assert!(tree.contains("\x1b[32mmain\x1b[0m"));
+        assert!(tree.contains("\x1b[33mfeature/payments\x1b[0m"));
+        assert!(tree.contains("\x1b[94mrelease/0.10\x1b[0m"));
+    }
+
+    #[test]
+    fn render_branch_tree_highlights_custom_main_branch() {
+        let tree = render_branch_tree(Some(&BranchDiagram {
+            root: BranchDiagramNode {
+                name: "trunk".to_string(),
+                state: BranchDiagramState::Main,
+            },
+            path: vec![BranchDiagramSegment {
+                branch: BranchDiagramNode {
+                    name: "feature/payments".to_string(),
+                    state: BranchDiagramState::Current,
+                },
+                merged: Vec::new(),
+            }],
+        }));
+
+        assert!(tree.contains("\x1b[32mtrunk\x1b[0m"));
+    }
+
+    #[test]
+    fn render_branch_tree_aligns_arrowheads_and_junctions() {
+        let tree = render_branch_tree(Some(&BranchDiagram {
+            root: BranchDiagramNode {
+                name: "main".to_string(),
+                state: BranchDiagramState::Main,
+            },
+            path: vec![
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "0.10.8+".to_string(),
+                        state: BranchDiagramState::Open,
+                    },
+                    merged: vec![BranchDiagramNode {
+                        name: "0.10.9".to_string(),
+                        state: BranchDiagramState::Merged,
+                    }],
+                },
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "0.10.10".to_string(),
+                        state: BranchDiagramState::Current,
+                    },
+                    merged: Vec::new(),
+                },
+            ],
+        }));
+        let lines = strip_ansi_for_test(&tree)
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+
+        let arrow_column = char_position(&lines[0], '>').expect("root line should contain arrow");
+        assert_eq!(
+            char_position(&lines[1], '>').expect("open branch should contain arrow"),
+            arrow_column
+        );
+        assert_eq!(
+            char_position(&lines[3], '>').expect("current branch should contain arrow"),
+            arrow_column
+        );
+        assert_eq!(
+            char_position(&lines[1], '┬').expect("junction should exist"),
+            char_position(&lines[2], '┘').expect("merged return should exist")
+        );
+    }
+
+    #[test]
+    fn render_branch_tree_keeps_future_branch_after_merge_timeline() {
+        let tree = render_branch_tree(Some(&BranchDiagram {
+            root: BranchDiagramNode {
+                name: "main".to_string(),
+                state: BranchDiagramState::Main,
+            },
+            path: vec![
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "0.10.8+".to_string(),
+                        state: BranchDiagramState::Open,
+                    },
+                    merged: vec![BranchDiagramNode {
+                        name: "0.10.9".to_string(),
+                        state: BranchDiagramState::Merged,
+                    }],
+                },
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "0.10.10".to_string(),
+                        state: BranchDiagramState::Current,
+                    },
+                    merged: Vec::new(),
+                },
+            ],
+        }));
+
+        assert_eq!(
+            strip_ansi_for_test(&tree),
+            [
+                "main ─────────────────────────────────────────────────>",
+                "└─ 0.10.8+ ──────────────┬┬───────────────────────────>",
+                "   └─ 0.10.9 ────────────┘│",
+                "                          └─ 0.10.10 ─────────────────>",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn display_branch_name_omits_heads_prefix() {
+        assert_eq!(display_branch_name("heads/0.10.9"), "0.10.9");
+        assert_eq!(display_branch_name("release/1.0.0"), "release/1.0.0");
+    }
+
+    fn strip_ansi_for_test(text: &str) -> String {
+        let mut plain = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+                chars.next();
+                for seq_ch in chars.by_ref() {
+                    if seq_ch.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            plain.push(ch);
+        }
+
+        plain
+    }
+
+    fn char_position(text: &str, target: char) -> Option<usize> {
+        text.chars().position(|ch| ch == target)
+    }
+
+    #[test]
     fn lookup_prefers_alias_before_name() {
         let projects = vec![
             sample_project("alpha", "core"),
@@ -874,6 +1708,7 @@ mod tests {
             repo: Some(RepoConfig {
                 local_root: "C:/repo/service".to_string(),
                 remote_url: None,
+                ..RepoConfig::default()
             }),
             changelog_enabled: false,
             changelog_path: None,
@@ -891,6 +1726,7 @@ mod tests {
         project2.repo = Some(RepoConfig {
             local_root: "C:/repo/beta".to_string(),
             remote_url: None,
+            ..RepoConfig::default()
         });
 
         let roots = all_configured_repo_roots(&[project1, project2]);
@@ -935,6 +1771,7 @@ mod tests {
             repo: Some(RepoConfig {
                 local_root: "C:/repo/service".to_string(),
                 remote_url: None,
+                ..RepoConfig::default()
             }),
             changelog_enabled: false,
             changelog_path: None,

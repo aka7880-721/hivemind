@@ -5,9 +5,12 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
@@ -301,6 +304,115 @@ impl ProjectConfig {
             }
         }
     }
+
+    pub fn repo_config_for_scope(&self, scope_index: usize) -> Option<&RepoConfig> {
+        match self.project_type {
+            ProjectType::AllInOne => self.repo.as_ref(),
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .and_then(|branch| branch.repo.as_ref())
+                .or_else(|| {
+                    self.branches
+                        .first()
+                        .and_then(|branch| branch.repo.as_ref())
+                })
+                .or(self.repo.as_ref()),
+        }
+    }
+
+    pub fn repo_has_custom_main_branch_for_scope(&self, scope_index: usize) -> bool {
+        self.repo_config_for_scope(scope_index)
+            .is_some_and(|repo| repo.has_custom_main_branch)
+    }
+
+    pub fn repo_custom_main_branch_value_for_scope(&self, scope_index: usize) -> String {
+        self.repo_config_for_scope(scope_index)
+            .map(|repo| repo.custom_main_branch.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn repo_main_branch_name_for_scope(&self, scope_index: usize) -> Option<&str> {
+        self.repo_config_for_scope(scope_index)
+            .and_then(RepoConfig::custom_main_branch_name)
+    }
+
+    pub fn set_repo_custom_main_branch_for_scope(
+        &mut self,
+        scope_index: usize,
+        enabled: bool,
+        main_branch_name: String,
+    ) -> Result<()> {
+        let repo = self.repo_config_for_scope_mut_or_insert(scope_index)?;
+        repo.has_custom_main_branch = enabled;
+        repo.custom_main_branch = if enabled {
+            main_branch_name.trim().to_string()
+        } else {
+            String::new()
+        };
+        Ok(())
+    }
+
+    fn repo_config_for_scope_mut_or_insert(
+        &mut self,
+        scope_index: usize,
+    ) -> Result<&mut RepoConfig> {
+        match self.project_type {
+            ProjectType::AllInOne => {
+                if self.repo.is_none() {
+                    let repo_root = derive_repo_root_from_targets(&self.targets).ok_or_else(|| {
+                        anyhow!(
+                            "no repo root is configured for this project and no target path could derive one"
+                        )
+                    })?;
+                    self.repo = Some(RepoConfig::new(repo_root, None));
+                }
+                Ok(self.repo.as_mut().expect("repo inserted above"))
+            }
+            ProjectType::Branched => {
+                if self
+                    .branches
+                    .get(scope_index)
+                    .and_then(|branch| branch.repo.as_ref())
+                    .is_some()
+                {
+                    return Ok(self
+                        .branches
+                        .get_mut(scope_index)
+                        .and_then(|branch| branch.repo.as_mut())
+                        .expect("branch repo exists for selected scope"));
+                }
+
+                if let Some(repo) = self.repo.as_mut() {
+                    return Ok(repo);
+                }
+
+                let repo_root = self
+                    .branches
+                    .get(scope_index)
+                    .or_else(|| self.branches.first())
+                    .and_then(|branch| derive_repo_root_from_targets(&branch.targets))
+                    .or_else(|| derive_repo_root_from_targets(&self.targets))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "no repo root is configured for this scope and no target path could derive one"
+                        )
+                    })?;
+
+                let target_index = if scope_index < self.branches.len() {
+                    scope_index
+                } else {
+                    0
+                };
+                let branch = self
+                    .branches
+                    .get_mut(target_index)
+                    .ok_or_else(|| anyhow!("branched project does not contain any scopes"))?;
+                branch.repo = Some(RepoConfig::new(repo_root, None));
+                Ok(branch.repo.as_mut().expect("branch repo inserted above"))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -460,10 +572,50 @@ impl BranchScopeKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct RepoConfig {
     pub local_root: String,
     pub remote_url: Option<String>,
+    pub has_custom_main_branch: bool,
+    pub custom_main_branch: String,
+}
+
+impl RepoConfig {
+    pub fn new(local_root: String, remote_url: Option<String>) -> Self {
+        Self {
+            local_root,
+            remote_url,
+            ..Self::default()
+        }
+    }
+
+    pub fn custom_main_branch_name(&self) -> Option<&str> {
+        if !self.has_custom_main_branch {
+            return None;
+        }
+
+        let branch = self.custom_main_branch.trim();
+        if branch.is_empty() {
+            None
+        } else {
+            Some(branch)
+        }
+    }
+}
+
+fn derive_repo_root_from_targets(targets: &[TargetSpec]) -> Option<String> {
+    targets.iter().find_map(|target| {
+        let path = target.path.trim();
+        if path.is_empty() {
+            return None;
+        }
+
+        Path::new(path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| parent.display().to_string())
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

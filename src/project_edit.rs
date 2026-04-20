@@ -673,9 +673,13 @@ impl ProjectEditDialog {
                 None
             };
 
+            let existing_repo = project.repo.clone().unwrap_or_default();
+
             project.repo = Some(RepoConfig {
                 local_root: repo_root.to_string(),
                 remote_url,
+                has_custom_main_branch: existing_repo.has_custom_main_branch,
+                custom_main_branch: existing_repo.custom_main_branch,
             });
         } else {
             project.repo = None;
@@ -904,6 +908,7 @@ mod tests {
                 repo: Some(RepoConfig {
                     local_root: "C:/repo".to_string(),
                     remote_url: Some("https://example.test/repo.git".to_string()),
+                    ..RepoConfig::default()
                 }),
                 changelog: ChangelogSettings {
                     enabled: true,
@@ -954,6 +959,7 @@ mod tests {
                 repo: Some(RepoConfig {
                     local_root: "C:/repo".to_string(),
                     remote_url: Some("https://example.test/repo.git".to_string()),
+                    ..RepoConfig::default()
                 }),
                 changelog: ChangelogSettings {
                     enabled: true,
