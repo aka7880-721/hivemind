@@ -105,34 +105,60 @@ fn is_bump_command(value: &str) -> bool {
 }
 
 fn print_usage() {
-    println!("ComfyGit {}", APP_VERSION);
-    println!("Usage:");
-    println!("  cg -v|--version           Show version and GitHub update status");
-    println!("  ---------------           --------------------------------------------------");
-    println!("  cg pwd <alias>            Print the configured project root path");
-    println!("  cg pwd -all|all           Print all configured repo root directories");
-    println!("  ---------------           --------------------------------------------------");
+    println!(" ");
     println!(
-        "  cg bmp <action>           performs a simple version bump for the project in the current working directory"
+        "ComfyGit {} | © 2026 ComfyHome™ | support@comfyhome.io",
+        APP_VERSION
+    );
+    println!(" ");
+    println!("Available:");
+    println!(" ");
+    println!("  ↓ Command / CATEGORY ↓     ↓ Description ↓");
+    println!(" ");
+    println!("  GENERAL COMMANDS:");
+    println!(" ");
+    println!("  cg | comfygit              Launch the interactive TUI");
+    println!("  cg -v | --version          Show version and GitHub update status");
+    println!("  ---------------            --------------------------------------------------");
+    println!("  <alias>                    Set in TUI: ");
+    println!("                                 Projects → Project Settings → General → Alias");
+    println!("  ---------------            --------------------------------------------------");
+    println!("  cg pwd <alias>             Print the configured project root path");
+    println!("  cg pwd -all | all          Print all configured repo root directories");
+    println!("  ---------------            --------------------------------------------------");
+    println!(
+        "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
+    );
+    println!(" ");
+    println!("  BUMPING COMMANDS:");
+    println!(" ");
+    println!(
+        "  cg bmp <action>            Performs a simple version bump for the project in the current working directory"
     );
     println!("          actions: major | minor | Patch | Auto | Cal ");
     println!("          synonyms:");
     println!("            major: maj | mj | mjr | big | .");
     println!("            minor: min | mnr | mr | mn | small | sml | ..");
     println!("            patch: pat | ptch | ph | pth | mini | ...");
-    println!("  cg bmp <action> <option>  --------------------------------------------------");
+    println!(" ");
     println!(
-        "  cg bmp <action> <option>  Bump the project in the current working directory as per options available in TUI"
+        "  cg bmp <action> <option>   Bump the project in the current working directory as per options available in TUI"
     );
-    println!("          options:           --------------------------------------------------");
+    println!("          options:");
     println!("             1 → Just bump the version");
     println!("             2 → Bump & Commit (locally)");
     println!("             3 → Bump & Commit & Push");
     println!("             4 → Branch & Bump & Commit & Push (will prompt for branch name)");
+    println!(" ");
 }
 
 fn print_version_status() {
-    println!("ComfyGit {}", APP_VERSION);
+    println!(" ");
+    println!(
+        "ComfyGit {} | © 2026 ComfyHome™ | support@comfyhome.io",
+        APP_VERSION
+    );
+    println!(" ");
     match github_release_status() {
         ReleaseStatus::UpToDate => println!("GitHub status: Up to date!"),
         ReleaseStatus::UpdateAvailable(version) => {
@@ -140,6 +166,7 @@ fn print_version_status() {
         }
         ReleaseStatus::Unavailable => println!("GitHub status: Version check unavailable."),
     }
+    println!(" ");
 }
 
 fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
