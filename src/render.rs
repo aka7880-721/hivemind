@@ -1041,7 +1041,7 @@ impl App {
                     .add_modifier(Modifier::BOLD),
             ),
             Line::from(
-                "Standard changelogs are usually deferred until the branch is merged into main/master.",
+                "Standard changelogs are usually deferred until the branch is merged into the repo's mainline.",
             ),
             Line::from("Choose whether to generate it now or mark it postponed in sync memory."),
         ];
