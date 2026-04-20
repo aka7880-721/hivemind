@@ -232,17 +232,21 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
                 &affected_indexes,
             )?;
             if !non_main_repo_states.is_empty() {
-                let mut message = String::from(
-                    "BranchCommitAndPush requires the current repository branch to be main.\nThe following repositories are on non-main branches:\n",
-                );
+                println!("Just to check: Are you aware you are currently on a NON-MAIN branch?");
+                println!("You are here:");
                 for state in &non_main_repo_states {
-                    message.push_str("  ");
-                    message.push_str(&state.repo_root);
-                    message.push_str(" -> ");
-                    message.push_str(&state.current_branch);
-                    message.push('\n');
+                    let repo_name = Path::new(&state.repo_root)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&state.repo_root);
+                    println!("  {} -> {}", repo_name, state.current_branch);
                 }
-                bail!(message);
+
+                if !prompt_confirm_default_yes(
+                    "Press ENTER or Y to ignore and continue; N to cancel: ",
+                )? {
+                    bail!("Cancelled by user");
+                }
             }
         }
     }
@@ -326,6 +330,26 @@ fn prompt_branch_name() -> Result<String> {
     }
 
     Ok(branch_name)
+}
+
+fn prompt_confirm_default_yes(prompt: &str) -> Result<bool> {
+    loop {
+        print!("{}", prompt);
+        io::stdout().flush().context("failed to flush prompt")?;
+
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read response")?;
+
+        match answer.trim().to_lowercase().as_str() {
+            "" | "y" => return Ok(true),
+            "n" => return Ok(false),
+            other => {
+                println!("Please answer Y or N. Received: {}", other);
+            }
+        }
+    }
 }
 
 fn load_config() -> Result<AppConfig> {
