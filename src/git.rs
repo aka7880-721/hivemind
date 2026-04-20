@@ -22,19 +22,69 @@ pub(crate) fn switch_to_main_branch(
     repo_root: &str,
     remote_spec: Option<&str>,
     sync_remote: bool,
+    custom_main_branch: Option<&str>,
 ) -> Result<()> {
-    let switch_output = run_git(repo_root, &["switch", "main"])?;
+    let main_branch = resolve_main_branch_name(repo_root, custom_main_branch)?;
+    let switch_output = run_git(repo_root, &["switch", &main_branch])?;
     if !switch_output.success {
-        run_git_checked(repo_root, &["checkout", "main"])?;
+        run_git_checked(repo_root, &["checkout", &main_branch])?;
     }
 
     if sync_remote {
         let remote_spec =
             remote_spec.ok_or_else(|| anyhow!("no remote is configured for this project"))?;
-        run_git_checked(repo_root, &["pull", "--ff-only", remote_spec, "main"])?;
+        run_git_checked(repo_root, &["pull", "--ff-only", remote_spec, &main_branch])?;
     }
 
     Ok(())
+}
+
+pub(crate) fn is_mainline_branch_name(branch: &str, custom_main_branch: Option<&str>) -> bool {
+    let normalized = normalize_branch_name(branch);
+    normalized.eq_ignore_ascii_case("main")
+        || normalized.eq_ignore_ascii_case("master")
+        || custom_main_branch.is_some_and(|custom| normalized.eq_ignore_ascii_case(custom.trim()))
+}
+
+pub(crate) fn resolve_main_branch_name(
+    repo_root: &str,
+    custom_main_branch: Option<&str>,
+) -> Result<String> {
+    if let Some(custom_main_branch) = custom_main_branch
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+    {
+        return Ok(custom_main_branch.to_string());
+    }
+
+    let branches = split_output_lines(&run_git_checked(
+        repo_root,
+        &[
+            "branch",
+            "--list",
+            "main",
+            "master",
+            "--format=%(refname:short)",
+        ],
+    )?);
+    if let Some(branch) = branches
+        .iter()
+        .find(|branch| branch.eq_ignore_ascii_case("main"))
+    {
+        return Ok(branch.clone());
+    }
+    if let Some(branch) = branches
+        .iter()
+        .find(|branch| branch.eq_ignore_ascii_case("master"))
+    {
+        return Ok(branch.clone());
+    }
+
+    Ok("main".to_string())
+}
+
+fn normalize_branch_name(branch: &str) -> &str {
+    branch.trim().trim_start_matches('*').trim()
 }
 
 pub(crate) fn create_branch_and_switch(repo_root: &str, branch_name: &str) -> Result<()> {
@@ -111,6 +161,7 @@ pub(crate) struct GitScopeContext {
     pub(crate) scope_kind: Option<BranchScopeKind>,
     pub(crate) repo_root: String,
     pub(crate) remote_spec: Option<String>,
+    pub(crate) main_branch_name: Option<String>,
     pub(crate) suggested_tag_name: String,
     pub(crate) path_filters: Vec<String>,
 }
@@ -237,6 +288,9 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             scope_kind: None,
             repo_root,
             remote_spec,
+            main_branch_name: project
+                .repo_main_branch_name_for_scope(0)
+                .map(str::to_string),
             suggested_tag_name: suggested_tag_name(project),
             path_filters: project_scope_target_paths(project),
         }]);
@@ -259,6 +313,9 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             scope_kind: None,
             repo_root,
             remote_spec,
+            main_branch_name: project
+                .repo_main_branch_name_for_scope(0)
+                .map(str::to_string),
             suggested_tag_name: suggested_tag_name(project),
             path_filters: project_scope_target_paths(project),
         }]);
@@ -280,6 +337,9 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                 scope_kind: Some(branch.scope_kind),
                 repo_root,
                 remote_spec: repo.and_then(|repo| repo.remote_url.clone()),
+                main_branch_name: project
+                    .repo_main_branch_name_for_scope(index)
+                    .map(str::to_string),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
                 path_filters: collect_target_paths(&branch.targets),
             })
@@ -310,6 +370,9 @@ pub(crate) fn collect_all_branch_git_scope_contexts(
                 scope_kind: Some(branch.scope_kind),
                 repo_root,
                 remote_spec: repo.and_then(|repo| repo.remote_url.clone()),
+                main_branch_name: project
+                    .repo_main_branch_name_for_scope(index)
+                    .map(str::to_string),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
                 path_filters: collect_target_paths(&branch.targets),
             })
@@ -729,6 +792,7 @@ mod tests {
                     repo: Some(RepoConfig {
                         local_root: "C:/repo/core".to_string(),
                         remote_url: Some("origin-core".to_string()),
+                        ..RepoConfig::default()
                     }),
                     changelog_enabled: false,
                     changelog_path: None,
@@ -761,6 +825,7 @@ mod tests {
             repo: Some(RepoConfig {
                 local_root: "C:/repo/project".to_string(),
                 remote_url: Some("origin-project".to_string()),
+                ..RepoConfig::default()
             }),
         };
 
@@ -797,6 +862,7 @@ mod tests {
                     repo: Some(RepoConfig {
                         local_root: "C:/repo/core".to_string(),
                         remote_url: None,
+                        ..RepoConfig::default()
                     }),
                     changelog_enabled: false,
                     changelog_path: None,
@@ -816,6 +882,7 @@ mod tests {
                     repo: Some(RepoConfig {
                         local_root: "C:/repo/api".to_string(),
                         remote_url: None,
+                        ..RepoConfig::default()
                     }),
                     changelog_enabled: false,
                     changelog_path: None,
@@ -849,6 +916,7 @@ mod tests {
             scope_kind: Some(BranchScopeKind::Module),
             repo_root: "C:/repo".to_string(),
             remote_spec: None,
+            main_branch_name: None,
             suggested_tag_name: "core-v1.2.3".to_string(),
             path_filters: vec!["C:/repo/core".to_string(), "core\\nested".to_string()],
         };
@@ -887,6 +955,7 @@ mod tests {
             repo: Some(RepoConfig {
                 local_root: "C:/repo".to_string(),
                 remote_url: Some("origin".to_string()),
+                ..RepoConfig::default()
             }),
         };
 
