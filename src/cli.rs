@@ -715,45 +715,55 @@ fn render_branch_tree(diagram: Option<&BranchDiagram>) -> String {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BranchDiagramSegmentLayout {
-    prefix: String,
-    junction_column: Option<usize>,
+    anchor_column: usize,
+    merge_column: Option<usize>,
+    continuation_column: Option<usize>,
 }
 
 fn compute_branch_diagram_layout(
     diagram: &BranchDiagram,
 ) -> (usize, Vec<BranchDiagramSegmentLayout>) {
     const MIN_RIGHT_TAIL: usize = 17;
-    const MIN_JUNCTION_GAP: usize = 3;
+    const MIN_JUNCTION_GAP: usize = 12;
 
     let root_start = plain_branch_label(&diagram.root).len() + 1;
     let mut arrow_column = root_start + MIN_RIGHT_TAIL;
     let mut layouts = Vec::with_capacity(diagram.path.len());
+    let mut anchor_column = 0usize;
 
     for (index, segment) in diagram.path.iter().enumerate() {
-        let prefix = "   ".repeat(index);
-        let path_start = prefix.len() + 3 + plain_branch_label(&segment.branch).len() + 1;
+        let path_start = anchor_column + 3 + plain_branch_label(&segment.branch).len() + 1;
         let has_more_path = index + 1 < diagram.path.len();
         let has_merged = !segment.merged.is_empty();
-        let junction_column = if has_more_path || has_merged {
+        let merge_column = has_merged.then(|| {
             let merged_start = segment
                 .merged
                 .iter()
-                .map(|merged| prefix.len() + 6 + plain_branch_label(merged).len() + 1)
+                .map(|merged| anchor_column + 6 + plain_branch_label(merged).len() + 1)
                 .max()
-                .unwrap_or(0);
-            Some(path_start.max(merged_start) + MIN_JUNCTION_GAP)
+                .unwrap_or(path_start);
+            path_start.max(merged_start) + MIN_JUNCTION_GAP
+        });
+        let continuation_column = if has_more_path {
+            Some(merge_column.unwrap_or(path_start + MIN_JUNCTION_GAP) + usize::from(has_merged))
         } else {
             None
         };
 
-        let line_arrow_column = junction_column
+        let line_arrow_column = continuation_column
             .map(|column| column + MIN_RIGHT_TAIL + 1)
+            .or_else(|| merge_column.map(|column| column + MIN_RIGHT_TAIL + 1))
             .unwrap_or(path_start + MIN_RIGHT_TAIL);
         arrow_column = arrow_column.max(line_arrow_column);
         layouts.push(BranchDiagramSegmentLayout {
-            prefix,
-            junction_column,
+            anchor_column,
+            merge_column,
+            continuation_column,
         });
+
+        if let Some(next_anchor_column) = continuation_column {
+            anchor_column = next_anchor_column;
+        }
     }
 
     (arrow_column, layouts)
@@ -767,40 +777,89 @@ fn render_branch_segments(
 ) {
     for (index, segment) in segments.iter().enumerate() {
         let layout = &layouts[index];
+        let path_prefix = " ".repeat(layout.anchor_column);
         let has_more_path = index + 1 < segments.len();
         let has_merged = !segment.merged.is_empty();
         let path_label = format_branch_label(&segment.branch);
-        let path_start = layout.prefix.len() + 3 + plain_branch_label(&segment.branch).len() + 1;
+        let path_start = layout.anchor_column + 3 + plain_branch_label(&segment.branch).len() + 1;
 
-        if let Some(junction_column) = layout.junction_column {
-            lines.push(format!(
-                "{}└─ {} {}┬{}>",
-                layout.prefix,
-                path_label,
-                branch_diagram_fill(path_start, junction_column),
-                branch_diagram_fill(junction_column + 1, arrow_column)
-            ));
-        } else {
-            debug_assert!(!has_more_path && !has_merged);
-            lines.push(format!(
-                "{}└─ {} {}>",
-                layout.prefix,
-                path_label,
-                branch_diagram_fill(path_start, arrow_column)
-            ));
+        match (layout.merge_column, layout.continuation_column) {
+            (Some(merge_column), Some(continuation_column)) => {
+                lines.push(format!(
+                    "{}└─ {} {}┬┬{}>",
+                    path_prefix,
+                    path_label,
+                    branch_diagram_fill(path_start, merge_column),
+                    branch_diagram_fill(continuation_column + 1, arrow_column)
+                ));
+            }
+            (Some(merge_column), None) => {
+                debug_assert!(!has_more_path);
+                lines.push(format!(
+                    "{}└─ {} {}┬{}>",
+                    path_prefix,
+                    path_label,
+                    branch_diagram_fill(path_start, merge_column),
+                    branch_diagram_fill(merge_column + 1, arrow_column)
+                ));
+            }
+            (None, Some(continuation_column)) => {
+                debug_assert!(has_more_path);
+                lines.push(format!(
+                    "{}└─ {} {}┬{}>",
+                    path_prefix,
+                    path_label,
+                    branch_diagram_fill(path_start, continuation_column),
+                    branch_diagram_fill(continuation_column + 1, arrow_column)
+                ));
+            }
+            (None, None) => {
+                debug_assert!(!has_more_path && !has_merged);
+                lines.push(format!(
+                    "{}└─ {} {}>",
+                    path_prefix,
+                    path_label,
+                    branch_diagram_fill(path_start, arrow_column)
+                ));
+            }
         }
 
-        for merged in &segment.merged {
-            let merged_start = layout.prefix.len() + 6 + plain_branch_label(merged).len() + 1;
-            let junction_column = layout
-                .junction_column
-                .expect("merged segments require a junction column");
-            lines.push(format!(
-                "{}   ├─ {} {}┘",
-                layout.prefix,
-                format_branch_label(merged),
-                branch_diagram_fill(merged_start, junction_column)
-            ));
+        for (merged_index, merged) in segment.merged.iter().enumerate() {
+            let merged_prefix = format!("{}   ", path_prefix);
+            let merged_start = layout.anchor_column + 6 + plain_branch_label(merged).len() + 1;
+            let merge_column = layout
+                .merge_column
+                .expect("merged segments require a merge column");
+            let starter = if merged_index + 1 == segment.merged.len() {
+                "└─ "
+            } else {
+                "├─ "
+            };
+            let close = if merged_index + 1 == segment.merged.len() {
+                '┘'
+            } else {
+                '┤'
+            };
+
+            if layout.continuation_column.is_some() {
+                lines.push(format!(
+                    "{}{}{} {}{}│",
+                    merged_prefix,
+                    starter,
+                    format_branch_label(merged),
+                    branch_diagram_fill(merged_start, merge_column),
+                    close
+                ));
+            } else {
+                lines.push(format!(
+                    "{}{}{} {}{}",
+                    merged_prefix,
+                    starter,
+                    format_branch_label(merged),
+                    branch_diagram_fill(merged_start, merge_column),
+                    close
+                ));
+            }
         }
     }
 }
@@ -825,12 +884,7 @@ fn branch_diagram_fill(start_column: usize, target_column: usize) -> String {
 }
 
 fn plain_branch_label(branch: &BranchDiagramNode) -> String {
-    match branch.state {
-        BranchDiagramState::Main => branch.name.clone(),
-        BranchDiagramState::Current => format!("{} [current]", branch.name),
-        BranchDiagramState::Open => branch.name.clone(),
-        BranchDiagramState::Merged => format!("{} [merged]", branch.name),
-    }
+    branch.name.clone()
 }
 
 fn format_branch_label(branch: &BranchDiagramNode) -> String {
@@ -1489,8 +1543,8 @@ mod tests {
         }));
 
         assert!(tree.contains("\x1b[32mmain\x1b[0m"));
-        assert!(tree.contains("\x1b[33mfeature/payments [current]\x1b[0m"));
-        assert!(tree.contains("\x1b[94mrelease/0.10 [merged]\x1b[0m"));
+        assert!(tree.contains("\x1b[33mfeature/payments\x1b[0m"));
+        assert!(tree.contains("\x1b[94mrelease/0.10\x1b[0m"));
     }
 
     #[test]
@@ -1556,6 +1610,46 @@ mod tests {
         assert_eq!(
             char_position(&lines[1], '┬').expect("junction should exist"),
             char_position(&lines[2], '┘').expect("merged return should exist")
+        );
+    }
+
+    #[test]
+    fn render_branch_tree_keeps_future_branch_after_merge_timeline() {
+        let tree = render_branch_tree(Some(&BranchDiagram {
+            root: BranchDiagramNode {
+                name: "main".to_string(),
+                state: BranchDiagramState::Main,
+            },
+            path: vec![
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "0.10.8+".to_string(),
+                        state: BranchDiagramState::Open,
+                    },
+                    merged: vec![BranchDiagramNode {
+                        name: "0.10.9".to_string(),
+                        state: BranchDiagramState::Merged,
+                    }],
+                },
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "0.10.10".to_string(),
+                        state: BranchDiagramState::Current,
+                    },
+                    merged: Vec::new(),
+                },
+            ],
+        }));
+
+        assert_eq!(
+            strip_ansi_for_test(&tree),
+            [
+                "main ─────────────────────────────────────────────────>",
+                "└─ 0.10.8+ ──────────────┬┬───────────────────────────>",
+                "   └─ 0.10.9 ────────────┘│",
+                "                          └─ 0.10.10 ─────────────────>",
+            ]
+            .join("\n")
         );
     }
 
