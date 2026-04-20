@@ -32,7 +32,7 @@ use crate::{
         TargetSpec,
     },
     git::{
-        collect_all_branch_git_scope_contexts, current_branch_with_cancel, is_mainline_branch_name,
+        collect_all_branch_git_scope_contexts, current_branch_with_cancel,
         latest_local_tag_with_cancel, load_scope_activity_summary_with_cancel, run_git,
         run_git_checked, split_output_lines,
     },
@@ -211,7 +211,7 @@ fn print_branch_status() -> Result<()> {
         .or_else(|| git_contexts.first())
         .ok_or_else(|| anyhow!("git scope metadata is unavailable for the current branch view"))?;
     let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
-    let topology = load_branch_topology(
+    let diagram = load_branch_diagram(
         &context.repo_root,
         &current_branch,
         context.main_branch_name.as_deref(),
@@ -220,14 +220,7 @@ fn print_branch_status() -> Result<()> {
     println!();
     println!("current branch: {}", current_branch);
     println!();
-    println!(
-        "{}",
-        render_branch_tree(
-            &topology,
-            &current_branch,
-            context.main_branch_name.as_deref()
-        )
-    );
+    println!("{}", render_branch_tree(diagram.as_ref()));
     println!();
     Ok(())
 }
@@ -461,15 +454,35 @@ fn prompt_confirm_default_yes(prompt: &str) -> Result<bool> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BranchRef {
     name: String,
+    refname: String,
     object_id: String,
     root_distance: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct BranchTopologyNode {
+enum BranchDiagramState {
+    Main,
+    Current,
+    Open,
+    Merged,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchDiagramNode {
     name: String,
-    parent: Option<usize>,
-    root_distance: usize,
+    state: BranchDiagramState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchDiagramSegment {
+    branch: BranchDiagramNode,
+    merged: Vec<BranchDiagramNode>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchDiagram {
+    root: BranchDiagramNode,
+    path: Vec<BranchDiagramSegment>,
 }
 
 fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
@@ -477,22 +490,25 @@ fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
         repo_root,
         &[
             "for-each-ref",
-            "--format=%(refname:short)|%(objectname)",
+            "--format=%(refname:short)|%(refname)|%(objectname)",
             "refs/heads",
         ],
     )?;
     let mut branches = split_output_lines(&output)
         .into_iter()
         .filter_map(|line| {
-            let (name, object_id) = line.split_once('|')?;
+            let mut parts = line.split('|');
+            let name = parts.next()?.trim();
+            let refname = parts.next()?.trim();
+            let object_id = parts.next()?.trim();
             let name = name.trim();
-            let object_id = object_id.trim();
-            if name.is_empty() || object_id.is_empty() {
+            if name.is_empty() || refname.is_empty() || object_id.is_empty() {
                 return None;
             }
 
             Some(BranchRef {
                 name: name.to_string(),
+                refname: refname.to_string(),
                 object_id: object_id.to_string(),
                 root_distance: 0,
             })
@@ -503,14 +519,14 @@ fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
     Ok(branches)
 }
 
-fn load_branch_topology(
+fn load_branch_diagram(
     repo_root: &str,
     current_branch: &str,
     custom_main_branch: Option<&str>,
-) -> Result<Vec<BranchTopologyNode>> {
+) -> Result<Option<BranchDiagram>> {
     let mut branches = list_local_branch_refs(repo_root)?;
     if branches.is_empty() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
     let root_index = branches
@@ -538,10 +554,47 @@ fn load_branch_topology(
 
     for branch in &mut branches {
         branch.root_distance =
-            branch_unique_commit_count(repo_root, &root_branch.name, &branch.name)?;
+            branch_unique_commit_count(repo_root, &root_branch.refname, &branch.refname)?;
     }
 
-    branches.sort_by(|left, right| {
+    let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
+        root_branch.clone()
+    } else {
+        branches
+            .iter()
+            .find(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+            .cloned()
+            .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
+    };
+
+    let first_parent_commits = first_parent_commit_ids(repo_root, &current_ref.refname)?;
+    let mut family_branches = Vec::new();
+    for branch in branches {
+        if !is_branch_ancestor(repo_root, &branch.refname, &current_ref.refname)? {
+            continue;
+        }
+
+        if is_branch_ancestor(repo_root, &branch.refname, &root_branch.refname)? {
+            continue;
+        }
+
+        family_branches.push(branch);
+    }
+
+    let mut path_branches = family_branches
+        .iter()
+        .filter(|branch| first_parent_commits.contains(&branch.object_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !root_branch.name.eq_ignore_ascii_case(current_branch)
+        && path_branches
+            .iter()
+            .all(|branch| !branch.name.eq_ignore_ascii_case(current_branch))
+    {
+        path_branches.push(current_ref.clone());
+    }
+
+    path_branches.sort_by(|left, right| {
         let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
         let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
         left.root_distance
@@ -550,62 +603,88 @@ fn load_branch_topology(
             .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
     });
 
-    let mut processed_refs = vec![root_branch.clone()];
-    let mut topology = vec![BranchTopologyNode {
-        name: root_branch.name,
-        parent: None,
-        root_distance: 0,
-    }];
-
-    for branch in branches {
-        let parent = select_branch_parent(repo_root, &processed_refs, &branch)?;
-        topology.push(BranchTopologyNode {
-            name: branch.name.clone(),
-            parent: Some(parent),
-            root_distance: branch.root_distance,
-        });
-        processed_refs.push(branch);
-    }
-
-    Ok(topology)
-}
-
-fn select_branch_parent(
-    repo_root: &str,
-    processed_refs: &[BranchRef],
-    branch: &BranchRef,
-) -> Result<usize> {
-    let mut candidates = processed_refs
+    let mut path = path_branches
         .iter()
-        .enumerate()
-        .filter(|(_, candidate)| candidate.object_id != branch.object_id)
+        .map(|branch| BranchDiagramSegment {
+            branch: BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state: if branch.name.eq_ignore_ascii_case(current_branch) {
+                    BranchDiagramState::Current
+                } else {
+                    BranchDiagramState::Open
+                },
+            },
+            merged: Vec::new(),
+        })
         .collect::<Vec<_>>();
 
-    candidates.sort_by_key(|(_, candidate)| std::cmp::Reverse(candidate.root_distance));
+    for branch in family_branches {
+        if path_branches
+            .iter()
+            .any(|path_branch| path_branch.object_id == branch.object_id)
+        {
+            continue;
+        }
 
-    for (index, candidate) in candidates {
-        if is_branch_ancestor(repo_root, &candidate.name, &branch.name)? {
-            return Ok(index);
+        let mut best_attachment = None;
+        for (index, path_branch) in path_branches.iter().enumerate() {
+            if !is_branch_ancestor(repo_root, &branch.refname, &path_branch.refname)? {
+                continue;
+            }
+
+            let distance = commit_distance(repo_root, &branch.refname, &path_branch.refname)?;
+            if distance == 0 {
+                continue;
+            }
+
+            match best_attachment {
+                Some((_, best_distance)) if distance >= best_distance => {}
+                _ => best_attachment = Some((index, distance)),
+            }
+        }
+
+        if let Some((index, _)) = best_attachment {
+            path[index].merged.push(BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state: BranchDiagramState::Merged,
+            });
         }
     }
 
-    Ok(0)
+    for segment in &mut path {
+        segment.merged.sort_by(|left, right| {
+            normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name))
+        });
+    }
+
+    Ok(Some(BranchDiagram {
+        root: BranchDiagramNode {
+            name: display_branch_name(&root_branch.name),
+            state: BranchDiagramState::Main,
+        },
+        path,
+    }))
 }
 
-fn is_branch_ancestor(repo_root: &str, ancestor: &str, descendant: &str) -> Result<bool> {
+fn first_parent_commit_ids(repo_root: &str, branch_ref: &str) -> Result<HashSet<String>> {
+    let output = run_git_checked(repo_root, &["rev-list", "--first-parent", branch_ref])?;
+    Ok(split_output_lines(&output).into_iter().collect())
+}
+
+fn is_branch_ancestor(repo_root: &str, ancestor_ref: &str, descendant_ref: &str) -> Result<bool> {
     let output = run_git(
         repo_root,
-        &["merge-base", "--is-ancestor", ancestor, descendant],
+        &["merge-base", "--is-ancestor", ancestor_ref, descendant_ref],
     )?;
     Ok(output.success)
 }
 
-fn branch_unique_commit_count(repo_root: &str, base: &str, branch: &str) -> Result<usize> {
-    commit_distance(repo_root, base, branch)
+fn branch_unique_commit_count(repo_root: &str, base_ref: &str, branch_ref: &str) -> Result<usize> {
+    commit_distance(repo_root, base_ref, branch_ref)
 }
 
-fn commit_distance(repo_root: &str, base: &str, branch: &str) -> Result<usize> {
-    let range = format!("{}..{}", base, branch);
+fn commit_distance(repo_root: &str, base_ref: &str, branch_ref: &str) -> Result<usize> {
+    let range = format!("{}..{}", base_ref, branch_ref);
     let output = run_git_checked(repo_root, &["rev-list", "--count", &range])?;
     output
         .trim()
@@ -613,149 +692,73 @@ fn commit_distance(repo_root: &str, base: &str, branch: &str) -> Result<usize> {
         .with_context(|| format!("failed to parse git ancestry distance for {}", range))
 }
 
-struct BranchRenderContext<'a> {
-    topology: &'a [BranchTopologyNode],
-    children: &'a [Vec<usize>],
-    current_branch: &'a str,
-    custom_main_branch: Option<&'a str>,
+fn display_branch_name(branch: &str) -> String {
+    branch.strip_prefix("heads/").unwrap_or(branch).to_string()
 }
 
-fn render_branch_tree(
-    topology: &[BranchTopologyNode],
-    current_branch: &str,
-    custom_main_branch: Option<&str>,
-) -> String {
-    if topology.is_empty() {
+fn render_branch_tree(diagram: Option<&BranchDiagram>) -> String {
+    let Some(diagram) = diagram else {
         return "(no local branches)".to_string();
-    }
-
-    let mut children = vec![Vec::<usize>::new(); topology.len()];
-    for (index, node) in topology.iter().enumerate().skip(1) {
-        if let Some(parent) = node.parent {
-            children[parent].push(index);
-        }
-    }
-
-    for sibling_group in &mut children {
-        sibling_group.sort_by(|left, right| {
-            let left_node = &topology[*left];
-            let right_node = &topology[*right];
-            let left_is_current = left_node.name.eq_ignore_ascii_case(current_branch);
-            let right_is_current = right_node.name.eq_ignore_ascii_case(current_branch);
-            left_node
-                .root_distance
-                .cmp(&right_node.root_distance)
-                .then_with(|| left_is_current.cmp(&right_is_current).reverse())
-                .then_with(|| {
-                    normalize_lookup(&left_node.name).cmp(&normalize_lookup(&right_node.name))
-                })
-        });
-    }
-
-    let (root_line, root_tail) =
-        collapse_branch_chain(topology, &children, 0, current_branch, custom_main_branch);
-    let mut lines = vec![root_line];
-
-    let context = BranchRenderContext {
-        topology,
-        children: &children,
-        current_branch,
-        custom_main_branch,
     };
 
-    let root_children = &children[root_tail];
-    for (index, child) in root_children.iter().enumerate() {
-        render_branch_subtree(
-            &mut lines,
-            &context,
-            *child,
-            "",
-            index + 1 == root_children.len(),
-        );
-    }
+    let mut lines = vec![format!(
+        "{} ────────────────────────────────>",
+        format_branch_label(&diagram.root)
+    )];
+    render_branch_segments(&mut lines, &diagram.path, "");
 
     lines.join("\n")
 }
 
-fn render_branch_subtree(
+fn render_branch_segments(
     lines: &mut Vec<String>,
-    context: &BranchRenderContext<'_>,
-    node_index: usize,
+    segments: &[BranchDiagramSegment],
     prefix: &str,
-    is_last: bool,
 ) {
-    let connector = if is_last { "└─ " } else { "├─ " };
-    let child_prefix = if is_last {
-        format!("{}   ", prefix)
-    } else {
-        format!("{}│  ", prefix)
+    let Some((segment, rest)) = segments.split_first() else {
+        return;
     };
 
-    let (line, tail_index) = collapse_branch_chain(
-        context.topology,
-        context.children,
-        node_index,
-        context.current_branch,
-        context.custom_main_branch,
-    );
-    lines.push(format!("{}{}{}", prefix, connector, line));
+    let has_more_path = !rest.is_empty();
+    let has_merged = !segment.merged.is_empty();
+    let tail = if has_more_path || has_merged {
+        " ──────────────┬────────────────>"
+    } else {
+        " ────────────────────────────────>"
+    };
+    lines.push(format!(
+        "{}└─ {}{}",
+        prefix,
+        format_branch_label(&segment.branch),
+        tail
+    ));
 
-    let subtree_children = &context.children[tail_index];
-    for (index, child) in subtree_children.iter().enumerate() {
-        render_branch_subtree(
-            lines,
-            context,
-            *child,
-            &child_prefix,
-            index + 1 == subtree_children.len(),
-        );
-    }
-}
-
-fn collapse_branch_chain(
-    topology: &[BranchTopologyNode],
-    children: &[Vec<usize>],
-    start_index: usize,
-    current_branch: &str,
-    custom_main_branch: Option<&str>,
-) -> (String, usize) {
-    let mut labels = vec![format_branch_label(
-        &topology[start_index].name,
-        current_branch,
-        custom_main_branch,
-    )];
-    let mut tail_index = start_index;
-
-    while children[tail_index].len() == 1 {
-        tail_index = children[tail_index][0];
-        labels.push(format_branch_label(
-            &topology[tail_index].name,
-            current_branch,
-            custom_main_branch,
+    for merged in &segment.merged {
+        lines.push(format!(
+            "{}   ├─ {} ─────────────────────┘",
+            prefix,
+            format_branch_label(merged)
         ));
     }
 
-    (labels.join(" ── "), tail_index)
-}
-
-fn format_branch_label(
-    branch: &str,
-    current_branch: &str,
-    custom_main_branch: Option<&str>,
-) -> String {
-    let plain = format_branch_plain_label(branch, current_branch);
-    if is_mainline_branch_name(branch, custom_main_branch) {
-        format!("\x1b[32m{}\x1b[0m", plain)
-    } else {
-        plain
+    if has_more_path {
+        render_branch_segments(lines, rest, &format!("{}   ", prefix));
     }
 }
 
-fn format_branch_plain_label(branch: &str, current_branch: &str) -> String {
-    if branch.eq_ignore_ascii_case(current_branch) {
-        format!("{} [current]", branch)
-    } else {
-        branch.to_string()
+fn format_branch_label(branch: &BranchDiagramNode) -> String {
+    let plain = match branch.state {
+        BranchDiagramState::Main => branch.name.clone(),
+        BranchDiagramState::Current => format!("{} [current]", branch.name),
+        BranchDiagramState::Open => branch.name.clone(),
+        BranchDiagramState::Merged => format!("{} [merged]", branch.name),
+    };
+
+    match branch.state {
+        BranchDiagramState::Main => format!("\x1b[32m{}\x1b[0m", plain),
+        BranchDiagramState::Current => format!("\x1b[33m{}\x1b[0m", plain),
+        BranchDiagramState::Open => format!("\x1b[92m{}\x1b[0m", plain),
+        BranchDiagramState::Merged => format!("\x1b[94m{}\x1b[0m", plain),
     }
 }
 
@@ -1377,63 +1380,60 @@ mod tests {
 
     #[test]
     fn render_branch_tree_highlights_main_and_current_branch() {
-        let tree = render_branch_tree(
-            &[
-                BranchTopologyNode {
-                    name: "main".to_string(),
-                    parent: None,
-                    root_distance: 0,
+        let tree = render_branch_tree(Some(&BranchDiagram {
+            root: BranchDiagramNode {
+                name: "main".to_string(),
+                state: BranchDiagramState::Main,
+            },
+            path: vec![
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "feature/base".to_string(),
+                        state: BranchDiagramState::Open,
+                    },
+                    merged: vec![BranchDiagramNode {
+                        name: "release/0.10".to_string(),
+                        state: BranchDiagramState::Merged,
+                    }],
                 },
-                BranchTopologyNode {
-                    name: "feature/base".to_string(),
-                    parent: Some(0),
-                    root_distance: 2,
-                },
-                BranchTopologyNode {
-                    name: "feature/payments".to_string(),
-                    parent: Some(1),
-                    root_distance: 4,
-                },
-                BranchTopologyNode {
-                    name: "release/0.10".to_string(),
-                    parent: Some(0),
-                    root_distance: 1,
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "feature/payments".to_string(),
+                        state: BranchDiagramState::Current,
+                    },
+                    merged: Vec::new(),
                 },
             ],
-            "feature/payments",
-            None,
-        );
+        }));
 
         assert!(tree.contains("\x1b[32mmain\x1b[0m"));
-        assert!(tree.contains("feature/payments [current]"));
-        assert!(tree.contains("feature/base ── feature/payments [current]"));
+        assert!(tree.contains("\x1b[33mfeature/payments [current]\x1b[0m"));
+        assert!(tree.contains("\x1b[94mrelease/0.10 [merged]\x1b[0m"));
     }
 
     #[test]
     fn render_branch_tree_highlights_custom_main_branch() {
-        let tree = render_branch_tree(
-            &[
-                BranchTopologyNode {
-                    name: "trunk".to_string(),
-                    parent: None,
-                    root_distance: 0,
-                },
-                BranchTopologyNode {
+        let tree = render_branch_tree(Some(&BranchDiagram {
+            root: BranchDiagramNode {
+                name: "trunk".to_string(),
+                state: BranchDiagramState::Main,
+            },
+            path: vec![BranchDiagramSegment {
+                branch: BranchDiagramNode {
                     name: "feature/payments".to_string(),
-                    parent: Some(0),
-                    root_distance: 3,
+                    state: BranchDiagramState::Current,
                 },
-                BranchTopologyNode {
-                    name: "release/0.10".to_string(),
-                    parent: Some(0),
-                    root_distance: 1,
-                },
-            ],
-            "feature/payments",
-            Some("trunk"),
-        );
+                merged: Vec::new(),
+            }],
+        }));
 
         assert!(tree.contains("\x1b[32mtrunk\x1b[0m"));
+    }
+
+    #[test]
+    fn display_branch_name_omits_heads_prefix() {
+        assert_eq!(display_branch_name("heads/0.10.9"), "0.10.9");
+        assert_eq!(display_branch_name("release/1.0.0"), "release/1.0.0");
     }
 
     #[test]
