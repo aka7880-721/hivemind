@@ -29,7 +29,7 @@ use crate::{
         AppConfig, BranchConfig, ConfigStore, ProjectConfig, ProjectType, RepoConfig, TargetFormat,
         TargetSpec,
     },
-    git::collect_all_branch_git_scope_contexts,
+    git::{collect_all_branch_git_scope_contexts, switch_or_create_branch},
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -208,6 +208,36 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
         .bump(&current_version, action, Local::now().date_naive())
         .map_err(anyhow::Error::msg)?;
 
+    let branch_name = if workflow.requires_branch() {
+        Some(prompt_branch_name()?)
+    } else {
+        None
+    };
+
+    let mut repo_operations = Vec::new();
+    if workflow != OverviewBumpWorkflow::JustBump {
+        if !project.integration_mode.requires_repo() {
+            bail!("selected bump option requires a git-backed project")
+        }
+
+        let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
+        repo_operations = collect_repo_bump_operations(
+            &resolved_project,
+            &scopes,
+            &git_contexts,
+            &affected_indexes,
+        )?;
+
+        if workflow.requires_branch() {
+            let branch_name = branch_name
+                .as_deref()
+                .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
+            for operation in &repo_operations {
+                switch_or_create_branch(&operation.repo_root, branch_name)?;
+            }
+        }
+    }
+
     let mut updated_targets = 0usize;
     for index in &affected_indexes {
         let scope = scopes
@@ -221,22 +251,6 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
     }
 
     if workflow != OverviewBumpWorkflow::JustBump {
-        if !project.integration_mode.requires_repo() {
-            bail!("selected bump option requires a git-backed project")
-        }
-
-        let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
-        let repo_operations = collect_repo_bump_operations(
-            &resolved_project,
-            &scopes,
-            &git_contexts,
-            &affected_indexes,
-        )?;
-        let branch_name = if workflow.requires_branch() {
-            Some(prompt_branch_name()?)
-        } else {
-            None
-        };
         apply_repo_bump_workflow(
             &repo_operations,
             &next_version,
