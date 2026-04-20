@@ -69,8 +69,9 @@ use crate::{
     git::{
         GitCancellation, RepoActivitySummary, branches_containing_ref_with_cancel,
         collect_all_branch_git_scope_contexts, current_branch_with_cancel, ensure_gh_available,
-        ensure_local_tag, latest_local_tag_with_cancel, load_scope_activity_summary_with_cancel,
-        run_git, run_git_checked, sorted_local_tags_with_cancel, split_output_lines,
+        ensure_local_tag, is_mainline_branch_name, latest_local_tag_with_cancel,
+        load_scope_activity_summary_with_cancel, run_git, run_git_checked,
+        sorted_local_tags_with_cancel, split_output_lines,
     },
     mmr::{
         load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error,
@@ -3216,6 +3217,7 @@ impl App {
             &branch_name,
             &previous_branches,
             &head_branches,
+            request.dialog.active_scope().main_branch_name.as_deref(),
         );
 
         match decision {
@@ -5150,8 +5152,8 @@ impl MainBranchWarningDialog {
 
     fn switch_label(&self) -> &'static str {
         match self.integration_mode {
-            IntegrationMode::GitHubEnabled => "Switch to main & Sync & Bump",
-            IntegrationMode::GitLocalOnly => "Switch to main & Bump",
+            IntegrationMode::GitHubEnabled => "Switch to mainline & Sync & Bump",
+            IntegrationMode::GitLocalOnly => "Switch to mainline & Bump",
             IntegrationMode::LocalOnly => "Continue",
         }
     }
@@ -6062,6 +6064,7 @@ fn execute_standard_changelog_for_tag_blocking(
                     branch_name,
                     &previous_branches,
                     &new_branches,
+                    scope.main_branch_name.as_deref(),
                 )
             } else {
                 StdChangelogDecision::SkipNoPreviousTag
@@ -6095,7 +6098,7 @@ fn execute_standard_changelog_for_tag_blocking(
             }
         }
         StdChangelogDecision::IgnoreNotOnMain => {
-            outcome.summary_notes.push("Standard changelog was not generated because this tag is not yet on main/master lineage.".to_string());
+            outcome.summary_notes.push("Standard changelog was not generated because this tag is not yet on mainline lineage.".to_string());
         }
         StdChangelogDecision::PostponeOnSubBranch(branch) => {
             record_std_changelog_postponed(repo_root, tag_name, branch_name)?;
@@ -6112,8 +6115,13 @@ fn execute_standard_changelog_for_tag_blocking(
         }
     }
 
-    let replay_outcome = if is_mainline_branch(branch_name) {
-        replay_postponed_std_changelogs_blocking(scope, repo_root, branch_name)?
+    let replay_outcome = if is_mainline_branch(branch_name, scope.main_branch_name.as_deref()) {
+        replay_postponed_std_changelogs_blocking(
+            scope,
+            repo_root,
+            branch_name,
+            scope.main_branch_name.as_deref(),
+        )?
     } else {
         PostponedReplayOutcome::default()
     };
@@ -6181,8 +6189,9 @@ fn replay_postponed_std_changelogs_blocking(
     scope: &crate::git::GitScopeContext,
     repo_root: &str,
     branch_name: &str,
+    custom_main_branch: Option<&str>,
 ) -> Result<PostponedReplayOutcome> {
-    if !is_mainline_branch(branch_name) {
+    if !is_mainline_branch(branch_name, custom_main_branch) {
         return Ok(PostponedReplayOutcome::default());
     }
 
@@ -6205,7 +6214,7 @@ fn replay_postponed_std_changelogs_blocking(
             branches_containing_ref_with_cancel(repo_root, &entry.tag_from, None)?;
         if !mainline_branches
             .iter()
-            .any(|branch| is_mainline_branch(branch))
+            .any(|branch| is_mainline_branch(branch, custom_main_branch))
         {
             continue;
         }
@@ -6242,7 +6251,7 @@ fn replay_postponed_std_changelogs_blocking(
         archive_changelog_markdown(repo_root, &entry.tag_from, &markdown)?;
         record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
         outcome.notices.push(format!(
-            "Replayed postponed changelog '{}' after it reached main/master lineage.",
+            "Replayed postponed changelog '{}' after it reached mainline lineage.",
             entry.tag_from
         ));
     }
@@ -6262,15 +6271,18 @@ fn decide_std_changelog_generation(
     current_branch: &str,
     previous_branches: &[String],
     new_branches: &[String],
+    custom_main_branch: Option<&str>,
 ) -> StdChangelogDecision {
-    if is_mainline_branch(current_branch) {
+    if is_mainline_branch(current_branch, custom_main_branch) {
         return StdChangelogDecision::Generate;
     }
 
     let previous_has_main = previous_branches
         .iter()
-        .any(|branch| is_mainline_branch(branch));
-    let new_has_main = new_branches.iter().any(|branch| is_mainline_branch(branch));
+        .any(|branch| is_mainline_branch(branch, custom_main_branch));
+    let new_has_main = new_branches
+        .iter()
+        .any(|branch| is_mainline_branch(branch, custom_main_branch));
     if previous_has_main && new_has_main {
         return StdChangelogDecision::Generate;
     }
@@ -6282,7 +6294,7 @@ fn decide_std_changelog_generation(
     let new_normalized = normalized_branch_names(new_branches);
     if previous_normalized == new_normalized && new_normalized.len() == 1 {
         let branch = new_normalized[0].clone();
-        if !is_mainline_branch(&branch) {
+        if !is_mainline_branch(&branch, custom_main_branch) {
             let _ = previous_tag;
             return StdChangelogDecision::PostponeOnSubBranch(branch);
         }
@@ -6302,9 +6314,8 @@ fn normalized_branch_names(branches: &[String]) -> Vec<String> {
     names
 }
 
-fn is_mainline_branch(branch: &str) -> bool {
-    let normalized = branch.trim().trim_start_matches('*').trim();
-    normalized.eq_ignore_ascii_case("main") || normalized.eq_ignore_ascii_case("master")
+fn is_mainline_branch(branch: &str, custom_main_branch: Option<&str>) -> bool {
+    is_mainline_branch_name(branch, custom_main_branch)
 }
 
 fn build_release_notes_markdown(
@@ -7806,6 +7817,7 @@ mod tests {
             "main",
             &["main".to_string()],
             &["main".to_string()],
+            None,
         );
 
         assert_eq!(decision, StdChangelogDecision::Generate);
@@ -7864,6 +7876,7 @@ mod tests {
             "feature-a",
             &["main".to_string()],
             &["feature-a".to_string()],
+            None,
         );
 
         assert_eq!(decision, StdChangelogDecision::IgnoreNotOnMain);
@@ -7876,6 +7889,7 @@ mod tests {
             "feature-a",
             &["feature-a".to_string()],
             &["feature-a".to_string()],
+            None,
         );
 
         assert_eq!(
@@ -7891,12 +7905,26 @@ mod tests {
             "feature-a",
             &["* feature-a".to_string()],
             &["feature-a".to_string()],
+            None,
         );
 
         assert_eq!(
             decision,
             StdChangelogDecision::PostponeOnSubBranch("feature-a".to_string())
         );
+    }
+
+    #[test]
+    fn std_changelog_decision_generates_on_custom_main_branch() {
+        let decision = decide_std_changelog_generation(
+            "v0.7.3",
+            "trunk",
+            &["trunk".to_string()],
+            &["trunk".to_string()],
+            Some("trunk"),
+        );
+
+        assert_eq!(decision, StdChangelogDecision::Generate);
     }
 
     #[test]
