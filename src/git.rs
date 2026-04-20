@@ -45,6 +45,20 @@ pub(crate) fn create_branch_and_switch(repo_root: &str, branch_name: &str) -> Re
 
     Ok(())
 }
+
+pub(crate) fn switch_or_create_branch(repo_root: &str, branch_name: &str) -> Result<()> {
+    let current_branch = current_branch_with_cancel(repo_root, None)?;
+    if current_branch == branch_name {
+        return Ok(());
+    }
+
+    let switch_output = run_git(repo_root, &["switch", branch_name])?;
+    if switch_output.success {
+        return Ok(());
+    }
+
+    create_branch_and_switch(repo_root, branch_name)
+}
 // For details, see the LICENSE file in the repository root.
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.

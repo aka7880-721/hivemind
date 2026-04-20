@@ -4993,9 +4993,9 @@ impl OverviewBumpWorkflow {
 
 #[derive(Clone)]
 pub(crate) struct RepoBumpOperation {
-    repo_root: String,
-    remote_spec: Option<String>,
-    stage_paths: Vec<String>,
+    pub(crate) repo_root: String,
+    pub(crate) remote_spec: Option<String>,
+    pub(crate) stage_paths: Vec<String>,
 }
 
 #[derive(Clone)]

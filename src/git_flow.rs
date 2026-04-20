@@ -8,8 +8,8 @@
 /// Git-related workflow operations for applying version bumps across repositories, managing staged changes, and ensuring tag consistency.
 use super::*;
 use crate::git::{
-    GitCancellation, create_branch_and_switch, current_branch_with_cancel,
-    run_git_checked_with_cancel, switch_to_main_branch,
+    GitCancellation, current_branch_with_cancel, run_git_checked_with_cancel,
+    switch_or_create_branch, switch_to_main_branch,
 };
 
 #[derive(Clone)]
@@ -77,7 +77,7 @@ pub(crate) fn apply_repo_bump_workflow(
         if workflow.requires_branch() {
             let branch_name = trimmed_branch_name
                 .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
-            create_branch_and_switch(&operation.repo_root, branch_name)?;
+            switch_or_create_branch(&operation.repo_root, branch_name)?;
         }
 
         if !operation.stage_paths.is_empty() {

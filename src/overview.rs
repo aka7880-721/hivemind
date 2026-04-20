@@ -16,7 +16,7 @@ use crate::changelog::{
 };
 use crate::{
     dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
-    git::{GitCancellation, sorted_local_tags_with_cancel},
+    git::{GitCancellation, sorted_local_tags_with_cancel, switch_or_create_branch},
 };
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
@@ -1140,6 +1140,15 @@ pub(super) fn execute_overview_bump_workflow(
             &git_contexts,
             &affected_scope_indexes,
         )?;
+
+        if workflow.requires_branch() {
+            let branch_name = branch_name
+                .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
+            for operation in &repo_operations {
+                switch_or_create_branch(&operation.repo_root, branch_name)?;
+            }
+        }
+
         if let Some(pending_changelog) =
             app.take_matching_pending_changelog_write(scope_index, workflow)
         {
