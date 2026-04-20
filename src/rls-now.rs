@@ -59,7 +59,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::{RecvTimeoutError, Sender as StdSender, channel},
+    sync::mpsc::{Receiver, RecvTimeoutError, Sender as StdSender, channel},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -78,7 +78,7 @@ use crate::{
     },
 };
 
-const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 30);
+const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const RECENT_BUMP_WINDOW_SECS: i64 = 15 * 60;
 const DEFAULT_RELEASE_NOTES: &str =
     "# Release Notes\n\nAdd release highlights here before publishing.";
@@ -1185,7 +1185,7 @@ fn run_command_with_streaming(
     loop {
         match line_rx.recv_timeout(Duration::from_millis(100)) {
             Ok((stream, line)) => {
-                let _ = progress_tx.send(vec![format!("[{}][{}] {}", log_label, stream, line)]);
+                drain_stream_lines(&line_rx, log_label, progress_tx, Some((stream, line)));
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {}
@@ -1195,7 +1195,7 @@ fn run_command_with_streaming(
             let _ = terminate_process_tree(&mut child);
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
-            drain_stream_lines(&line_rx, log_label, progress_tx);
+            drain_stream_lines(&line_rx, log_label, progress_tx, None);
             bail!("ReleaseNOW cancelled by user")
         }
 
@@ -1205,7 +1205,7 @@ fn run_command_with_streaming(
         {
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
-            drain_stream_lines(&line_rx, log_label, progress_tx);
+            drain_stream_lines(&line_rx, log_label, progress_tx, None);
 
             if status.success() {
                 return Ok(());
@@ -1217,7 +1217,7 @@ fn run_command_with_streaming(
             let _ = terminate_process_tree(&mut child);
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
-            drain_stream_lines(&line_rx, log_label, progress_tx);
+            drain_stream_lines(&line_rx, log_label, progress_tx, None);
             bail!("{} timed out after {}s", action, timeout_window.as_secs())
         }
     }
@@ -1481,13 +1481,33 @@ fn join_stream_reader(handle: thread::JoinHandle<Result<()>>, action: &str) -> R
 }
 
 fn drain_stream_lines(
-    line_rx: &std::sync::mpsc::Receiver<(String, String)>,
+    line_rx: &Receiver<(String, String)>,
     log_label: &str,
     progress_tx: &UnboundedSender<Vec<String>>,
+    first_line: Option<(String, String)>,
 ) {
-    while let Ok((stream, line)) = line_rx.try_recv() {
-        let _ = progress_tx.send(vec![format!("[{}][{}] {}", log_label, stream, line)]);
+    let lines = collect_stream_lines(line_rx, log_label, first_line);
+    if !lines.is_empty() {
+        let _ = progress_tx.send(lines);
     }
+}
+
+fn collect_stream_lines(
+    line_rx: &Receiver<(String, String)>,
+    log_label: &str,
+    first_line: Option<(String, String)>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if let Some((stream, line)) = first_line {
+        lines.push(format!("[{}][{}] {}", log_label, stream, line));
+    }
+
+    while let Ok((stream, line)) = line_rx.try_recv() {
+        lines.push(format!("[{}][{}] {}", log_label, stream, line));
+    }
+
+    lines
 }
 
 fn terminate_process_tree(child: &mut std::process::Child) -> Result<()> {
@@ -1722,5 +1742,31 @@ mod tests {
     #[test]
     fn strip_terminal_control_sequences_applies_backspaces() {
         assert_eq!(strip_terminal_control_sequences("abc\u{8}d"), "abd");
+    }
+
+    #[test]
+    fn collect_stream_lines_drains_all_buffered_output() {
+        let (line_tx, line_rx) = channel();
+        line_tx
+            .send(("stdout".to_string(), "line 2".to_string()))
+            .expect("send line 2");
+        line_tx
+            .send(("stderr".to_string(), "line 3".to_string()))
+            .expect("send line 3");
+
+        let lines = collect_stream_lines(
+            &line_rx,
+            "Linux AMD",
+            Some(("stdout".to_string(), "line 1".to_string())),
+        );
+
+        assert_eq!(
+            lines,
+            vec![
+                "[Linux AMD][stdout] line 1".to_string(),
+                "[Linux AMD][stdout] line 2".to_string(),
+                "[Linux AMD][stderr] line 3".to_string(),
+            ]
+        );
     }
 }
