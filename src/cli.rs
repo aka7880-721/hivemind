@@ -701,58 +701,140 @@ fn render_branch_tree(diagram: Option<&BranchDiagram>) -> String {
         return "(no local branches)".to_string();
     };
 
-    let mut lines = vec![format!(
-        "{} ────────────────────────────────>",
-        format_branch_label(&diagram.root)
+    let (arrow_column, segment_layouts) = compute_branch_diagram_layout(diagram);
+    let mut lines = vec![render_aligned_arrow_line(
+        "",
+        &format_branch_label(&diagram.root),
+        plain_branch_label(&diagram.root).len() + 1,
+        arrow_column,
     )];
-    render_branch_segments(&mut lines, &diagram.path, "");
+    render_branch_segments(&mut lines, &diagram.path, &segment_layouts, arrow_column);
 
     lines.join("\n")
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchDiagramSegmentLayout {
+    prefix: String,
+    junction_column: Option<usize>,
+}
+
+fn compute_branch_diagram_layout(
+    diagram: &BranchDiagram,
+) -> (usize, Vec<BranchDiagramSegmentLayout>) {
+    const MIN_RIGHT_TAIL: usize = 17;
+    const MIN_JUNCTION_GAP: usize = 3;
+
+    let root_start = plain_branch_label(&diagram.root).len() + 1;
+    let mut arrow_column = root_start + MIN_RIGHT_TAIL;
+    let mut layouts = Vec::with_capacity(diagram.path.len());
+
+    for (index, segment) in diagram.path.iter().enumerate() {
+        let prefix = "   ".repeat(index);
+        let path_start = prefix.len() + 3 + plain_branch_label(&segment.branch).len() + 1;
+        let has_more_path = index + 1 < diagram.path.len();
+        let has_merged = !segment.merged.is_empty();
+        let junction_column = if has_more_path || has_merged {
+            let merged_start = segment
+                .merged
+                .iter()
+                .map(|merged| prefix.len() + 6 + plain_branch_label(merged).len() + 1)
+                .max()
+                .unwrap_or(0);
+            Some(path_start.max(merged_start) + MIN_JUNCTION_GAP)
+        } else {
+            None
+        };
+
+        let line_arrow_column = junction_column
+            .map(|column| column + MIN_RIGHT_TAIL + 1)
+            .unwrap_or(path_start + MIN_RIGHT_TAIL);
+        arrow_column = arrow_column.max(line_arrow_column);
+        layouts.push(BranchDiagramSegmentLayout {
+            prefix,
+            junction_column,
+        });
+    }
+
+    (arrow_column, layouts)
 }
 
 fn render_branch_segments(
     lines: &mut Vec<String>,
     segments: &[BranchDiagramSegment],
-    prefix: &str,
+    layouts: &[BranchDiagramSegmentLayout],
+    arrow_column: usize,
 ) {
-    let Some((segment, rest)) = segments.split_first() else {
-        return;
-    };
+    for (index, segment) in segments.iter().enumerate() {
+        let layout = &layouts[index];
+        let has_more_path = index + 1 < segments.len();
+        let has_merged = !segment.merged.is_empty();
+        let path_label = format_branch_label(&segment.branch);
+        let path_start = layout.prefix.len() + 3 + plain_branch_label(&segment.branch).len() + 1;
 
-    let has_more_path = !rest.is_empty();
-    let has_merged = !segment.merged.is_empty();
-    let tail = if has_more_path || has_merged {
-        " ──────────────┬────────────────>"
-    } else {
-        " ────────────────────────────────>"
-    };
-    lines.push(format!(
-        "{}└─ {}{}",
-        prefix,
-        format_branch_label(&segment.branch),
-        tail
-    ));
+        if let Some(junction_column) = layout.junction_column {
+            lines.push(format!(
+                "{}└─ {} {}┬{}>",
+                layout.prefix,
+                path_label,
+                branch_diagram_fill(path_start, junction_column),
+                branch_diagram_fill(junction_column + 1, arrow_column)
+            ));
+        } else {
+            debug_assert!(!has_more_path && !has_merged);
+            lines.push(format!(
+                "{}└─ {} {}>",
+                layout.prefix,
+                path_label,
+                branch_diagram_fill(path_start, arrow_column)
+            ));
+        }
 
-    for merged in &segment.merged {
-        lines.push(format!(
-            "{}   ├─ {} ─────────────────────┘",
-            prefix,
-            format_branch_label(merged)
-        ));
-    }
-
-    if has_more_path {
-        render_branch_segments(lines, rest, &format!("{}   ", prefix));
+        for merged in &segment.merged {
+            let merged_start = layout.prefix.len() + 6 + plain_branch_label(merged).len() + 1;
+            let junction_column = layout
+                .junction_column
+                .expect("merged segments require a junction column");
+            lines.push(format!(
+                "{}   ├─ {} {}┘",
+                layout.prefix,
+                format_branch_label(merged),
+                branch_diagram_fill(merged_start, junction_column)
+            ));
+        }
     }
 }
 
-fn format_branch_label(branch: &BranchDiagramNode) -> String {
-    let plain = match branch.state {
+fn render_aligned_arrow_line(
+    prefix: &str,
+    label: &str,
+    start_column: usize,
+    arrow_column: usize,
+) -> String {
+    format!(
+        "{}{} {}>",
+        prefix,
+        label,
+        branch_diagram_fill(start_column, arrow_column)
+    )
+}
+
+fn branch_diagram_fill(start_column: usize, target_column: usize) -> String {
+    let count = target_column.saturating_sub(start_column);
+    "─".repeat(count)
+}
+
+fn plain_branch_label(branch: &BranchDiagramNode) -> String {
+    match branch.state {
         BranchDiagramState::Main => branch.name.clone(),
         BranchDiagramState::Current => format!("{} [current]", branch.name),
         BranchDiagramState::Open => branch.name.clone(),
         BranchDiagramState::Merged => format!("{} [merged]", branch.name),
-    };
+    }
+}
+
+fn format_branch_label(branch: &BranchDiagramNode) -> String {
+    let plain = plain_branch_label(branch);
 
     match branch.state {
         BranchDiagramState::Main => format!("\x1b[32m{}\x1b[0m", plain),
@@ -1431,9 +1513,80 @@ mod tests {
     }
 
     #[test]
+    fn render_branch_tree_aligns_arrowheads_and_junctions() {
+        let tree = render_branch_tree(Some(&BranchDiagram {
+            root: BranchDiagramNode {
+                name: "main".to_string(),
+                state: BranchDiagramState::Main,
+            },
+            path: vec![
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "0.10.8+".to_string(),
+                        state: BranchDiagramState::Open,
+                    },
+                    merged: vec![BranchDiagramNode {
+                        name: "0.10.9".to_string(),
+                        state: BranchDiagramState::Merged,
+                    }],
+                },
+                BranchDiagramSegment {
+                    branch: BranchDiagramNode {
+                        name: "0.10.10".to_string(),
+                        state: BranchDiagramState::Current,
+                    },
+                    merged: Vec::new(),
+                },
+            ],
+        }));
+        let lines = strip_ansi_for_test(&tree)
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+
+        let arrow_column = char_position(&lines[0], '>').expect("root line should contain arrow");
+        assert_eq!(
+            char_position(&lines[1], '>').expect("open branch should contain arrow"),
+            arrow_column
+        );
+        assert_eq!(
+            char_position(&lines[3], '>').expect("current branch should contain arrow"),
+            arrow_column
+        );
+        assert_eq!(
+            char_position(&lines[1], '┬').expect("junction should exist"),
+            char_position(&lines[2], '┘').expect("merged return should exist")
+        );
+    }
+
+    #[test]
     fn display_branch_name_omits_heads_prefix() {
         assert_eq!(display_branch_name("heads/0.10.9"), "0.10.9");
         assert_eq!(display_branch_name("release/1.0.0"), "release/1.0.0");
+    }
+
+    fn strip_ansi_for_test(text: &str) -> String {
+        let mut plain = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+                chars.next();
+                for seq_ch in chars.by_ref() {
+                    if seq_ch.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            plain.push(ch);
+        }
+
+        plain
+    }
+
+    fn char_position(text: &str, target: char) -> Option<usize> {
+        text.chars().position(|ch| ch == target)
     }
 
     #[test]
