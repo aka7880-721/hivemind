@@ -8,14 +8,15 @@
 /// Git-related workflow operations for applying version bumps across repositories, managing staged changes, and ensuring tag consistency.
 use super::*;
 use crate::git::{
-    GitCancellation, current_branch_with_cancel, run_git_checked_with_cancel,
-    switch_or_create_branch, switch_to_main_branch,
+    GitCancellation, current_branch_with_cancel, is_mainline_branch_name,
+    run_git_checked_with_cancel, switch_or_create_branch, switch_to_main_branch,
 };
 
 #[derive(Clone)]
 pub(crate) struct RepoBranchState {
     pub(crate) repo_root: String,
     pub(crate) current_branch: String,
+    pub(super) main_branch_name: Option<String>,
     pub(super) remote_spec: Option<String>,
 }
 
@@ -140,16 +141,24 @@ pub(super) fn collect_non_main_repo_states_with_cancel(
     affected_scope_indexes: &[usize],
     cancel: Option<GitCancellation>,
 ) -> Result<Vec<RepoBranchState>> {
-    let operations =
-        collect_repo_bump_operations(project, scopes, git_contexts, affected_scope_indexes)?;
     let mut repo_states = Vec::new();
 
+    let operations =
+        collect_repo_bump_operations(project, scopes, git_contexts, affected_scope_indexes)?;
+
     for operation in operations {
+        let context = git_contexts
+            .iter()
+            .find(|context| context.repo_root == operation.repo_root)
+            .ok_or_else(|| {
+                anyhow!("git scope metadata is unavailable for the selected repository")
+            })?;
         let current_branch = current_branch_with_cancel(&operation.repo_root, cancel.clone())?;
-        if current_branch != "main" {
+        if !is_mainline_branch_name(&current_branch, context.main_branch_name.as_deref()) {
             repo_states.push(RepoBranchState {
                 repo_root: operation.repo_root,
                 current_branch,
+                main_branch_name: context.main_branch_name.clone(),
                 remote_spec: operation.remote_spec,
             });
         }
@@ -164,7 +173,12 @@ pub(super) fn switch_repos_to_main(
 ) -> Result<()> {
     let sync_remote = integration_mode == IntegrationMode::GitHubEnabled;
     for repo in repos {
-        switch_to_main_branch(&repo.repo_root, repo.remote_spec.as_deref(), sync_remote)?;
+        switch_to_main_branch(
+            &repo.repo_root,
+            repo.remote_spec.as_deref(),
+            sync_remote,
+            repo.main_branch_name.as_deref(),
+        )?;
     }
     Ok(())
 }
