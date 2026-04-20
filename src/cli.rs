@@ -60,7 +60,7 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             Ok(StartupMode::Handled)
         }
         [command] if is_tui(command) => Ok(StartupMode::LaunchTui),
-        [command, option] if command == "pwd" && option == "-all" => {
+        [command, option] if command == "pwd" && matches!(option.as_str(), "-all" | "all") => {
             let config = load_config()?;
             for root in all_configured_repo_roots(&config.projects) {
                 println!("{}", root.display());
@@ -110,7 +110,7 @@ fn print_usage() {
     println!("  cg -v|--version           Show version and GitHub update status");
     println!("  ---------------           --------------------------------------------------");
     println!("  cg pwd <alias>            Print the configured project root path");
-    println!("  cg pwd -all               Print all configured repo root directories");
+    println!("  cg pwd -all|all           Print all configured repo root directories");
     println!("  ---------------           --------------------------------------------------");
     println!(
         "  cg bmp <action>           performs a simple version bump for the project in the current working directory"
