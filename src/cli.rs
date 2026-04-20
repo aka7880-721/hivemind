@@ -31,7 +31,11 @@ use crate::{
         AppConfig, BranchConfig, ConfigStore, ProjectConfig, ProjectType, RepoConfig, TargetFormat,
         TargetSpec,
     },
-    git::collect_all_branch_git_scope_contexts,
+    git::{
+        collect_all_branch_git_scope_contexts, current_branch_with_cancel, is_mainline_branch_name,
+        latest_local_tag_with_cancel, load_scope_activity_summary_with_cancel, run_git_checked,
+        split_output_lines,
+    },
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -59,6 +63,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command] if is_version(command) => {
             print_version_status();
+            Ok(StartupMode::Handled)
+        }
+        [command] if is_branch_command(command) => {
+            print_branch_status()?;
+            Ok(StartupMode::Handled)
+        }
+        [command, lookup] if is_project_version_command(command) => {
+            print_project_version(lookup)?;
             Ok(StartupMode::Handled)
         }
         [command] if is_tui(command) => Ok(StartupMode::LaunchTui),
@@ -106,6 +118,14 @@ fn is_bump_command(value: &str) -> bool {
     matches!(value, "bmp" | "bump" | "bp" | "bum")
 }
 
+fn is_branch_command(value: &str) -> bool {
+    matches!(value, "branch" | "br" | "brn" | "brnch")
+}
+
+fn is_project_version_command(value: &str) -> bool {
+    value == "v"
+}
+
 fn print_usage() {
     println!(" ");
     println!(
@@ -131,6 +151,8 @@ fn print_usage() {
     println!(
         "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
     );
+    println!("  cg branch                  Show the current branch and a compact branch tree");
+    println!("  cg v <alias>               Show project version, last bump, and last release");
     println!(" ");
     println!("  BUMPING COMMANDS:");
     println!(" ");
@@ -169,6 +191,86 @@ fn print_version_status() {
         ReleaseStatus::Unavailable => println!("GitHub status: Version check unavailable."),
     }
     println!(" ");
+}
+
+fn print_branch_status() -> Result<()> {
+    let config = load_config()?;
+    let cwd =
+        best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
+    let project = find_project_for_cwd(&config.projects, &cwd)?;
+    let resolved_project = resolve_project_target_paths(project)?;
+    let scope_index = if project.project_type == ProjectType::AllInOne || project.unified_versioning
+    {
+        0
+    } else {
+        find_scope_for_cwd(project, &resolved_project, &cwd)?
+    };
+    let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
+    let context = git_contexts
+        .get(scope_index)
+        .or_else(|| git_contexts.first())
+        .ok_or_else(|| anyhow!("git scope metadata is unavailable for the current branch view"))?;
+    let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
+    let branches = list_local_branches(&context.repo_root)?;
+
+    println!();
+    println!("current branch: {}", current_branch);
+    println!();
+    println!(
+        "{}",
+        render_branch_tree(
+            &branches,
+            &current_branch,
+            context.main_branch_name.as_deref()
+        )
+    );
+    println!();
+    Ok(())
+}
+
+fn print_project_version(lookup: &str) -> Result<()> {
+    let config = load_config()?;
+    let project = find_project_by_lookup(&config.projects, lookup)?;
+    let resolved_project = resolve_project_target_paths(project)?;
+    let scopes = collect_bump_scopes(&resolved_project)?;
+    if scopes.is_empty() {
+        bail!("the matched project does not contain any bump targets")
+    }
+
+    let current_version = shared_bump_version(&scopes)
+        .or_else(|| {
+            scopes
+                .first()
+                .and_then(|scope| scope.current_version.clone())
+        })
+        .unwrap_or_else(|| "mixed values".to_string());
+
+    let git_context = collect_all_branch_git_scope_contexts(&resolved_project)
+        .ok()
+        .and_then(|contexts| contexts.into_iter().next());
+    let (last_bump, last_release) = if let Some(context) = git_context {
+        let last_bump = load_scope_activity_summary_with_cancel(&context, None)
+            .map(|summary| summary.last_bump_label)
+            .unwrap_or_else(|_| "n/a".to_string());
+        let last_release = latest_public_release_tag_for_repo(&context.repo_root)
+            .or_else(|| {
+                latest_local_tag_with_cancel(&context.repo_root, None)
+                    .ok()
+                    .flatten()
+            })
+            .unwrap_or_else(|| "n/a".to_string());
+        (last_bump, last_release)
+    } else {
+        ("n/a".to_string(), "n/a".to_string())
+    };
+
+    println!();
+    println!("Project Name: {}", project.name);
+    println!("Current Version: {}", current_version);
+    println!("Last Bump: {}", last_bump);
+    println!("Last Release: {}", last_release);
+    println!();
+    Ok(())
 }
 
 fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
@@ -350,6 +452,141 @@ fn prompt_confirm_default_yes(prompt: &str) -> Result<bool> {
             }
         }
     }
+}
+
+fn list_local_branches(repo_root: &str) -> Result<Vec<String>> {
+    let output = run_git_checked(repo_root, &["branch", "--format=%(refname:short)"])?;
+    let mut branches = split_output_lines(&output)
+        .into_iter()
+        .filter(|branch| !branch.trim().is_empty())
+        .collect::<Vec<_>>();
+    branches.sort_by_cached_key(|branch| normalize_lookup(branch));
+    branches.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    Ok(branches)
+}
+
+fn render_branch_tree(
+    branches: &[String],
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> String {
+    let mut unique_branches = branches.to_vec();
+    if !unique_branches
+        .iter()
+        .any(|branch| branch.eq_ignore_ascii_case(current_branch))
+    {
+        unique_branches.push(current_branch.to_string());
+    }
+
+    if unique_branches.is_empty() {
+        return format_branch_label(current_branch, current_branch, custom_main_branch);
+    }
+
+    let root_index = unique_branches
+        .iter()
+        .position(|branch| {
+            custom_main_branch.is_some_and(|custom| branch.eq_ignore_ascii_case(custom.trim()))
+        })
+        .or_else(|| {
+            unique_branches
+                .iter()
+                .position(|branch| branch.eq_ignore_ascii_case("main"))
+        })
+        .or_else(|| {
+            unique_branches
+                .iter()
+                .position(|branch| branch.eq_ignore_ascii_case("master"))
+        })
+        .or_else(|| {
+            unique_branches
+                .iter()
+                .position(|branch| branch.eq_ignore_ascii_case(current_branch))
+        })
+        .unwrap_or(0);
+    let root_branch = unique_branches.remove(root_index);
+
+    unique_branches.sort_by(|left, right| {
+        let left_is_current = left.eq_ignore_ascii_case(current_branch);
+        let right_is_current = right.eq_ignore_ascii_case(current_branch);
+        left_is_current
+            .cmp(&right_is_current)
+            .reverse()
+            .then_with(|| normalize_lookup(left).cmp(&normalize_lookup(right)))
+    });
+
+    let root_label = format_branch_label(&root_branch, current_branch, custom_main_branch);
+    let root_plain = format_branch_plain_label(&root_branch, current_branch);
+    let indent = " ".repeat(root_plain.chars().count());
+
+    if unique_branches.is_empty() {
+        return root_label;
+    }
+
+    let mut lines = Vec::with_capacity(unique_branches.len());
+    lines.push(format!(
+        "{} ─┬─ {}",
+        root_label,
+        format_branch_label(&unique_branches[0], current_branch, custom_main_branch)
+    ));
+    for (index, branch) in unique_branches.iter().enumerate().skip(1) {
+        let connector = if index + 1 == unique_branches.len() {
+            "└─"
+        } else {
+            "├─"
+        };
+        lines.push(format!(
+            "{}   {} {}",
+            indent,
+            connector,
+            format_branch_label(branch, current_branch, custom_main_branch)
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn format_branch_label(
+    branch: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> String {
+    let plain = format_branch_plain_label(branch, current_branch);
+    if is_mainline_branch_name(branch, custom_main_branch) {
+        format!("\x1b[32m{}\x1b[0m", plain)
+    } else {
+        plain
+    }
+}
+
+fn format_branch_plain_label(branch: &str, current_branch: &str) -> String {
+    if branch.eq_ignore_ascii_case(current_branch) {
+        format!("{} [current]", branch)
+    } else {
+        branch.to_string()
+    }
+}
+
+fn latest_public_release_tag_for_repo(repo_root: &str) -> Option<String> {
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .args([
+            "release",
+            "list",
+            "--limit",
+            "1",
+            "--json",
+            "tagName",
+            "--jq",
+            ".[].tagName",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!tag.is_empty()).then_some(tag)
 }
 
 fn load_config() -> Result<AppConfig> {
@@ -808,6 +1045,7 @@ mod tests {
             repo: Some(RepoConfig {
                 local_root: "C:/repo".to_string(),
                 remote_url: None,
+                ..RepoConfig::default()
             }),
         }
     }
@@ -930,6 +1168,53 @@ mod tests {
     }
 
     #[test]
+    fn is_branch_command_accepts_requested_synonyms() {
+        assert!(is_branch_command("branch"));
+        assert!(is_branch_command("br"));
+        assert!(is_branch_command("brn"));
+        assert!(is_branch_command("brnch"));
+        assert!(!is_branch_command("bran"));
+    }
+
+    #[test]
+    fn is_project_version_command_accepts_short_form() {
+        assert!(is_project_version_command("v"));
+        assert!(!is_project_version_command("version"));
+    }
+
+    #[test]
+    fn render_branch_tree_highlights_main_and_current_branch() {
+        let tree = render_branch_tree(
+            &[
+                "feature/payments".to_string(),
+                "main".to_string(),
+                "release/0.10".to_string(),
+            ],
+            "feature/payments",
+            None,
+        );
+
+        assert!(tree.contains("\x1b[32mmain\x1b[0m"));
+        assert!(tree.contains("feature/payments [current]"));
+        assert!(tree.contains("─┬─"));
+    }
+
+    #[test]
+    fn render_branch_tree_highlights_custom_main_branch() {
+        let tree = render_branch_tree(
+            &[
+                "trunk".to_string(),
+                "feature/payments".to_string(),
+                "release/0.10".to_string(),
+            ],
+            "feature/payments",
+            Some("trunk"),
+        );
+
+        assert!(tree.contains("\x1b[32mtrunk\x1b[0m"));
+    }
+
+    #[test]
     fn lookup_prefers_alias_before_name() {
         let projects = vec![
             sample_project("alpha", "core"),
@@ -954,6 +1239,7 @@ mod tests {
             repo: Some(RepoConfig {
                 local_root: "C:/repo/service".to_string(),
                 remote_url: None,
+                ..RepoConfig::default()
             }),
             changelog_enabled: false,
             changelog_path: None,
@@ -971,6 +1257,7 @@ mod tests {
         project2.repo = Some(RepoConfig {
             local_root: "C:/repo/beta".to_string(),
             remote_url: None,
+            ..RepoConfig::default()
         });
 
         let roots = all_configured_repo_roots(&[project1, project2]);
@@ -1015,6 +1302,7 @@ mod tests {
             repo: Some(RepoConfig {
                 local_root: "C:/repo/service".to_string(),
                 remote_url: None,
+                ..RepoConfig::default()
             }),
             changelog_enabled: false,
             changelog_path: None,
