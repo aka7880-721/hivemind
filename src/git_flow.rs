@@ -13,9 +13,9 @@ use crate::git::{
 };
 
 #[derive(Clone)]
-pub(super) struct RepoBranchState {
-    pub(super) repo_root: String,
-    pub(super) current_branch: String,
+pub(crate) struct RepoBranchState {
+    pub(crate) repo_root: String,
+    pub(crate) current_branch: String,
     pub(super) remote_spec: Option<String>,
 }
 
@@ -62,6 +62,21 @@ pub(crate) fn collect_repo_bump_operations(
     }
 
     Ok(operations)
+}
+
+pub(crate) fn collect_non_main_repo_states(
+    project: &ProjectConfig,
+    scopes: &[BumpScope],
+    git_contexts: &[crate::git::GitScopeContext],
+    affected_scope_indexes: &[usize],
+) -> Result<Vec<RepoBranchState>> {
+    collect_non_main_repo_states_with_cancel(
+        project,
+        scopes,
+        git_contexts,
+        affected_scope_indexes,
+        None,
+    )
 }
 
 pub(crate) fn apply_repo_bump_workflow(
