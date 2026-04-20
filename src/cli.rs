@@ -33,8 +33,8 @@ use crate::{
     },
     git::{
         collect_all_branch_git_scope_contexts, current_branch_with_cancel, is_mainline_branch_name,
-        latest_local_tag_with_cancel, load_scope_activity_summary_with_cancel, run_git_checked,
-        split_output_lines,
+        latest_local_tag_with_cancel, load_scope_activity_summary_with_cancel, run_git,
+        run_git_checked, split_output_lines,
     },
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
@@ -211,7 +211,11 @@ fn print_branch_status() -> Result<()> {
         .or_else(|| git_contexts.first())
         .ok_or_else(|| anyhow!("git scope metadata is unavailable for the current branch view"))?;
     let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
-    let branches = list_local_branches(&context.repo_root)?;
+    let topology = load_branch_topology(
+        &context.repo_root,
+        &current_branch,
+        context.main_branch_name.as_deref(),
+    )?;
 
     println!();
     println!("current branch: {}", current_branch);
@@ -219,7 +223,7 @@ fn print_branch_status() -> Result<()> {
     println!(
         "{}",
         render_branch_tree(
-            &branches,
+            &topology,
             &current_branch,
             context.main_branch_name.as_deref()
         )
@@ -454,95 +458,284 @@ fn prompt_confirm_default_yes(prompt: &str) -> Result<bool> {
     }
 }
 
-fn list_local_branches(repo_root: &str) -> Result<Vec<String>> {
-    let output = run_git_checked(repo_root, &["branch", "--format=%(refname:short)"])?;
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchRef {
+    name: String,
+    object_id: String,
+    root_distance: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchTopologyNode {
+    name: String,
+    parent: Option<usize>,
+    root_distance: usize,
+}
+
+fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
+    let output = run_git_checked(
+        repo_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)|%(objectname)",
+            "refs/heads",
+        ],
+    )?;
     let mut branches = split_output_lines(&output)
         .into_iter()
-        .filter(|branch| !branch.trim().is_empty())
+        .filter_map(|line| {
+            let (name, object_id) = line.split_once('|')?;
+            let name = name.trim();
+            let object_id = object_id.trim();
+            if name.is_empty() || object_id.is_empty() {
+                return None;
+            }
+
+            Some(BranchRef {
+                name: name.to_string(),
+                object_id: object_id.to_string(),
+                root_distance: 0,
+            })
+        })
         .collect::<Vec<_>>();
-    branches.sort_by_cached_key(|branch| normalize_lookup(branch));
-    branches.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    branches.sort_by_cached_key(|branch| normalize_lookup(&branch.name));
+    branches.dedup_by(|left, right| left.name.eq_ignore_ascii_case(&right.name));
     Ok(branches)
 }
 
+fn load_branch_topology(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> Result<Vec<BranchTopologyNode>> {
+    let mut branches = list_local_branch_refs(repo_root)?;
+    if branches.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let root_index = branches
+        .iter()
+        .position(|branch| {
+            custom_main_branch.is_some_and(|custom| branch.name.eq_ignore_ascii_case(custom.trim()))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case("main"))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case("master"))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+        })
+        .unwrap_or(0);
+    let root_branch = branches.remove(root_index);
+
+    for branch in &mut branches {
+        branch.root_distance =
+            branch_unique_commit_count(repo_root, &root_branch.name, &branch.name)?;
+    }
+
+    branches.sort_by(|left, right| {
+        let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
+        let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
+        left.root_distance
+            .cmp(&right.root_distance)
+            .then_with(|| left_is_current.cmp(&right_is_current).reverse())
+            .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
+    });
+
+    let mut processed_refs = vec![root_branch.clone()];
+    let mut topology = vec![BranchTopologyNode {
+        name: root_branch.name,
+        parent: None,
+        root_distance: 0,
+    }];
+
+    for branch in branches {
+        let parent = select_branch_parent(repo_root, &processed_refs, &branch)?;
+        topology.push(BranchTopologyNode {
+            name: branch.name.clone(),
+            parent: Some(parent),
+            root_distance: branch.root_distance,
+        });
+        processed_refs.push(branch);
+    }
+
+    Ok(topology)
+}
+
+fn select_branch_parent(
+    repo_root: &str,
+    processed_refs: &[BranchRef],
+    branch: &BranchRef,
+) -> Result<usize> {
+    let mut candidates = processed_refs
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| candidate.object_id != branch.object_id)
+        .collect::<Vec<_>>();
+
+    candidates.sort_by_key(|(_, candidate)| std::cmp::Reverse(candidate.root_distance));
+
+    for (index, candidate) in candidates {
+        if is_branch_ancestor(repo_root, &candidate.name, &branch.name)? {
+            return Ok(index);
+        }
+    }
+
+    Ok(0)
+}
+
+fn is_branch_ancestor(repo_root: &str, ancestor: &str, descendant: &str) -> Result<bool> {
+    let output = run_git(
+        repo_root,
+        &["merge-base", "--is-ancestor", ancestor, descendant],
+    )?;
+    Ok(output.success)
+}
+
+fn branch_unique_commit_count(repo_root: &str, base: &str, branch: &str) -> Result<usize> {
+    commit_distance(repo_root, base, branch)
+}
+
+fn commit_distance(repo_root: &str, base: &str, branch: &str) -> Result<usize> {
+    let range = format!("{}..{}", base, branch);
+    let output = run_git_checked(repo_root, &["rev-list", "--count", &range])?;
+    output
+        .trim()
+        .parse::<usize>()
+        .with_context(|| format!("failed to parse git ancestry distance for {}", range))
+}
+
+struct BranchRenderContext<'a> {
+    topology: &'a [BranchTopologyNode],
+    children: &'a [Vec<usize>],
+    current_branch: &'a str,
+    custom_main_branch: Option<&'a str>,
+}
+
 fn render_branch_tree(
-    branches: &[String],
+    topology: &[BranchTopologyNode],
     current_branch: &str,
     custom_main_branch: Option<&str>,
 ) -> String {
-    let mut unique_branches = branches.to_vec();
-    if !unique_branches
-        .iter()
-        .any(|branch| branch.eq_ignore_ascii_case(current_branch))
-    {
-        unique_branches.push(current_branch.to_string());
+    if topology.is_empty() {
+        return "(no local branches)".to_string();
     }
 
-    if unique_branches.is_empty() {
-        return format_branch_label(current_branch, current_branch, custom_main_branch);
+    let mut children = vec![Vec::<usize>::new(); topology.len()];
+    for (index, node) in topology.iter().enumerate().skip(1) {
+        if let Some(parent) = node.parent {
+            children[parent].push(index);
+        }
     }
 
-    let root_index = unique_branches
-        .iter()
-        .position(|branch| {
-            custom_main_branch.is_some_and(|custom| branch.eq_ignore_ascii_case(custom.trim()))
-        })
-        .or_else(|| {
-            unique_branches
-                .iter()
-                .position(|branch| branch.eq_ignore_ascii_case("main"))
-        })
-        .or_else(|| {
-            unique_branches
-                .iter()
-                .position(|branch| branch.eq_ignore_ascii_case("master"))
-        })
-        .or_else(|| {
-            unique_branches
-                .iter()
-                .position(|branch| branch.eq_ignore_ascii_case(current_branch))
-        })
-        .unwrap_or(0);
-    let root_branch = unique_branches.remove(root_index);
-
-    unique_branches.sort_by(|left, right| {
-        let left_is_current = left.eq_ignore_ascii_case(current_branch);
-        let right_is_current = right.eq_ignore_ascii_case(current_branch);
-        left_is_current
-            .cmp(&right_is_current)
-            .reverse()
-            .then_with(|| normalize_lookup(left).cmp(&normalize_lookup(right)))
-    });
-
-    let root_label = format_branch_label(&root_branch, current_branch, custom_main_branch);
-    let root_plain = format_branch_plain_label(&root_branch, current_branch);
-    let indent = " ".repeat(root_plain.chars().count());
-
-    if unique_branches.is_empty() {
-        return root_label;
+    for sibling_group in &mut children {
+        sibling_group.sort_by(|left, right| {
+            let left_node = &topology[*left];
+            let right_node = &topology[*right];
+            let left_is_current = left_node.name.eq_ignore_ascii_case(current_branch);
+            let right_is_current = right_node.name.eq_ignore_ascii_case(current_branch);
+            left_node
+                .root_distance
+                .cmp(&right_node.root_distance)
+                .then_with(|| left_is_current.cmp(&right_is_current).reverse())
+                .then_with(|| {
+                    normalize_lookup(&left_node.name).cmp(&normalize_lookup(&right_node.name))
+                })
+        });
     }
 
-    let mut lines = Vec::with_capacity(unique_branches.len());
-    lines.push(format!(
-        "{} ─┬─ {}",
-        root_label,
-        format_branch_label(&unique_branches[0], current_branch, custom_main_branch)
-    ));
-    for (index, branch) in unique_branches.iter().enumerate().skip(1) {
-        let connector = if index + 1 == unique_branches.len() {
-            "└─"
-        } else {
-            "├─"
-        };
-        lines.push(format!(
-            "{}   {} {}",
-            indent,
-            connector,
-            format_branch_label(branch, current_branch, custom_main_branch)
-        ));
+    let (root_line, root_tail) =
+        collapse_branch_chain(topology, &children, 0, current_branch, custom_main_branch);
+    let mut lines = vec![root_line];
+
+    let context = BranchRenderContext {
+        topology,
+        children: &children,
+        current_branch,
+        custom_main_branch,
+    };
+
+    let root_children = &children[root_tail];
+    for (index, child) in root_children.iter().enumerate() {
+        render_branch_subtree(
+            &mut lines,
+            &context,
+            *child,
+            "",
+            index + 1 == root_children.len(),
+        );
     }
 
     lines.join("\n")
+}
+
+fn render_branch_subtree(
+    lines: &mut Vec<String>,
+    context: &BranchRenderContext<'_>,
+    node_index: usize,
+    prefix: &str,
+    is_last: bool,
+) {
+    let connector = if is_last { "└─ " } else { "├─ " };
+    let child_prefix = if is_last {
+        format!("{}   ", prefix)
+    } else {
+        format!("{}│  ", prefix)
+    };
+
+    let (line, tail_index) = collapse_branch_chain(
+        context.topology,
+        context.children,
+        node_index,
+        context.current_branch,
+        context.custom_main_branch,
+    );
+    lines.push(format!("{}{}{}", prefix, connector, line));
+
+    let subtree_children = &context.children[tail_index];
+    for (index, child) in subtree_children.iter().enumerate() {
+        render_branch_subtree(
+            lines,
+            context,
+            *child,
+            &child_prefix,
+            index + 1 == subtree_children.len(),
+        );
+    }
+}
+
+fn collapse_branch_chain(
+    topology: &[BranchTopologyNode],
+    children: &[Vec<usize>],
+    start_index: usize,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> (String, usize) {
+    let mut labels = vec![format_branch_label(
+        &topology[start_index].name,
+        current_branch,
+        custom_main_branch,
+    )];
+    let mut tail_index = start_index;
+
+    while children[tail_index].len() == 1 {
+        tail_index = children[tail_index][0];
+        labels.push(format_branch_label(
+            &topology[tail_index].name,
+            current_branch,
+            custom_main_branch,
+        ));
+    }
+
+    (labels.join(" ── "), tail_index)
 }
 
 fn format_branch_label(
@@ -1186,9 +1379,26 @@ mod tests {
     fn render_branch_tree_highlights_main_and_current_branch() {
         let tree = render_branch_tree(
             &[
-                "feature/payments".to_string(),
-                "main".to_string(),
-                "release/0.10".to_string(),
+                BranchTopologyNode {
+                    name: "main".to_string(),
+                    parent: None,
+                    root_distance: 0,
+                },
+                BranchTopologyNode {
+                    name: "feature/base".to_string(),
+                    parent: Some(0),
+                    root_distance: 2,
+                },
+                BranchTopologyNode {
+                    name: "feature/payments".to_string(),
+                    parent: Some(1),
+                    root_distance: 4,
+                },
+                BranchTopologyNode {
+                    name: "release/0.10".to_string(),
+                    parent: Some(0),
+                    root_distance: 1,
+                },
             ],
             "feature/payments",
             None,
@@ -1196,16 +1406,28 @@ mod tests {
 
         assert!(tree.contains("\x1b[32mmain\x1b[0m"));
         assert!(tree.contains("feature/payments [current]"));
-        assert!(tree.contains("─┬─"));
+        assert!(tree.contains("feature/base ── feature/payments [current]"));
     }
 
     #[test]
     fn render_branch_tree_highlights_custom_main_branch() {
         let tree = render_branch_tree(
             &[
-                "trunk".to_string(),
-                "feature/payments".to_string(),
-                "release/0.10".to_string(),
+                BranchTopologyNode {
+                    name: "trunk".to_string(),
+                    parent: None,
+                    root_distance: 0,
+                },
+                BranchTopologyNode {
+                    name: "feature/payments".to_string(),
+                    parent: Some(0),
+                    root_distance: 3,
+                },
+                BranchTopologyNode {
+                    name: "release/0.10".to_string(),
+                    parent: Some(0),
+                    root_distance: 1,
+                },
             ],
             "feature/payments",
             Some("trunk"),
