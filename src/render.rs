@@ -714,8 +714,11 @@ impl App {
 
         let visible_rows = (sections[1].height / 3).max(1) as usize;
         dialog.clamp_scroll(visible_rows);
-        let start = dialog.scroll.min(dialog.options.len().saturating_sub(visible_rows));
-        let visible_options = &dialog.options[start..(start + visible_rows).min(dialog.options.len())];
+        let start = dialog
+            .scroll
+            .min(dialog.options.len().saturating_sub(visible_rows));
+        let visible_options =
+            &dialog.options[start..(start + visible_rows).min(dialog.options.len())];
         let option_rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![Constraint::Length(3); visible_options.len()])

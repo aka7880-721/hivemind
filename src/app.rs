@@ -5053,7 +5053,7 @@ impl OverviewBranchBumpDialog {
 
     fn scroll_by(&mut self, delta: i16) {
         self.scroll = if delta < 0 {
-            self.scroll.saturating_sub(delta.unsigned_abs() as u16)
+            self.scroll.saturating_sub(delta.unsigned_abs())
         } else {
             self.scroll.saturating_add(delta as u16)
         };
@@ -5098,7 +5098,12 @@ impl OverviewBumpWorkflowDialog {
     }
 
     fn clamp_scroll(&mut self, visible_rows: usize) {
-        clamp_dialog_scroll(&mut self.scroll, self.options.len(), visible_rows, Some(self.selected));
+        clamp_dialog_scroll(
+            &mut self.scroll,
+            self.options.len(),
+            visible_rows,
+            Some(self.selected),
+        );
     }
 }
 
