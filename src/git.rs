@@ -24,7 +24,7 @@ use crate::{
     targets::{collect_bump_scopes, shared_bump_version},
 };
 
-pub(crate) use crate::git_stt::latest_local_tag_with_cancel;
+pub(crate) use crate::git_stt::{last_bump_time, latest_local_tag_with_cancel};
 
 pub(crate) fn current_branch_with_cancel(
     repo_root: &str,

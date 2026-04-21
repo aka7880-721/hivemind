@@ -100,3 +100,30 @@ pub(crate) fn last_tag_time(
 
     Ok(format_relative_git_timestamp(tag_timestamp.trim()).unwrap_or_else(|| "n/a".to_string()))
 }
+
+pub(crate) fn last_bump_time(
+    repo_root: &str,
+    pathspecs: &[String],
+    cancel: Option<GitCancellation>,
+) -> Result<Option<i64>> {
+    ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
+
+    let args = build_git_args(
+        &[
+            "log",
+            "-1",
+            "--grep=bump: CG app version bump",
+            "--format=%ct",
+            "HEAD",
+        ],
+        pathspecs,
+    );
+
+    let output = run_git_checked_owned_with_cancel(repo_root, args, cancel)?;
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(trimmed.parse::<i64>().ok())
+    }
+}
