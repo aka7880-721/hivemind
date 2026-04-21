@@ -17,6 +17,7 @@ use crate::changelog::{
 use crate::{
     dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
     git::{GitCancellation, sorted_local_tags_with_cancel, switch_or_create_branch},
+    git_stt::format_relative_git_timestamp,
 };
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
@@ -25,6 +26,9 @@ const PLACEHOLDER_VERSION: &str = "1.2.3";
 const PLACEHOLDER_COMMITS_AHEAD: &str = "7 ahead";
 const PLACEHOLDER_LAST_BUMP: &str = "2 days";
 const PLACEHOLDER_LAST_COMMIT: &str = "14 min";
+const PLACEHOLDER_LAST_RELEASE_VERSION: &str = "v1.2.3";
+const DEV_TILE_DISPLAY_COUNT: usize = 3;
+const RELEASE_TILE_DISPLAY_COUNT: usize = 2;
 
 pub(super) fn render_dashboard_overview(app: &mut App, frame: &mut Frame, area: Rect) {
     let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
@@ -217,6 +221,8 @@ pub(super) fn ensure_dashboard_tile_state(app: &mut App, scopes: &[BumpScope]) {
     if app.overview_tile_project == Some(app.selected_project)
         && app.overview_scope_order.len() == scopes.len()
         && app.overview_pending_versions.len() == scopes.len()
+        && app.overview_tile_dev_modes.len() == scopes.len()
+        && app.overview_tile_rls_modes.len() == scopes.len()
     {
         app.overview_focused_scope = app
             .overview_focused_scope
@@ -236,8 +242,64 @@ pub(super) fn ensure_dashboard_tile_state(app: &mut App, scopes: &[BumpScope]) {
         .iter()
         .map(|scope| resolved_scope_preview_version(scope, use_placeholder))
         .collect();
+    app.overview_tile_dev_modes = vec![0; scopes.len()];
+    app.overview_tile_rls_modes = vec![0; scopes.len()];
+    app.overview_tile_last_rotation_at = Instant::now();
     app.overview_tile_scroll = 0;
     app.overview_focused_scope = 0;
+}
+
+pub(super) fn cycle_overview_tile_info(
+    app: &mut App,
+    scope_index: usize,
+    row: OverviewTileInfoRow,
+) -> Result<()> {
+    let modes = match row {
+        OverviewTileInfoRow::Dev => &mut app.overview_tile_dev_modes,
+        OverviewTileInfoRow::Release => &mut app.overview_tile_rls_modes,
+    };
+    let count = match row {
+        OverviewTileInfoRow::Dev => DEV_TILE_DISPLAY_COUNT,
+        OverviewTileInfoRow::Release => RELEASE_TILE_DISPLAY_COUNT,
+    };
+    let mode = modes
+        .get_mut(scope_index)
+        .ok_or_else(|| anyhow!("selected overview scope is not available"))?;
+    *mode = (*mode + 1) % count;
+    app.overview_tile_last_rotation_at = Instant::now();
+    Ok(())
+}
+
+pub(super) fn tick_dashboard_tile_rotation(app: &mut App) -> bool {
+    if app.screen != Screen::Dashboard || app.overview_tab != OverviewTab::Overview {
+        return false;
+    }
+
+    let Some(project) = app.config.projects.get(app.selected_project) else {
+        return false;
+    };
+    if !project.tile_info.auto_rotation || app.overview_tile_project != Some(app.selected_project) {
+        return false;
+    }
+
+    let interval = Duration::from_secs(project.tile_info.rotation_timing_seconds.max(1));
+    if app.overview_tile_last_rotation_at.elapsed() < interval {
+        return false;
+    }
+
+    if app.overview_tile_dev_modes.is_empty() || app.overview_tile_rls_modes.is_empty() {
+        app.overview_tile_last_rotation_at = Instant::now();
+        return false;
+    }
+
+    for mode in &mut app.overview_tile_dev_modes {
+        *mode = (*mode + 1) % DEV_TILE_DISPLAY_COUNT;
+    }
+    for mode in &mut app.overview_tile_rls_modes {
+        *mode = (*mode + 1) % RELEASE_TILE_DISPLAY_COUNT;
+    }
+    app.overview_tile_last_rotation_at = Instant::now();
+    true
 }
 
 pub(super) fn invalidate_overview_cache(app: &mut App) {
@@ -431,6 +493,20 @@ pub(super) fn render_dashboard_tiles(
             };
             let selected = scope_index == app.overview_focused_scope;
             let placeholder = placeholder_activity(scope, project);
+            let dev_mode = app
+                .overview_tile_dev_modes
+                .get(scope_index)
+                .copied()
+                .unwrap_or_default();
+            let release_mode = app
+                .overview_tile_rls_modes
+                .get(scope_index)
+                .copied()
+                .unwrap_or_default();
+            let (dev_display, dev_output) =
+                build_dev_tile_display(activity, placeholder.as_ref(), dev_mode);
+            let (rls_display, rls_output) =
+                build_release_tile_display(activity, placeholder.as_ref(), release_mode);
             let tile = OverviewTileData {
                 name: scope.display_name.clone(),
                 scheme: scope.scheme,
@@ -450,24 +526,10 @@ pub(super) fn render_dashboard_tiles(
                             .map(|data| data.commits_since_tag_label.to_string())
                     })
                     .unwrap_or_else(|| "n/a".to_string()),
-                last_bump_label: activity
-                    .as_ref()
-                    .map(|summary| summary.last_bump_label.clone())
-                    .or_else(|| {
-                        placeholder
-                            .as_ref()
-                            .map(|data| data.last_bump_label.to_string())
-                    })
-                    .unwrap_or_else(|| "n/a".to_string()),
-                last_commit_label: activity
-                    .as_ref()
-                    .map(|summary| summary.last_commit_label.clone())
-                    .or_else(|| {
-                        placeholder
-                            .as_ref()
-                            .map(|data| data.last_commit_label.to_string())
-                    })
-                    .unwrap_or_else(|| "n/a".to_string()),
+                dev_display,
+                dev_output,
+                rls_display,
+                rls_output,
                 selected,
             };
             let hotspots = render_overview_tile(frame, tile_rect, &tile);
@@ -487,8 +549,16 @@ pub(super) fn render_dashboard_tiles(
                 HitAction::BeginOverviewBump(scope_index),
             ));
             app.hit_targets.push(HitTarget::new(
+                hotspots.dev_info_rect,
+                HitAction::CycleOverviewTileInfo(scope_index, OverviewTileInfoRow::Dev),
+            ));
+            app.hit_targets.push(HitTarget::new(
                 hotspots.tag_rect,
                 HitAction::OpenOverviewTagDialog(scope_index),
+            ));
+            app.hit_targets.push(HitTarget::new(
+                hotspots.rls_info_rect,
+                HitAction::CycleOverviewTileInfo(scope_index, OverviewTileInfoRow::Release),
             ));
             if let Some(rect) = hotspots.reset_rect {
                 app.hit_targets.push(HitTarget::new(
@@ -618,8 +688,11 @@ fn placeholder_activity(
 
     Some(OverviewPlaceholderData {
         commits_since_tag_label: PLACEHOLDER_COMMITS_AHEAD,
-        last_bump_label: PLACEHOLDER_LAST_BUMP,
-        last_commit_label: PLACEHOLDER_LAST_COMMIT,
+        bump_output: PLACEHOLDER_LAST_BUMP,
+        tag_output: PLACEHOLDER_LAST_BUMP,
+        commit_output: PLACEHOLDER_LAST_COMMIT,
+        release_version_output: PLACEHOLDER_LAST_RELEASE_VERSION,
+        release_time_output: PLACEHOLDER_LAST_BUMP,
     })
 }
 
@@ -656,8 +729,71 @@ fn placeholder_recent_changes_lines(project: &ProjectConfig) -> Vec<Line<'static
 
 struct OverviewPlaceholderData {
     commits_since_tag_label: &'static str,
-    last_bump_label: &'static str,
-    last_commit_label: &'static str,
+    bump_output: &'static str,
+    tag_output: &'static str,
+    commit_output: &'static str,
+    release_version_output: &'static str,
+    release_time_output: &'static str,
+}
+
+fn build_dev_tile_display(
+    activity: Option<&RepoActivitySummary>,
+    placeholder: Option<&OverviewPlaceholderData>,
+    mode: usize,
+) -> (String, String) {
+    match mode % DEV_TILE_DISPLAY_COUNT {
+        0 => (
+            "bump".to_string(),
+            activity
+                .and_then(|summary| summary.last_bump_time)
+                .map(|timestamp| format_relative_git_timestamp(&timestamp.to_string()))
+                .flatten()
+                .or_else(|| placeholder.map(|data| data.bump_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+        1 => (
+            "tag".to_string(),
+            activity
+                .and_then(|summary| summary.last_tag_time)
+                .map(|timestamp| format_relative_git_timestamp(&timestamp.to_string()))
+                .flatten()
+                .or_else(|| placeholder.map(|data| data.tag_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+        _ => (
+            "commit".to_string(),
+            activity
+                .map(|summary| summary.last_commit_label.clone())
+                .or_else(|| placeholder.map(|data| data.commit_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+    }
+}
+
+fn build_release_tile_display(
+    activity: Option<&RepoActivitySummary>,
+    placeholder: Option<&OverviewPlaceholderData>,
+    mode: usize,
+) -> (String, String) {
+    match mode % RELEASE_TILE_DISPLAY_COUNT {
+        0 => (
+            "v".to_string(),
+            activity
+                .and_then(|summary| summary.last_rls_version.clone())
+                .or_else(|| placeholder.map(|data| data.release_version_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+        _ => (
+            activity
+                .and_then(|summary| summary.last_tag_name.clone())
+                .unwrap_or_else(|| "RLS'd".to_string()),
+            activity
+                .and_then(|summary| summary.last_rls_time.as_deref())
+                .and_then(format_relative_git_timestamp)
+                .or_else(|| placeholder.map(|data| data.release_time_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+    }
 }
 
 pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<()> {
@@ -1390,6 +1526,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
@@ -1426,6 +1563,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
@@ -1480,6 +1618,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog,
             release_now: ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,

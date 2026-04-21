@@ -6,7 +6,7 @@
 // For details, see the LICENSE file in the repository root.
 
 use anyhow::{Context, Result, bail};
-use chrono::{Local, TimeZone};
+use chrono::{DateTime, Local, TimeZone};
 use std::process::Command;
 
 use crate::git::{
@@ -30,7 +30,7 @@ pub(crate) fn last_commit_label(
 }
 
 pub(crate) fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
-    let seconds = timestamp.parse::<i64>().ok()?;
+    let seconds = parse_git_timestamp_seconds(timestamp)?;
     let then = Local.timestamp_opt(seconds, 0).single()?;
     let now = Local::now();
     let delta = now.signed_duration_since(then);
@@ -51,6 +51,19 @@ pub(crate) fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
     };
 
     Some(label)
+}
+
+fn parse_git_timestamp_seconds(timestamp: &str) -> Option<i64> {
+    let trimmed = timestamp.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    trimmed.parse::<i64>().ok().or_else(|| {
+        DateTime::parse_from_rfc3339(trimmed)
+            .ok()
+            .map(|value| value.timestamp())
+    })
 }
 
 pub(crate) fn last_tag_name(
@@ -78,7 +91,7 @@ pub(crate) fn last_tag_time(
     repo_root: &str,
     pathspecs: &[String],
     cancel: Option<GitCancellation>,
-) -> Result<String> {
+) -> Result<Option<i64>> {
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
 
     let describe = run_git_with_cancel(
@@ -87,12 +100,12 @@ pub(crate) fn last_tag_time(
         cancel.clone(),
     )?;
     if !describe.success {
-        return Ok("n/a".to_string());
+        return Ok(None);
     }
 
     let tag = describe.stdout.trim().to_string();
     if tag.is_empty() {
-        return Ok("n/a".to_string());
+        return Ok(None);
     }
 
     let tag_timestamp = run_git_checked_owned_with_cancel(
@@ -101,7 +114,7 @@ pub(crate) fn last_tag_time(
         cancel,
     )?;
 
-    Ok(format_relative_git_timestamp(tag_timestamp.trim()).unwrap_or_else(|| "n/a".to_string()))
+    Ok(tag_timestamp.trim().parse::<i64>().ok())
 }
 
 pub(crate) fn last_bump_time(

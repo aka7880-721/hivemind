@@ -19,7 +19,7 @@ use crate::{
     },
     config::{
         BranchConfig, BranchScopeKind, ChangelogSettings, DEFAULT_CHANGELOG_PATH, IntegrationMode,
-        ProjectConfig, ProjectType, RepoConfig, TargetSpec,
+        ProjectConfig, ProjectType, RepoConfig, TargetSpec, TileInfoSettings,
     },
     dialogs::TextInput,
     versioning::VersionScheme,
@@ -40,6 +40,8 @@ pub(crate) struct ProjectEditDialog {
     pub(crate) repo_root: TextInput,
     pub(crate) remote_url: TextInput,
     pub(crate) changelog_path: TextInput,
+    pub(crate) tile_auto_rotation: bool,
+    pub(crate) tile_rotation_timing: TextInput,
     pub(crate) project_type: ProjectType,
     pub(crate) unified_versioning: bool,
     pub(crate) integration_mode: IntegrationMode,
@@ -97,6 +99,10 @@ impl ProjectEditDialog {
             repo_root: TextInput::with_value(repo_root),
             remote_url: TextInput::with_value(remote_url),
             changelog_path: TextInput::with_value(project.changelog.effective_path().to_string()),
+            tile_auto_rotation: project.tile_info.auto_rotation,
+            tile_rotation_timing: TextInput::with_value(
+                project.tile_info.rotation_timing_seconds.to_string(),
+            ),
             project_type: project.project_type,
             unified_versioning: project.unified_versioning,
             integration_mode: project.integration_mode,
@@ -145,6 +151,7 @@ impl ProjectEditDialog {
                 | ProjectEditFocus::TargetPath
                 | ProjectEditFocus::RepoRoot
                 | ProjectEditFocus::RemoteUrl
+                | ProjectEditFocus::TileRotationTiming
         ) || (self.focus == ProjectEditFocus::TargetKey && self.target_key_accepts_text())
     }
 
@@ -177,6 +184,10 @@ impl ProjectEditDialog {
         }
         if self.integration_mode.requires_remote() {
             fields.push(ProjectEditFocus::RemoteUrl);
+        }
+        fields.push(ProjectEditFocus::TileAutoRotation);
+        if self.tile_auto_rotation {
+            fields.push(ProjectEditFocus::TileRotationTiming);
         }
         fields.extend([
             ProjectEditFocus::Save,
@@ -234,6 +245,13 @@ impl ProjectEditDialog {
             ),
             ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
             ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
+            ProjectEditFocus::TileAutoRotation => (
+                "Enable tile info auto-rotation",
+                HitAction::EditProjectField(field),
+            ),
+            ProjectEditFocus::TileRotationTiming => {
+                ("Rotation (s)", HitAction::EditProjectField(field))
+            }
             ProjectEditFocus::Save => ("Save", HitAction::SaveProjectEdit),
             ProjectEditFocus::Remove => ("Remove", HitAction::RemoveProject),
             ProjectEditFocus::Cancel => ("Cancel", HitAction::CancelProjectEdit),
@@ -318,6 +336,13 @@ impl ProjectEditDialog {
             ProjectEditFocus::RemoteUrl => {
                 self.remote_url.display_line_with_width(focused, max_width)
             }
+            ProjectEditFocus::TileAutoRotation => Line::from(format!(
+                "< {} >",
+                if self.tile_auto_rotation { "Yes" } else { "No" }
+            )),
+            ProjectEditFocus::TileRotationTiming => self
+                .tile_rotation_timing
+                .display_line_with_width(focused, max_width),
             ProjectEditFocus::Save => Line::from("Persist project"),
             ProjectEditFocus::Remove => Line::from("Delete project"),
             ProjectEditFocus::Cancel => Line::from("Discard changes"),
@@ -361,6 +386,9 @@ impl ProjectEditDialog {
                 } else {
                     self.integration_mode.previous()
                 };
+            }
+            ProjectEditFocus::TileAutoRotation => {
+                self.tile_auto_rotation = !self.tile_auto_rotation;
             }
             _ => {}
         }
@@ -437,6 +465,7 @@ impl ProjectEditDialog {
             }
             ProjectEditFocus::RepoRoot => Some(&mut self.repo_root),
             ProjectEditFocus::RemoteUrl => Some(&mut self.remote_url),
+            ProjectEditFocus::TileRotationTiming => Some(&mut self.tile_rotation_timing),
             _ => None,
         }
     }
@@ -609,6 +638,7 @@ impl ProjectEditDialog {
         project.unified_versioning =
             self.project_type == ProjectType::AllInOne || self.unified_versioning;
         project.version_scheme = self.version_scheme;
+        project.tile_info = self.build_tile_info_settings()?;
         let preserved_all_in_one_changelog_enabled = project.changelog.enabled;
         let preserved_branch_changelog_enabled = project
             .branches
@@ -697,6 +727,17 @@ impl ProjectEditDialog {
                 self.changelog_path.value.trim().to_string()
             },
         }
+    }
+
+    fn build_tile_info_settings(&self) -> Result<TileInfoSettings> {
+        let rotation_timing_seconds = parse_tile_rotation_seconds(
+            self.tile_rotation_timing.value.trim(),
+            self.tile_auto_rotation,
+        )?;
+        Ok(TileInfoSettings {
+            auto_rotation: self.tile_auto_rotation,
+            rotation_timing_seconds,
+        })
     }
 
     pub(crate) fn current_scope(&self) -> Option<&ScopeDraft> {
@@ -844,9 +885,31 @@ pub(crate) enum ProjectEditFocus {
     MoveScopeDown,
     RepoRoot,
     RemoteUrl,
+    TileAutoRotation,
+    TileRotationTiming,
     Save,
     Remove,
     Cancel,
+}
+
+fn parse_tile_rotation_seconds(value: &str, enabled: bool) -> Result<u64> {
+    if !enabled {
+        return Ok(5);
+    }
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("tile rotation timing is required when auto-rotation is enabled");
+    }
+
+    let parsed = trimmed
+        .parse::<u64>()
+        .map_err(|_| anyhow!("tile rotation timing must be a positive whole number"))?;
+    if parsed == 0 {
+        bail!("tile rotation timing must be at least 1 second");
+    }
+
+    Ok(parsed)
 }
 
 #[cfg(test)]
@@ -865,6 +928,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: vec![TargetSpec {
                 label: "Version".to_string(),
                 path: "Cargo.toml".to_string(),
@@ -898,6 +962,7 @@ mod tests {
                 unified_versioning: true,
                 integration_mode: IntegrationMode::GitHubEnabled,
                 release_now: crate::config::ReleaseNowSettings::default(),
+                tile_info: crate::config::TileInfoSettings::default(),
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),
                     path: "C:/repo/Cargo.toml".to_string(),
@@ -939,6 +1004,7 @@ mod tests {
                 unified_versioning: false,
                 integration_mode: IntegrationMode::GitHubEnabled,
                 release_now: crate::config::ReleaseNowSettings::default(),
+                tile_info: crate::config::TileInfoSettings::default(),
                 targets: vec![],
                 branches: vec![BranchConfig {
                     name: "core".to_string(),

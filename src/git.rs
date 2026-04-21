@@ -20,7 +20,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
     config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
-    git_stt::{format_relative_git_timestamp, last_commit_label},
+    git_stt::{last_commit_label, last_rls_time, last_rls_version, last_tag_name, last_tag_time},
     targets::{collect_bump_scopes, shared_bump_version},
 };
 
@@ -182,8 +182,12 @@ impl GitScopeContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RepoActivitySummary {
     pub(crate) commits_since_tag_label: String,
-    pub(crate) last_bump_label: String,
+    pub(crate) last_bump_time: Option<i64>,
+    pub(crate) last_tag_name: Option<String>,
+    pub(crate) last_tag_time: Option<i64>,
     pub(crate) last_commit_label: String,
+    pub(crate) last_rls_version: Option<String>,
+    pub(crate) last_rls_time: Option<String>,
 }
 
 pub(crate) fn build_git_args(base: &[&str], pathspecs: &[String]) -> Vec<String> {
@@ -597,7 +601,7 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
         &["describe", "--tags", "--abbrev=0"],
         cancel.clone(),
     )?;
-    let (commits_since_tag_label, last_bump_label) = if describe.success {
+    let commits_since_tag_label = if describe.success {
         let tag = describe.stdout.trim().to_string();
         let range = format!("{}..HEAD", tag);
         let count = run_git_checked_owned_with_cancel(
@@ -607,26 +611,26 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
         )?
         .trim()
         .to_string();
-        let tag_timestamp = run_git_checked_with_cancel(
-            repo_root,
-            &["log", "-1", "--format=%ct", &tag],
-            cancel.clone(),
-        )?;
-        (
-            format!("{}c ahd", count),
-            format_relative_git_timestamp(tag_timestamp.trim())
-                .unwrap_or_else(|| "n/a".to_string()),
-        )
+        format!("{}c ahd", count)
     } else {
-        ("no tags".to_string(), "n/a".to_string())
+        "no tags".to_string()
     };
 
-    let last_commit_label = last_commit_label(repo_root, &pathspecs, cancel)?;
+    let last_bump_time = crate::git_stt::last_bump_time(repo_root, &pathspecs, cancel.clone())?;
+    let last_tag_name = last_tag_name(repo_root, cancel.clone())?;
+    let last_tag_time = last_tag_time(repo_root, &pathspecs, cancel.clone())?;
+    let last_commit_label = last_commit_label(repo_root, &pathspecs, cancel.clone())?;
+    let last_rls_version = last_rls_version(repo_root, cancel.clone()).ok().flatten();
+    let last_rls_time = last_rls_time(repo_root, cancel).ok().flatten();
 
     Ok(RepoActivitySummary {
         commits_since_tag_label,
-        last_bump_label,
+        last_bump_time,
+        last_tag_name,
+        last_tag_time,
         last_commit_label,
+        last_rls_version,
+        last_rls_time,
     })
 }
 
@@ -731,6 +735,7 @@ mod tests {
         config::{
             BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec,
         },
+        git_stt::format_relative_git_timestamp,
         versioning::VersionScheme,
     };
 
@@ -745,6 +750,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -815,6 +821,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -897,6 +904,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),

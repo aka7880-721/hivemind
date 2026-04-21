@@ -231,6 +231,9 @@ struct App {
     overview_activity_summaries: Vec<Option<RepoActivitySummary>>,
     overview_scope_order: Vec<usize>,
     overview_pending_versions: Vec<String>,
+    overview_tile_dev_modes: Vec<usize>,
+    overview_tile_rls_modes: Vec<usize>,
+    overview_tile_last_rotation_at: Instant,
     overview_tile_scroll: usize,
     overview_tile_viewport: Option<Rect>,
     overview_recent_viewport: Option<Rect>,
@@ -325,6 +328,9 @@ impl App {
             overview_activity_summaries: Vec::new(),
             overview_scope_order: Vec::new(),
             overview_pending_versions: Vec::new(),
+            overview_tile_dev_modes: Vec::new(),
+            overview_tile_rls_modes: Vec::new(),
+            overview_tile_last_rotation_at: Instant::now(),
             overview_tile_scroll: 0,
             overview_tile_viewport: None,
             overview_recent_viewport: None,
@@ -1834,6 +1840,10 @@ impl App {
                 self.dashboard_focus = DashboardPane::Overview;
                 return self.begin_overview_bump(scope_index);
             }
+            HitAction::CycleOverviewTileInfo(scope_index, row) => {
+                self.dashboard_focus = DashboardPane::Overview;
+                return self.cycle_overview_tile_info(scope_index, row);
+            }
             HitAction::SelectOverviewBumpWorkflow(index) => {
                 self.select_overview_bump_workflow(index)
             }
@@ -2671,6 +2681,7 @@ impl App {
         had_transient_toast
             || self.transient_toaster.has_toast() != had_transient_toast
             || self.sticky_toaster.has_toast() != had_sticky_toast
+            || overview::tick_dashboard_tile_rotation(self)
     }
 
     fn sync_dashboard_overview_after_repo_change(&mut self) {
@@ -2713,6 +2724,14 @@ impl App {
 
     fn scroll_dashboard_tiles(&mut self, delta: isize) -> Result<()> {
         overview::scroll_dashboard_tiles(self, delta)
+    }
+
+    fn cycle_overview_tile_info(
+        &mut self,
+        scope_index: usize,
+        row: OverviewTileInfoRow,
+    ) -> Result<()> {
+        overview::cycle_overview_tile_info(self, scope_index, row)
     }
 
     fn move_dashboard_overview_focus(&mut self, delta: isize) -> Result<()> {
@@ -4256,6 +4275,7 @@ pub(crate) enum HitAction {
     BrowseProjectSettingsField(ProjectSettingsFocus),
     OpenOverviewReleaseNow(usize),
     BeginOverviewBump(usize),
+    CycleOverviewTileInfo(usize, OverviewTileInfoRow),
     SelectOverviewBumpWorkflow(usize),
     ConfirmOverviewBumpWorkflow,
     CancelOverviewBumpWorkflow,
@@ -4336,6 +4356,12 @@ pub(crate) enum OverviewVersionControl {
     Minor,
     Patch,
     Whole,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum OverviewTileInfoRow {
+    Dev,
+    Release,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -7725,7 +7751,7 @@ mod tests {
         assert_eq!(row_height, 2);
         assert!(visible_fields.contains(&WizardField::RemoteUrl));
         assert!(show_above);
-        assert!(!show_below);
+        assert!(show_below);
     }
 
     #[test]
@@ -7791,6 +7817,7 @@ mod tests {
                 enabled: true,
                 ..Default::default()
             },
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
@@ -7822,6 +7849,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: crate::config::ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
@@ -8012,6 +8040,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: crate::config::ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {

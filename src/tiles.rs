@@ -29,8 +29,10 @@ pub(crate) struct OverviewTileData {
     pub(crate) scheme: VersionScheme,
     pub(crate) preview_version: String,
     pub(crate) commits_since_tag_label: String,
-    pub(crate) last_bump_label: String,
-    pub(crate) last_commit_label: String,
+    pub(crate) dev_display: String,
+    pub(crate) dev_output: String,
+    pub(crate) rls_display: String,
+    pub(crate) rls_output: String,
     pub(crate) selected: bool,
 }
 
@@ -46,6 +48,8 @@ pub(crate) struct OverviewTileHotspots {
     pub(crate) view_rect: Rect,
     pub(crate) bump_rect: Rect,
     pub(crate) tag_rect: Rect,
+    pub(crate) dev_info_rect: Rect,
+    pub(crate) rls_info_rect: Rect,
 }
 
 pub(crate) fn tile_height(scheme: VersionScheme) -> u16 {
@@ -112,12 +116,12 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             "·",
-            format_activity_detail("   last bump", &tile.last_bump_label, 9, right_width)
+            format_tile_info_row("🏗️ →", &tile.dev_display, &tile.dev_output, right_width)
         ),
         format!(
             "║{:^5}│{}║",
             parts[1],
-            format_activity_detail("   last commit", &tile.last_commit_label, 7, right_width)
+            format_tile_info_row("🌍 →", &tile.rls_display, &tile.rls_output, right_width)
         ),
         format!("║{:^5}├{}╢", "·", "─".repeat(right_width)),
         format!("║{:^5}│{}║", parts[2], button_line),
@@ -165,6 +169,8 @@ fn render_semver_tile(
         bump_rect: Rect::new(right_x + button_positions[0] as u16, inner_y + 6, 6, 1),
         tag_rect: Rect::new(right_x + button_positions[1] as u16, inner_y + 6, 6, 1),
         view_rect: Rect::new(right_x + button_positions[2] as u16, inner_y + 6, 5, 1),
+        dev_info_rect: Rect::new(right_x, inner_y + 3, right_width as u16, 1),
+        rls_info_rect: Rect::new(right_x, inner_y + 4, right_width as u16, 1),
     }
 }
 
@@ -199,13 +205,13 @@ fn render_calver_tile(
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_activity_detail(" last bump", &tile.last_bump_label, 9, detail_width),
+            format_tile_info_row("🏗️ →", &tile.dev_display, &tile.dev_output, detail_width),
             "rls",
             action_width = CALVER_ACTION_WIDTH
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_activity_detail(" last commit", &tile.last_commit_label, 7, detail_width),
+            format_tile_info_row("🌍 →", &tile.rls_display, &tile.rls_output, detail_width),
             "tag",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -256,6 +262,8 @@ fn render_calver_tile(
         bump_rect: Rect::new(action_x, inner_y + 3, CALVER_ACTION_WIDTH as u16, 1),
         view_rect: Rect::new(action_x, inner_y + 4, CALVER_ACTION_WIDTH as u16, 1),
         tag_rect: Rect::new(action_x, inner_y + 5, CALVER_ACTION_WIDTH as u16, 1),
+        dev_info_rect: Rect::new(area.x + 1, inner_y + 3, detail_width as u16, 1),
+        rls_info_rect: Rect::new(area.x + 1, inner_y + 4, detail_width as u16, 1),
     }
 }
 
@@ -383,6 +391,10 @@ fn format_activity_detail(
         value_width = value_width
     );
     fit_to_width(&raw, total_width)
+}
+
+fn format_tile_info_row(prefix: &str, label: &str, value: &str, total_width: usize) -> String {
+    fit_to_width(&format!("{prefix} {label}: {value}"), total_width)
 }
 
 fn fit_to_width(value: &str, width: usize) -> String {

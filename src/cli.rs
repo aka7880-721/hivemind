@@ -1379,6 +1379,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: vec![TargetSpec {
                 label: "Version".to_string(),
                 path: "C:/repo/Cargo.toml".to_string(),

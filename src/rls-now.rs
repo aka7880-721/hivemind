@@ -70,14 +70,7 @@ use tokio::{
     task::spawn_blocking,
 };
 
-use crate::{
-    config::ReleaseNowSettings,
-    git::{
-        GitScopeContext, ensure_git_repo_with_cancel, run_git_checked_with_cancel,
-        run_git_with_cancel,
-    },
-    git_stt::recent_merge_check,
-};
+use crate::{config::ReleaseNowSettings, git::GitScopeContext, git_stt::recent_merge_check};
 
 const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const DEFAULT_RELEASE_NOTES: &str =

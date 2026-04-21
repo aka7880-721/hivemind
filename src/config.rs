@@ -100,6 +100,8 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub release_now: ReleaseNowSettings,
     #[serde(default)]
+    pub tile_info: TileInfoSettings,
+    #[serde(default)]
     pub targets: Vec<TargetSpec>,
     #[serde(default)]
     pub branches: Vec<BranchConfig>,
@@ -450,6 +452,22 @@ pub struct ReleaseNowSettings {
     pub linux_arm_script: String,
     pub linux_amd_script: String,
     pub macos_script: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TileInfoSettings {
+    pub auto_rotation: bool,
+    pub rotation_timing_seconds: u64,
+}
+
+impl Default for TileInfoSettings {
+    fn default() -> Self {
+        Self {
+            auto_rotation: true,
+            rotation_timing_seconds: 5,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -869,6 +887,7 @@ format = "json"
                 version_scheme: VersionScheme::SemVer,
                 changelog: ChangelogSettings::default(),
                 release_now: ReleaseNowSettings::default(),
+                tile_info: TileInfoSettings::default(),
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),
                     path: "package.json".to_string(),
@@ -904,6 +923,7 @@ format = "json"
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: ReleaseNowSettings::default(),
+            tile_info: TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
