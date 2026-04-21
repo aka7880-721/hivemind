@@ -36,8 +36,10 @@ pub(crate) fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
     let delta = now.signed_duration_since(then);
     let minutes = delta.num_minutes().max(0);
 
-    let label = if minutes < 60 {
-        format!("{}m ago", minutes.max(1))
+    let label = if delta.num_seconds() < 60 {
+        "now".to_string()
+    } else if minutes < 60 {
+        format!("{}m ago", minutes)
     } else if minutes < 60 * 24 {
         format!("{}h ago", (minutes / 60).max(1))
     } else if minutes < 60 * 24 * 7 {
