@@ -675,11 +675,11 @@ impl App {
     }
 
     fn render_overview_bump_workflow_dialog(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(dialog) = &self.overview_bump_workflow_dialog else {
+        let Some(dialog) = &mut self.overview_bump_workflow_dialog else {
             return;
         };
 
-        let popup = centered_rect(area, 78, 46);
+        let popup = centered_rect(area, 78, if area.height < 30 { 100 } else { 60 });
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
@@ -712,13 +712,21 @@ impl App {
             sections[0],
         );
 
+        let visible_rows = (sections[1].height / 3).max(1) as usize;
+        dialog.clamp_scroll(visible_rows);
+        let start = dialog
+            .scroll
+            .min(dialog.options.len().saturating_sub(visible_rows));
+        let visible_options =
+            &dialog.options[start..(start + visible_rows).min(dialog.options.len())];
         let option_rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Length(3); dialog.options.len()])
+            .constraints(vec![Constraint::Length(3); visible_options.len()])
             .split(sections[1]);
 
-        for (index, (option, row)) in dialog.options.iter().zip(option_rows.iter()).enumerate() {
-            let selected = index == dialog.selected;
+        for (index, (option, row)) in visible_options.iter().zip(option_rows.iter()).enumerate() {
+            let option_index = start + index;
+            let selected = option_index == dialog.selected;
             let row_block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(if selected {
@@ -729,7 +737,7 @@ impl App {
             let row_inner = row_block.inner(*row);
             frame.render_widget(row_block, *row);
             let lines = vec![
-                Line::from(format!("{}. {}", index + 1, option.display_name())).style(
+                Line::from(format!("{}. {}", option_index + 1, option.display_name())).style(
                     if selected {
                         Style::default()
                             .fg(Color::Cyan)
@@ -743,9 +751,16 @@ impl App {
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), row_inner);
             self.hit_targets.push(HitTarget::new(
                 *row,
-                HitAction::SelectOverviewBumpWorkflow(index),
+                HitAction::SelectOverviewBumpWorkflow(option_index),
             ));
         }
+
+        super::render_vertical_overflow_indicators(
+            frame,
+            sections[1],
+            start > 0,
+            start + visible_options.len() < dialog.options.len(),
+        );
 
         self.render_button_row(
             frame,
@@ -772,11 +787,11 @@ impl App {
             return;
         };
 
-        let popup = centered_rect(area, 72, 16);
+        let popup = centered_rect(area, 72, if area.height < 24 { 100 } else { 44 });
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Branch Bump ")
+            .title(" Name New Branch ")
             .border_style(Style::default().fg(Color::Cyan));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
@@ -826,7 +841,8 @@ impl App {
             Paragraph::new(
                 "Create the branch first, then run the bump, commit, and push workflow.",
             )
-            .wrap(Wrap { trim: false }),
+            .wrap(Wrap { trim: false })
+            .scroll((0, dialog.scroll)),
             sections[2],
         );
 

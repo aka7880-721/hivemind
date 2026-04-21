@@ -211,15 +211,24 @@ fn print_branch_status() -> Result<()> {
         .or_else(|| git_contexts.first())
         .ok_or_else(|| anyhow!("git scope metadata is unavailable for the current branch view"))?;
     let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
+
+    println!();
+    println!("current branch: \x1b[33m{}\x1b[0m", current_branch);
+    println!("---------------");
+    println!();
+    println!("Generating the tree...");
+    println!("\x1b[90m(ctrl+c to cancel)\x1b[0m");
+    println!();
+    io::stdout()
+        .flush()
+        .context("failed to flush branch status output")?;
+
     let diagram = load_branch_diagram(
         &context.repo_root,
         &current_branch,
         context.main_branch_name.as_deref(),
     )?;
 
-    println!();
-    println!("current branch: {}", current_branch);
-    println!();
     println!("{}", render_branch_tree(diagram.as_ref()));
     println!();
     Ok(())

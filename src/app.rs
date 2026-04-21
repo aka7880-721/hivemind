@@ -872,6 +872,16 @@ impl App {
                     dialog.branch_name.insert(character);
                 }
             }
+            KeyCode::PageUp => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.scroll_by(-3);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.scroll_by(3);
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -5008,6 +5018,7 @@ struct OverviewBumpWorkflowDialog {
     scope_index: usize,
     options: Vec<OverviewBumpWorkflow>,
     selected: usize,
+    scroll: usize,
 }
 
 #[derive(Clone)]
@@ -5018,6 +5029,7 @@ struct OverviewBranchBumpDialog {
     scope_index: usize,
     workflow: OverviewBumpWorkflow,
     branch_name: TextInput,
+    scroll: u16,
 }
 
 impl OverviewBranchBumpDialog {
@@ -5035,7 +5047,16 @@ impl OverviewBranchBumpDialog {
             scope_index,
             workflow,
             branch_name: TextInput::with_value(""),
+            scroll: 0,
         }
+    }
+
+    fn scroll_by(&mut self, delta: i16) {
+        self.scroll = if delta < 0 {
+            self.scroll.saturating_sub(delta.unsigned_abs())
+        } else {
+            self.scroll.saturating_add(delta as u16)
+        };
     }
 }
 
@@ -5054,6 +5075,7 @@ impl OverviewBumpWorkflowDialog {
             scope_index,
             options,
             selected: 0,
+            scroll: 0,
         }
     }
 
@@ -5073,6 +5095,15 @@ impl OverviewBumpWorkflowDialog {
 
         let len = self.options.len() as isize;
         self.selected = (self.selected as isize + delta).rem_euclid(len) as usize;
+    }
+
+    fn clamp_scroll(&mut self, visible_rows: usize) {
+        clamp_dialog_scroll(
+            &mut self.scroll,
+            self.options.len(),
+            visible_rows,
+            Some(self.selected),
+        );
     }
 }
 
