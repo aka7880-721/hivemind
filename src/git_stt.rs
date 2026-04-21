@@ -127,3 +127,32 @@ pub(crate) fn last_bump_time(
         Ok(trimmed.parse::<i64>().ok())
     }
 }
+
+pub(crate) fn recent_merge_check(
+    repo_root: &str,
+    pathspecs: &[String],
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
+
+    let args = build_git_args(
+        &[
+            "log",
+            "-1",
+            "--grep=Merge pull request",
+            "--format=%ct",
+            "HEAD",
+        ],
+        pathspecs,
+    );
+
+    let output = run_git_checked_owned_with_cancel(repo_root, args, cancel)?;
+    let trimmed = output.trim();
+    let timestamp = trimmed.parse::<i64>().ok();
+    let now = Local::now().timestamp();
+
+    match timestamp {
+        Some(last_merge_ts) if now.saturating_sub(last_merge_ts) < 5 * 60 => Ok("pass".to_string()),
+        _ => Ok("fail".to_string()),
+    }
+}
