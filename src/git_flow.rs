@@ -86,7 +86,7 @@ pub(crate) fn apply_repo_bump_workflow(
     workflow: OverviewBumpWorkflow,
     branch_name: Option<&str>,
 ) -> Result<()> {
-    let commit_message = format!("bump: CG version bump to {}", next_version);
+    let commit_message = format!("bump: CG app version bump to v{}", next_version);
     let trimmed_branch_name = branch_name.map(str::trim).filter(|name| !name.is_empty());
 
     for operation in operations {
