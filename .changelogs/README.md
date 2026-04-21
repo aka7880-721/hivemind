@@ -2,6 +2,48 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog 0.10.11
+2026-04-21
+
+#### What's changed:
+
+### Changed in CLI
+
+#### 💎 Enhancements
+
+* `cg branch` improved with sequential rendering   _(d366eb8)_
+
+---
+
+### Changed in TUI
+
+#### 💎 Enhancements
+
+* code cleanup   _(8f09f0b)_
+
+* add variable height to bump popups and better render logic   _(1e9964a)_
+
+* update branch bump dialog title and increase popup height   _(f42b2e4)_
+* add scrolling functionality   _(f42b2e4)_
+
+---
+
+### 🛠️ General:
+
+### 🔧 Maintenance
+
+* CG version bump to 0.10.11   _(95b8eca)_
+
+### 💎 Enhancements
+
+* minor wording adjustments in commits and changlogs   _(acd0c5c)_
+
+### 📝 Other
+
+* Merge pull request #27 from comfy-home/v0.10.11+   _(fbc3726)_
+
+---
+
 ## Changelog v0.10.10
 2026-04-20
 
