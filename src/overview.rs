@@ -760,8 +760,7 @@ fn build_dev_tile_display(
             "bump".to_string(),
             activity
                 .and_then(|summary| summary.last_bump_time)
-                .map(|timestamp| format_relative_git_timestamp(&timestamp.to_string()))
-                .flatten()
+                .and_then(|timestamp| format_relative_git_timestamp(&timestamp.to_string()))
                 .or_else(|| placeholder.map(|data| data.bump_output.to_string()))
                 .unwrap_or_else(|| "n/a".to_string()),
         ),
@@ -769,8 +768,7 @@ fn build_dev_tile_display(
             "tag".to_string(),
             activity
                 .and_then(|summary| summary.last_tag_time)
-                .map(|timestamp| format_relative_git_timestamp(&timestamp.to_string()))
-                .flatten()
+                .and_then(|timestamp| format_relative_git_timestamp(&timestamp.to_string()))
                 .or_else(|| placeholder.map(|data| data.tag_output.to_string()))
                 .unwrap_or_else(|| "n/a".to_string()),
         ),
