@@ -5018,6 +5018,7 @@ struct OverviewBumpWorkflowDialog {
     scope_index: usize,
     options: Vec<OverviewBumpWorkflow>,
     selected: usize,
+    scroll: usize,
 }
 
 #[derive(Clone)]
@@ -5074,6 +5075,7 @@ impl OverviewBumpWorkflowDialog {
             scope_index,
             options,
             selected: 0,
+            scroll: 0,
         }
     }
 
@@ -5093,6 +5095,10 @@ impl OverviewBumpWorkflowDialog {
 
         let len = self.options.len() as isize;
         self.selected = (self.selected as isize + delta).rem_euclid(len) as usize;
+    }
+
+    fn clamp_scroll(&mut self, visible_rows: usize) {
+        clamp_dialog_scroll(&mut self.scroll, self.options.len(), visible_rows, Some(self.selected));
     }
 }
 
