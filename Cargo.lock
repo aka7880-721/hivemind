@@ -273,6 +273,7 @@ dependencies = [
  "tui-overlay",
  "tui-tabs",
  "tui-textarea",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

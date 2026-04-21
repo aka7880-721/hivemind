@@ -12,6 +12,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::versioning::VersionScheme;
 
@@ -116,7 +117,7 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             "·",
-            format_tile_info_row("🏗️ →", &tile.dev_display, &tile.dev_output, right_width)
+            format_tile_info_row("🏗️  →", &tile.dev_display, &tile.dev_output, right_width)
         ),
         format!(
             "║{:^5}│{}║",
@@ -205,7 +206,7 @@ fn render_calver_tile(
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_tile_info_row("🏗️ →", &tile.dev_display, &tile.dev_output, detail_width),
+            format_tile_info_row("🏗️  →", &tile.dev_display, &tile.dev_output, detail_width),
             "rls",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -394,16 +395,47 @@ fn format_activity_detail(
 }
 
 fn format_tile_info_row(prefix: &str, label: &str, value: &str, total_width: usize) -> String {
-    fit_to_width(&format!("{prefix} {label}: {value}"), total_width)
+    center_to_width(&format!("{prefix} {label}: {value}"), total_width)
 }
 
 fn fit_to_width(value: &str, width: usize) -> String {
-    let rendered = value.chars().take(width).collect::<String>();
-    if rendered.len() >= width {
-        rendered
-    } else {
-        format!("{rendered:<width$}")
+    pad_to_width(truncate_to_width(value, width), width, Alignment::Left)
+}
+
+fn center_to_width(value: &str, width: usize) -> String {
+    pad_to_width(truncate_to_width(value, width), width, Alignment::Center)
+}
+
+fn truncate_to_width(value: &str, width: usize) -> String {
+    let mut rendered = String::new();
+    let mut used_width = 0;
+
+    for character in value.chars() {
+        let char_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used_width + char_width > width {
+            break;
+        }
+        rendered.push(character);
+        used_width += char_width;
     }
+
+    rendered
+}
+
+fn pad_to_width(value: String, width: usize, alignment: Alignment) -> String {
+    let visible_width = UnicodeWidthStr::width(value.as_str());
+    if visible_width >= width {
+        return value;
+    }
+
+    let remaining = width - visible_width;
+    let (left_pad, right_pad) = match alignment {
+        Alignment::Center => (remaining / 2, remaining - (remaining / 2)),
+        Alignment::Right => (remaining, 0),
+        _ => (0, remaining),
+    };
+
+    format!("{}{}{}", " ".repeat(left_pad), value, " ".repeat(right_pad))
 }
 
 fn dot_fill(width: usize) -> String {
@@ -496,6 +528,16 @@ mod tests {
             format_activity_detail("last bump", "5d ago", 9, 20),
             "last bump:    5d ago"
         );
+    }
+
+    #[test]
+    fn format_tile_info_row_centers_unicode_prefix_without_overflow() {
+        let formatted = format_tile_info_row("🏗️ →", "tag..→HEAD", "8c ahd", 28);
+
+        assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
+        assert!(formatted.contains("🏗️ → tag..→HEAD: 8c ahd"));
+        assert!(formatted.starts_with(' '));
+        assert!(formatted.ends_with(' '));
     }
 
     #[test]
