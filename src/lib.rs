@@ -12,6 +12,7 @@ mod cli;
 mod config;
 mod dialogs;
 mod git;
+mod git_stt;
 mod mmr;
 #[path = "overview-pg.rs"]
 mod overview_pg;
