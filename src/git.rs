@@ -24,6 +24,8 @@ use crate::{
     targets::{collect_bump_scopes, shared_bump_version},
 };
 
+pub(crate) use crate::git_stt::latest_local_tag_with_cancel;
+
 pub(crate) fn current_branch_with_cancel(
     repo_root: &str,
     cancel: Option<GitCancellation>,
@@ -635,19 +637,6 @@ pub(crate) fn run_git_checked_owned_with_cancel(
 ) -> Result<String> {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_git_checked_with_cancel(repo_root, &arg_refs, cancel)
-}
-
-pub(crate) fn latest_local_tag_with_cancel(
-    repo_root: &str,
-    cancel: Option<GitCancellation>,
-) -> Result<Option<String>> {
-    let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel)?;
-    if !describe.success {
-        return Ok(None);
-    }
-
-    let tag = describe.stdout.trim().to_string();
-    Ok((!tag.is_empty()).then_some(tag))
 }
 
 pub(crate) fn branches_containing_ref_with_cancel(
