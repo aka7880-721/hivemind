@@ -76,10 +76,10 @@ use crate::{
         GitScopeContext, ensure_git_repo_with_cancel, run_git_checked_with_cancel,
         run_git_with_cancel,
     },
+    git_stt::recent_merge_check,
 };
 
 const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const RECENT_BUMP_WINDOW_SECS: i64 = 15 * 60;
 const DEFAULT_RELEASE_NOTES: &str =
     "# Release Notes\n\nAdd release highlights here before publishing.";
 
@@ -390,7 +390,7 @@ impl ReleaseNowDialog {
 
     pub(super) fn body_title(&self) -> &'static str {
         match self.mode {
-            ReleaseNowMode::BumpWarning => " Bump Check ",
+            ReleaseNowMode::BumpWarning => " Merge Check ",
             ReleaseNowMode::Configure => {
                 if self.running {
                     " Live Log "
@@ -408,12 +408,14 @@ impl ReleaseNowDialog {
         let lines = match self.mode {
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
-                    Line::from("Recent bump validation did not find a very recent release tag.")
-                        .style(
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        ),
+                    Line::from(
+                        "Recent merge validation did not find a very recent pull request merge.",
+                    )
+                    .style(
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Line::raw(""),
                 ];
                 if let Some(message) = &self.warning_message {
@@ -500,7 +502,8 @@ impl ReleaseNowDialog {
         match self.mode {
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
-                    "Recent bump validation did not find a very recent release tag.".to_string(),
+                    "Recent merge validation did not find a very recent pull request merge."
+                        .to_string(),
                     String::new(),
                 ];
                 if let Some(message) = &self.warning_message {
@@ -646,7 +649,7 @@ pub(super) fn validate_release_now(
     let scope = contexts[scope_index].clone();
     let options = collect_release_now_options(project.release_now_for_scope(scope_index))?;
     let warning_message =
-        build_recent_bump_warning(project, &contexts, scope_index, cancel.clone())?;
+        build_recent_merge_warning(project, &contexts, scope_index, cancel.clone())?;
     let release_notes_markdown = build_release_notes_markdown(&scope.suggested_tag_name, &scope)
         .unwrap_or_else(|_| DEFAULT_RELEASE_NOTES.to_string());
 
@@ -923,7 +926,7 @@ fn push_release_option(
     });
 }
 
-fn build_recent_bump_warning(
+fn build_recent_merge_warning(
     project: &ProjectConfig,
     contexts: &[GitScopeContext],
     scope_index: usize,
@@ -935,31 +938,18 @@ fn build_recent_bump_warning(
         vec![scope_index.min(contexts.len().saturating_sub(1))]
     };
 
-    let now_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before UNIX epoch")?
-        .as_secs() as i64;
     let mut warnings = Vec::new();
 
     for index in affected_scope_indexes {
         let scope = contexts
             .get(index)
             .ok_or_else(|| anyhow!("selected ReleaseNOW scope no longer exists"))?;
-        match latest_bump_timestamp(scope, cancel.clone())? {
-            Some(timestamp) => {
-                let age = now_seconds.saturating_sub(timestamp);
-                if age > RECENT_BUMP_WINDOW_SECS {
-                    warnings.push(format!(
-                        "- {}: latest tag was {} ago",
-                        scope.display_name,
-                        format_age(age)
-                    ));
-                }
-            }
-            None => warnings.push(format!(
-                "- {}: no release tag was found",
+        let check = recent_merge_check(&scope.repo_root, &scope.git_pathspecs(), cancel.clone())?;
+        if check != "pass" {
+            warnings.push(format!(
+                "- {}: no recent pull request merge was found",
                 scope.display_name
-            )),
+            ));
         }
     }
 
@@ -967,50 +957,11 @@ fn build_recent_bump_warning(
         Ok(None)
     } else {
         Ok(Some(format!(
-            "ReleaseNOW expected a bump within the last 15 minutes.\n{}",
+            "ReleaseNOW! expected a recent pull request merge within the last 5 minutes. You can safely ignore this warning if you are intentionally running a release without a recent merge. Just confirm with the yellow-ish button below.\n\n\n{}",
             warnings.join("\n")
         )))
     }
 }
-
-fn latest_bump_timestamp(
-    scope: &GitScopeContext,
-    cancel: Option<GitCancellation>,
-) -> Result<Option<i64>> {
-    ensure_git_repo_with_cancel(&scope.repo_root, cancel.clone())?;
-    let describe = run_git_with_cancel(
-        &scope.repo_root,
-        &["describe", "--tags", "--abbrev=0"],
-        cancel.clone(),
-    )?;
-    if !describe.success {
-        return Ok(None);
-    }
-
-    let tag = describe.stdout.trim().to_string();
-    if tag.is_empty() {
-        return Ok(None);
-    }
-
-    let timestamp = run_git_checked_with_cancel(
-        &scope.repo_root,
-        &["log", "-1", "--format=%ct", &tag],
-        cancel,
-    )?;
-    Ok(timestamp.trim().parse::<i64>().ok())
-}
-
-fn format_age(age_seconds: i64) -> String {
-    let minutes = (age_seconds / 60).max(0);
-    if minutes < 60 {
-        format!("{} minute(s)", minutes.max(1))
-    } else if minutes < 60 * 24 {
-        format!("{} hour(s)", (minutes / 60).max(1))
-    } else {
-        format!("{} day(s)", (minutes / (60 * 24)).max(1))
-    }
-}
-
 fn ensure_gh_authenticated() -> Result<()> {
     ensure_gh_available()?;
     let output = Command::new("gh")
