@@ -19,7 +19,7 @@ use crate::{
     },
     config::{
         BranchConfig, BranchScopeKind, ChangelogSettings, DEFAULT_CHANGELOG_PATH, IntegrationMode,
-        ProjectConfig, ProjectType, RepoConfig, TargetSpec, TileInfoSettings,
+        ProjectConfig, ProjectType, RepoConfig, TargetSpec, TileInfoSettings, TileRotationTarget,
     },
     dialogs::TextInput,
     versioning::VersionScheme,
@@ -41,6 +41,7 @@ pub(crate) struct ProjectEditDialog {
     pub(crate) remote_url: TextInput,
     pub(crate) changelog_path: TextInput,
     pub(crate) tile_auto_rotation: bool,
+    pub(crate) tile_rotates: TileRotationTarget,
     pub(crate) tile_rotation_timing: TextInput,
     pub(crate) project_type: ProjectType,
     pub(crate) unified_versioning: bool,
@@ -100,6 +101,7 @@ impl ProjectEditDialog {
             remote_url: TextInput::with_value(remote_url),
             changelog_path: TextInput::with_value(project.changelog.effective_path().to_string()),
             tile_auto_rotation: project.tile_info.auto_rotation,
+            tile_rotates: project.tile_info.rotates,
             tile_rotation_timing: TextInput::with_value(
                 project.tile_info.rotation_timing_seconds.to_string(),
             ),
@@ -187,6 +189,7 @@ impl ProjectEditDialog {
         }
         fields.push(ProjectEditFocus::TileAutoRotation);
         if self.tile_auto_rotation {
+            fields.push(ProjectEditFocus::TileRotates);
             fields.push(ProjectEditFocus::TileRotationTiming);
         }
         fields.extend([
@@ -249,6 +252,7 @@ impl ProjectEditDialog {
                 "Enable tile info auto-rotation",
                 HitAction::EditProjectField(field),
             ),
+            ProjectEditFocus::TileRotates => ("Rotates", HitAction::EditProjectField(field)),
             ProjectEditFocus::TileRotationTiming => {
                 ("Rotation (s)", HitAction::EditProjectField(field))
             }
@@ -340,6 +344,9 @@ impl ProjectEditDialog {
                 "< {} >",
                 if self.tile_auto_rotation { "Yes" } else { "No" }
             )),
+            ProjectEditFocus::TileRotates => {
+                Line::from(format!("< {} >", self.tile_rotates.display_name()))
+            }
             ProjectEditFocus::TileRotationTiming => self
                 .tile_rotation_timing
                 .display_line_with_width(focused, max_width),
@@ -389,6 +396,13 @@ impl ProjectEditDialog {
             }
             ProjectEditFocus::TileAutoRotation => {
                 self.tile_auto_rotation = !self.tile_auto_rotation;
+            }
+            ProjectEditFocus::TileRotates => {
+                self.tile_rotates = if delta >= 0 {
+                    self.tile_rotates.next()
+                } else {
+                    self.tile_rotates.previous()
+                };
             }
             _ => {}
         }
@@ -736,6 +750,7 @@ impl ProjectEditDialog {
         )?;
         Ok(TileInfoSettings {
             auto_rotation: self.tile_auto_rotation,
+            rotates: self.tile_rotates,
             rotation_timing_seconds,
         })
     }
@@ -886,6 +901,7 @@ pub(crate) enum ProjectEditFocus {
     RepoRoot,
     RemoteUrl,
     TileAutoRotation,
+    TileRotates,
     TileRotationTiming,
     Save,
     Remove,
@@ -1041,5 +1057,67 @@ mod tests {
             .map(|field| dialog.render_field(*field).0)
             .collect();
         assert!(!labels.contains(&"Changelog path"));
+    }
+
+    #[test]
+    fn visible_fields_hide_rotates_when_auto_rotation_disabled() {
+        let mut dialog = ProjectEditDialog::from_project(
+            0,
+            &ProjectConfig {
+                name: "demo".to_string(),
+                alias: String::new(),
+                project_type: ProjectType::AllInOne,
+                version_scheme: VersionScheme::SemVer,
+                unified_versioning: true,
+                integration_mode: IntegrationMode::LocalOnly,
+                release_now: crate::config::ReleaseNowSettings::default(),
+                tile_info: crate::config::TileInfoSettings::default(),
+                targets: vec![TargetSpec {
+                    label: "Version".to_string(),
+                    path: "Cargo.toml".to_string(),
+                    key_path: "package.version".to_string(),
+                    format: crate::config::TargetFormat::Toml,
+                }],
+                branches: vec![],
+                repo: None,
+                changelog: ChangelogSettings::default(),
+            },
+        )
+        .expect("dialog should build");
+
+        dialog.tile_auto_rotation = false;
+        let fields = dialog.visible_fields();
+        assert!(!fields.contains(&ProjectEditFocus::TileRotates));
+        assert!(!fields.contains(&ProjectEditFocus::TileRotationTiming));
+    }
+
+    #[test]
+    fn apply_persists_tile_rotation_target() {
+        let mut project = ProjectConfig {
+            name: "Example".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
+            targets: vec![TargetSpec {
+                label: "Version".to_string(),
+                path: "Cargo.toml".to_string(),
+                key_path: "package.version".to_string(),
+                format: TargetFormat::Toml,
+            }],
+            branches: Vec::new(),
+            repo: None,
+        };
+
+        let mut dialog = ProjectEditDialog::from_project(0, &project).expect("dialog should build");
+        dialog.tile_rotates = TileRotationTarget::DevLineOnly;
+
+        dialog.apply(&mut project).expect("apply should succeed");
+
+        assert_eq!(project.tile_info.rotates, TileRotationTarget::DevLineOnly);
     }
 }

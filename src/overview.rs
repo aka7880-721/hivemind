@@ -292,11 +292,25 @@ pub(super) fn tick_dashboard_tile_rotation(app: &mut App) -> bool {
         return false;
     }
 
-    for mode in &mut app.overview_tile_dev_modes {
-        *mode = (*mode + 1) % DEV_TILE_DISPLAY_COUNT;
-    }
-    for mode in &mut app.overview_tile_rls_modes {
-        *mode = (*mode + 1) % RELEASE_TILE_DISPLAY_COUNT;
+    match project.tile_info.rotates {
+        crate::config::TileRotationTarget::Both => {
+            for mode in &mut app.overview_tile_dev_modes {
+                *mode = (*mode + 1) % DEV_TILE_DISPLAY_COUNT;
+            }
+            for mode in &mut app.overview_tile_rls_modes {
+                *mode = (*mode + 1) % RELEASE_TILE_DISPLAY_COUNT;
+            }
+        }
+        crate::config::TileRotationTarget::DevLineOnly => {
+            for mode in &mut app.overview_tile_dev_modes {
+                *mode = (*mode + 1) % DEV_TILE_DISPLAY_COUNT;
+            }
+        }
+        crate::config::TileRotationTarget::RlsLineOnly => {
+            for mode in &mut app.overview_tile_rls_modes {
+                *mode = (*mode + 1) % RELEASE_TILE_DISPLAY_COUNT;
+            }
+        }
     }
     app.overview_tile_last_rotation_at = Instant::now();
     true

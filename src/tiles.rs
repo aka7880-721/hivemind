@@ -12,6 +12,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::versioning::VersionScheme;
@@ -117,7 +118,7 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             "·",
-            format_tile_info_row("🏗️  →", &tile.dev_display, &tile.dev_output, right_width)
+            format_tile_info_row("🏗️ →", &tile.dev_display, &tile.dev_output, right_width)
         ),
         format!(
             "║{:^5}│{}║",
@@ -206,7 +207,7 @@ fn render_calver_tile(
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_tile_info_row("🏗️  →", &tile.dev_display, &tile.dev_output, detail_width),
+            format_tile_info_row("🏗️ →", &tile.dev_display, &tile.dev_output, detail_width),
             "rls",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -326,24 +327,28 @@ fn styled_row_with_highlights(
     let border_chars = [
         '╔', '╗', '╚', '╝', '║', '═', '│', '╤', '╧', '╟', '╢', '├', '┴', '─',
     ];
-    let spans = row
-        .chars()
-        .enumerate()
-        .map(|(index, character)| {
-            let style = highlights
-                .iter()
-                .find(|highlight| highlight.contains(index))
-                .map(|highlight| highlight.style)
-                .unwrap_or_else(|| {
-                    if border_chars.contains(&character) || character == '·' {
-                        border_style
-                    } else {
-                        tile_style.fg(Color::White)
-                    }
-                });
-            Span::styled(character.to_string(), style)
-        })
-        .collect::<Vec<_>>();
+    let spans =
+        row.graphemes(true)
+            .enumerate()
+            .map(|(index, grapheme)| {
+                let is_border = grapheme.chars().count() == 1
+                    && grapheme.chars().next().is_some_and(|character| {
+                        border_chars.contains(&character) || character == '·'
+                    });
+                let style = highlights
+                    .iter()
+                    .find(|highlight| highlight.contains(index))
+                    .map(|highlight| highlight.style)
+                    .unwrap_or_else(|| {
+                        if is_border {
+                            border_style
+                        } else {
+                            tile_style.fg(Color::White)
+                        }
+                    });
+                Span::styled(grapheme.to_string(), style)
+            })
+            .collect::<Vec<_>>();
     Line::from(spans)
 }
 
@@ -538,6 +543,24 @@ mod tests {
         assert!(formatted.contains("🏗️ → tag..→HEAD: 8c ahd"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
+    }
+
+    #[test]
+    fn styled_row_keeps_emoji_grapheme_cluster_intact() {
+        let line = styled_row(
+            "║🏗️ → bump: 5h ago      ║",
+            Style::default(),
+            Style::default(),
+        );
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>();
+
+        assert!(rendered.contains(&"🏗️"));
+        assert!(!rendered.contains(&"🏗"));
+        assert!(!rendered.contains(&"️"));
     }
 
     #[test]

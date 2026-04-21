@@ -458,6 +458,7 @@ pub struct ReleaseNowSettings {
 #[serde(default)]
 pub struct TileInfoSettings {
     pub auto_rotation: bool,
+    pub rotates: TileRotationTarget,
     pub rotation_timing_seconds: u64,
 }
 
@@ -465,7 +466,43 @@ impl Default for TileInfoSettings {
     fn default() -> Self {
         Self {
             auto_rotation: true,
+            rotates: TileRotationTarget::Both,
             rotation_timing_seconds: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TileRotationTarget {
+    #[default]
+    Both,
+    DevLineOnly,
+    RlsLineOnly,
+}
+
+impl TileRotationTarget {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            TileRotationTarget::Both => "both",
+            TileRotationTarget::DevLineOnly => "dev-line only",
+            TileRotationTarget::RlsLineOnly => "rls-line only",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            TileRotationTarget::Both => TileRotationTarget::DevLineOnly,
+            TileRotationTarget::DevLineOnly => TileRotationTarget::RlsLineOnly,
+            TileRotationTarget::RlsLineOnly => TileRotationTarget::Both,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        match self {
+            TileRotationTarget::Both => TileRotationTarget::RlsLineOnly,
+            TileRotationTarget::DevLineOnly => TileRotationTarget::Both,
+            TileRotationTarget::RlsLineOnly => TileRotationTarget::DevLineOnly,
         }
     }
 }

@@ -273,6 +273,7 @@ dependencies = [
  "tui-overlay",
  "tui-tabs",
  "tui-textarea",
+ "unicode-segmentation",
  "unicode-width 0.2.0",
 ]
 

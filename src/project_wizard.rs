@@ -20,7 +20,7 @@ use crate::{
     config::{
         BranchConfig, BranchScopeKind, ChangelogSettings, DEFAULT_CHANGELOG_PATH, IntegrationMode,
         ProjectConfig, ProjectType, ReleaseNowSettings, RepoConfig, TargetFormat, TargetSpec,
-        TileInfoSettings,
+        TileInfoSettings, TileRotationTarget,
     },
     dialogs::TextInput,
     targets::{ProbeKind, TargetProbe},
@@ -41,6 +41,7 @@ pub(crate) struct ProjectWizard {
     pub(crate) remote_url: TextInput,
     pub(crate) changelog_path: TextInput,
     pub(crate) tile_auto_rotation: bool,
+    pub(crate) tile_rotates: TileRotationTarget,
     pub(crate) tile_rotation_timing: TextInput,
     pub(crate) project_type: ProjectType,
     pub(crate) unified_versioning: bool,
@@ -65,6 +66,7 @@ impl Default for ProjectWizard {
             remote_url: TextInput::with_value(""),
             changelog_path: TextInput::with_value(DEFAULT_CHANGELOG_PATH),
             tile_auto_rotation: true,
+            tile_rotates: TileRotationTarget::Both,
             tile_rotation_timing: TextInput::with_value("5"),
             project_type: ProjectType::AllInOne,
             unified_versioning: false,
@@ -121,6 +123,7 @@ impl ProjectWizard {
         }
         fields.push(WizardField::TileAutoRotation);
         if self.tile_auto_rotation {
+            fields.push(WizardField::TileRotates);
             fields.push(WizardField::TileRotationTiming);
         }
         fields.extend([
@@ -194,6 +197,7 @@ impl ProjectWizard {
                 "Enable tile info auto-rotation",
                 HitAction::WizardField(field),
             ),
+            WizardField::TileRotates => ("Rotates", HitAction::WizardField(field)),
             WizardField::TileRotationTiming => ("Rotation (s)", HitAction::WizardField(field)),
             WizardField::Validate => ("Read", HitAction::ValidateWizard),
             WizardField::Save => ("Save", HitAction::SaveWizard),
@@ -279,6 +283,9 @@ impl ProjectWizard {
                 "< {} >",
                 if self.tile_auto_rotation { "Yes" } else { "No" }
             )),
+            WizardField::TileRotates => {
+                Line::from(format!("< {} >", self.tile_rotates.display_name()))
+            }
             WizardField::TileRotationTiming => self
                 .tile_rotation_timing
                 .display_line_with_width(focused, max_width),
@@ -329,6 +336,13 @@ impl ProjectWizard {
             }
             WizardField::TileAutoRotation => {
                 self.tile_auto_rotation = !self.tile_auto_rotation;
+            }
+            WizardField::TileRotates => {
+                self.tile_rotates = if delta >= 0 {
+                    self.tile_rotates.next()
+                } else {
+                    self.tile_rotates.previous()
+                };
             }
             _ => {}
         }
@@ -674,6 +688,7 @@ impl ProjectWizard {
         )?;
         Ok(TileInfoSettings {
             auto_rotation: self.tile_auto_rotation,
+            rotates: self.tile_rotates,
             rotation_timing_seconds,
         })
     }
@@ -838,6 +853,7 @@ pub(crate) enum WizardField {
     RepoRoot,
     RemoteUrl,
     TileAutoRotation,
+    TileRotates,
     TileRotationTiming,
     Validate,
     Save,
@@ -888,5 +904,36 @@ mod tests {
 
         assert!(!project.changelog.enabled);
         assert_eq!(project.changelog.file_path, "docs/CHANGELOG.md");
+    }
+
+    #[test]
+    fn visible_fields_show_rotates_only_when_auto_rotation_enabled() {
+        let mut wizard = ProjectWizard::default();
+        assert!(wizard.visible_fields().contains(&WizardField::TileRotates));
+
+        wizard.tile_auto_rotation = false;
+
+        let fields = wizard.visible_fields();
+        assert!(!fields.contains(&WizardField::TileRotates));
+        assert!(!fields.contains(&WizardField::TileRotationTiming));
+    }
+
+    #[test]
+    fn build_project_persists_tile_rotation_target() {
+        let mut wizard = ProjectWizard::default();
+        wizard.name.set_value("Example".to_string());
+        wizard.target_path.set_value("Cargo.toml".to_string());
+        wizard.target_key.set_value("package.version".to_string());
+        wizard.tile_rotates = TileRotationTarget::RlsLineOnly;
+        wizard.last_probe = Some(TargetProbe {
+            kind: ProbeKind::Success,
+            message: "ok".to_string(),
+            version: Some("0.1.0".to_string()),
+            format: Some(TargetFormat::Toml),
+        });
+
+        let project = wizard.build_project().expect("project should build");
+
+        assert_eq!(project.tile_info.rotates, TileRotationTarget::RlsLineOnly);
     }
 }
