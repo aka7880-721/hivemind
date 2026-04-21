@@ -772,11 +772,11 @@ impl App {
             return;
         };
 
-        let popup = centered_rect(area, 72, 16);
+        let popup = centered_rect(area, 72,44);
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Branch Bump ")
+            .title(" Name New Branch ")
             .border_style(Style::default().fg(Color::Cyan));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
@@ -826,7 +826,8 @@ impl App {
             Paragraph::new(
                 "Create the branch first, then run the bump, commit, and push workflow.",
             )
-            .wrap(Wrap { trim: false }),
+            .wrap(Wrap { trim: false })
+            .scroll((0, dialog.scroll)),
             sections[2],
         );
 

@@ -872,6 +872,16 @@ impl App {
                     dialog.branch_name.insert(character);
                 }
             }
+            KeyCode::PageUp => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.scroll_by(-3);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.scroll_by(3);
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -5018,6 +5028,7 @@ struct OverviewBranchBumpDialog {
     scope_index: usize,
     workflow: OverviewBumpWorkflow,
     branch_name: TextInput,
+    scroll: u16,
 }
 
 impl OverviewBranchBumpDialog {
@@ -5035,7 +5046,16 @@ impl OverviewBranchBumpDialog {
             scope_index,
             workflow,
             branch_name: TextInput::with_value(""),
+            scroll: 0,
         }
+    }
+
+    fn scroll_by(&mut self, delta: i16) {
+        self.scroll = if delta < 0 {
+            self.scroll.saturating_sub(delta.unsigned_abs() as u16)
+        } else {
+            self.scroll.saturating_add(delta as u16)
+        };
     }
 }
 
