@@ -118,12 +118,12 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             "·",
-            format_tile_info_row("🏗️ →", &tile.dev_display, &tile.dev_output, right_width)
+            format_tile_info_row("🏗 ", &tile.dev_display, &tile.dev_output, right_width)
         ),
         format!(
             "║{:^5}│{}║",
             parts[1],
-            format_tile_info_row("🌍 →", &tile.rls_display, &tile.rls_output, right_width)
+            format_tile_info_row("🌍", &tile.rls_display, &tile.rls_output, right_width)
         ),
         format!("║{:^5}├{}╢", "·", "─".repeat(right_width)),
         format!("║{:^5}│{}║", parts[2], button_line),
@@ -207,13 +207,13 @@ fn render_calver_tile(
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_tile_info_row("🏗️ →", &tile.dev_display, &tile.dev_output, detail_width),
+            format_tile_info_row("🏗 ", &tile.dev_display, &tile.dev_output, detail_width),
             "rls",
             action_width = CALVER_ACTION_WIDTH
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_tile_info_row("🌍 →", &tile.rls_display, &tile.rls_output, detail_width),
+            format_tile_info_row("🌍", &tile.rls_display, &tile.rls_output, detail_width),
             "tag",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -399,8 +399,8 @@ fn format_activity_detail(
     fit_to_width(&raw, total_width)
 }
 
-fn format_tile_info_row(prefix: &str, label: &str, value: &str, total_width: usize) -> String {
-    center_to_width(&format!("{prefix} {label}: {value}"), total_width)
+fn format_tile_info_row(icon: &str, label: &str, value: &str, total_width: usize) -> String {
+    center_to_width(&format!("{icon} → {label}: {value}"), total_width)
 }
 
 fn fit_to_width(value: &str, width: usize) -> String {
@@ -537,18 +537,18 @@ mod tests {
 
     #[test]
     fn format_tile_info_row_centers_unicode_prefix_without_overflow() {
-        let formatted = format_tile_info_row("🏗️ →", "tag..→HEAD", "8c ahd", 28);
+        let formatted = format_tile_info_row("🏗", "tag..→HEAD", "8c ahd", 28);
 
         assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
-        assert!(formatted.contains("🏗️ → tag..→HEAD: 8c ahd"));
+        assert!(formatted.contains("🏗 → tag..→HEAD: 8c ahd"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
     }
 
     #[test]
-    fn styled_row_keeps_emoji_grapheme_cluster_intact() {
+    fn styled_row_keeps_dev_icon_grapheme_intact() {
         let line = styled_row(
-            "║🏗️ → bump: 5h ago      ║",
+            "║🏗 → bump: 5h ago       ║",
             Style::default(),
             Style::default(),
         );
@@ -558,9 +558,8 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<Vec<_>>();
 
-        assert!(rendered.contains(&"🏗️"));
-        assert!(!rendered.contains(&"🏗"));
-        assert!(!rendered.contains(&"️"));
+        assert!(rendered.contains(&"🏗"));
+        assert!(rendered.contains(&"→"));
     }
 
     #[test]
