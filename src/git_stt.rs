@@ -5,11 +5,12 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use chrono::{Local, TimeZone};
+use std::process::Command;
 
 use crate::git::{
-    GitCancellation, build_git_args, ensure_git_repo_with_cancel,
+    GitCancellation, build_git_args, ensure_gh_available, ensure_git_repo_with_cancel,
     run_git_checked_owned_with_cancel, run_git_with_cancel,
 };
 
@@ -155,4 +156,62 @@ pub(crate) fn recent_merge_check(
         Some(last_merge_ts) if now.saturating_sub(last_merge_ts) < 5 * 60 => Ok("pass".to_string()),
         _ => Ok("fail".to_string()),
     }
+}
+
+pub(crate) fn last_rls_time(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<String>> {
+    ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
+    ensure_gh_available()?;
+
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .arg("release")
+        .arg("list")
+        .arg("--limit")
+        .arg("1")
+        .arg("--json")
+        .arg("publishedAt")
+        .arg("--jq")
+        .arg(".[]?.publishedAt")
+        .output()
+        .context("failed to invoke gh to query last release published time")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("gh release list failed: {}", stderr.trim());
+    }
+
+    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!result.is_empty()).then_some(result))
+}
+
+pub(crate) fn last_rls_version(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<String>> {
+    ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
+    ensure_gh_available()?;
+
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .arg("release")
+        .arg("list")
+        .arg("--limit")
+        .arg("1")
+        .arg("--json")
+        .arg("tagName")
+        .arg("--jq")
+        .arg(".[]?.tagName")
+        .output()
+        .context("failed to invoke gh to query last release tag name")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("gh release list failed: {}", stderr.trim());
+    }
+
+    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!result.is_empty()).then_some(result))
 }
