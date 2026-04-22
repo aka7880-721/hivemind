@@ -333,6 +333,42 @@ pub(crate) fn rls_changelog_gen(
     document.render_markdown()
 }
 
+pub(crate) fn ensure_previous_public_release_header(
+    markdown: &str,
+    current_tag: &str,
+    previous_public_release: Option<&str>,
+) -> String {
+    let Some(previous_public_release) = previous_public_release
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return markdown.to_string();
+    };
+
+    let plain_header = format!("## Changelog {}", current_tag.trim());
+    let enriched_header = format!(
+        "## Changelog {} <sub><sup>← {} (Previous Public Version)</sup></sub>",
+        current_tag.trim(),
+        previous_public_release
+    );
+
+    let mut lines = markdown.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    let Some(header_index) = lines.iter().position(|line| !line.trim().is_empty()) else {
+        return markdown.to_string();
+    };
+
+    let current_header = lines[header_index].trim();
+    if current_header == enriched_header {
+        return markdown.to_string();
+    }
+    if current_header != plain_header {
+        return markdown.to_string();
+    }
+
+    lines[header_index] = enriched_header;
+    lines.join("\n")
+}
+
 #[allow(dead_code)]
 pub(crate) fn custom_changelog_gen(
     current_tag: impl Into<String>,
@@ -1393,6 +1429,24 @@ mod tests {
             "## Changelog v0.7.3 <sub><sup>← v0.7.1 (Previous Public Version)</sup></sub>"
         ));
         assert!(changelog.markdown.contains("2026-"));
+    }
+
+    #[test]
+    fn ensure_previous_public_release_header_updates_plain_archived_release_header() {
+        let markdown = [
+            "## Changelog v0.11.2",
+            "2026-04-22",
+            "",
+            "#### What's changed:",
+        ]
+        .join("\n");
+
+        let updated = ensure_previous_public_release_header(&markdown, "v0.11.2", Some("v0.10.11"));
+
+        assert!(updated.contains(
+            "## Changelog v0.11.2 <sub><sup>← v0.10.11 (Previous Public Version)</sup></sub>"
+        ));
+        assert!(updated.contains("#### What's changed:"));
     }
 
     #[test]

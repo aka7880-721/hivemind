@@ -53,9 +53,9 @@ use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTe
 use crate::{
     branding::{PixelLogo, choose_header_content},
     changelog::{
-        ChangelogDocument, archive_changelog_markdown, find_archived_changelog_markdown,
-        rebuild_history_summary_readme, rls_changelog_gen, std_changelog_gen,
-        write_changelog_markdown, write_temp_changelog_markdown,
+        ChangelogDocument, archive_changelog_markdown, ensure_previous_public_release_header,
+        find_archived_changelog_markdown, rebuild_history_summary_readme, rls_changelog_gen,
+        std_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
     },
     config::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
@@ -6386,11 +6386,15 @@ fn build_release_notes_markdown(
     tag_name: &str,
     scope: &crate::git::GitScopeContext,
 ) -> Result<String> {
+    let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
     if let Some(markdown) = find_archived_changelog_markdown(&scope.repo_root, tag_name)? {
-        return Ok(markdown);
+        return Ok(ensure_previous_public_release_header(
+            &markdown,
+            tag_name,
+            last_public_release.as_deref(),
+        ));
     }
 
-    let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
     if let Some(last_public_release) =
         last_public_release.filter(|tag| tag.trim() != tag_name.trim())
     {
