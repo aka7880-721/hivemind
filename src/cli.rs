@@ -167,7 +167,9 @@ fn print_usage() {
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
-    println!("                             on the current branch and pushing the revert if an upstream exists");
+    println!(
+        "                             on the current branch and pushing the revert if an upstream exists"
+    );
     println!("          synonyms:");
     println!("            commit: cmt | com | ct");
     println!("            del: del | rm | rem | delete | drop | erase");
@@ -458,7 +460,10 @@ fn run_commit_delete(commit_hash: &str) -> Result<()> {
     if outcome.pushed {
         println!(
             "Pushed the revert to {}.",
-            outcome.upstream_ref.as_deref().unwrap_or("the upstream branch")
+            outcome
+                .upstream_ref
+                .as_deref()
+                .unwrap_or("the upstream branch")
         );
     } else {
         println!("No upstream branch is configured, so the revert remains local.");
@@ -470,10 +475,12 @@ fn run_commit_delete(commit_hash: &str) -> Result<()> {
 
 fn current_git_repo_root(cwd: &Path) -> Result<String> {
     let cwd_display = cwd.display().to_string();
-    Ok(run_git_checked(&cwd_display, &["rev-parse", "--show-toplevel"])
-        .context("the current directory is not inside a git repository")?
-        .trim()
-        .to_string())
+    Ok(
+        run_git_checked(&cwd_display, &["rev-parse", "--show-toplevel"])
+            .context("the current directory is not inside a git repository")?
+            .trim()
+            .to_string(),
+    )
 }
 
 fn revert_commit_safely(repo_root: &str, commit_hash: &str) -> Result<CommitDeleteOutcome> {
@@ -555,19 +562,27 @@ fn ensure_clean_worktree(repo_root: &str) -> Result<()> {
 
 fn verify_commit_hash(repo_root: &str, commit_hash: &str) -> Result<String> {
     let revision = format!("{}^{{commit}}", commit_hash);
-    Ok(run_git_checked(repo_root, &["rev-parse", "--verify", &revision])
-        .with_context(|| format!("commit '{}' was not found", commit_hash))?
-        .trim()
-        .to_string())
+    Ok(
+        run_git_checked(repo_root, &["rev-parse", "--verify", &revision])
+            .with_context(|| format!("commit '{}' was not found", commit_hash))?
+            .trim()
+            .to_string(),
+    )
 }
 
 fn is_commit_ancestor_of_head(repo_root: &str, commit_hash: &str) -> Result<bool> {
-    let output = run_git(repo_root, &["merge-base", "--is-ancestor", commit_hash, "HEAD"])?;
+    let output = run_git(
+        repo_root,
+        &["merge-base", "--is-ancestor", commit_hash, "HEAD"],
+    )?;
     Ok(output.success)
 }
 
 fn revert_uses_mainline_parent(repo_root: &str, commit_hash: &str) -> Result<bool> {
-    let output = run_git_checked(repo_root, &["rev-list", "--parents", "-n", "1", commit_hash])?;
+    let output = run_git_checked(
+        repo_root,
+        &["rev-list", "--parents", "-n", "1", commit_hash],
+    )?;
     let parent_count = output.split_whitespace().count().saturating_sub(1);
     match parent_count {
         0 | 1 => Ok(false),
@@ -582,9 +597,12 @@ fn revert_uses_mainline_parent(repo_root: &str, commit_hash: &str) -> Result<boo
 }
 
 fn commit_subject(repo_root: &str, commit_hash: &str) -> Result<String> {
-    Ok(run_git_checked(repo_root, &["show", "--no-patch", "--format=%s", commit_hash])?
-        .trim()
-        .to_string())
+    Ok(run_git_checked(
+        repo_root,
+        &["show", "--no-patch", "--format=%s", commit_hash],
+    )?
+    .trim()
+    .to_string())
 }
 
 fn current_upstream_ref(repo_root: &str) -> Result<Option<String>> {
@@ -1582,7 +1600,10 @@ impl ProjectRootBase for ProjectConfig {
 mod tests {
     use super::*;
     use crate::config::{BranchScopeKind, ChangelogSettings, IntegrationMode, ReleaseNowSettings};
-    use std::{env, fs, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        env, fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn sample_project(name: &str, alias: &str) -> ProjectConfig {
         ProjectConfig {
@@ -2025,15 +2046,13 @@ mod tests {
         .expect("configure user.email");
         let switch_main = run_git(&repo_root, &["switch", "-c", "main"]).expect("switch main");
         if !switch_main.success {
-            run_git_checked(&repo_root, &["checkout", "-b", "main"])
-                .expect("checkout main");
+            run_git_checked(&repo_root, &["checkout", "-b", "main"]).expect("checkout main");
         }
 
         let tracked_file = repo_dir.join("tracked.txt");
         fs::write(&tracked_file, "base\n").expect("write base file");
         run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
-        run_git_checked(&repo_root, &["commit", "-m", "base"])
-            .expect("commit base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
 
         fs::write(&tracked_file, "changed\n").expect("write changed file");
         run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage changed file");
@@ -2045,8 +2064,8 @@ mod tests {
             .trim()
             .to_string();
 
-        let outcome = revert_commit_safely(&repo_root, &target_commit)
-            .expect("safe revert should succeed");
+        let outcome =
+            revert_commit_safely(&repo_root, &target_commit).expect("safe revert should succeed");
 
         assert_eq!(outcome.reverted_commit, target_commit);
         assert_eq!(outcome.reverted_subject, "change tracked file");
@@ -2060,8 +2079,9 @@ mod tests {
             "base\n"
         );
 
-        let head_subject = run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
-            .expect("read revert subject");
+        let head_subject =
+            run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
+                .expect("read revert subject");
         assert!(head_subject.contains("Revert \"change tracked file\""));
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
@@ -2082,15 +2102,13 @@ mod tests {
         .expect("configure user.email");
         let switch_main = run_git(&repo_root, &["switch", "-c", "main"]).expect("switch main");
         if !switch_main.success {
-            run_git_checked(&repo_root, &["checkout", "-b", "main"])
-                .expect("checkout main");
+            run_git_checked(&repo_root, &["checkout", "-b", "main"]).expect("checkout main");
         }
 
         let tracked_file = repo_dir.join("tracked.txt");
         fs::write(&tracked_file, "base\n").expect("write base file");
         run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
-        run_git_checked(&repo_root, &["commit", "-m", "base"])
-            .expect("commit base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
 
         let switch_feature = run_git(&repo_root, &["switch", "-c", "feature/remove-me"])
             .expect("switch feature branch");
@@ -2110,7 +2128,13 @@ mod tests {
         }
         run_git_checked(
             &repo_root,
-            &["merge", "--no-ff", "feature/remove-me", "-m", "Merge feature/remove-me"],
+            &[
+                "merge",
+                "--no-ff",
+                "feature/remove-me",
+                "-m",
+                "Merge feature/remove-me",
+            ],
         )
         .expect("merge feature branch");
 
@@ -2133,8 +2157,9 @@ mod tests {
             "base\n"
         );
 
-        let head_subject = run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
-            .expect("read revert subject");
+        let head_subject =
+            run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
+                .expect("read revert subject");
         assert!(head_subject.contains("Revert \"Merge feature/remove-me\""));
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
@@ -2156,29 +2181,26 @@ mod tests {
 
         let switch_main = run_git(&repo_root, &["switch", "-c", "main"]).expect("switch main");
         if !switch_main.success {
-            run_git_checked(&repo_root, &["checkout", "-b", "main"])
-                .expect("checkout main");
+            run_git_checked(&repo_root, &["checkout", "-b", "main"]).expect("checkout main");
         }
 
         fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write base file");
         run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
-        run_git_checked(&repo_root, &["commit", "-m", "base"])
-            .expect("commit base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
 
         let switch_v039 = run_git(&repo_root, &["switch", "-c", "v0.3.9"]).expect("switch v0.3.9");
         if !switch_v039.success {
-            run_git_checked(&repo_root, &["checkout", "-b", "v0.3.9"])
-                .expect("checkout v0.3.9");
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.3.9"]).expect("checkout v0.3.9");
         }
         fs::write(repo_dir.join("tracked.txt"), "base\nv0.3.9\n").expect("write v0.3.9 file");
         run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage v0.3.9 file");
         run_git_checked(&repo_root, &["commit", "-m", "v0.3.9 change"])
             .expect("commit v0.3.9 change");
 
-        let switch_v011x = run_git(&repo_root, &["switch", "-c", "v0.11.x"]).expect("switch v0.11.x");
+        let switch_v011x =
+            run_git(&repo_root, &["switch", "-c", "v0.11.x"]).expect("switch v0.11.x");
         if !switch_v011x.success {
-            run_git_checked(&repo_root, &["checkout", "-b", "v0.11.x"])
-                .expect("checkout v0.11.x");
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.11.x"]).expect("checkout v0.11.x");
         }
         fs::write(repo_dir.join("tracked.txt"), "base\nv0.3.9\nv0.11.x\n")
             .expect("write v0.11.x file");
@@ -2186,7 +2208,8 @@ mod tests {
         run_git_checked(&repo_root, &["commit", "-m", "v0.11.x change"])
             .expect("commit v0.11.x change");
 
-        let switch_main_back = run_git(&repo_root, &["switch", "main"]).expect("switch back to main");
+        let switch_main_back =
+            run_git(&repo_root, &["switch", "main"]).expect("switch back to main");
         if !switch_main_back.success {
             run_git_checked(&repo_root, &["checkout", "main"]).expect("checkout main");
         }
@@ -2200,11 +2223,16 @@ mod tests {
             .iter()
             .map(|segment| segment.branch.name.clone())
             .collect::<Vec<_>>();
-        assert_eq!(path_names, vec!["v0.3.9".to_string(), "v0.11.x".to_string()]);
-        assert!(diagram
-            .path
-            .iter()
-            .all(|segment| segment.branch.state == BranchDiagramState::Open));
+        assert_eq!(
+            path_names,
+            vec!["v0.3.9".to_string(), "v0.11.x".to_string()]
+        );
+        assert!(
+            diagram
+                .path
+                .iter()
+                .all(|segment| segment.branch.state == BranchDiagramState::Open)
+        );
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
     }

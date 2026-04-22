@@ -57,8 +57,7 @@ struct ReleaseNowGeneratedFilesCommit {
 }
 
 fn current_head_commit(repo_root: &str) -> Result<String> {
-    Ok(run_git_checked(repo_root, &["rev-parse", "HEAD"])
-        .map(|head| head.trim().to_string())?)
+    run_git_checked(repo_root, &["rev-parse", "HEAD"]).map(|head| head.trim().to_string())
 }
 
 fn create_release_now_generated_files_commit(
@@ -81,7 +80,10 @@ fn rollback_release_now_generated_files_commit(
     repo_root: &str,
     generated_commit: &ReleaseNowGeneratedFilesCommit,
 ) -> Result<()> {
-    run_git_checked(repo_root, &["reset", "--soft", &generated_commit.previous_head])?;
+    run_git_checked(
+        repo_root,
+        &["reset", "--soft", &generated_commit.previous_head],
+    )?;
     Ok(())
 }
 
@@ -804,7 +806,6 @@ pub(super) async fn execute_release_now_async(
             emit_progress(vec![format!("Warning: {}", line)]);
         }
         release_notes.extend(std_outcome.summary_notes);
-
     }
 
     create_or_update_github_release(
@@ -986,7 +987,10 @@ fn truncate_error_detail(detail: &str, max_len: usize) -> String {
         return trimmed.to_string();
     }
 
-    let truncated = trimmed.chars().take(max_len.saturating_sub(3)).collect::<String>();
+    let truncated = trimmed
+        .chars()
+        .take(max_len.saturating_sub(3))
+        .collect::<String>();
     format!("{}...", truncated)
 }
 
@@ -1333,7 +1337,11 @@ fn run_command_with_streaming(
             }
 
             if recent_lines.is_empty() {
-                bail!("{} failed with exit code {}", action, format_exit_code(status.code()));
+                bail!(
+                    "{} failed with exit code {}",
+                    action,
+                    format_exit_code(status.code())
+                );
             }
 
             bail!(
@@ -1952,8 +1960,7 @@ mod tests {
 
         fs::write(repo_dir.join("README.md"), "seed\n").expect("write seed file");
         run_git_checked(&repo_root, &["add", "README.md"]).expect("stage seed file");
-        run_git_checked(&repo_root, &["commit", "-m", "seed"])
-            .expect("commit seed file");
+        run_git_checked(&repo_root, &["commit", "-m", "seed"]).expect("commit seed file");
 
         let previous_head = current_head_commit(&repo_root).expect("read initial head");
         let syncmem_dir = repo_dir.join(".comfygit").join("syncmem");
