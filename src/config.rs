@@ -459,6 +459,8 @@ pub struct ReleaseNowSettings {
 pub struct TileInfoSettings {
     pub auto_rotation: bool,
     pub rotates: TileRotationTarget,
+    pub remembered_dev_mode: usize,
+    pub remembered_rls_mode: usize,
     pub rotation_timing_seconds: u64,
 }
 
@@ -467,6 +469,8 @@ impl Default for TileInfoSettings {
         Self {
             auto_rotation: true,
             rotates: TileRotationTarget::Both,
+            remembered_dev_mode: 0,
+            remembered_rls_mode: 0,
             rotation_timing_seconds: 5,
         }
     }

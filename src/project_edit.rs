@@ -652,7 +652,13 @@ impl ProjectEditDialog {
         project.unified_versioning =
             self.project_type == ProjectType::AllInOne || self.unified_versioning;
         project.version_scheme = self.version_scheme;
-        project.tile_info = self.build_tile_info_settings()?;
+        let remembered_dev_mode = project.tile_info.remembered_dev_mode;
+        let remembered_rls_mode = project.tile_info.remembered_rls_mode;
+        project.tile_info = TileInfoSettings {
+            remembered_dev_mode,
+            remembered_rls_mode,
+            ..self.build_tile_info_settings()?
+        };
         let preserved_all_in_one_changelog_enabled = project.changelog.enabled;
         let preserved_branch_changelog_enabled = project
             .branches
@@ -751,6 +757,8 @@ impl ProjectEditDialog {
         Ok(TileInfoSettings {
             auto_rotation: self.tile_auto_rotation,
             rotates: self.tile_rotates,
+            remembered_dev_mode: 0,
+            remembered_rls_mode: 0,
             rotation_timing_seconds,
         })
     }
