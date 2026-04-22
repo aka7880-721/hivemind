@@ -2,6 +2,17 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.11.3
+2026-04-22
+
+#### What's changed:
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.11.3   _(85c5c41)_
+
+---
+
 ## Changelog v0.11.2
 2026-04-22
 
@@ -30,6 +41,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 * Merge pull request #30 from comfy-home/v0.11.x   _(83861cb)_
 
 * Merge pull request #29 from comfy-home/v0.11.2   _(af7b774)_
+
+<br>
+
+---
+... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
 
 ---
 
@@ -169,6 +185,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 * Merge pull request #26 from comfy-home/0.10.8+   _(49fb8b8)_
 
 * Merge pull request #25 from comfy-home/0.10.10   _(5b51a67)_
+
+<br>
+
+---
+... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
 
 ---
 
@@ -336,6 +357,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 
 * v0.9.0 has just been released via ComfyGit!   _(48ccf8b)_
 
+<br>
+
+---
+... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
+
 ---
 
 ## Changelog v0.9.0
@@ -402,6 +428,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 * Merge pull request #17 from comfy-home/0.9.0   _(f1940d3)_
 
 * Merge branch 'main' into 0.9.0   _(0f7c5ac)_
+
+<br>
+
+---
+... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
 
 ---
 
