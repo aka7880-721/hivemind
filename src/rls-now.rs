@@ -289,12 +289,13 @@ impl ReleaseNowDialog {
     }
 
     pub(super) fn apply_failure(&mut self, error_message: String) {
+        let formatted_error = format_user_facing_error(&error_message);
         self.running = false;
         self.auto_follow = false;
         self.cancel_requested = false;
         self.clear_body_selection();
         self.mode = ReleaseNowMode::Completed;
-        self.summary = Some(format!("ReleaseNOW failed: {}", error_message));
+        self.summary = Some(formatted_error.clone());
         self.summary_is_warning = false;
         self.summary_is_error = true;
         self.artifact_files.clear();
@@ -302,6 +303,8 @@ impl ReleaseNowDialog {
             self.log_lines
                 .push("ReleaseNOW failed before any logs were captured.".to_string());
         }
+        self.log_lines
+            .push(format!("[ReleaseNOW][summary] {}", formatted_error));
         self.scroll = 0;
     }
 
@@ -840,6 +843,109 @@ pub(super) fn is_cancelled_error(message: &str) -> bool {
     message.contains("cancelled by user")
 }
 
+pub(super) fn format_user_facing_error(message: &str) -> String {
+    let normalized = message.to_ascii_lowercase();
+    let detail = extract_relevant_error_detail(message);
+
+    if normalized.contains("git push failed") {
+        return build_guided_error(
+            "ReleaseNOW could not push to the remote.",
+            "Verify git authentication, remote write access, and whether the branch or tag is protected, then retry. Open the ReleaseNOW log for the exact git output.",
+            detail.as_deref(),
+        );
+    }
+
+    if normalized.contains("run windows script failed") {
+        return build_guided_error(
+            "ReleaseNOW Windows build script failed.",
+            "Run the configured Windows script manually in PowerShell from the repository root and fix the first failing command shown in the ReleaseNOW log.",
+            detail.as_deref(),
+        );
+    }
+
+    if normalized.contains("configured releasenow script") && normalized.contains("was not found") {
+        return build_guided_error(
+            "ReleaseNOW could not find the configured script.",
+            "Update Project Settings -> Distro so the selected platform points to a valid script path, then retry.",
+            detail.as_deref(),
+        );
+    }
+
+    if normalized.contains("no artifacts were found under dist/latest") {
+        return build_guided_error(
+            "ReleaseNOW finished the scripts but found no artifacts to publish.",
+            "Make sure the script writes release files under dist/latest for the selected platform before retrying.",
+            detail.as_deref(),
+        );
+    }
+
+    if normalized.contains("gh release") || normalized.contains("github release") {
+        return build_guided_error(
+            "ReleaseNOW could not create the GitHub release.",
+            "Check that GitHub CLI is authenticated and that the repository, tag, and release permissions are valid, then retry.",
+            detail.as_deref(),
+        );
+    }
+
+    build_guided_error(
+        "ReleaseNOW failed.",
+        "Open the ReleaseNOW log, copy the first concrete error line, fix that issue, and retry.",
+        detail.as_deref(),
+    )
+}
+
+fn build_guided_error(summary: &str, guidance: &str, detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) if !detail.is_empty() => format!("{summary} {guidance} Detail: {detail}"),
+        _ => format!("{summary} {guidance}"),
+    }
+}
+
+fn extract_relevant_error_detail(message: &str) -> Option<String> {
+    let cleaned = strip_terminal_control_sequences(message);
+    let detail_source = cleaned
+        .split_once(": ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(cleaned.as_str());
+
+    let preferred = detail_source
+        .split(" | ")
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .find(|segment| {
+            let lower = segment.to_ascii_lowercase();
+            lower.contains("fatal:")
+                || lower.contains("error:")
+                || lower.contains("denied")
+                || lower.contains("rejected")
+                || lower.contains("not found")
+                || lower.contains("failed")
+        })
+        .or_else(|| {
+            detail_source
+                .split(" | ")
+                .map(str::trim)
+                .find(|segment| !segment.is_empty())
+        })?;
+
+    Some(truncate_error_detail(preferred, 220))
+}
+
+fn truncate_error_detail(detail: &str, max_len: usize) -> String {
+    let trimmed = detail.trim();
+    if trimmed.chars().count() <= max_len {
+        return trimmed.to_string();
+    }
+
+    let truncated = trimmed.chars().take(max_len.saturating_sub(3)).collect::<String>();
+    format!("{}...", truncated)
+}
+
+fn format_exit_code(code: Option<i32>) -> String {
+    code.map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn collect_release_now_options(settings: &ReleaseNowSettings) -> Result<Vec<ReleaseNowRunOption>> {
     if !settings.enabled {
         bail!("ReleaseNOW is disabled for this scope in Project Settings -> Distro")
@@ -1178,13 +1284,13 @@ fn run_command_with_streaming(
             }
 
             if recent_lines.is_empty() {
-                bail!("{} failed with exit code {:?}", action, status.code());
+                bail!("{} failed with exit code {}", action, format_exit_code(status.code()));
             }
 
             bail!(
-                "{} failed with exit code {:?}: {}",
+                "{} failed with exit code {}: {}",
                 action,
-                status.code(),
+                format_exit_code(status.code()),
                 recent_lines.join(" | ")
             )
         }
@@ -1735,5 +1841,33 @@ mod tests {
                 "[Linux AMD][stderr] line 3".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn format_user_facing_error_guides_git_push_failures() {
+        let message = "git push failed with exit code 1: [git][stderr] remote: Permission to org/repo denied to user.";
+
+        let formatted = format_user_facing_error(message);
+
+        assert!(formatted.contains("could not push to the remote"));
+        assert!(formatted.contains("authentication"));
+        assert!(formatted.contains("Permission to org/repo denied to user"));
+    }
+
+    #[test]
+    fn format_user_facing_error_guides_windows_script_failures() {
+        let message = "run Windows script failed with exit code 1: [Windows][stderr] error: cargo build failed";
+
+        let formatted = format_user_facing_error(message);
+
+        assert!(formatted.contains("Windows build script failed"));
+        assert!(formatted.contains("Run the configured Windows script manually in PowerShell"));
+        assert!(formatted.contains("cargo build failed"));
+    }
+
+    #[test]
+    fn format_exit_code_removes_debug_option_wrapper() {
+        assert_eq!(format_exit_code(Some(1)), "1");
+        assert_eq!(format_exit_code(None), "unknown");
     }
 }

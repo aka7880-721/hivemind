@@ -2326,6 +2326,11 @@ impl App {
             BackgroundJobMessagePayload::Finished(result) => match result {
                 Ok(output) => self.apply_background_job_output(output)?,
                 Err(error_message) => {
+                    let release_now_error = if message.kind == BackgroundJobKind::ReleaseNow {
+                        Some(rls_now::format_user_facing_error(&error_message))
+                    } else {
+                        None
+                    };
                     if message.kind == BackgroundJobKind::ReleaseNow
                         && let Some(dialog) = &mut self.release_now_dialog
                     {
@@ -2339,6 +2344,8 @@ impl App {
                         && rls_now::is_cancelled_error(&error_message)
                     {
                         StatusMessage::warning(error_message)
+                    } else if let Some(formatted_error) = release_now_error {
+                        StatusMessage::error(formatted_error)
                     } else {
                         StatusMessage::error(error_message)
                     };
