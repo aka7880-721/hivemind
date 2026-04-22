@@ -874,9 +874,7 @@ fn build_release_tile_display(
                 .unwrap_or_else(|| "n/a".to_string()),
         ),
         _ => (
-            activity
-                .and_then(|summary| summary.last_tag_name.clone())
-                .unwrap_or_else(|| "RLS'd".to_string()),
+            "RLS'd".to_string(),
             activity
                 .and_then(|summary| summary.last_rls_time.as_deref())
                 .and_then(format_relative_git_timestamp)
@@ -1642,6 +1640,23 @@ mod tests {
             placeholder.commits_since_tag_label,
             PLACEHOLDER_COMMITS_AHEAD
         );
+    }
+
+    #[test]
+    fn release_tile_display_uses_rlsd_label_even_when_data_is_loaded() {
+        let activity = RepoActivitySummary {
+            commits_since_tag_label: "1c ahd".to_string(),
+            last_bump_time: None,
+            last_tag_name: Some("v1.2.3".to_string()),
+            last_tag_time: None,
+            last_commit_label: "abc123".to_string(),
+            last_rls_version: Some("1.2.3".to_string()),
+            last_rls_time: Some("2026-04-22T12:00:00Z".to_string()),
+        };
+
+        let (display, _) = build_release_tile_display(Some(&activity), None, 1);
+
+        assert_eq!(display, "RLS'd");
     }
 
     #[test]
