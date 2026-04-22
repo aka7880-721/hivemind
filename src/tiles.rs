@@ -13,7 +13,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crate::versioning::VersionScheme;
 
@@ -108,12 +108,7 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             parts[0],
-            format_activity_detail(
-                "   tag..→HEAD",
-                &tile.commits_since_tag_label,
-                8,
-                right_width
-            )
+            format_tile_tag_row("🏷 ", &tile.commits_since_tag_label, right_width)
         ),
         format!(
             "║{:^5}│{}║",
@@ -196,12 +191,7 @@ fn render_calver_tile(
         format!("║{}║", dot_fill(content_width)),
         format!(
             "║{}│{:^action_width$}║",
-            format_activity_detail(
-                " tag..→HEAD",
-                &tile.commits_since_tag_label,
-                8,
-                detail_width
-            ),
+            format_tile_tag_row("🏷 ", &tile.commits_since_tag_label, detail_width),
             "bump",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -384,27 +374,12 @@ fn border_bottom_semver(right_width: usize) -> String {
     )
 }
 
-fn format_activity_detail(
-    label: &str,
-    value: &str,
-    value_width: usize,
-    total_width: usize,
-) -> String {
-    let raw = format!(
-        "{}: {:>value_width$}",
-        label,
-        value,
-        value_width = value_width
-    );
-    fit_to_width(&raw, total_width)
-}
-
 fn format_tile_info_row(icon: &str, label: &str, value: &str, total_width: usize) -> String {
     center_to_width(&format!("{icon} → {label}: {value}"), total_width)
 }
 
-fn fit_to_width(value: &str, width: usize) -> String {
-    pad_to_width(truncate_to_width(value, width), width, Alignment::Left)
+fn format_tile_tag_row(icon: &str, value: &str, total_width: usize) -> String {
+    center_to_width(&format!("{icon}..HEAD: {value}"), total_width)
 }
 
 fn center_to_width(value: &str, width: usize) -> String {
@@ -413,15 +388,15 @@ fn center_to_width(value: &str, width: usize) -> String {
 
 fn truncate_to_width(value: &str, width: usize) -> String {
     let mut rendered = String::new();
-    let mut used_width = 0;
+    let mut used_width = 0usize;
 
-    for character in value.chars() {
-        let char_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if used_width + char_width > width {
+    for grapheme in value.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if used_width + grapheme_width > width {
             break;
         }
-        rendered.push(character);
-        used_width += char_width;
+        rendered.push_str(grapheme);
+        used_width += grapheme_width;
     }
 
     rendered
@@ -528,19 +503,21 @@ mod tests {
     }
 
     #[test]
-    fn format_activity_detail_right_aligns_value() {
-        assert_eq!(
-            format_activity_detail("last bump", "5d ago", 9, 20),
-            "last bump:    5d ago"
-        );
-    }
-
-    #[test]
     fn format_tile_info_row_centers_unicode_prefix_without_overflow() {
         let formatted = format_tile_info_row("🏗", "tag..→HEAD", "8c ahd", 28);
 
         assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
         assert!(formatted.contains("🏗 → tag..→HEAD: 8c ahd"));
+        assert!(formatted.starts_with(' '));
+        assert!(formatted.ends_with(' '));
+    }
+
+    #[test]
+    fn format_tile_tag_row_centers_unicode_prefix_without_overflow() {
+        let formatted = format_tile_tag_row("🏷", "11c ahd", 22);
+
+        assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 22);
+        assert!(formatted.contains("🏷..HEAD: 11c ahd"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
     }

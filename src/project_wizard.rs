@@ -689,6 +689,8 @@ impl ProjectWizard {
         Ok(TileInfoSettings {
             auto_rotation: self.tile_auto_rotation,
             rotates: self.tile_rotates,
+            remembered_dev_mode: 0,
+            remembered_rls_mode: 0,
             rotation_timing_seconds,
         })
     }
