@@ -1125,11 +1125,19 @@ fn run_command_with_streaming(
     let stdout_thread = spawn_stream_reader(stdout, "stdout", line_tx.clone());
     let stderr_thread = spawn_stream_reader(stderr, "stderr", line_tx);
     let started_at = Instant::now();
+    let mut recent_lines: Vec<String> = Vec::new();
 
     loop {
         match line_rx.recv_timeout(Duration::from_millis(100)) {
             Ok((stream, line)) => {
-                drain_stream_lines(&line_rx, log_label, progress_tx, Some((stream, line)));
+                let lines = collect_stream_lines(&line_rx, log_label, Some((stream, line)));
+                if !lines.is_empty() {
+                    let _ = progress_tx.send(lines.clone());
+                    recent_lines.extend(lines);
+                    if recent_lines.len() > 20 {
+                        recent_lines.drain(0..recent_lines.len() - 20);
+                    }
+                }
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {}
@@ -1139,7 +1147,14 @@ fn run_command_with_streaming(
             let _ = terminate_process_tree(&mut child);
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
-            drain_stream_lines(&line_rx, log_label, progress_tx, None);
+            let lines = collect_stream_lines(&line_rx, log_label, None);
+            if !lines.is_empty() {
+                let _ = progress_tx.send(lines.clone());
+                recent_lines.extend(lines);
+                if recent_lines.len() > 20 {
+                    recent_lines.drain(0..recent_lines.len() - 20);
+                }
+            }
             bail!("ReleaseNOW cancelled by user")
         }
 
@@ -1149,19 +1164,39 @@ fn run_command_with_streaming(
         {
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
-            drain_stream_lines(&line_rx, log_label, progress_tx, None);
+            let lines = collect_stream_lines(&line_rx, log_label, None);
+            if !lines.is_empty() {
+                let _ = progress_tx.send(lines.clone());
+                recent_lines.extend(lines);
+                if recent_lines.len() > 20 {
+                    recent_lines.drain(0..recent_lines.len() - 20);
+                }
+            }
 
             if status.success() {
                 return Ok(());
             }
-            bail!("{} failed with exit code {:?}", action, status.code())
+
+            if recent_lines.is_empty() {
+                bail!("{} failed with exit code {:?}", action, status.code());
+            }
+
+            bail!(
+                "{} failed with exit code {:?}: {}",
+                action,
+                status.code(),
+                recent_lines.join(" | ")
+            )
         }
 
         if started_at.elapsed() >= timeout_window {
             let _ = terminate_process_tree(&mut child);
             join_stream_reader(stdout_thread, action)?;
             join_stream_reader(stderr_thread, action)?;
-            drain_stream_lines(&line_rx, log_label, progress_tx, None);
+            let lines = collect_stream_lines(&line_rx, log_label, None);
+            if !lines.is_empty() {
+                let _ = progress_tx.send(lines.clone());
+            }
             bail!("{} timed out after {}s", action, timeout_window.as_secs())
         }
     }
@@ -1422,18 +1457,6 @@ fn join_stream_reader(handle: thread::JoinHandle<Result<()>>, action: &str) -> R
         .join()
         .map_err(|_| anyhow!("failed to join output reader thread for {}", action))??;
     Ok(())
-}
-
-fn drain_stream_lines(
-    line_rx: &Receiver<(String, String)>,
-    log_label: &str,
-    progress_tx: &UnboundedSender<Vec<String>>,
-    first_line: Option<(String, String)>,
-) {
-    let lines = collect_stream_lines(line_rx, log_label, first_line);
-    if !lines.is_empty() {
-        let _ = progress_tx.send(lines);
-    }
 }
 
 fn collect_stream_lines(

@@ -2,6 +2,37 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.11.2
+2026-04-22
+
+#### What's changed:
+
+### Changed in Previous Release in rls-changelog
+
+#### 🐛 Fix(es)
+
+* refactor→ previous public release in changelog header   _(bf32735)_
+
+* refactor→ replace manual GitHub release query with crate function for latest public release tag   _(a8de61d)_
+
+---
+
+### 🛠️ General:
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.11.2   _(857da06)_
+
+* update changelog for version 0.10.11 and sync metadata   _(ec6b60d)_
+
+### 📝 Other
+
+* Merge pull request #30 from comfy-home/v0.11.x   _(83861cb)_
+
+* Merge pull request #29 from comfy-home/v0.11.2   _(af7b774)_
+
+---
+
 ## Changelog 0.10.11
 2026-04-21
 
@@ -41,6 +72,11 @@ Newest archived changelogs first. When multiple archived files represent the sam
 ### 📝 Other
 
 * Merge pull request #27 from comfy-home/v0.10.11+   _(fbc3726)_
+
+<br>
+
+---
+... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
 
 ---
 
