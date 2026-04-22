@@ -199,6 +199,7 @@ impl RenderedChangelog {
 pub(crate) struct ChangelogDocument {
     current_tag: String,
     date: NaiveDate,
+    previous_public_release: Option<String>,
     context_lines: Vec<String>,
     release_message: Option<String>,
     commits: Vec<ParsedCommit>,
@@ -209,6 +210,7 @@ impl ChangelogDocument {
         Self {
             current_tag: current_tag.into(),
             date: Local::now().date_naive(),
+            previous_public_release: None,
             context_lines: Vec::new(),
             release_message: None,
             commits,
@@ -229,17 +231,28 @@ impl ChangelogDocument {
         self
     }
 
-    pub(crate) fn with_context_line(mut self, context_line: impl Into<String>) -> Self {
-        let line = context_line.into();
-        if !line.trim().is_empty() {
-            self.context_lines.push(line.trim().to_string());
+    pub(crate) fn with_previous_public_release(
+        mut self,
+        previous_public_release: impl Into<String>,
+    ) -> Self {
+        let value = previous_public_release.into();
+        if !value.trim().is_empty() {
+            self.previous_public_release = Some(value.trim().to_string());
         }
         self
     }
 
     pub(crate) fn render_markdown(&self) -> RenderedChangelog {
+        let header = match self.previous_public_release.as_ref() {
+            Some(previous_public) => format!(
+                "## Changelog {} <sub><sup>← {} (Previous Public Version)</sup></sub>",
+                self.current_tag, previous_public
+            ),
+            None => format!("## Changelog {}", self.current_tag),
+        };
+
         let mut lines = vec![
-            format!("## Changelog {}", self.current_tag),
+            header,
             self.date.format("%Y-%m-%d").to_string(),
             String::new(),
         ];
@@ -315,10 +328,7 @@ pub(crate) fn rls_changelog_gen(
 ) -> RenderedChangelog {
     let mut document = build_document_from_git_log(current_tag, lines);
     if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
-        document = document.with_context_line(format!(
-            "_Previous Public Release Version: {}_",
-            last_public.trim()
-        ));
+        document = document.with_previous_public_release(last_public);
     }
     document.render_markdown()
 }
@@ -1372,19 +1382,17 @@ mod tests {
     }
 
     #[test]
-    fn release_now_generator_places_previous_public_release_under_date() {
+    fn release_now_generator_places_previous_public_release_in_header() {
         let changelog = rls_changelog_gen(
             "v0.7.3",
             &["abc1234 fix: tighten ReleaseNOW history selection".to_string()],
             Some("v0.7.1"),
         );
 
-        assert!(changelog.markdown.contains("## Changelog v0.7.3\n2026-"));
-        assert!(
-            changelog
-                .markdown
-                .contains("_Previous Public Release Version: v0.7.1_")
-        );
+        assert!(changelog.markdown.contains(
+            "## Changelog v0.7.3 <sub><sup>← v0.7.1 (Previous Public Version)</sup></sub>"
+        ));
+        assert!(changelog.markdown.contains("2026-"));
     }
 
     #[test]
