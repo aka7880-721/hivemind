@@ -6409,33 +6409,7 @@ fn build_release_notes_markdown(
 }
 
 fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
-    ensure_gh_available()?;
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args([
-            "release",
-            "list",
-            "--limit",
-            "1",
-            "--json",
-            "tagName",
-            "--jq",
-            ".[].tagName",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .context("failed to query latest public release")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if stderr.is_empty() { stdout } else { stderr };
-        bail!("failed to query latest public release: {}", detail)
-    }
-
-    let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok((!tag.is_empty()).then_some(tag))
+    crate::git_stt::last_rls_version(repo_root, None)
 }
 
 async fn run_git_push_with_retry_async(
