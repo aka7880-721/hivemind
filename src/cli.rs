@@ -86,6 +86,12 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             println!("{}", project_root(project)?.display());
             Ok(StartupMode::Handled)
         }
+        [command, action, commit_hash]
+            if is_commit_command(command) && is_commit_delete_action(action) =>
+        {
+            run_commit_delete(commit_hash)?;
+            Ok(StartupMode::Handled)
+        }
         [command, action] if is_bump_command(command) => {
             run_bump(action, None)?;
             Ok(StartupMode::Handled)
@@ -115,6 +121,14 @@ fn is_tui(value: &str) -> bool {
 
 fn is_bump_command(value: &str) -> bool {
     matches!(value, "bmp" | "bump" | "bp" | "bum")
+}
+
+fn is_commit_command(value: &str) -> bool {
+    matches!(value, "commit" | "cmt" | "com" | "ct")
+}
+
+fn is_commit_delete_action(value: &str) -> bool {
+    matches!(value, "del" | "rm" | "rem" | "delete" | "drop" | "erase")
 }
 
 fn is_branch_command(value: &str) -> bool {
@@ -152,6 +166,11 @@ fn print_usage() {
     );
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg v <alias>               Show project version, last bump, and last release");
+    println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
+    println!("                             on the current branch and pushing the revert if an upstream exists");
+    println!("          synonyms:");
+    println!("            commit: cmt | com | ct");
+    println!("            del: del | rm | rem | delete | drop | erase");
     println!(" ");
     println!("  BUMPING COMMANDS:");
     println!(" ");
@@ -411,6 +430,178 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CommitDeleteOutcome {
+    repo_root: String,
+    branch_name: String,
+    reverted_commit: String,
+    reverted_subject: String,
+    revert_commit: String,
+    pushed: bool,
+    upstream_ref: Option<String>,
+}
+
+fn run_commit_delete(commit_hash: &str) -> Result<()> {
+    let cwd = env::current_dir().context("failed to read current directory")?;
+    let repo_root = current_git_repo_root(&cwd)?;
+    let outcome = revert_commit_safely(&repo_root, commit_hash)?;
+
+    println!();
+    println!(
+        "Safely reverted {} on branch {}.",
+        outcome.reverted_commit, outcome.branch_name
+    );
+    println!("Original commit: {}", outcome.reverted_subject);
+    println!("New revert commit: {}", outcome.revert_commit);
+    if outcome.pushed {
+        println!(
+            "Pushed the revert to {}.",
+            outcome.upstream_ref.as_deref().unwrap_or("the upstream branch")
+        );
+    } else {
+        println!("No upstream branch is configured, so the revert remains local.");
+    }
+    println!();
+
+    Ok(())
+}
+
+fn current_git_repo_root(cwd: &Path) -> Result<String> {
+    let cwd_display = cwd.display().to_string();
+    Ok(run_git_checked(&cwd_display, &["rev-parse", "--show-toplevel"])
+        .context("the current directory is not inside a git repository")?
+        .trim()
+        .to_string())
+}
+
+fn revert_commit_safely(repo_root: &str, commit_hash: &str) -> Result<CommitDeleteOutcome> {
+    let commit_hash = commit_hash.trim();
+    if commit_hash.is_empty() {
+        bail!("commit hash cannot be empty")
+    }
+
+    ensure_clean_worktree(repo_root)?;
+
+    let branch_name = current_branch_with_cancel(repo_root, None)?;
+    if branch_name.starts_with("detached (") {
+        bail!("cg commit del requires a checked-out branch; detached HEAD is not supported")
+    }
+
+    let verified_commit = verify_commit_hash(repo_root, commit_hash)?;
+    if !is_commit_ancestor_of_head(repo_root, &verified_commit)? {
+        bail!(
+            "commit {} is not reachable from the current branch {}; switch to the branch that contains it first",
+            verified_commit,
+            branch_name
+        )
+    }
+
+    let use_merge_mainline = revert_uses_mainline_parent(repo_root, &verified_commit)?;
+
+    let reverted_subject = commit_subject(repo_root, &verified_commit)?;
+    let mut revert_args = vec!["revert", "--no-edit"];
+    if use_merge_mainline {
+        revert_args.extend(["-m", "1"]);
+    }
+    revert_args.push(verified_commit.as_str());
+    run_git_checked(repo_root, &revert_args).with_context(|| {
+        format!(
+            "failed to revert commit {}; if git reported conflicts, resolve them and run 'git revert --continue' or abort with 'git revert --abort'",
+            verified_commit
+        )
+    })?;
+
+    let revert_commit = run_git_checked(repo_root, &["rev-parse", "--short", "HEAD"])?
+        .trim()
+        .to_string();
+    let upstream_ref = current_upstream_ref(repo_root)?;
+    let pushed = if upstream_ref.is_some() {
+        if let Err(error) = run_git_checked(repo_root, &["push"]) {
+            bail!(
+                "reverted commit {} locally as {}, but failed to push it: {}",
+                verified_commit,
+                revert_commit,
+                error
+            )
+        }
+        true
+    } else {
+        false
+    };
+
+    Ok(CommitDeleteOutcome {
+        repo_root: repo_root.to_string(),
+        branch_name,
+        reverted_commit: verified_commit,
+        reverted_subject,
+        revert_commit,
+        pushed,
+        upstream_ref,
+    })
+}
+
+fn ensure_clean_worktree(repo_root: &str) -> Result<()> {
+    let status = run_git_checked(repo_root, &["status", "--porcelain"])?;
+    if status.trim().is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "the git working tree has uncommitted changes; commit, stash, or discard them before running cg commit del"
+        )
+    }
+}
+
+fn verify_commit_hash(repo_root: &str, commit_hash: &str) -> Result<String> {
+    let revision = format!("{}^{{commit}}", commit_hash);
+    Ok(run_git_checked(repo_root, &["rev-parse", "--verify", &revision])
+        .with_context(|| format!("commit '{}' was not found", commit_hash))?
+        .trim()
+        .to_string())
+}
+
+fn is_commit_ancestor_of_head(repo_root: &str, commit_hash: &str) -> Result<bool> {
+    let output = run_git(repo_root, &["merge-base", "--is-ancestor", commit_hash, "HEAD"])?;
+    Ok(output.success)
+}
+
+fn revert_uses_mainline_parent(repo_root: &str, commit_hash: &str) -> Result<bool> {
+    let output = run_git_checked(repo_root, &["rev-list", "--parents", "-n", "1", commit_hash])?;
+    let parent_count = output.split_whitespace().count().saturating_sub(1);
+    match parent_count {
+        0 | 1 => Ok(false),
+        2 => Ok(true),
+        _ => bail!(
+            "commit {} is an octopus merge with {} parents; revert it manually with 'git revert -m <parent-number> {}'",
+            commit_hash,
+            parent_count,
+            commit_hash
+        ),
+    }
+}
+
+fn commit_subject(repo_root: &str, commit_hash: &str) -> Result<String> {
+    Ok(run_git_checked(repo_root, &["show", "--no-patch", "--format=%s", commit_hash])?
+        .trim()
+        .to_string())
+}
+
+fn current_upstream_ref(repo_root: &str) -> Result<Option<String>> {
+    let output = run_git(
+        repo_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )?;
+    if !output.success {
+        return Ok(None);
+    }
+
+    let upstream = output.stdout.trim();
+    if upstream.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(upstream.to_string()))
+    }
 }
 
 fn parse_cli_bump_option(value: Option<&str>) -> Result<OverviewBumpWorkflow> {
@@ -1368,6 +1559,7 @@ impl ProjectRootBase for ProjectConfig {
 mod tests {
     use super::*;
     use crate::config::{BranchScopeKind, ChangelogSettings, IntegrationMode, ReleaseNowSettings};
+    use std::{env, fs, time::{SystemTime, UNIX_EPOCH}};
 
     fn sample_project(name: &str, alias: &str) -> ProjectConfig {
         ProjectConfig {
@@ -1510,6 +1702,26 @@ mod tests {
         assert!(is_bump_command("bp"));
         assert!(is_bump_command("bum"));
         assert!(!is_bump_command("bom"));
+    }
+
+    #[test]
+    fn is_commit_command_accepts_requested_synonyms() {
+        assert!(is_commit_command("commit"));
+        assert!(is_commit_command("cmt"));
+        assert!(is_commit_command("com"));
+        assert!(is_commit_command("ct"));
+        assert!(!is_commit_command("cmd"));
+    }
+
+    #[test]
+    fn is_commit_delete_action_accepts_requested_synonyms() {
+        assert!(is_commit_delete_action("del"));
+        assert!(is_commit_delete_action("rm"));
+        assert!(is_commit_delete_action("rem"));
+        assert!(is_commit_delete_action("delete"));
+        assert!(is_commit_delete_action("drop"));
+        assert!(is_commit_delete_action("erase"));
+        assert!(!is_commit_delete_action("remove"));
     }
 
     #[test]
@@ -1758,6 +1970,151 @@ mod tests {
             compare_release_versions("0.10.0", "0.9.2"),
             Ordering::Greater
         );
+    }
+
+    fn create_temp_repo_dir(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "comfygit-cli-{}-{}-{}",
+            test_name,
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&dir).expect("create temp repo dir");
+        dir
+    }
+
+    #[test]
+    fn revert_commit_safely_creates_local_revert_commit() {
+        let repo_dir = create_temp_repo_dir("commit-del");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_main = run_git(&repo_root, &["switch", "-c", "main"]).expect("switch main");
+        if !switch_main.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "main"])
+                .expect("checkout main");
+        }
+
+        let tracked_file = repo_dir.join("tracked.txt");
+        fs::write(&tracked_file, "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"])
+            .expect("commit base file");
+
+        fs::write(&tracked_file, "changed\n").expect("write changed file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage changed file");
+        run_git_checked(&repo_root, &["commit", "-m", "change tracked file"])
+            .expect("commit changed file");
+
+        let target_commit = run_git_checked(&repo_root, &["rev-parse", "HEAD"])
+            .expect("read target commit")
+            .trim()
+            .to_string();
+
+        let outcome = revert_commit_safely(&repo_root, &target_commit)
+            .expect("safe revert should succeed");
+
+        assert_eq!(outcome.reverted_commit, target_commit);
+        assert_eq!(outcome.reverted_subject, "change tracked file");
+        assert!(!outcome.revert_commit.is_empty());
+        assert!(!outcome.pushed);
+        assert!(outcome.upstream_ref.is_none());
+        assert_eq!(
+            fs::read_to_string(&tracked_file)
+                .expect("read reverted file")
+                .replace("\r\n", "\n"),
+            "base\n"
+        );
+
+        let head_subject = run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
+            .expect("read revert subject");
+        assert!(head_subject.contains("Revert \"change tracked file\""));
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn revert_commit_safely_reverts_standard_merge_commit() {
+        let repo_dir = create_temp_repo_dir("commit-del-merge");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_main = run_git(&repo_root, &["switch", "-c", "main"]).expect("switch main");
+        if !switch_main.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "main"])
+                .expect("checkout main");
+        }
+
+        let tracked_file = repo_dir.join("tracked.txt");
+        fs::write(&tracked_file, "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"])
+            .expect("commit base file");
+
+        let switch_feature = run_git(&repo_root, &["switch", "-c", "feature/remove-me"])
+            .expect("switch feature branch");
+        if !switch_feature.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "feature/remove-me"])
+                .expect("checkout feature branch");
+        }
+
+        fs::write(&tracked_file, "base\nfeature\n").expect("write feature file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage feature file");
+        run_git_checked(&repo_root, &["commit", "-m", "feature change"])
+            .expect("commit feature change");
+
+        let switch_back = run_git(&repo_root, &["switch", "main"]).expect("switch back to main");
+        if !switch_back.success {
+            run_git_checked(&repo_root, &["checkout", "main"]).expect("checkout main");
+        }
+        run_git_checked(
+            &repo_root,
+            &["merge", "--no-ff", "feature/remove-me", "-m", "Merge feature/remove-me"],
+        )
+        .expect("merge feature branch");
+
+        let merge_commit = run_git_checked(&repo_root, &["rev-parse", "HEAD"])
+            .expect("read merge commit")
+            .trim()
+            .to_string();
+
+        let outcome = revert_commit_safely(&repo_root, &merge_commit)
+            .expect("safe revert of merge commit should succeed");
+
+        assert_eq!(outcome.reverted_commit, merge_commit);
+        assert!(outcome.reverted_subject.contains("Merge feature/remove-me"));
+        assert!(!outcome.pushed);
+        assert!(outcome.upstream_ref.is_none());
+        assert_eq!(
+            fs::read_to_string(&tracked_file)
+                .expect("read reverted file")
+                .replace("\r\n", "\n"),
+            "base\n"
+        );
+
+        let head_subject = run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
+            .expect("read revert subject");
+        assert!(head_subject.contains("Revert \"Merge feature/remove-me\""));
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
     }
 
     #[test]
