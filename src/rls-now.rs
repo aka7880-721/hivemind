@@ -52,6 +52,39 @@ fn commit_release_now_generated_files(repo_root: &str, tag_name: &str) -> Result
     Ok(true)
 }
 
+struct ReleaseNowGeneratedFilesCommit {
+    previous_head: String,
+}
+
+fn current_head_commit(repo_root: &str) -> Result<String> {
+    Ok(run_git_checked(repo_root, &["rev-parse", "HEAD"])
+        .map(|head| head.trim().to_string())?)
+}
+
+fn create_release_now_generated_files_commit(
+    repo_root: &str,
+    tag_name: &str,
+) -> Result<Option<ReleaseNowGeneratedFilesCommit>> {
+    if !stage_release_now_generated_files(repo_root)? || !has_staged_changes(repo_root)? {
+        return Ok(None);
+    }
+
+    let previous_head = current_head_commit(repo_root)?;
+    if commit_release_now_generated_files(repo_root, tag_name)? {
+        Ok(Some(ReleaseNowGeneratedFilesCommit { previous_head }))
+    } else {
+        Ok(None)
+    }
+}
+
+fn rollback_release_now_generated_files_commit(
+    repo_root: &str,
+    generated_commit: &ReleaseNowGeneratedFilesCommit,
+) -> Result<()> {
+    run_git_checked(repo_root, &["reset", "--soft", &generated_commit.previous_head])?;
+    Ok(())
+}
+
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
@@ -772,21 +805,31 @@ pub(super) async fn execute_release_now_async(
         }
         release_notes.extend(std_outcome.summary_notes);
 
+    }
+
+    create_or_update_github_release(
+        &request.repo_root,
+        &request.tag_name,
+        request.scope.remote_spec.as_deref(),
+        &request.release_title,
+        request.release_notes_markdown.as_deref(),
+        &artifact_files,
+        cancel.clone(),
+        &mut emit_progress,
+    )
+    .await?;
+
+    if request.changelog_enabled {
         ensure_not_cancelled(&cancel)?;
         let repo_root_for_commit = request.repo_root.clone();
         let tag_name_for_commit = request.tag_name.clone();
-        let remote_spec_for_push = request.scope.remote_spec.clone();
-        let generated_commit_made = run_blocking_job(move || {
-            if stage_release_now_generated_files(&repo_root_for_commit)? {
-                commit_release_now_generated_files(&repo_root_for_commit, &tag_name_for_commit)
-            } else {
-                Ok(false)
-            }
+        let generated_commit = run_blocking_job(move || {
+            create_release_now_generated_files_commit(&repo_root_for_commit, &tag_name_for_commit)
         })
         .await?;
 
-        if generated_commit_made {
-            let remote_spec = remote_spec_for_push.ok_or_else(|| {
+        if let Some(generated_commit) = generated_commit {
+            let remote_spec = request.scope.remote_spec.clone().ok_or_else(|| {
                 anyhow!("ReleaseNOW requires a configured git remote to push generated files")
             })?;
             let repo_root_for_branch = request.repo_root.clone();
@@ -800,7 +843,7 @@ pub(super) async fn execute_release_now_async(
                 "Pushing generated ReleaseNOW files to {}.",
                 remote_spec
             )]);
-            run_command_with_retry_async(
+            if let Err(push_error) = run_command_with_retry_async(
                 request.repo_root.clone(),
                 "git",
                 vec!["push".to_string(), remote_spec.clone(), branch_name],
@@ -808,21 +851,27 @@ pub(super) async fn execute_release_now_async(
                 NETWORK_RETRY_ATTEMPTS,
                 "git push",
             )
-            .await?;
+            .await
+            {
+                let repo_root_for_rollback = request.repo_root.clone();
+                let rollback_result = run_blocking_job(move || {
+                    rollback_release_now_generated_files_commit(
+                        &repo_root_for_rollback,
+                        &generated_commit,
+                    )
+                })
+                .await;
+                if let Err(rollback_error) = rollback_result {
+                    return Err(anyhow!(
+                        "{}; additionally failed to roll back the generated ReleaseNOW commit: {}",
+                        push_error,
+                        rollback_error
+                    ));
+                }
+                return Err(push_error);
+            }
         }
     }
-
-    create_or_update_github_release(
-        &request.repo_root,
-        &request.tag_name,
-        request.scope.remote_spec.as_deref(),
-        &request.release_title,
-        request.release_notes_markdown.as_deref(),
-        &artifact_files,
-        cancel,
-        &mut emit_progress,
-    )
-    .await?;
 
     Ok(ReleaseNowExecutionOutcome {
         summary: append_background_tag_summary_notes(
@@ -1785,6 +1834,22 @@ fn write_release_notes_file(notes: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use crate::config::ReleaseNowSettings;
+    use std::{env, fs};
+
+    fn create_temp_repo_dir(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "comfygit-{}-{}-{}",
+            test_name,
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&dir).expect("create temp repo dir");
+        dir
+    }
 
     #[test]
     fn release_now_options_keep_all_configured_first() {
@@ -1869,5 +1934,52 @@ mod tests {
     fn format_exit_code_removes_debug_option_wrapper() {
         assert_eq!(format_exit_code(Some(1)), "1");
         assert_eq!(format_exit_code(None), "unknown");
+    }
+
+    #[test]
+    fn rollback_release_now_generated_files_commit_restores_previous_head() {
+        let repo_dir = create_temp_repo_dir("release-now-rollback");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+
+        fs::write(repo_dir.join("README.md"), "seed\n").expect("write seed file");
+        run_git_checked(&repo_root, &["add", "README.md"]).expect("stage seed file");
+        run_git_checked(&repo_root, &["commit", "-m", "seed"])
+            .expect("commit seed file");
+
+        let previous_head = current_head_commit(&repo_root).expect("read initial head");
+        let syncmem_dir = repo_dir.join(".comfygit").join("syncmem");
+        fs::create_dir_all(&syncmem_dir).expect("create syncmem dir");
+        fs::write(syncmem_dir.join("stdchlg.json"), "{}\n").expect("write syncmem file");
+
+        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3")
+            .expect("create generated commit")
+            .expect("generated commit should exist");
+
+        let release_commit_subject = run_git_checked(&repo_root, &["log", "-1", "--pretty=%s"])
+            .expect("read release commit subject");
+        assert!(release_commit_subject.contains("ReleaseNOW! → v1.2.3 has just been released"));
+
+        rollback_release_now_generated_files_commit(&repo_root, &generated_commit)
+            .expect("roll back generated commit");
+
+        assert_eq!(
+            current_head_commit(&repo_root).expect("read restored head"),
+            previous_head
+        );
+
+        let status = run_git_checked(&repo_root, &["status", "--short"])
+            .expect("read staged status after rollback");
+        assert!(status.contains("A  .comfygit/syncmem/stdchlg.json"));
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
     }
 }
