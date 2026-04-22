@@ -32,9 +32,8 @@ use crate::{
         TargetSpec,
     },
     git::{
-        collect_all_branch_git_scope_contexts, current_branch_with_cancel,
-        latest_local_tag_with_cancel, load_scope_activity_summary_with_cancel, run_git,
-        run_git_checked, split_output_lines,
+        collect_all_branch_git_scope_contexts, current_branch_with_cancel, last_bump_time,
+        latest_local_tag_with_cancel, run_git, run_git_checked, split_output_lines,
     },
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
@@ -255,9 +254,13 @@ fn print_project_version(lookup: &str) -> Result<()> {
         .ok()
         .and_then(|contexts| contexts.into_iter().next());
     let (last_bump, last_release) = if let Some(context) = git_context {
-        let last_bump = load_scope_activity_summary_with_cancel(&context, None)
-            .map(|summary| summary.last_bump_label)
-            .unwrap_or_else(|_| "n/a".to_string());
+        let last_bump = last_bump_time(&context.repo_root, &context.git_pathspecs(), None)
+            .ok()
+            .flatten()
+            .and_then(|timestamp| {
+                crate::git_stt::format_relative_git_timestamp(&timestamp.to_string())
+            })
+            .unwrap_or_else(|| "n/a".to_string());
         let last_release = latest_public_release_tag_for_repo(&context.repo_root)
             .or_else(|| {
                 latest_local_tag_with_cancel(&context.repo_root, None)
@@ -1376,6 +1379,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: vec![TargetSpec {
                 label: "Version".to_string(),
                 path: "C:/repo/Cargo.toml".to_string(),

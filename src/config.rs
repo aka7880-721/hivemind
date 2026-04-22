@@ -100,6 +100,8 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub release_now: ReleaseNowSettings,
     #[serde(default)]
+    pub tile_info: TileInfoSettings,
+    #[serde(default)]
     pub targets: Vec<TargetSpec>,
     #[serde(default)]
     pub branches: Vec<BranchConfig>,
@@ -450,6 +452,63 @@ pub struct ReleaseNowSettings {
     pub linux_arm_script: String,
     pub linux_amd_script: String,
     pub macos_script: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TileInfoSettings {
+    pub auto_rotation: bool,
+    pub rotates: TileRotationTarget,
+    pub remembered_dev_mode: usize,
+    pub remembered_rls_mode: usize,
+    pub rotation_timing_seconds: u64,
+}
+
+impl Default for TileInfoSettings {
+    fn default() -> Self {
+        Self {
+            auto_rotation: true,
+            rotates: TileRotationTarget::Both,
+            remembered_dev_mode: 0,
+            remembered_rls_mode: 0,
+            rotation_timing_seconds: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TileRotationTarget {
+    #[default]
+    Both,
+    DevLineOnly,
+    RlsLineOnly,
+}
+
+impl TileRotationTarget {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            TileRotationTarget::Both => "both",
+            TileRotationTarget::DevLineOnly => "dev-line only",
+            TileRotationTarget::RlsLineOnly => "rls-line only",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            TileRotationTarget::Both => TileRotationTarget::DevLineOnly,
+            TileRotationTarget::DevLineOnly => TileRotationTarget::RlsLineOnly,
+            TileRotationTarget::RlsLineOnly => TileRotationTarget::Both,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        match self {
+            TileRotationTarget::Both => TileRotationTarget::RlsLineOnly,
+            TileRotationTarget::DevLineOnly => TileRotationTarget::Both,
+            TileRotationTarget::RlsLineOnly => TileRotationTarget::DevLineOnly,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -869,6 +928,7 @@ format = "json"
                 version_scheme: VersionScheme::SemVer,
                 changelog: ChangelogSettings::default(),
                 release_now: ReleaseNowSettings::default(),
+                tile_info: TileInfoSettings::default(),
                 targets: vec![TargetSpec {
                     label: "Version".to_string(),
                     path: "package.json".to_string(),
@@ -904,6 +964,7 @@ format = "json"
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: ReleaseNowSettings::default(),
+            tile_info: TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),

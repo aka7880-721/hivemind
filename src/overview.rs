@@ -17,6 +17,7 @@ use crate::changelog::{
 use crate::{
     dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
     git::{GitCancellation, sorted_local_tags_with_cancel, switch_or_create_branch},
+    git_stt::format_relative_git_timestamp,
 };
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
@@ -25,6 +26,9 @@ const PLACEHOLDER_VERSION: &str = "1.2.3";
 const PLACEHOLDER_COMMITS_AHEAD: &str = "7 ahead";
 const PLACEHOLDER_LAST_BUMP: &str = "2 days";
 const PLACEHOLDER_LAST_COMMIT: &str = "14 min";
+const PLACEHOLDER_LAST_RELEASE_VERSION: &str = "v1.2.3";
+const DEV_TILE_DISPLAY_COUNT: usize = 3;
+const RELEASE_TILE_DISPLAY_COUNT: usize = 2;
 
 pub(super) fn render_dashboard_overview(app: &mut App, frame: &mut Frame, area: Rect) {
     let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
@@ -217,6 +221,8 @@ pub(super) fn ensure_dashboard_tile_state(app: &mut App, scopes: &[BumpScope]) {
     if app.overview_tile_project == Some(app.selected_project)
         && app.overview_scope_order.len() == scopes.len()
         && app.overview_pending_versions.len() == scopes.len()
+        && app.overview_tile_dev_modes.len() == scopes.len()
+        && app.overview_tile_rls_modes.len() == scopes.len()
     {
         app.overview_focused_scope = app
             .overview_focused_scope
@@ -236,8 +242,123 @@ pub(super) fn ensure_dashboard_tile_state(app: &mut App, scopes: &[BumpScope]) {
         .iter()
         .map(|scope| resolved_scope_preview_version(scope, use_placeholder))
         .collect();
+    let (dev_mode, rls_mode) = app
+        .config
+        .projects
+        .get(app.selected_project)
+        .map(initial_tile_modes)
+        .unwrap_or_default();
+    app.overview_tile_dev_modes = vec![dev_mode; scopes.len()];
+    app.overview_tile_rls_modes = vec![rls_mode; scopes.len()];
+    app.overview_tile_last_rotation_at = Instant::now();
     app.overview_tile_scroll = 0;
     app.overview_focused_scope = 0;
+}
+
+pub(super) fn cycle_overview_tile_info(
+    app: &mut App,
+    scope_index: usize,
+    row: OverviewTileInfoRow,
+) -> Result<()> {
+    let count = match row {
+        OverviewTileInfoRow::Dev => DEV_TILE_DISPLAY_COUNT,
+        OverviewTileInfoRow::Release => RELEASE_TILE_DISPLAY_COUNT,
+    };
+    let auto_rotates = app
+        .config
+        .projects
+        .get(app.selected_project)
+        .map(|project| row_auto_rotates(&project.tile_info, row))
+        .unwrap_or(false);
+
+    if auto_rotates {
+        let modes = match row {
+            OverviewTileInfoRow::Dev => &mut app.overview_tile_dev_modes,
+            OverviewTileInfoRow::Release => &mut app.overview_tile_rls_modes,
+        };
+        let mode = modes
+            .get_mut(scope_index)
+            .ok_or_else(|| anyhow!("selected overview scope is not available"))?;
+        *mode = (*mode + 1) % count;
+    } else {
+        let current_mode = match row {
+            OverviewTileInfoRow::Dev => app
+                .overview_tile_dev_modes
+                .get(scope_index)
+                .copied()
+                .ok_or_else(|| anyhow!("selected overview scope is not available"))?,
+            OverviewTileInfoRow::Release => {
+                app.overview_tile_rls_modes
+                    .get(scope_index)
+                    .copied()
+                    .ok_or_else(|| anyhow!("selected overview scope is not available"))?
+            }
+        };
+        let next_mode = (current_mode + 1) % count;
+        match row {
+            OverviewTileInfoRow::Dev => {
+                app.overview_tile_dev_modes.fill(next_mode);
+            }
+            OverviewTileInfoRow::Release => {
+                app.overview_tile_rls_modes.fill(next_mode);
+            }
+        }
+        if let Some(project) = app.config.projects.get_mut(app.selected_project) {
+            match row {
+                OverviewTileInfoRow::Dev => project.tile_info.remembered_dev_mode = next_mode,
+                OverviewTileInfoRow::Release => project.tile_info.remembered_rls_mode = next_mode,
+            }
+        }
+        app.config_store.save(&app.config)?;
+    }
+    app.overview_tile_last_rotation_at = Instant::now();
+    Ok(())
+}
+
+pub(super) fn tick_dashboard_tile_rotation(app: &mut App) -> bool {
+    if app.screen != Screen::Dashboard || app.overview_tab != OverviewTab::Overview {
+        return false;
+    }
+
+    let Some(project) = app.config.projects.get(app.selected_project) else {
+        return false;
+    };
+    if !project.tile_info.auto_rotation || app.overview_tile_project != Some(app.selected_project) {
+        return false;
+    }
+
+    let interval = Duration::from_secs(project.tile_info.rotation_timing_seconds.max(1));
+    if app.overview_tile_last_rotation_at.elapsed() < interval {
+        return false;
+    }
+
+    if app.overview_tile_dev_modes.is_empty() || app.overview_tile_rls_modes.is_empty() {
+        app.overview_tile_last_rotation_at = Instant::now();
+        return false;
+    }
+
+    match project.tile_info.rotates {
+        crate::config::TileRotationTarget::Both => {
+            for mode in &mut app.overview_tile_dev_modes {
+                *mode = (*mode + 1) % DEV_TILE_DISPLAY_COUNT;
+            }
+            for mode in &mut app.overview_tile_rls_modes {
+                *mode = (*mode + 1) % RELEASE_TILE_DISPLAY_COUNT;
+            }
+        }
+        crate::config::TileRotationTarget::DevLineOnly => {
+            for mode in &mut app.overview_tile_dev_modes {
+                *mode = (*mode + 1) % DEV_TILE_DISPLAY_COUNT;
+            }
+        }
+        crate::config::TileRotationTarget::RlsLineOnly => {
+            for mode in &mut app.overview_tile_rls_modes {
+                *mode = (*mode + 1) % RELEASE_TILE_DISPLAY_COUNT;
+            }
+        }
+    }
+    app.overview_tile_last_rotation_at = Instant::now();
+    true
 }
 
 pub(super) fn invalidate_overview_cache(app: &mut App) {
@@ -245,6 +366,39 @@ pub(super) fn invalidate_overview_cache(app: &mut App) {
     app.overview_tile_project = None;
     app.overview_activity_project = None;
     app.overview_activity_summaries.clear();
+}
+
+fn initial_tile_modes(project: &ProjectConfig) -> (usize, usize) {
+    let dev_mode = if row_auto_rotates(&project.tile_info, OverviewTileInfoRow::Dev) {
+        0
+    } else {
+        project.tile_info.remembered_dev_mode % DEV_TILE_DISPLAY_COUNT
+    };
+    let rls_mode = if row_auto_rotates(&project.tile_info, OverviewTileInfoRow::Release) {
+        0
+    } else {
+        project.tile_info.remembered_rls_mode % RELEASE_TILE_DISPLAY_COUNT
+    };
+    (dev_mode, rls_mode)
+}
+
+fn row_auto_rotates(settings: &crate::config::TileInfoSettings, row: OverviewTileInfoRow) -> bool {
+    if !settings.auto_rotation {
+        return false;
+    }
+
+    matches!(
+        (settings.rotates, row),
+        (crate::config::TileRotationTarget::Both, _)
+            | (
+                crate::config::TileRotationTarget::DevLineOnly,
+                OverviewTileInfoRow::Dev
+            )
+            | (
+                crate::config::TileRotationTarget::RlsLineOnly,
+                OverviewTileInfoRow::Release,
+            )
+    )
 }
 
 pub(super) fn reorder_dashboard_tile_scope(app: &mut App, from_scope: usize, to_scope: usize) {
@@ -431,6 +585,20 @@ pub(super) fn render_dashboard_tiles(
             };
             let selected = scope_index == app.overview_focused_scope;
             let placeholder = placeholder_activity(scope, project);
+            let dev_mode = app
+                .overview_tile_dev_modes
+                .get(scope_index)
+                .copied()
+                .unwrap_or_default();
+            let release_mode = app
+                .overview_tile_rls_modes
+                .get(scope_index)
+                .copied()
+                .unwrap_or_default();
+            let (dev_display, dev_output) =
+                build_dev_tile_display(activity, placeholder.as_ref(), dev_mode);
+            let (rls_display, rls_output) =
+                build_release_tile_display(activity, placeholder.as_ref(), release_mode);
             let tile = OverviewTileData {
                 name: scope.display_name.clone(),
                 scheme: scope.scheme,
@@ -450,24 +618,10 @@ pub(super) fn render_dashboard_tiles(
                             .map(|data| data.commits_since_tag_label.to_string())
                     })
                     .unwrap_or_else(|| "n/a".to_string()),
-                last_bump_label: activity
-                    .as_ref()
-                    .map(|summary| summary.last_bump_label.clone())
-                    .or_else(|| {
-                        placeholder
-                            .as_ref()
-                            .map(|data| data.last_bump_label.to_string())
-                    })
-                    .unwrap_or_else(|| "n/a".to_string()),
-                last_commit_label: activity
-                    .as_ref()
-                    .map(|summary| summary.last_commit_label.clone())
-                    .or_else(|| {
-                        placeholder
-                            .as_ref()
-                            .map(|data| data.last_commit_label.to_string())
-                    })
-                    .unwrap_or_else(|| "n/a".to_string()),
+                dev_display,
+                dev_output,
+                rls_display,
+                rls_output,
                 selected,
             };
             let hotspots = render_overview_tile(frame, tile_rect, &tile);
@@ -487,8 +641,16 @@ pub(super) fn render_dashboard_tiles(
                 HitAction::BeginOverviewBump(scope_index),
             ));
             app.hit_targets.push(HitTarget::new(
+                hotspots.dev_info_rect,
+                HitAction::CycleOverviewTileInfo(scope_index, OverviewTileInfoRow::Dev),
+            ));
+            app.hit_targets.push(HitTarget::new(
                 hotspots.tag_rect,
                 HitAction::OpenOverviewTagDialog(scope_index),
+            ));
+            app.hit_targets.push(HitTarget::new(
+                hotspots.rls_info_rect,
+                HitAction::CycleOverviewTileInfo(scope_index, OverviewTileInfoRow::Release),
             ));
             if let Some(rect) = hotspots.reset_rect {
                 app.hit_targets.push(HitTarget::new(
@@ -618,8 +780,11 @@ fn placeholder_activity(
 
     Some(OverviewPlaceholderData {
         commits_since_tag_label: PLACEHOLDER_COMMITS_AHEAD,
-        last_bump_label: PLACEHOLDER_LAST_BUMP,
-        last_commit_label: PLACEHOLDER_LAST_COMMIT,
+        bump_output: PLACEHOLDER_LAST_BUMP,
+        tag_output: PLACEHOLDER_LAST_BUMP,
+        commit_output: PLACEHOLDER_LAST_COMMIT,
+        release_version_output: PLACEHOLDER_LAST_RELEASE_VERSION,
+        release_time_output: PLACEHOLDER_LAST_BUMP,
     })
 }
 
@@ -656,8 +821,67 @@ fn placeholder_recent_changes_lines(project: &ProjectConfig) -> Vec<Line<'static
 
 struct OverviewPlaceholderData {
     commits_since_tag_label: &'static str,
-    last_bump_label: &'static str,
-    last_commit_label: &'static str,
+    bump_output: &'static str,
+    tag_output: &'static str,
+    commit_output: &'static str,
+    release_version_output: &'static str,
+    release_time_output: &'static str,
+}
+
+fn build_dev_tile_display(
+    activity: Option<&RepoActivitySummary>,
+    placeholder: Option<&OverviewPlaceholderData>,
+    mode: usize,
+) -> (String, String) {
+    match mode % DEV_TILE_DISPLAY_COUNT {
+        0 => (
+            "bump".to_string(),
+            activity
+                .and_then(|summary| summary.last_bump_time)
+                .and_then(|timestamp| format_relative_git_timestamp(&timestamp.to_string()))
+                .or_else(|| placeholder.map(|data| data.bump_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+        1 => (
+            "tag".to_string(),
+            activity
+                .and_then(|summary| summary.last_tag_time)
+                .and_then(|timestamp| format_relative_git_timestamp(&timestamp.to_string()))
+                .or_else(|| placeholder.map(|data| data.tag_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+        _ => (
+            "commit".to_string(),
+            activity
+                .map(|summary| summary.last_commit_label.clone())
+                .or_else(|| placeholder.map(|data| data.commit_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+    }
+}
+
+fn build_release_tile_display(
+    activity: Option<&RepoActivitySummary>,
+    placeholder: Option<&OverviewPlaceholderData>,
+    mode: usize,
+) -> (String, String) {
+    match mode % RELEASE_TILE_DISPLAY_COUNT {
+        0 => (
+            "v".to_string(),
+            activity
+                .and_then(|summary| summary.last_rls_version.clone())
+                .or_else(|| placeholder.map(|data| data.release_version_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+        _ => (
+            "RLS'd".to_string(),
+            activity
+                .and_then(|summary| summary.last_rls_time.as_deref())
+                .and_then(format_relative_git_timestamp)
+                .or_else(|| placeholder.map(|data| data.release_time_output.to_string()))
+                .unwrap_or_else(|| "n/a".to_string()),
+        ),
+    }
 }
 
 pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<()> {
@@ -1377,7 +1601,9 @@ async fn collect_preview_entries_async(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BranchConfig, ChangelogSettings, ReleaseNowSettings};
+    use crate::config::{
+        BranchConfig, ChangelogSettings, ReleaseNowSettings, TileInfoSettings, TileRotationTarget,
+    };
 
     #[test]
     fn empty_local_only_project_uses_dashboard_placeholders() {
@@ -1390,6 +1616,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
@@ -1416,6 +1643,23 @@ mod tests {
     }
 
     #[test]
+    fn release_tile_display_uses_rlsd_label_even_when_data_is_loaded() {
+        let activity = RepoActivitySummary {
+            commits_since_tag_label: "1c ahd".to_string(),
+            last_bump_time: None,
+            last_tag_name: Some("v1.2.3".to_string()),
+            last_tag_time: None,
+            last_commit_label: "abc123".to_string(),
+            last_rls_version: Some("1.2.3".to_string()),
+            last_rls_time: Some("2026-04-22T12:00:00Z".to_string()),
+        };
+
+        let (display, _) = build_release_tile_display(Some(&activity), None, 1);
+
+        assert_eq!(display, "RLS'd");
+    }
+
+    #[test]
     fn configured_branched_project_keeps_real_scope_versions() {
         let project = ProjectConfig {
             name: "demo".to_string(),
@@ -1426,6 +1670,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
@@ -1480,6 +1725,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog,
             release_now: ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
@@ -1494,5 +1740,83 @@ mod tests {
             should_open_overview_changelog_preview(&mut app, 0, OverviewBumpWorkflow::CommitAndTag)
                 .expect("check should succeed")
         );
+    }
+
+    #[test]
+    fn disabled_rows_restore_remembered_modes() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: ReleaseNowSettings::default(),
+            tile_info: TileInfoSettings {
+                auto_rotation: true,
+                rotates: TileRotationTarget::DevLineOnly,
+                remembered_dev_mode: 2,
+                remembered_rls_mode: 1,
+                rotation_timing_seconds: 5,
+            },
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+        }];
+        let scopes = vec![BumpScope {
+            display_name: "demo".to_string(),
+            scope_kind: None,
+            scheme: VersionScheme::SemVer,
+            current_version: None,
+            targets: Vec::new(),
+        }];
+
+        ensure_dashboard_tile_state(&mut app, &scopes);
+
+        assert_eq!(app.overview_tile_dev_modes, vec![0]);
+        assert_eq!(app.overview_tile_rls_modes, vec![1]);
+    }
+
+    #[test]
+    fn cycling_disabled_row_persists_remembered_mode() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: ReleaseNowSettings::default(),
+            tile_info: TileInfoSettings {
+                auto_rotation: true,
+                rotates: TileRotationTarget::DevLineOnly,
+                remembered_dev_mode: 0,
+                remembered_rls_mode: 0,
+                rotation_timing_seconds: 5,
+            },
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+        }];
+        let scopes = vec![BumpScope {
+            display_name: "demo".to_string(),
+            scope_kind: None,
+            scheme: VersionScheme::SemVer,
+            current_version: None,
+            targets: Vec::new(),
+        }];
+        ensure_dashboard_tile_state(&mut app, &scopes);
+
+        cycle_overview_tile_info(&mut app, 0, OverviewTileInfoRow::Release)
+            .expect("row cycle should succeed");
+
+        assert_eq!(app.overview_tile_rls_modes, vec![1]);
+        assert_eq!(app.config.projects[0].tile_info.remembered_rls_mode, 1);
+        let saved = app.config_store.load().expect("config should load");
+        assert_eq!(saved.projects[0].tile_info.remembered_rls_mode, 1);
     }
 }

@@ -3,6 +3,29 @@
 //
 // Licensed under the ComfyGit License v1.2
 //
+// For details, see the LICENSE file in the repository root.
+
+/// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+
+use anyhow::{Context, Result, anyhow, bail};
+
+use crate::{
+    config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
+    git_stt::{last_commit_label, last_rls_time, last_rls_version, last_tag_name, last_tag_time},
+    targets::{collect_bump_scopes, shared_bump_version},
+};
+
+pub(crate) use crate::git_stt::{last_bump_time, latest_local_tag_with_cancel};
+
 pub(crate) fn current_branch_with_cancel(
     repo_root: &str,
     cancel: Option<GitCancellation>,
@@ -109,26 +132,6 @@ pub(crate) fn switch_or_create_branch(repo_root: &str, branch_name: &str) -> Res
 
     create_branch_and_switch(repo_root, branch_name)
 }
-// For details, see the LICENSE file in the repository root.
-
-/// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
-
-use anyhow::{Context, Result, anyhow, bail};
-use chrono::{Local, TimeZone};
-
-use crate::{
-    config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
-    targets::{collect_bump_scopes, shared_bump_version},
-};
 
 pub(crate) struct GitOutput {
     pub(crate) success: bool,
@@ -179,11 +182,15 @@ impl GitScopeContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RepoActivitySummary {
     pub(crate) commits_since_tag_label: String,
-    pub(crate) last_bump_label: String,
+    pub(crate) last_bump_time: Option<i64>,
+    pub(crate) last_tag_name: Option<String>,
+    pub(crate) last_tag_time: Option<i64>,
     pub(crate) last_commit_label: String,
+    pub(crate) last_rls_version: Option<String>,
+    pub(crate) last_rls_time: Option<String>,
 }
 
-fn build_git_args(base: &[&str], pathspecs: &[String]) -> Vec<String> {
+pub(crate) fn build_git_args(base: &[&str], pathspecs: &[String]) -> Vec<String> {
     let mut args = base
         .iter()
         .map(|arg| (*arg).to_string())
@@ -594,7 +601,7 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
         &["describe", "--tags", "--abbrev=0"],
         cancel.clone(),
     )?;
-    let (commits_since_tag_label, last_bump_label) = if describe.success {
+    let commits_since_tag_label = if describe.success {
         let tag = describe.stdout.trim().to_string();
         let range = format!("{}..HEAD", tag);
         let count = run_git_checked_owned_with_cancel(
@@ -604,77 +611,36 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
         )?
         .trim()
         .to_string();
-        let tag_timestamp = run_git_checked_with_cancel(
-            repo_root,
-            &["log", "-1", "--format=%ct", &tag],
-            cancel.clone(),
-        )?;
-        (
-            format!("{}c ahd", count),
-            format_relative_git_timestamp(tag_timestamp.trim())
-                .unwrap_or_else(|| "n/a".to_string()),
-        )
+        format!("{}c ahd", count)
     } else {
-        ("no tags".to_string(), "n/a".to_string())
+        "no tags".to_string()
     };
 
-    let last_commit_timestamp = run_git_checked_owned_with_cancel(
-        repo_root,
-        build_git_args(&["log", "-1", "--format=%ct", "HEAD"], &pathspecs),
-        cancel,
-    )?;
-    let last_commit_label = format_relative_git_timestamp(last_commit_timestamp.trim())
-        .unwrap_or_else(|| "n/a".to_string());
+    let last_bump_time = crate::git_stt::last_bump_time(repo_root, &pathspecs, cancel.clone())?;
+    let last_tag_name = last_tag_name(repo_root, cancel.clone())?;
+    let last_tag_time = last_tag_time(repo_root, &pathspecs, cancel.clone())?;
+    let last_commit_label = last_commit_label(repo_root, &pathspecs, cancel.clone())?;
+    let last_rls_version = last_rls_version(repo_root, cancel.clone()).ok().flatten();
+    let last_rls_time = last_rls_time(repo_root, cancel).ok().flatten();
 
     Ok(RepoActivitySummary {
         commits_since_tag_label,
-        last_bump_label,
+        last_bump_time,
+        last_tag_name,
+        last_tag_time,
         last_commit_label,
+        last_rls_version,
+        last_rls_time,
     })
 }
 
-fn format_relative_git_timestamp(timestamp: &str) -> Option<String> {
-    let seconds = timestamp.parse::<i64>().ok()?;
-    let then = Local.timestamp_opt(seconds, 0).single()?;
-    let now = Local::now();
-    let delta = now.signed_duration_since(then);
-    let minutes = delta.num_minutes().max(0);
-
-    let label = if minutes < 60 {
-        format!("{}m ago", minutes.max(1))
-    } else if minutes < 60 * 24 {
-        format!("{}h ago", (minutes / 60).max(1))
-    } else if minutes < 60 * 24 * 7 {
-        format!("{}d ago", (minutes / (60 * 24)).max(1))
-    } else if minutes < 60 * 24 * 365 {
-        format!("{}w ago", (minutes / (60 * 24 * 7)).max(1))
-    } else {
-        format!("{}y ago", (minutes / (60 * 24 * 365)).max(1))
-    };
-
-    Some(label)
-}
-
-fn run_git_checked_owned_with_cancel(
+pub(crate) fn run_git_checked_owned_with_cancel(
     repo_root: &str,
     args: Vec<String>,
     cancel: Option<GitCancellation>,
 ) -> Result<String> {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_git_checked_with_cancel(repo_root, &arg_refs, cancel)
-}
-
-pub(crate) fn latest_local_tag_with_cancel(
-    repo_root: &str,
-    cancel: Option<GitCancellation>,
-) -> Result<Option<String>> {
-    let describe = run_git_with_cancel(repo_root, &["describe", "--tags", "--abbrev=0"], cancel)?;
-    if !describe.success {
-        return Ok(None);
-    }
-
-    let tag = describe.stdout.trim().to_string();
-    Ok((!tag.is_empty()).then_some(tag))
 }
 
 pub(crate) fn branches_containing_ref_with_cancel(
@@ -769,6 +735,7 @@ mod tests {
         config::{
             BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec,
         },
+        git_stt::format_relative_git_timestamp,
         versioning::VersionScheme,
     };
 
@@ -783,6 +750,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -853,6 +821,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![
                 BranchConfig {
@@ -935,6 +904,7 @@ mod tests {
             version_scheme: VersionScheme::SemVer,
             changelog: ChangelogSettings::default(),
             release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
             targets: Vec::new(),
             branches: vec![BranchConfig {
                 name: "core".to_string(),
@@ -966,7 +936,7 @@ mod tests {
 
     #[test]
     fn relative_git_timestamps_are_compacted() {
-        let now = Local::now().timestamp();
+        let now = chrono::Local::now().timestamp();
         let two_days_ago = (now - 60 * 60 * 24 * 2).to_string();
 
         let formatted =

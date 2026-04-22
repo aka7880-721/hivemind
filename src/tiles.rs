@@ -12,6 +12,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::versioning::VersionScheme;
 
@@ -29,8 +31,10 @@ pub(crate) struct OverviewTileData {
     pub(crate) scheme: VersionScheme,
     pub(crate) preview_version: String,
     pub(crate) commits_since_tag_label: String,
-    pub(crate) last_bump_label: String,
-    pub(crate) last_commit_label: String,
+    pub(crate) dev_display: String,
+    pub(crate) dev_output: String,
+    pub(crate) rls_display: String,
+    pub(crate) rls_output: String,
     pub(crate) selected: bool,
 }
 
@@ -46,6 +50,8 @@ pub(crate) struct OverviewTileHotspots {
     pub(crate) view_rect: Rect,
     pub(crate) bump_rect: Rect,
     pub(crate) tag_rect: Rect,
+    pub(crate) dev_info_rect: Rect,
+    pub(crate) rls_info_rect: Rect,
 }
 
 pub(crate) fn tile_height(scheme: VersionScheme) -> u16 {
@@ -102,22 +108,17 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             parts[0],
-            format_activity_detail(
-                "   tag..→HEAD",
-                &tile.commits_since_tag_label,
-                8,
-                right_width
-            )
+            format_tile_tag_row("🏷 ", &tile.commits_since_tag_label, right_width)
         ),
         format!(
             "║{:^5}│{}║",
             "·",
-            format_activity_detail("   last bump", &tile.last_bump_label, 9, right_width)
+            format_tile_info_row("🏗 ", &tile.dev_display, &tile.dev_output, right_width)
         ),
         format!(
             "║{:^5}│{}║",
             parts[1],
-            format_activity_detail("   last commit", &tile.last_commit_label, 7, right_width)
+            format_tile_info_row("🌍", &tile.rls_display, &tile.rls_output, right_width)
         ),
         format!("║{:^5}├{}╢", "·", "─".repeat(right_width)),
         format!("║{:^5}│{}║", parts[2], button_line),
@@ -165,6 +166,8 @@ fn render_semver_tile(
         bump_rect: Rect::new(right_x + button_positions[0] as u16, inner_y + 6, 6, 1),
         tag_rect: Rect::new(right_x + button_positions[1] as u16, inner_y + 6, 6, 1),
         view_rect: Rect::new(right_x + button_positions[2] as u16, inner_y + 6, 5, 1),
+        dev_info_rect: Rect::new(right_x, inner_y + 3, right_width as u16, 1),
+        rls_info_rect: Rect::new(right_x, inner_y + 4, right_width as u16, 1),
     }
 }
 
@@ -188,24 +191,19 @@ fn render_calver_tile(
         format!("║{}║", dot_fill(content_width)),
         format!(
             "║{}│{:^action_width$}║",
-            format_activity_detail(
-                " tag..→HEAD",
-                &tile.commits_since_tag_label,
-                8,
-                detail_width
-            ),
+            format_tile_tag_row("🏷 ", &tile.commits_since_tag_label, detail_width),
             "bump",
             action_width = CALVER_ACTION_WIDTH
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_activity_detail(" last bump", &tile.last_bump_label, 9, detail_width),
+            format_tile_info_row("🏗 ", &tile.dev_display, &tile.dev_output, detail_width),
             "rls",
             action_width = CALVER_ACTION_WIDTH
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_activity_detail(" last commit", &tile.last_commit_label, 7, detail_width),
+            format_tile_info_row("🌍", &tile.rls_display, &tile.rls_output, detail_width),
             "tag",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -256,6 +254,8 @@ fn render_calver_tile(
         bump_rect: Rect::new(action_x, inner_y + 3, CALVER_ACTION_WIDTH as u16, 1),
         view_rect: Rect::new(action_x, inner_y + 4, CALVER_ACTION_WIDTH as u16, 1),
         tag_rect: Rect::new(action_x, inner_y + 5, CALVER_ACTION_WIDTH as u16, 1),
+        dev_info_rect: Rect::new(area.x + 1, inner_y + 3, detail_width as u16, 1),
+        rls_info_rect: Rect::new(area.x + 1, inner_y + 4, detail_width as u16, 1),
     }
 }
 
@@ -317,24 +317,28 @@ fn styled_row_with_highlights(
     let border_chars = [
         '╔', '╗', '╚', '╝', '║', '═', '│', '╤', '╧', '╟', '╢', '├', '┴', '─',
     ];
-    let spans = row
-        .chars()
-        .enumerate()
-        .map(|(index, character)| {
-            let style = highlights
-                .iter()
-                .find(|highlight| highlight.contains(index))
-                .map(|highlight| highlight.style)
-                .unwrap_or_else(|| {
-                    if border_chars.contains(&character) || character == '·' {
-                        border_style
-                    } else {
-                        tile_style.fg(Color::White)
-                    }
-                });
-            Span::styled(character.to_string(), style)
-        })
-        .collect::<Vec<_>>();
+    let spans =
+        row.graphemes(true)
+            .enumerate()
+            .map(|(index, grapheme)| {
+                let is_border = grapheme.chars().count() == 1
+                    && grapheme.chars().next().is_some_and(|character| {
+                        border_chars.contains(&character) || character == '·'
+                    });
+                let style = highlights
+                    .iter()
+                    .find(|highlight| highlight.contains(index))
+                    .map(|highlight| highlight.style)
+                    .unwrap_or_else(|| {
+                        if is_border {
+                            border_style
+                        } else {
+                            tile_style.fg(Color::White)
+                        }
+                    });
+                Span::styled(grapheme.to_string(), style)
+            })
+            .collect::<Vec<_>>();
     Line::from(spans)
 }
 
@@ -370,28 +374,48 @@ fn border_bottom_semver(right_width: usize) -> String {
     )
 }
 
-fn format_activity_detail(
-    label: &str,
-    value: &str,
-    value_width: usize,
-    total_width: usize,
-) -> String {
-    let raw = format!(
-        "{}: {:>value_width$}",
-        label,
-        value,
-        value_width = value_width
-    );
-    fit_to_width(&raw, total_width)
+fn format_tile_info_row(icon: &str, label: &str, value: &str, total_width: usize) -> String {
+    center_to_width(&format!("{icon} → {label}: {value}"), total_width)
 }
 
-fn fit_to_width(value: &str, width: usize) -> String {
-    let rendered = value.chars().take(width).collect::<String>();
-    if rendered.len() >= width {
-        rendered
-    } else {
-        format!("{rendered:<width$}")
+fn format_tile_tag_row(icon: &str, value: &str, total_width: usize) -> String {
+    center_to_width(&format!("{icon}..HEAD: {value}"), total_width)
+}
+
+fn center_to_width(value: &str, width: usize) -> String {
+    pad_to_width(truncate_to_width(value, width), width, Alignment::Center)
+}
+
+fn truncate_to_width(value: &str, width: usize) -> String {
+    let mut rendered = String::new();
+    let mut used_width = 0usize;
+
+    for grapheme in value.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if used_width + grapheme_width > width {
+            break;
+        }
+        rendered.push_str(grapheme);
+        used_width += grapheme_width;
     }
+
+    rendered
+}
+
+fn pad_to_width(value: String, width: usize, alignment: Alignment) -> String {
+    let visible_width = UnicodeWidthStr::width(value.as_str());
+    if visible_width >= width {
+        return value;
+    }
+
+    let remaining = width - visible_width;
+    let (left_pad, right_pad) = match alignment {
+        Alignment::Center => (remaining / 2, remaining - (remaining / 2)),
+        Alignment::Right => (remaining, 0),
+        _ => (0, remaining),
+    };
+
+    format!("{}{}{}", " ".repeat(left_pad), value, " ".repeat(right_pad))
 }
 
 fn dot_fill(width: usize) -> String {
@@ -479,11 +503,40 @@ mod tests {
     }
 
     #[test]
-    fn format_activity_detail_right_aligns_value() {
-        assert_eq!(
-            format_activity_detail("last bump", "5d ago", 9, 20),
-            "last bump:    5d ago"
+    fn format_tile_info_row_centers_unicode_prefix_without_overflow() {
+        let formatted = format_tile_info_row("🏗", "tag..→HEAD", "8c ahd", 28);
+
+        assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
+        assert!(formatted.contains("🏗 → tag..→HEAD: 8c ahd"));
+        assert!(formatted.starts_with(' '));
+        assert!(formatted.ends_with(' '));
+    }
+
+    #[test]
+    fn format_tile_tag_row_centers_unicode_prefix_without_overflow() {
+        let formatted = format_tile_tag_row("🏷", "11c ahd", 22);
+
+        assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 22);
+        assert!(formatted.contains("🏷..HEAD: 11c ahd"));
+        assert!(formatted.starts_with(' '));
+        assert!(formatted.ends_with(' '));
+    }
+
+    #[test]
+    fn styled_row_keeps_dev_icon_grapheme_intact() {
+        let line = styled_row(
+            "║🏗 → bump: 5h ago       ║",
+            Style::default(),
+            Style::default(),
         );
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>();
+
+        assert!(rendered.contains(&"🏗"));
+        assert!(rendered.contains(&"→"));
     }
 
     #[test]
