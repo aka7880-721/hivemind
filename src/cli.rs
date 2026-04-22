@@ -761,7 +761,8 @@ fn load_branch_diagram(
     }
 
     let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
-        root_branch.clone()
+        select_branch_diagram_focus(repo_root, &root_branch, &branches)?
+            .unwrap_or_else(|| root_branch.clone())
     } else {
         branches
             .iter()
@@ -867,6 +868,28 @@ fn load_branch_diagram(
         },
         path,
     }))
+}
+
+fn select_branch_diagram_focus(
+    _repo_root: &str,
+    _root_branch: &BranchRef,
+    branches: &[BranchRef],
+) -> Result<Option<BranchRef>> {
+    let mut descendants = Vec::new();
+    for branch in branches {
+        if branch.root_distance == 0 {
+            continue;
+        }
+        descendants.push(branch.clone());
+    }
+
+    descendants.sort_by(|left, right| {
+        right
+            .root_distance
+            .cmp(&left.root_distance)
+            .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
+    });
+    Ok(descendants.into_iter().next())
 }
 
 fn first_parent_commit_ids(repo_root: &str, branch_ref: &str) -> Result<HashSet<String>> {
@@ -2113,6 +2136,75 @@ mod tests {
         let head_subject = run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
             .expect("read revert subject");
         assert!(head_subject.contains("Revert \"Merge feature/remove-me\""));
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn load_branch_diagram_uses_deepest_open_descendant_when_current_is_main() {
+        let repo_dir = create_temp_repo_dir("branch-diagram-main-focus");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+
+        let switch_main = run_git(&repo_root, &["switch", "-c", "main"]).expect("switch main");
+        if !switch_main.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "main"])
+                .expect("checkout main");
+        }
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"])
+            .expect("commit base file");
+
+        let switch_v039 = run_git(&repo_root, &["switch", "-c", "v0.3.9"]).expect("switch v0.3.9");
+        if !switch_v039.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.3.9"])
+                .expect("checkout v0.3.9");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\nv0.3.9\n").expect("write v0.3.9 file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage v0.3.9 file");
+        run_git_checked(&repo_root, &["commit", "-m", "v0.3.9 change"])
+            .expect("commit v0.3.9 change");
+
+        let switch_v011x = run_git(&repo_root, &["switch", "-c", "v0.11.x"]).expect("switch v0.11.x");
+        if !switch_v011x.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.11.x"])
+                .expect("checkout v0.11.x");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\nv0.3.9\nv0.11.x\n")
+            .expect("write v0.11.x file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage v0.11.x file");
+        run_git_checked(&repo_root, &["commit", "-m", "v0.11.x change"])
+            .expect("commit v0.11.x change");
+
+        let switch_main_back = run_git(&repo_root, &["switch", "main"]).expect("switch back to main");
+        if !switch_main_back.success {
+            run_git_checked(&repo_root, &["checkout", "main"]).expect("checkout main");
+        }
+
+        let diagram = load_branch_diagram(&repo_root, "main", None)
+            .expect("load branch diagram")
+            .expect("diagram should exist");
+
+        let path_names = diagram
+            .path
+            .iter()
+            .map(|segment| segment.branch.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(path_names, vec!["v0.3.9".to_string(), "v0.11.x".to_string()]);
+        assert!(diagram
+            .path
+            .iter()
+            .all(|segment| segment.branch.state == BranchDiagramState::Open));
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
     }
