@@ -106,8 +106,13 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
     app.overview_recent_viewport = Some(recent_inner);
     frame.render_widget(recent_block, area);
 
-    let recent_lines = if let Some(dialog) = &app.overview_recent_changes {
-        let mut lines = vec![
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(3)])
+        .split(recent_inner);
+
+    let header_lines = if let Some(dialog) = &app.overview_recent_changes {
+        vec![
             Line::from(format!(
                 "Scope: {} ({})",
                 dialog.active_scope().display_name,
@@ -124,21 +129,8 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
             ),
             Line::from(format!("View: {}", dialog.current_range().label))
                 .style(Style::default().fg(Color::Gray)),
-            Line::raw(""),
-        ];
-        if dialog.current_range().lines.is_empty() {
-            lines.push(Line::from("No recent changes to display."));
-        } else {
-            let graph_base_column = git_graph_base_column(&dialog.current_range().lines);
-            lines.extend(
-                dialog
-                    .current_range()
-                    .lines
-                    .iter()
-                    .map(|line| colorize_git_log_line(line, graph_base_column)),
-            );
-        }
-        lines
+            Line::from("Ctrl+R renames the selected commit. Double-click a commit row to open it."),
+        ]
     } else if let Some(error) = &app.overview_recent_error {
         vec![
             Line::from("Recent changes are unavailable.").style(
@@ -147,7 +139,37 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
                     .add_modifier(Modifier::BOLD),
             ),
             Line::from(error.clone()),
+            Line::raw(""),
         ]
+    } else {
+        vec![Line::from("Recent changes"), Line::raw(""), Line::raw("")]
+    };
+    frame.render_widget(
+        Paragraph::new(header_lines).wrap(Wrap { trim: false }),
+        sections[0],
+    );
+
+    let body_lines = if let Some(dialog) = &mut app.overview_recent_changes {
+        dialog.ensure_selection_visible(sections[1].height as usize);
+        if dialog.current_range().lines.is_empty() {
+            vec![Line::from("No recent changes to display.")]
+        } else {
+            let graph_base_column = git_graph_base_column(&dialog.current_range().lines);
+            dialog
+                .current_range()
+                .lines
+                .iter()
+                .enumerate()
+                .map(|(index, line)| {
+                    let rendered = colorize_git_log_line(line, graph_base_column);
+                    if dialog.selected_line() == Some(index) {
+                        highlight_git_log_line(rendered)
+                    } else {
+                        rendered
+                    }
+                })
+                .collect::<Vec<_>>()
+        }
     } else if let Some(project) = app.config.projects.get(app.selected_project) {
         if uses_dashboard_placeholder(project) {
             placeholder_recent_changes_lines(project)
@@ -167,11 +189,30 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
         .map(|dialog| dialog.scroll)
         .unwrap_or(0);
     frame.render_widget(
-        Paragraph::new(recent_lines)
+        Paragraph::new(body_lines)
             .scroll((scroll, 0))
             .wrap(Wrap { trim: false }),
-        recent_inner,
+        sections[1],
     );
+    if let Some(dialog) = &app.overview_recent_changes {
+        let start = dialog.scroll as usize;
+        let end = (start + sections[1].height as usize).min(dialog.current_range().lines.len());
+        for line_index in start..end {
+            if !dialog.line_has_commit(line_index) {
+                continue;
+            }
+            let offset = line_index.saturating_sub(start) as u16;
+            app.hit_targets.push(HitTarget::new(
+                Rect {
+                    x: sections[1].x,
+                    y: sections[1].y + offset,
+                    width: sections[1].width,
+                    height: 1,
+                },
+                HitAction::SelectRecentChangeLine(RecentChangeView::Overview, line_index),
+            ));
+        }
+    }
 }
 
 pub(super) fn should_use_recent_changes_tab(app: &App, area: Rect) -> bool {
