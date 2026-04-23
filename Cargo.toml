@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.12.1"
+version = "0.12.2"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
