@@ -196,6 +196,7 @@ fn print_usage() {
     );
     println!("          actions: major | minor | Patch | Auto | Cal ");
     println!("          synonyms:");
+    println!("            bmp: bump | bp | bum");
     println!("            major: maj | mj | mjr | big | .");
     println!("            minor: min | mnr | mr | mn | small | sml | ..");
     println!("            patch: pat | ptch | ph | pth | mini | ...");
