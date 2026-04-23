@@ -59,6 +59,9 @@ impl App {
         if self.recent_changes_dialog.is_some() {
             self.render_recent_changes_dialog(frame, frame.area());
         }
+        if self.commit_rename_dialog.is_some() {
+            self.render_commit_rename_dialog(frame, frame.area());
+        }
         if self.tag_dialog.is_some() {
             self.render_tag_dialog(frame, frame.area());
         }
@@ -1240,7 +1243,7 @@ impl App {
         );
     }
     fn render_recent_changes_dialog(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(dialog) = &self.recent_changes_dialog else {
+        let Some(dialog) = &mut self.recent_changes_dialog else {
             return;
         };
 
@@ -1316,6 +1319,7 @@ impl App {
         let body_block = Block::default().borders(Borders::ALL).title(" git log ");
         let body_inner = body_block.inner(sections[2]);
         frame.render_widget(body_block, sections[2]);
+        dialog.ensure_selection_visible(body_inner.height as usize);
         let graph_base_column = git_graph_base_column(&dialog.current_range().lines);
         let body = if dialog.current_range().lines.is_empty() {
             vec![Line::from(
@@ -1330,7 +1334,15 @@ impl App {
                 .current_range()
                 .lines
                 .iter()
-                .map(|line| colorize_git_log_line(line, graph_base_column))
+                .enumerate()
+                .map(|(index, line)| {
+                    let rendered = colorize_git_log_line(line, graph_base_column);
+                    if dialog.selected_line() == Some(index) {
+                        highlight_git_log_line(rendered)
+                    } else {
+                        rendered
+                    }
+                })
                 .collect::<Vec<_>>()
         };
         frame.render_widget(
@@ -1339,6 +1351,24 @@ impl App {
                 .scroll((dialog.scroll, 0)),
             body_inner,
         );
+        let visible_rows = body_inner.height as usize;
+        let start = dialog.scroll as usize;
+        let end = (start + visible_rows).min(dialog.current_range().lines.len());
+        for line_index in start..end {
+            if !dialog.line_has_commit(line_index) {
+                continue;
+            }
+            let offset = line_index.saturating_sub(start) as u16;
+            self.hit_targets.push(HitTarget::new(
+                Rect {
+                    x: body_inner.x,
+                    y: body_inner.y + offset,
+                    width: body_inner.width,
+                    height: 1,
+                },
+                HitAction::SelectRecentChangeLine(RecentChangeView::Popup, line_index),
+            ));
+        }
 
         let mut buttons = Vec::new();
         if dialog.can_select_scope() {
@@ -1367,6 +1397,122 @@ impl App {
             "Close",
             false,
             HitAction::CloseRecentChanges,
+            Style::default().fg(Color::White).bg(Color::Red),
+        ));
+        self.render_button_row(frame, sections[3], &buttons);
+    }
+
+    fn render_commit_rename_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.commit_rename_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 76, if area.height < 26 { 100 } else { 48 });
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Rename Commit ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(BUTTON_ROW_HEIGHT),
+            ])
+            .split(inner);
+
+        let header = vec![
+            Line::from(format!("Branch: {}", dialog.plan.branch_name)).bold(),
+            Line::from(format!("Commit: {}", dialog.plan.target_short)),
+            Line::from(format!("Current message: {}", dialog.plan.current_subject)),
+            Line::from(match dialog.view {
+                RecentChangeView::Popup => "Opened from: Gitlog Viewer",
+                RecentChangeView::Overview => "Opened from: Recent Changes",
+            }),
+        ];
+        frame.render_widget(
+            Paragraph::new(header).wrap(Wrap { trim: false }),
+            sections[0],
+        );
+
+        let input_row = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(20), Constraint::Min(10)])
+            .split(sections[1]);
+        frame.render_widget(Paragraph::new("New message"), input_row[0]);
+        let input_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" value ")
+            .border_style(Style::default().fg(Color::Cyan));
+        frame.render_widget(
+            Paragraph::new(dialog.message_input.display_value(true))
+                .block(input_block)
+                .style(Style::default().fg(Color::White)),
+            input_row[1],
+        );
+
+        let mut body = vec![Line::from(
+            "Enter saves. Esc cancels. Ctrl+P toggles force-push after rename.",
+        )];
+        if dialog.plan.touches_pushed_history {
+            body.push(
+                Line::from(format!(
+                    "Warning: this commit is already on {}.",
+                    dialog
+                        .plan
+                        .upstream_ref
+                        .as_deref()
+                        .unwrap_or("the upstream branch")
+                ))
+                .style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+            body.push(Line::from(format!(
+                "Force push after rename: {}",
+                if dialog.push_after_rename {
+                    "Yes"
+                } else {
+                    "No"
+                }
+            )));
+        } else {
+            body.push(Line::from(
+                "This rename stays local until you choose to push it.",
+            ));
+        }
+        frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), sections[2]);
+
+        let mut buttons = Vec::new();
+        if dialog.plan.touches_pushed_history {
+            buttons.push(DialogButton::new(
+                if dialog.push_after_rename {
+                    "Force Push: Yes"
+                } else {
+                    "Force Push: No"
+                },
+                false,
+                HitAction::ToggleCommitRenameForcePush,
+                Style::default().fg(Color::Black).bg(Color::Yellow),
+            ));
+        }
+        buttons.push(DialogButton::new(
+            "Save",
+            false,
+            HitAction::SaveCommitRename,
+            Style::default().fg(Color::Black).bg(Color::Green),
+        ));
+        buttons.push(DialogButton::new(
+            "Cancel",
+            false,
+            HitAction::CancelCommitRename,
             Style::default().fg(Color::White).bg(Color::Red),
         ));
         self.render_button_row(frame, sections[3], &buttons);
