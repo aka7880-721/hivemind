@@ -1225,13 +1225,13 @@ fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit) {
                 items,
                 summary,
             } => {
-                lines.push(format!("* {}   _({})_", intro, commit.short_hash));
+                lines.push(format!("{}   _({})_", intro, commit.short_hash));
                 for item in items {
-                    lines.push(format!("{}* {}", "  ".repeat(item.level), item.text));
+                    lines.push(format!("{}* {}", "  ".repeat(item.level - 1), item.text));
                 }
                 if let Some(summary) = summary {
                     lines.push(String::new());
-                    lines.push(format!("  {}", summary));
+                    lines.push(format!("<sup>💡 >> {}</sup>", summary));
                 }
             }
         }
@@ -1495,21 +1495,21 @@ mod tests {
 
         assert!(changelog.markdown.contains("### ✨ New in DEMO message:"));
         assert!(changelog.markdown.contains("#### 💎 Enhancements"));
-        assert!(changelog.markdown.contains("* Improvements:   _(b38b72e)_"));
-        assert!(changelog.markdown.contains("\n  * This is major element"));
+        assert!(changelog.markdown.contains("Improvements:   _(b38b72e)_"));
+        assert!(changelog.markdown.contains("\n* This is major element"));
         assert!(
             changelog
                 .markdown
-                .contains("\n    * This indented sub-information")
+                .contains("\n  * This indented sub-information")
         );
         assert!(
             changelog
                 .markdown
-                .contains("\n      * This is double-sub info")
+                .contains("\n    * This is double-sub info")
         );
-        assert!(changelog.markdown.contains("\n    * One more sub-info"));
-        assert!(changelog.markdown.contains("\n  * Another major"));
-        assert!(changelog.markdown.contains("\n    * With this sub-info"));
+        assert!(changelog.markdown.contains("\n  * One more sub-info"));
+        assert!(changelog.markdown.contains("\n* Another major"));
+        assert!(changelog.markdown.contains("\n  * With this sub-info"));
         assert!(
             changelog
                 .markdown
