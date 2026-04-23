@@ -193,10 +193,7 @@ impl ProjectWizard {
             ),
             WizardField::RepoRoot => ("Repo root", HitAction::WizardField(field)),
             WizardField::RemoteUrl => ("Remote URL", HitAction::WizardField(field)),
-            WizardField::TileAutoRotation => (
-                "Enable tile info auto-rotation",
-                HitAction::WizardField(field),
-            ),
+            WizardField::TileAutoRotation => ("Auto-rotation", HitAction::WizardField(field)),
             WizardField::TileRotates => ("Rotates", HitAction::WizardField(field)),
             WizardField::TileRotationTiming => ("Rotation (s)", HitAction::WizardField(field)),
             WizardField::Validate => ("Read", HitAction::ValidateWizard),

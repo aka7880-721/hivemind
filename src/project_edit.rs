@@ -248,10 +248,9 @@ impl ProjectEditDialog {
             ),
             ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
             ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
-            ProjectEditFocus::TileAutoRotation => (
-                "Enable tile info auto-rotation",
-                HitAction::EditProjectField(field),
-            ),
+            ProjectEditFocus::TileAutoRotation => {
+                ("Auto-rotation", HitAction::EditProjectField(field))
+            }
             ProjectEditFocus::TileRotates => ("Rotates", HitAction::EditProjectField(field)),
             ProjectEditFocus::TileRotationTiming => {
                 ("Rotation (s)", HitAction::EditProjectField(field))
