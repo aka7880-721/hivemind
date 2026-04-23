@@ -7,9 +7,12 @@
 
 use std::{
     collections::HashSet,
+    env, fs,
     io::{self, Write},
+    path::Path,
+    process::Command,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -25,6 +28,14 @@ use crate::{
 const PR_PREVIEW_SECONDS: u64 = 5;
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_RESET: &str = "\x1b[0m";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PullRequestPlan {
+    target_branch: String,
+    current_branch: String,
+    title: String,
+    body: String,
+}
 
 pub(crate) fn run_pr(
     repo_root: &str,
@@ -56,10 +67,22 @@ pub(crate) fn run_pr(
         );
     }
 
-    let title = format!("{} (via ComfyGit)", current_branch);
-    let body = build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?;
+    let plan = PullRequestPlan {
+        title: format!("{} (via ComfyGit)", current_branch),
+        body: build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?,
+        target_branch,
+        current_branch,
+    };
 
-    preview_pr(&target_branch, &current_branch, &title, &body, cancel)?;
+    preview_pr(&plan, cancel)?;
+    let pr_url = create_pull_request(repo_root, &plan)?;
+
+    println!();
+    println!(
+        "Created pull request: {}{}{}",
+        ANSI_YELLOW, pr_url, ANSI_RESET
+    );
+
     Ok(())
 }
 
@@ -91,32 +114,14 @@ fn build_pr_body(
     Ok(pr_changelog_gen(current_branch, &lines).markdown)
 }
 
-fn preview_pr(
-    target_branch: &str,
-    current_branch: &str,
-    title: &str,
-    body: &str,
-    cancel: Option<GitCancellation>,
-) -> Result<()> {
+fn preview_pr(plan: &PullRequestPlan, cancel: Option<GitCancellation>) -> Result<()> {
+    println!();
+    println!("{}", render_preview_summary(plan));
+    println!();
+    println!("{}", plan.body);
     println!();
     println!(
-        "{}Dry-run PR preview{}\n  {}Target branch:{} {}\n  {}Source branch:{} {}\n  {}Title:{} {}\n",
-        ANSI_YELLOW,
-        ANSI_RESET,
-        ANSI_YELLOW,
-        ANSI_RESET,
-        target_branch,
-        ANSI_YELLOW,
-        ANSI_RESET,
-        current_branch,
-        ANSI_YELLOW,
-        ANSI_RESET,
-        title
-    );
-    println!("{}", body);
-    println!();
-    println!(
-        "{}Preview will complete in {} seconds. Press Ctrl+C to abort.{}",
+        "Flow proceeds automatically in {}{}{} seconds. Press Ctrl+C to abort.",
         ANSI_YELLOW, PR_PREVIEW_SECONDS, ANSI_RESET
     );
     io::stdout()
@@ -125,9 +130,91 @@ fn preview_pr(
 
     wait_for_preview(cancel, PR_PREVIEW_SECONDS)?;
     println!();
-    println!("PR preview complete. No pull request was created by this command.");
+    println!("Creating pull request...");
 
     Ok(())
+}
+
+fn render_preview_summary(plan: &PullRequestPlan) -> String {
+    format!(
+        "ComfyGit is about to create PR {}{}{} from the branch {}{}{} that will request merge into {}{}{}. Press Ctrl+C within {}{}{} seconds to abort.",
+        ANSI_YELLOW,
+        plan.title,
+        ANSI_RESET,
+        ANSI_YELLOW,
+        plan.current_branch,
+        ANSI_RESET,
+        ANSI_YELLOW,
+        plan.target_branch,
+        ANSI_RESET,
+        ANSI_YELLOW,
+        PR_PREVIEW_SECONDS,
+        ANSI_RESET,
+    )
+}
+
+fn create_pull_request(repo_root: &str, plan: &PullRequestPlan) -> Result<String> {
+    let body_file = write_pr_body_file(&plan.body)?;
+    let args = build_pr_create_args(plan, &body_file);
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .args(&args)
+        .output()
+        .context(
+            "failed to execute `gh pr create`; ensure GitHub CLI is installed and authenticated",
+        )?;
+    let _ = fs::remove_file(&body_file);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        bail!("`gh pr create` failed: {}", detail);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let pr_url = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    if pr_url.is_empty() {
+        bail!("`gh pr create` succeeded but did not return a pull request URL");
+    }
+
+    Ok(pr_url)
+}
+
+fn write_pr_body_file(body: &str) -> Result<std::path::PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?
+        .as_nanos();
+    let path = env::temp_dir().join(format!(
+        "comfygit-pr-body-{}-{}.md",
+        std::process::id(),
+        timestamp
+    ));
+    fs::write(&path, body.trim_end())
+        .with_context(|| format!("failed to write temporary PR body file {}", path.display()))?;
+    Ok(path)
+}
+
+fn build_pr_create_args(plan: &PullRequestPlan, body_file: &Path) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "create".to_string(),
+        "--base".to_string(),
+        plan.target_branch.clone(),
+        "--head".to_string(),
+        plan.current_branch.clone(),
+        "--title".to_string(),
+        plan.title.clone(),
+        "--body-file".to_string(),
+        body_file.display().to_string(),
+    ]
 }
 
 fn wait_for_preview(cancel: Option<GitCancellation>, seconds: u64) -> Result<()> {
@@ -446,4 +533,60 @@ fn local_branch_names_merged_into_with_cancel(
 
 fn normalize_lookup(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_summary_highlights_dynamic_values() {
+        let plan = PullRequestPlan {
+            target_branch: "v0.13.x".to_string(),
+            current_branch: "v0.13.1-dev".to_string(),
+            title: "v0.13.1-dev (via ComfyGit)".to_string(),
+            body: "body".to_string(),
+        };
+
+        let summary = render_preview_summary(&plan);
+
+        assert!(summary.contains(&format!("{}{}{}", ANSI_YELLOW, plan.title, ANSI_RESET)));
+        assert!(summary.contains(&format!(
+            "{}{}{}",
+            ANSI_YELLOW, plan.current_branch, ANSI_RESET
+        )));
+        assert!(summary.contains(&format!(
+            "{}{}{}",
+            ANSI_YELLOW, plan.target_branch, ANSI_RESET
+        )));
+    }
+
+    #[test]
+    fn build_pr_create_args_uses_non_interactive_flags() {
+        let plan = PullRequestPlan {
+            target_branch: "main".to_string(),
+            current_branch: "feature/demo".to_string(),
+            title: "feature/demo (via ComfyGit)".to_string(),
+            body: "body".to_string(),
+        };
+        let body_file = Path::new("pr_temp.md");
+
+        let args = build_pr_create_args(&plan, body_file);
+
+        assert_eq!(
+            args,
+            vec![
+                "pr",
+                "create",
+                "--base",
+                "main",
+                "--head",
+                "feature/demo",
+                "--title",
+                "feature/demo (via ComfyGit)",
+                "--body-file",
+                "pr_temp.md",
+            ]
+        );
+    }
 }
