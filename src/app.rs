@@ -1499,6 +1499,35 @@ impl App {
             }
         }
 
+        if self.recent_changes_dialog.is_some()
+            && self.commit_rename_dialog.is_none()
+            && self.tag_dialog.is_none()
+            && self.tag_annotation_dialog.is_none()
+        {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.scroll_recent_changes(-2);
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll_recent_changes(2);
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
+                    }
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left) => return,
+                _ => return,
+            }
+        }
+
         if self.browser_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
@@ -2653,6 +2682,23 @@ impl App {
                     && !matches!(
                         action,
                         HitAction::ConfirmDeleteRequest | HitAction::CancelDeleteRequest
+                    )
+                {
+                    return None;
+                }
+
+                if self.recent_changes_dialog.is_some()
+                    && self.commit_rename_dialog.is_none()
+                    && self.tag_dialog.is_none()
+                    && self.tag_annotation_dialog.is_none()
+                    && !matches!(
+                        action,
+                        HitAction::SelectRecentChangesTab(_)
+                            | HitAction::CycleRecentChangesScope(_)
+                            | HitAction::CloseRecentChanges
+                            | HitAction::ScrollRecentChanges(_)
+                            | HitAction::SelectRecentChangeLine(_, _)
+                            | HitAction::OpenTagDialog
                     )
                 {
                     return None;
@@ -4282,11 +4328,12 @@ impl App {
             }
         };
 
-        if dialog.push_after_rename && dialog.plan.touches_pushed_history {
-            if let Err(error) = push_branch_force_with_lease(&dialog.plan.repo_root) {
-                self.commit_rename_dialog = Some(dialog);
-                return Err(error);
-            }
+        if dialog.push_after_rename
+            && dialog.plan.touches_pushed_history
+            && let Err(error) = push_branch_force_with_lease(&dialog.plan.repo_root)
+        {
+            self.commit_rename_dialog = Some(dialog);
+            return Err(error);
         }
 
         self.sync_dashboard_overview_after_repo_change();
