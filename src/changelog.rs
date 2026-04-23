@@ -1513,7 +1513,7 @@ mod tests {
         assert!(
             changelog
                 .markdown
-                .contains("\n\n  This is end message to sum it up\n")
+                .contains("\n\n<sup>💡 >> This is end message to sum it up</sup>\n")
         );
     }
 
