@@ -540,7 +540,7 @@ fn run_commit_rename(commit_target: &str) -> Result<()> {
                 .unwrap_or("the upstream branch")
         );
         println!(
-            "Renaming it will rewrite published history on {}.",
+            "Renaming it will rewrite published history on {}.\nDo this only if:\n  A) This is a solo project\n  B) This is a very recent pushed commit\n  C) You are 100% sure no one else is basing work on it\n  D) You coordinate with everyone who is basing work on it to update their branches after you push the rewrite",
             plan.branch_name
         );
         if !prompt_confirm_default_no("Continue with the local rename? [y/N]: ")? {
