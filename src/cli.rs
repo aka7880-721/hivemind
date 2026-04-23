@@ -12,6 +12,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -32,9 +33,10 @@ use crate::{
         TargetSpec,
     },
     git::{
-        collect_all_branch_git_scope_contexts, current_branch_with_cancel, last_bump_time,
-        latest_local_tag_with_cancel, run_git, run_git_checked, split_output_lines,
-        switch_to_existing_branch, switch_to_main_branch,
+        GitCancellation, collect_all_branch_git_scope_contexts, current_branch_with_cancel,
+        last_bump_time, latest_local_tag_with_cancel, resolve_main_branch_name, run_git,
+        run_git_checked, run_git_checked_owned_with_cancel, run_git_checked_with_cancel,
+        split_output_lines, switch_to_existing_branch, switch_to_main_branch,
     },
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
@@ -43,6 +45,58 @@ use crate::{
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/comfy-home/ComfyGit/releases/latest";
+
+static CLI_GIT_CANCELLATION_SLOT: OnceLock<Mutex<Option<GitCancellation>>> = OnceLock::new();
+static CLI_CTRL_C_HANDLER_RESULT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+
+fn cli_git_cancellation_slot() -> &'static Mutex<Option<GitCancellation>> {
+    CLI_GIT_CANCELLATION_SLOT.get_or_init(|| Mutex::new(None))
+}
+
+fn ensure_cli_ctrl_c_handler() -> Result<()> {
+    let slot = cli_git_cancellation_slot();
+    let install_result = CLI_CTRL_C_HANDLER_RESULT.get_or_init(|| {
+        ctrlc::set_handler(move || {
+            if let Ok(active) = slot.lock()
+                && let Some(cancel) = active.as_ref()
+            {
+                cancel.cancel();
+            }
+        })
+        .map_err(|error| error.to_string())
+    });
+
+    if let Err(message) = install_result {
+        bail!("failed to install Ctrl+C handler: {}", message)
+    }
+
+    Ok(())
+}
+
+fn with_cli_git_cancellation<T>(
+    action: impl FnOnce(Option<GitCancellation>) -> Result<T>,
+) -> Result<T> {
+    ensure_cli_ctrl_c_handler()?;
+
+    let cancel = GitCancellation::new();
+    {
+        let mut active = cli_git_cancellation_slot()
+            .lock()
+            .map_err(|_| anyhow!("failed to acquire Ctrl+C cancellation state"))?;
+        *active = Some(cancel.clone());
+    }
+
+    let result = action(Some(cancel.clone()));
+
+    if let Ok(mut active) = cli_git_cancellation_slot().lock() {
+        *active = None;
+    }
+
+    match result {
+        Err(_error) if cancel.is_cancelled() => bail!("cancelled by user"),
+        other => other,
+    }
+}
 
 pub(crate) enum StartupMode {
     Handled,
@@ -206,10 +260,10 @@ fn print_usage() {
     println!("            rename: rename | rn | rnm | reword | rwrd | rwd");
     println!(" ");
     println!("  BRANCHING COMMANDS:");
-    println!(" ");      
+    println!(" ");
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
-    println!("  cg branch main | ~         Switch to main/master/custom main for the project"); 
+    println!("  cg branch main | ~         Switch to main/master/custom main for the project");
     println!("          synonyms:");
     println!("            branch: br | brn | brnch");
     println!("            up: up | ..");
@@ -270,11 +324,14 @@ fn print_branch_status() -> Result<()> {
         .flush()
         .context("failed to flush branch status output")?;
 
-    let diagram = load_branch_diagram(
-        &context.repo_root,
-        &context.current_branch,
-        context.main_branch_name.as_deref(),
-    )?;
+    let diagram = with_cli_git_cancellation(|cancel| {
+        load_branch_diagram_with_cancel(
+            &context.repo_root,
+            &context.current_branch,
+            context.main_branch_name.as_deref(),
+            cancel,
+        )
+    })?;
 
     println!("{}", render_branch_tree(diagram.as_ref()));
     println!();
@@ -283,11 +340,14 @@ fn print_branch_status() -> Result<()> {
 
 fn run_branch_up() -> Result<()> {
     let context = load_active_branch_cli_context()?;
-    let target_branch = resolve_parent_branch_name(
-        &context.repo_root,
-        &context.current_branch,
-        context.main_branch_name.as_deref(),
-    )?;
+    let target_branch = with_cli_git_cancellation(|cancel| {
+        resolve_parent_branch_name_with_cancel(
+            &context.repo_root,
+            &context.current_branch,
+            context.main_branch_name.as_deref(),
+            cancel,
+        )
+    })?;
     switch_to_existing_branch(&context.repo_root, &target_branch)?;
 
     println!();
@@ -1391,14 +1451,18 @@ struct BranchLineage {
     path: Vec<BranchRef>,
 }
 
-fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
-    let output = run_git_checked(
+fn list_local_branch_refs_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<BranchRef>> {
+    let output = run_git_checked_with_cancel(
         repo_root,
         &[
             "for-each-ref",
             "--format=%(refname:short)|%(refname)|%(objectname)",
             "refs/heads",
         ],
+        cancel,
     )?;
     let mut branches = split_output_lines(&output)
         .into_iter()
@@ -1425,92 +1489,41 @@ fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
     Ok(branches)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchTreeData {
+    root: BranchRef,
+    family: Vec<BranchRef>,
+    path: Vec<BranchRef>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn load_branch_diagram(
     repo_root: &str,
     current_branch: &str,
     custom_main_branch: Option<&str>,
 ) -> Result<Option<BranchDiagram>> {
-    let mut branches = list_local_branch_refs(repo_root)?;
-    if branches.is_empty() {
+    load_branch_diagram_with_cancel(repo_root, current_branch, custom_main_branch, None)
+}
+
+fn load_branch_diagram_with_cancel(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<BranchDiagram>> {
+    let Some(tree) = build_branch_tree_data_with_cancel(
+        repo_root,
+        current_branch,
+        custom_main_branch,
+        true,
+        cancel.clone(),
+    )?
+    else {
         return Ok(None);
-    }
-
-    let root_index = branches
-        .iter()
-        .position(|branch| {
-            custom_main_branch.is_some_and(|custom| branch.name.eq_ignore_ascii_case(custom.trim()))
-        })
-        .or_else(|| {
-            branches
-                .iter()
-                .position(|branch| branch.name.eq_ignore_ascii_case("main"))
-        })
-        .or_else(|| {
-            branches
-                .iter()
-                .position(|branch| branch.name.eq_ignore_ascii_case("master"))
-        })
-        .or_else(|| {
-            branches
-                .iter()
-                .position(|branch| branch.name.eq_ignore_ascii_case(current_branch))
-        })
-        .unwrap_or(0);
-    let root_branch = branches.remove(root_index);
-
-    for branch in &mut branches {
-        branch.root_distance =
-            branch_unique_commit_count(repo_root, &root_branch.refname, &branch.refname)?;
-    }
-
-    let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
-        select_branch_diagram_focus(repo_root, &root_branch, &branches)?
-            .unwrap_or_else(|| root_branch.clone())
-    } else {
-        branches
-            .iter()
-            .find(|branch| branch.name.eq_ignore_ascii_case(current_branch))
-            .cloned()
-            .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
     };
 
-    let first_parent_commits = first_parent_commit_ids(repo_root, &current_ref.refname)?;
-    let mut family_branches = Vec::new();
-    for branch in branches {
-        if !is_branch_ancestor(repo_root, &branch.refname, &current_ref.refname)? {
-            continue;
-        }
-
-        if is_branch_ancestor(repo_root, &branch.refname, &root_branch.refname)? {
-            continue;
-        }
-
-        family_branches.push(branch);
-    }
-
-    let mut path_branches = family_branches
-        .iter()
-        .filter(|branch| first_parent_commits.contains(&branch.object_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !root_branch.name.eq_ignore_ascii_case(current_branch)
-        && path_branches
-            .iter()
-            .all(|branch| !branch.name.eq_ignore_ascii_case(current_branch))
-    {
-        path_branches.push(current_ref.clone());
-    }
-
-    path_branches.sort_by(|left, right| {
-        let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
-        let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
-        left.root_distance
-            .cmp(&right.root_distance)
-            .then_with(|| left_is_current.cmp(&right_is_current).reverse())
-            .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
-    });
-
-    let mut path = path_branches
+    let mut path = tree
+        .path
         .iter()
         .map(|branch| BranchDiagramSegment {
             branch: BranchDiagramNode {
@@ -1525,32 +1538,28 @@ fn load_branch_diagram(
         })
         .collect::<Vec<_>>();
 
-    for branch in family_branches {
-        if path_branches
+    let merged_sets = tree
+        .path
+        .iter()
+        .map(|branch| {
+            local_branch_names_merged_into_with_cancel(repo_root, &branch.refname, cancel.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    for branch in tree.family {
+        if tree
+            .path
             .iter()
             .any(|path_branch| path_branch.object_id == branch.object_id)
         {
             continue;
         }
 
-        let mut best_attachment = None;
-        for (index, path_branch) in path_branches.iter().enumerate() {
-            if !is_branch_ancestor(repo_root, &branch.refname, &path_branch.refname)? {
-                continue;
-            }
-
-            let distance = commit_distance(repo_root, &branch.refname, &path_branch.refname)?;
-            if distance == 0 {
-                continue;
-            }
-
-            match best_attachment {
-                Some((_, best_distance)) if distance >= best_distance => {}
-                _ => best_attachment = Some((index, distance)),
-            }
-        }
-
-        if let Some((index, _)) = best_attachment {
+        let branch_lookup = normalize_lookup(&branch.name);
+        if let Some(index) = merged_sets
+            .iter()
+            .position(|merged| merged.contains(&branch_lookup))
+        {
             path[index].merged.push(BranchDiagramNode {
                 name: display_branch_name(&branch.name),
                 state: BranchDiagramState::Merged,
@@ -1566,24 +1575,118 @@ fn load_branch_diagram(
 
     Ok(Some(BranchDiagram {
         root: BranchDiagramNode {
-            name: display_branch_name(&root_branch.name),
+            name: display_branch_name(&tree.root.name),
             state: BranchDiagramState::Main,
         },
         path,
     }))
 }
 
-fn load_branch_lineage(
+fn load_branch_lineage_with_cancel(
     repo_root: &str,
     current_branch: &str,
     custom_main_branch: Option<&str>,
+    cancel: Option<GitCancellation>,
 ) -> Result<Option<BranchLineage>> {
-    let mut branches = list_local_branch_refs(repo_root)?;
+    let Some(tree) = build_branch_tree_data_with_cancel(
+        repo_root,
+        current_branch,
+        custom_main_branch,
+        false,
+        cancel,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(BranchLineage {
+        root: tree.root,
+        path: tree.path,
+    }))
+}
+
+fn build_branch_tree_data_with_cancel(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+    focus_descendant_from_root: bool,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<BranchTreeData>> {
+    let mut branches = list_local_branch_refs_with_cancel(repo_root, cancel.clone())?;
     if branches.is_empty() {
         return Ok(None);
     }
 
-    let root_index = branches
+    let root_index = select_root_branch_index(&branches, current_branch, custom_main_branch);
+    let root_branch = branches.remove(root_index);
+    populate_root_distances_with_cancel(
+        repo_root,
+        &root_branch.refname,
+        &mut branches,
+        cancel.clone(),
+    )?;
+
+    let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
+        if focus_descendant_from_root {
+            select_branch_diagram_focus(repo_root, &root_branch, &branches)?
+                .unwrap_or_else(|| root_branch.clone())
+        } else {
+            root_branch.clone()
+        }
+    } else {
+        branches
+            .iter()
+            .find(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+            .cloned()
+            .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
+    };
+
+    let first_parent_commits =
+        first_parent_commit_ids_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
+    let merged_into_current = local_branch_names_merged_into_with_cancel(
+        repo_root,
+        &current_ref.refname,
+        cancel.clone(),
+    )?;
+    let merged_into_root =
+        local_branch_names_merged_into_with_cancel(repo_root, &root_branch.refname, cancel)?;
+
+    let family = branches
+        .into_iter()
+        .filter(|branch| {
+            let branch_lookup = normalize_lookup(&branch.name);
+            merged_into_current.contains(&branch_lookup)
+                && !merged_into_root.contains(&branch_lookup)
+        })
+        .collect::<Vec<_>>();
+
+    let mut path = family
+        .iter()
+        .filter(|branch| first_parent_commits.contains(&branch.object_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !root_branch.name.eq_ignore_ascii_case(current_branch)
+        && path
+            .iter()
+            .all(|branch| !branch.name.eq_ignore_ascii_case(current_branch))
+    {
+        path.push(current_ref);
+    }
+    sort_branch_path(&mut path, current_branch);
+
+    Ok(Some(BranchTreeData {
+        root: root_branch,
+        family,
+        path,
+    }))
+}
+
+fn select_root_branch_index(
+    branches: &[BranchRef],
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> usize {
+    branches
         .iter()
         .position(|branch| {
             custom_main_branch.is_some_and(|custom| branch.name.eq_ignore_ascii_case(custom.trim()))
@@ -1603,51 +1706,32 @@ fn load_branch_lineage(
                 .iter()
                 .position(|branch| branch.name.eq_ignore_ascii_case(current_branch))
         })
-        .unwrap_or(0);
-    let root_branch = branches.remove(root_index);
+        .unwrap_or(0)
+}
 
-    for branch in &mut branches {
-        branch.root_distance =
-            branch_unique_commit_count(repo_root, &root_branch.refname, &branch.refname)?;
+fn populate_root_distances_with_cancel(
+    repo_root: &str,
+    root_ref: &str,
+    branches: &mut [BranchRef],
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    for branch in branches.iter_mut() {
+        let range = format!("{}..{}", root_ref, branch.refname);
+        let output = run_git_checked_owned_with_cancel(
+            repo_root,
+            vec!["rev-list".to_string(), "--count".to_string(), range.clone()],
+            cancel.clone(),
+        )?;
+        branch.root_distance = output
+            .trim()
+            .parse::<usize>()
+            .with_context(|| format!("failed to parse git ancestry distance for {}", range))?;
     }
 
-    let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
-        root_branch.clone()
-    } else {
-        branches
-            .iter()
-            .find(|branch| branch.name.eq_ignore_ascii_case(current_branch))
-            .cloned()
-            .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
-    };
+    Ok(())
+}
 
-    let first_parent_commits = first_parent_commit_ids(repo_root, &current_ref.refname)?;
-    let mut family_branches = Vec::new();
-    for branch in branches {
-        if !is_branch_ancestor(repo_root, &branch.refname, &current_ref.refname)? {
-            continue;
-        }
-
-        if is_branch_ancestor(repo_root, &branch.refname, &root_branch.refname)? {
-            continue;
-        }
-
-        family_branches.push(branch);
-    }
-
-    let mut path = family_branches
-        .iter()
-        .filter(|branch| first_parent_commits.contains(&branch.object_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !root_branch.name.eq_ignore_ascii_case(current_branch)
-        && path
-            .iter()
-            .all(|branch| !branch.name.eq_ignore_ascii_case(current_branch))
-    {
-        path.push(current_ref);
-    }
-
+fn sort_branch_path(path: &mut [BranchRef], current_branch: &str) {
     path.sort_by(|left, right| {
         let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
         let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
@@ -1656,20 +1740,26 @@ fn load_branch_lineage(
             .then_with(|| left_is_current.cmp(&right_is_current).reverse())
             .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
     });
-
-    Ok(Some(BranchLineage {
-        root: root_branch,
-        path,
-    }))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve_parent_branch_name(
     repo_root: &str,
     current_branch: &str,
     custom_main_branch: Option<&str>,
 ) -> Result<String> {
-    let lineage = load_branch_lineage(repo_root, current_branch, custom_main_branch)?
-        .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
+    resolve_parent_branch_name_with_cancel(repo_root, current_branch, custom_main_branch, None)
+}
+
+fn resolve_parent_branch_name_with_cancel(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let lineage =
+        load_branch_lineage_with_cancel(repo_root, current_branch, custom_main_branch, cancel)?
+            .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
     if lineage.root.name.eq_ignore_ascii_case(current_branch) {
         bail!("current branch is already the main branch")
     }
@@ -1689,13 +1779,7 @@ fn resolve_parent_branch_name(
 }
 
 fn resolve_main_branch_target(repo_root: &str, custom_main_branch: Option<&str>) -> Result<String> {
-    let lineage = load_branch_lineage(
-        repo_root,
-        current_branch_with_cancel(repo_root, None)?.as_str(),
-        custom_main_branch,
-    )?
-    .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
-    Ok(lineage.root.name)
+    resolve_main_branch_name(repo_root, custom_main_branch)
 }
 
 fn select_branch_diagram_focus(
@@ -1720,30 +1804,39 @@ fn select_branch_diagram_focus(
     Ok(descendants.into_iter().next())
 }
 
-fn first_parent_commit_ids(repo_root: &str, branch_ref: &str) -> Result<HashSet<String>> {
-    let output = run_git_checked(repo_root, &["rev-list", "--first-parent", branch_ref])?;
+fn first_parent_commit_ids_with_cancel(
+    repo_root: &str,
+    branch_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<HashSet<String>> {
+    let output = run_git_checked_with_cancel(
+        repo_root,
+        &["rev-list", "--first-parent", branch_ref],
+        cancel,
+    )?;
     Ok(split_output_lines(&output).into_iter().collect())
 }
 
-fn is_branch_ancestor(repo_root: &str, ancestor_ref: &str, descendant_ref: &str) -> Result<bool> {
-    let output = run_git(
+fn local_branch_names_merged_into_with_cancel(
+    repo_root: &str,
+    descendant_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<HashSet<String>> {
+    let output = run_git_checked_with_cancel(
         repo_root,
-        &["merge-base", "--is-ancestor", ancestor_ref, descendant_ref],
+        &[
+            "for-each-ref",
+            "--merged",
+            descendant_ref,
+            "--format=%(refname:short)",
+            "refs/heads",
+        ],
+        cancel,
     )?;
-    Ok(output.success)
-}
-
-fn branch_unique_commit_count(repo_root: &str, base_ref: &str, branch_ref: &str) -> Result<usize> {
-    commit_distance(repo_root, base_ref, branch_ref)
-}
-
-fn commit_distance(repo_root: &str, base_ref: &str, branch_ref: &str) -> Result<usize> {
-    let range = format!("{}..{}", base_ref, branch_ref);
-    let output = run_git_checked(repo_root, &["rev-list", "--count", &range])?;
-    output
-        .trim()
-        .parse::<usize>()
-        .with_context(|| format!("failed to parse git ancestry distance for {}", range))
+    Ok(split_output_lines(&output)
+        .into_iter()
+        .map(|branch| normalize_lookup(&branch))
+        .collect())
 }
 
 fn display_branch_name(branch: &str) -> String {
