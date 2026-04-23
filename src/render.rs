@@ -1462,12 +1462,14 @@ impl App {
         if dialog.plan.touches_pushed_history {
             body.push(
                 Line::from(format!(
-                    "Warning: this commit is already on {}.",
+                    "\nWarning: this commit is already on {}! Renaming it will rewrite published history on {}.\n
+                    Do this only if:\n  A) This is a solo project\n  B) This is a very recent pushed commit\n  C) You are 100% sure no one else is basing work on it\n  D) You coordinate with everyone who is",
                     dialog
                         .plan
                         .upstream_ref
                         .as_deref()
-                        .unwrap_or("the upstream branch")
+                        .unwrap_or("the upstream branch"),
+                    dialog.plan.branch_name
                 ))
                 .style(
                     Style::default()
