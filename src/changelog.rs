@@ -2,9 +2,7 @@
 // All rights reserved.
 //
 // Licensed under the ComfyGit License v1.2
-///
 // For details, see the LICENSE file in the repository root.
-
 use std::{
     collections::HashSet,
     fs,
@@ -181,7 +179,17 @@ impl ParsedCommit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MessageItem {
     Text(String),
-    NestedList { intro: String, items: Vec<String> },
+    NestedList {
+        intro: String,
+        items: Vec<NestedListEntry>,
+        summary: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NestedListEntry {
+    level: usize,
+    text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -856,8 +864,12 @@ fn parse_message_items(message: &str) -> Vec<MessageItem> {
                 return None;
             }
 
-            if let Some((intro, items)) = parse_nested_list(segment) {
-                return Some(MessageItem::NestedList { intro, items });
+            if let Some((intro, items, summary)) = parse_nested_list(segment) {
+                return Some(MessageItem::NestedList {
+                    intro,
+                    items,
+                    summary,
+                });
             }
 
             Some(MessageItem::Text(segment.to_string()))
@@ -929,24 +941,96 @@ fn looks_like_prefixed_clause(segment: &str) -> bool {
     category.is_some() || specific.is_some() || specific_heading.is_some()
 }
 
-fn parse_nested_list(segment: &str) -> Option<(String, Vec<String>)> {
+fn parse_nested_list(segment: &str) -> Option<(String, Vec<NestedListEntry>, Option<String>)> {
     let (intro, trailing) = segment.split_once(':')?;
-    if !trailing.contains('*') {
+    if !trailing.contains('*') || !trailing.trim_start().starts_with('*') {
         return None;
     }
 
-    let items = trailing
-        .split('*')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-
+    let (items, summary) = parse_nested_list_items(trailing.trim_start())?;
     if items.is_empty() {
         return None;
     }
 
-    Some((format!("{}:", intro.trim()), items))
+    Some((format!("{}:", intro.trim()), items, summary))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NestedListMarker {
+    Level(usize),
+    End,
+}
+
+fn parse_nested_list_items(trailing: &str) -> Option<(Vec<NestedListEntry>, Option<String>)> {
+    let mut entries = Vec::new();
+    let mut summary = None;
+    let mut cursor = 0;
+
+    while cursor < trailing.len() {
+        let Some((marker_index, marker)) = find_next_nested_list_marker(trailing, cursor) else {
+            break;
+        };
+
+        let marker_len = nested_list_marker_len(marker);
+        let content_start = marker_index + marker_len;
+
+        match marker {
+            NestedListMarker::End => {
+                let text = trailing[content_start..].trim();
+                if !text.is_empty() {
+                    summary = Some(text.to_string());
+                }
+                break;
+            }
+            NestedListMarker::Level(level) => {
+                let next_index = find_next_nested_list_marker(trailing, content_start)
+                    .map(|(index, _)| index)
+                    .unwrap_or(trailing.len());
+                let text = trailing[content_start..next_index].trim();
+                if !text.is_empty() {
+                    entries.push(NestedListEntry {
+                        level,
+                        text: text.to_string(),
+                    });
+                }
+                cursor = next_index;
+            }
+        }
+    }
+
+    (!entries.is_empty()).then_some((entries, summary))
+}
+
+fn find_next_nested_list_marker(input: &str, start: usize) -> Option<(usize, NestedListMarker)> {
+    let bytes = input.as_bytes();
+    let mut index = start;
+
+    while index < bytes.len() {
+        if bytes[index] != b'*' {
+            index += 1;
+            continue;
+        }
+
+        if input[index..].starts_with("*end*") {
+            return Some((index, NestedListMarker::End));
+        }
+        if input[index..].starts_with("***") {
+            return Some((index, NestedListMarker::Level(3)));
+        }
+        if input[index..].starts_with("**") {
+            return Some((index, NestedListMarker::Level(2)));
+        }
+        return Some((index, NestedListMarker::Level(1)));
+    }
+
+    None
+}
+
+fn nested_list_marker_len(marker: NestedListMarker) -> usize {
+    match marker {
+        NestedListMarker::Level(level) => level,
+        NestedListMarker::End => 5,
+    }
 }
 
 fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
@@ -1136,10 +1220,18 @@ fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit) {
             MessageItem::Text(text) => {
                 lines.push(format!("* {}   _({})_", text, commit.short_hash));
             }
-            MessageItem::NestedList { intro, items } => {
+            MessageItem::NestedList {
+                intro,
+                items,
+                summary,
+            } => {
                 lines.push(format!("* {}   _({})_", intro, commit.short_hash));
                 for item in items {
-                    lines.push(format!("  * {}", item));
+                    lines.push(format!("{}* {}", "  ".repeat(item.level), item.text));
+                }
+                if let Some(summary) = summary {
+                    lines.push(String::new());
+                    lines.push(format!("  {}", summary));
                 }
             }
         }
@@ -1330,10 +1422,98 @@ mod tests {
             vec![
                 MessageItem::NestedList {
                     intro: "bugs in the UI:".to_string(),
-                    items: vec!["render".to_string(), "borders".to_string()],
+                    items: vec![
+                        NestedListEntry {
+                            level: 1,
+                            text: "render".to_string(),
+                        },
+                        NestedListEntry {
+                            level: 1,
+                            text: "borders".to_string(),
+                        },
+                    ],
+                    summary: None,
                 },
                 MessageItem::Text("auth button in settings modal".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn parses_nested_list_modifiers_for_indentation_and_summary() {
+        let parsed = ParsedCommit::parse(
+            "@enh(DEMO message): Improvements: *This is major element **This indented sub-information ***This is double-sub info **One more sub-info *Another major **With this sub-info *end*This is end message to sum it up",
+            "abc1234",
+        );
+
+        assert_eq!(
+            parsed.message_items,
+            vec![MessageItem::NestedList {
+                intro: "Improvements:".to_string(),
+                items: vec![
+                    NestedListEntry {
+                        level: 1,
+                        text: "This is major element".to_string(),
+                    },
+                    NestedListEntry {
+                        level: 2,
+                        text: "This indented sub-information".to_string(),
+                    },
+                    NestedListEntry {
+                        level: 3,
+                        text: "This is double-sub info".to_string(),
+                    },
+                    NestedListEntry {
+                        level: 2,
+                        text: "One more sub-info".to_string(),
+                    },
+                    NestedListEntry {
+                        level: 1,
+                        text: "Another major".to_string(),
+                    },
+                    NestedListEntry {
+                        level: 2,
+                        text: "With this sub-info".to_string(),
+                    },
+                ],
+                summary: Some("This is end message to sum it up".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn renders_nested_list_modifiers_with_indentation_and_summary_spacing() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![ParsedCommit::parse(
+                "@enh(DEMO message): Improvements: *This is major element **This indented sub-information ***This is double-sub info **One more sub-info *Another major **With this sub-info *end*This is end message to sum it up",
+                "b38b72e",
+            )],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 4, 23).unwrap())
+        .render_markdown();
+
+        assert!(changelog.markdown.contains("### ✨ New in DEMO message:"));
+        assert!(changelog.markdown.contains("#### 💎 Enhancements"));
+        assert!(changelog.markdown.contains("* Improvements:   _(b38b72e)_"));
+        assert!(changelog.markdown.contains("\n  * This is major element"));
+        assert!(
+            changelog
+                .markdown
+                .contains("\n    * This indented sub-information")
+        );
+        assert!(
+            changelog
+                .markdown
+                .contains("\n      * This is double-sub info")
+        );
+        assert!(changelog.markdown.contains("\n    * One more sub-info"));
+        assert!(changelog.markdown.contains("\n  * Another major"));
+        assert!(changelog.markdown.contains("\n    * With this sub-info"));
+        assert!(
+            changelog
+                .markdown
+                .contains("\n\n  This is end message to sum it up\n")
         );
     }
 
