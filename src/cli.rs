@@ -2271,21 +2271,19 @@ fn find_repo_custom_main_branch(repo_root: &str) -> Option<String> {
     let config = load_config().ok()?;
 
     for project in &config.projects {
-        if let Some(repo) = project.repo.as_ref() {
-            if best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root {
-                if let Some(branch) = repo.custom_main_branch_name() {
-                    return Some(branch.to_string());
-                }
-            }
+        if let Some(repo) = project.repo.as_ref()
+            && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+            && let Some(branch) = repo.custom_main_branch_name()
+        {
+            return Some(branch.to_string());
         }
 
         for branch in &project.branches {
-            if let Some(repo) = branch.repo.as_ref() {
-                if best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root {
-                    if let Some(branch_name) = repo.custom_main_branch_name() {
-                        return Some(branch_name.to_string());
-                    }
-                }
+            if let Some(repo) = branch.repo.as_ref()
+                && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+                && let Some(branch_name) = repo.custom_main_branch_name()
+            {
+                return Some(branch_name.to_string());
             }
         }
     }
