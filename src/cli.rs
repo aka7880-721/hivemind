@@ -861,10 +861,10 @@ fn commit_subject(repo_root: &str, commit_hash: &str) -> Result<String> {
 }
 
 fn commit_message(repo_root: &str, commit_hash: &str) -> Result<String> {
-    Ok(run_git_checked(
+    run_git_checked(
         repo_root,
         &["show", "--no-patch", "--format=%B", commit_hash],
-    )?)
+    )
 }
 
 fn short_commit_hash(repo_root: &str, commit_hash: &str) -> Result<String> {
