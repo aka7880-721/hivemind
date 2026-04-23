@@ -903,7 +903,8 @@ impl App {
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5),
+                Constraint::Length(6),
+                Constraint::Length(dialog.options.len() as u16 + 2),
                 Constraint::Length(3),
                 Constraint::Min(2),
                 Constraint::Length(BUTTON_ROW_HEIGHT),
@@ -919,43 +920,94 @@ impl App {
                     .add_modifier(Modifier::BOLD),
             ),
             Line::from(format!("Workflow: {}", dialog.workflow.display_name())),
+            Line::from(format!("Resolved branch: {}", dialog.branch_preview()))
+                .style(Style::default().fg(Color::Cyan)),
         ];
         frame.render_widget(
             Paragraph::new(header).wrap(Wrap { trim: false }),
             sections[0],
         );
 
+        let mut option_state = ListState::default();
+        option_state.select(Some(dialog.selected));
+        let option_items = dialog
+            .options
+            .iter()
+            .enumerate()
+            .map(|(index, option)| {
+                let mut line = vec![Span::raw(format!("{}. {}", index + 1, option.preview()))];
+                if index == 0 {
+                    line.push(Span::styled(
+                        "  default",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                ListItem::new(Line::from(line))
+            })
+            .collect::<Vec<_>>();
+        let option_list = List::new(option_items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" suggestions ")
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("> ");
+        frame.render_stateful_widget(option_list, sections[1], &mut option_state);
+
         let input_row = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(20), Constraint::Min(10)])
-            .split(sections[1]);
-        frame.render_widget(Paragraph::new("Branch name"), input_row[0]);
+            .split(sections[2]);
+        frame.render_widget(Paragraph::new(dialog.input_label()), input_row[0]);
         let input_block = Block::default()
             .borders(Borders::ALL)
             .title(" value ")
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(if dialog.input_enabled() {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }));
         frame.render_widget(
-            Paragraph::new(dialog.branch_name.display_value(true))
-                .block(input_block)
-                .style(Style::default().fg(Color::White)),
+            Paragraph::new(if dialog.input_enabled() {
+                dialog.branch_name.display_value(true)
+            } else {
+                dialog.branch_preview()
+            })
+            .block(input_block)
+            .style(Style::default().fg(if dialog.input_enabled() {
+                Color::White
+            } else {
+                Color::DarkGray
+            })),
             input_row[1],
         );
 
-        let workflow_hint = if dialog.workflow.requires_push() {
-            "Create the branch first, then run the bump, commit, and push workflow."
-        } else {
-            "Create the branch first, then run the bump and commit workflow locally."
-        };
+        let workflow_hint = format!(
+            "{}\n{}",
+            dialog.input_hint(),
+            if dialog.workflow.requires_push() {
+                "The selected workflow will create the branch, then run the bump, commit, and push flow."
+            } else {
+                "The selected workflow will create the branch, then run the bump and commit flow locally."
+            }
+        );
         frame.render_widget(
             Paragraph::new(workflow_hint)
                 .wrap(Wrap { trim: false })
                 .scroll((0, dialog.scroll)),
-            sections[2],
+            sections[3],
         );
 
         self.render_button_row(
             frame,
-            sections[3],
+            sections[4],
             &[
                 DialogButton::new(
                     "Run",
