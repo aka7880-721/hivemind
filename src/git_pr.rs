@@ -133,10 +133,7 @@ fn preview_pr(
 fn wait_for_preview(cancel: Option<GitCancellation>, seconds: u64) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
-        if cancel
-            .as_ref()
-            .map_or(false, |cancel| cancel.is_cancelled())
-        {
+        if cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
             bail!("cancelled by user");
         }
         thread::sleep(Duration::from_millis(100));
