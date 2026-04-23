@@ -207,7 +207,8 @@ fn print_usage() {
     println!("             1 → Just bump the version");
     println!("             2 → Bump & Commit (locally)");
     println!("             3 → Bump & Commit & Push");
-    println!("             4 → Branch & Bump & Commit & Push (will prompt for branch name)");
+    println!("             4 → Branch & Bump & Commit (will prompt for branch name, local only)");
+    println!("             5 → Branch & Bump & Commit & Push (will prompt for branch name)");
     println!(" ");
 }
 
@@ -1224,8 +1225,9 @@ fn parse_cli_bump_option(value: Option<&str>) -> Result<OverviewBumpWorkflow> {
         Some("1") => Ok(OverviewBumpWorkflow::JustBump),
         Some("2") => Ok(OverviewBumpWorkflow::Commit),
         Some("3") => Ok(OverviewBumpWorkflow::CommitAndPush),
-        Some("4") => Ok(OverviewBumpWorkflow::BranchCommitAndPush),
-        Some(other) => bail!("unsupported bump option '{}'; expected 1-4", other),
+        Some("4") => Ok(OverviewBumpWorkflow::BranchCommit),
+        Some("5") => Ok(OverviewBumpWorkflow::BranchCommitAndPush),
+        Some(other) => bail!("unsupported bump option '{}'; expected 1-5", other),
     }
 }
 
@@ -2331,6 +2333,10 @@ mod tests {
         );
         assert_eq!(
             parse_cli_bump_option(Some("4")).expect("option 4 should parse"),
+            OverviewBumpWorkflow::BranchCommit
+        );
+        assert_eq!(
+            parse_cli_bump_option(Some("5")).expect("option 5 should parse"),
             OverviewBumpWorkflow::BranchCommitAndPush
         );
     }
