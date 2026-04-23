@@ -34,6 +34,7 @@ use crate::{
     git::{
         collect_all_branch_git_scope_contexts, current_branch_with_cancel, last_bump_time,
         latest_local_tag_with_cancel, run_git, run_git_checked, split_output_lines,
+        switch_to_existing_branch, switch_to_main_branch,
     },
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
@@ -66,6 +67,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command] if is_branch_command(command) => {
             print_branch_status()?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_branch_command(command) && is_branch_up_action(action) => {
+            run_branch_up()?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_branch_command(command) && is_branch_main_action(action) => {
+            run_branch_main()?;
             Ok(StartupMode::Handled)
         }
         [command, lookup] if is_project_version_command(command) => {
@@ -145,6 +154,14 @@ fn is_branch_command(value: &str) -> bool {
     matches!(value, "branch" | "br" | "brn" | "brnch")
 }
 
+fn is_branch_up_action(value: &str) -> bool {
+    matches!(value, "up" | "..")
+}
+
+fn is_branch_main_action(value: &str) -> bool {
+    matches!(value, "main" | "~")
+}
+
 fn is_project_version_command(value: &str) -> bool {
     value == "v"
 }
@@ -175,6 +192,8 @@ fn print_usage() {
         "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
     );
     println!("  cg branch                  Show the current branch and a compact branch tree");
+    println!("  cg branch up | ..          Switch to the parent branch in the current tree");
+    println!("  cg branch main | ~         Switch to main/master/custom main for the project");
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
     println!(
@@ -230,6 +249,75 @@ fn print_version_status() {
 }
 
 fn print_branch_status() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+
+    println!();
+    println!("current branch: \x1b[33m{}\x1b[0m", context.current_branch);
+    println!("---------------");
+    println!();
+    println!("Generating the tree...");
+    println!("\x1b[90m(ctrl+c to cancel)\x1b[0m");
+    println!();
+    io::stdout()
+        .flush()
+        .context("failed to flush branch status output")?;
+
+    let diagram = load_branch_diagram(
+        &context.repo_root,
+        &context.current_branch,
+        context.main_branch_name.as_deref(),
+    )?;
+
+    println!("{}", render_branch_tree(diagram.as_ref()));
+    println!();
+    Ok(())
+}
+
+fn run_branch_up() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    let target_branch = resolve_parent_branch_name(
+        &context.repo_root,
+        &context.current_branch,
+        context.main_branch_name.as_deref(),
+    )?;
+    switch_to_existing_branch(&context.repo_root, &target_branch)?;
+
+    println!();
+    println!(
+        "switched current branch: \x1b[33m{}\x1b[0m → \x1b[33m{}\x1b[0m",
+        context.current_branch, target_branch
+    );
+    println!();
+    Ok(())
+}
+
+fn run_branch_main() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    let target_branch =
+        resolve_main_branch_target(&context.repo_root, context.main_branch_name.as_deref())?;
+    switch_to_main_branch(
+        &context.repo_root,
+        None,
+        false,
+        context.main_branch_name.as_deref(),
+    )?;
+
+    println!();
+    println!(
+        "switched current branch: \x1b[33m{}\x1b[0m → \x1b[33m{}\x1b[0m",
+        context.current_branch, target_branch
+    );
+    println!();
+    Ok(())
+}
+
+struct ActiveBranchCliContext {
+    repo_root: String,
+    main_branch_name: Option<String>,
+    current_branch: String,
+}
+
+fn load_active_branch_cli_context() -> Result<ActiveBranchCliContext> {
     let config = load_config()?;
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
@@ -248,26 +336,11 @@ fn print_branch_status() -> Result<()> {
         .ok_or_else(|| anyhow!("git scope metadata is unavailable for the current branch view"))?;
     let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
 
-    println!();
-    println!("current branch: \x1b[33m{}\x1b[0m", current_branch);
-    println!("---------------");
-    println!();
-    println!("Generating the tree...");
-    println!("\x1b[90m(ctrl+c to cancel)\x1b[0m");
-    println!();
-    io::stdout()
-        .flush()
-        .context("failed to flush branch status output")?;
-
-    let diagram = load_branch_diagram(
-        &context.repo_root,
-        &current_branch,
-        context.main_branch_name.as_deref(),
-    )?;
-
-    println!("{}", render_branch_tree(diagram.as_ref()));
-    println!();
-    Ok(())
+    Ok(ActiveBranchCliContext {
+        repo_root: context.repo_root.clone(),
+        main_branch_name: context.main_branch_name.clone(),
+        current_branch,
+    })
 }
 
 fn print_project_version(lookup: &str) -> Result<()> {
@@ -1304,6 +1377,12 @@ struct BranchDiagram {
     path: Vec<BranchDiagramSegment>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchLineage {
+    root: BranchRef,
+    path: Vec<BranchRef>,
+}
+
 fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
     let output = run_git_checked(
         repo_root,
@@ -1484,6 +1563,131 @@ fn load_branch_diagram(
         },
         path,
     }))
+}
+
+fn load_branch_lineage(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> Result<Option<BranchLineage>> {
+    let mut branches = list_local_branch_refs(repo_root)?;
+    if branches.is_empty() {
+        return Ok(None);
+    }
+
+    let root_index = branches
+        .iter()
+        .position(|branch| {
+            custom_main_branch.is_some_and(|custom| branch.name.eq_ignore_ascii_case(custom.trim()))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case("main"))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case("master"))
+        })
+        .or_else(|| {
+            branches
+                .iter()
+                .position(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+        })
+        .unwrap_or(0);
+    let root_branch = branches.remove(root_index);
+
+    for branch in &mut branches {
+        branch.root_distance =
+            branch_unique_commit_count(repo_root, &root_branch.refname, &branch.refname)?;
+    }
+
+    let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
+        root_branch.clone()
+    } else {
+        branches
+            .iter()
+            .find(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+            .cloned()
+            .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
+    };
+
+    let first_parent_commits = first_parent_commit_ids(repo_root, &current_ref.refname)?;
+    let mut family_branches = Vec::new();
+    for branch in branches {
+        if !is_branch_ancestor(repo_root, &branch.refname, &current_ref.refname)? {
+            continue;
+        }
+
+        if is_branch_ancestor(repo_root, &branch.refname, &root_branch.refname)? {
+            continue;
+        }
+
+        family_branches.push(branch);
+    }
+
+    let mut path = family_branches
+        .iter()
+        .filter(|branch| first_parent_commits.contains(&branch.object_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !root_branch.name.eq_ignore_ascii_case(current_branch)
+        && path
+            .iter()
+            .all(|branch| !branch.name.eq_ignore_ascii_case(current_branch))
+    {
+        path.push(current_ref);
+    }
+
+    path.sort_by(|left, right| {
+        let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
+        let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
+        left.root_distance
+            .cmp(&right.root_distance)
+            .then_with(|| left_is_current.cmp(&right_is_current).reverse())
+            .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
+    });
+
+    Ok(Some(BranchLineage {
+        root: root_branch,
+        path,
+    }))
+}
+
+fn resolve_parent_branch_name(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> Result<String> {
+    let lineage = load_branch_lineage(repo_root, current_branch, custom_main_branch)?
+        .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
+    if lineage.root.name.eq_ignore_ascii_case(current_branch) {
+        bail!("current branch is already the main branch")
+    }
+
+    let current_index = lineage
+        .path
+        .iter()
+        .position(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+        .ok_or_else(|| anyhow!("current branch is not part of the current branch tree"))?;
+
+    let target = if current_index == 0 {
+        lineage.root.name
+    } else {
+        lineage.path[current_index - 1].name.clone()
+    };
+    Ok(target)
+}
+
+fn resolve_main_branch_target(repo_root: &str, custom_main_branch: Option<&str>) -> Result<String> {
+    let lineage = load_branch_lineage(
+        repo_root,
+        current_branch_with_cancel(repo_root, None)?.as_str(),
+        custom_main_branch,
+    )?
+    .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
+    Ok(lineage.root.name)
 }
 
 fn select_branch_diagram_focus(
@@ -2399,6 +2603,20 @@ mod tests {
     }
 
     #[test]
+    fn is_branch_up_action_accepts_requested_synonyms() {
+        assert!(is_branch_up_action("up"));
+        assert!(is_branch_up_action(".."));
+        assert!(!is_branch_up_action("parent"));
+    }
+
+    #[test]
+    fn is_branch_main_action_accepts_requested_synonyms() {
+        assert!(is_branch_main_action("main"));
+        assert!(is_branch_main_action("~"));
+        assert!(!is_branch_main_action("root"));
+    }
+
+    #[test]
     fn is_project_version_command_accepts_short_form() {
         assert!(is_project_version_command("v"));
         assert!(!is_project_version_command("version"));
@@ -2954,6 +3172,78 @@ mod tests {
                 .path
                 .iter()
                 .all(|segment| segment.branch.state == BranchDiagramState::Open)
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn resolve_parent_branch_name_uses_previous_level_in_branch_tree() {
+        let repo_dir = create_temp_repo_dir("branch-parent-target");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        init_temp_git_repo(&repo_root);
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        let switch_dev =
+            run_git(&repo_root, &["switch", "-c", "v0.12.x-dev"]).expect("switch dev branch");
+        if !switch_dev.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.12.x-dev"])
+                .expect("checkout dev branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\ndev\n").expect("write dev file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage dev file");
+        run_git_checked(&repo_root, &["commit", "-m", "dev"]).expect("commit dev file");
+
+        let switch_patch =
+            run_git(&repo_root, &["switch", "-c", "v0.12.2"]).expect("switch patch branch");
+        if !switch_patch.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.12.2"])
+                .expect("checkout patch branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\ndev\npatch\n").expect("write patch file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage patch file");
+        run_git_checked(&repo_root, &["commit", "-m", "patch"]).expect("commit patch file");
+
+        assert_eq!(
+            resolve_parent_branch_name(&repo_root, "v0.12.2", None).expect("resolve parent branch"),
+            "v0.12.x-dev"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn resolve_main_branch_target_prefers_custom_main_branch() {
+        let repo_dir = create_temp_repo_dir("branch-main-target");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_trunk =
+            run_git(&repo_root, &["switch", "-c", "trunk"]).expect("switch trunk branch");
+        if !switch_trunk.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "trunk"])
+                .expect("checkout trunk branch");
+        }
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        assert_eq!(
+            resolve_main_branch_target(&repo_root, Some("trunk"))
+                .expect("resolve main branch target"),
+            "trunk"
         );
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
