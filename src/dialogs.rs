@@ -10,6 +10,7 @@ use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     config::{IntegrationMode, ProjectConfig},
@@ -42,6 +43,19 @@ pub(crate) struct RecentChangesDialog {
 pub(crate) struct ChangeRange {
     pub(crate) label: String,
     pub(crate) lines: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RecentChangeLineLayout {
+    pub(crate) line_index: usize,
+    pub(crate) start_row: usize,
+    pub(crate) row_count: usize,
+}
+
+impl RecentChangeLineLayout {
+    pub(crate) fn end_row(self) -> usize {
+        self.start_row + self.row_count
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -441,6 +455,33 @@ impl RecentChangesDialog {
             .and_then(|line| extract_commit_hash(line))
     }
 
+    pub(crate) fn line_layouts(&self, wrap_width: usize) -> Vec<RecentChangeLineLayout> {
+        let wrap_width = wrap_width.max(1);
+        let mut start_row = 0usize;
+        self.current_range()
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(line_index, line)| {
+                let row_count = wrapped_line_rows(line, wrap_width);
+                let layout = RecentChangeLineLayout {
+                    line_index,
+                    start_row,
+                    row_count,
+                };
+                start_row += row_count;
+                layout
+            })
+            .collect()
+    }
+
+    pub(crate) fn selected_line_layout(&self, wrap_width: usize) -> Option<RecentChangeLineLayout> {
+        let selected_line = self.selected_line()?;
+        self.line_layouts(wrap_width)
+            .into_iter()
+            .find(|layout| layout.line_index == selected_line)
+    }
+
     pub(crate) fn line_has_commit(&self, line_index: usize) -> bool {
         self.current_range()
             .lines
@@ -455,22 +496,28 @@ impl RecentChangesDialog {
         }
     }
 
-    pub(crate) fn ensure_selection_visible(&mut self, visible_rows: usize) {
-        if visible_rows == 0 || self.selected_line().is_none() {
+    pub(crate) fn ensure_selection_visible(&mut self, visible_rows: usize, wrap_width: usize) {
+        if visible_rows == 0 {
             self.scroll = 0;
             return;
         }
 
-        let selected = self.selected_line as u16;
-        let visible_rows = visible_rows.min(u16::MAX as usize) as u16;
-        if selected < self.scroll {
-            self.scroll = selected;
+        let Some(selected_layout) = self.selected_line_layout(wrap_width) else {
+            self.scroll = 0;
+            return;
+        };
+
+        let visible_rows = visible_rows.min(u16::MAX as usize);
+        let scroll = self.scroll as usize;
+        if selected_layout.start_row < scroll {
+            self.scroll = selected_layout.start_row.min(u16::MAX as usize) as u16;
             return;
         }
 
-        let viewport_end = self.scroll.saturating_add(visible_rows.saturating_sub(1));
-        if selected > viewport_end {
-            self.scroll = selected.saturating_sub(visible_rows.saturating_sub(1));
+        let viewport_end = scroll + visible_rows;
+        if selected_layout.end_row() > viewport_end {
+            let next_scroll = selected_layout.end_row().saturating_sub(visible_rows);
+            self.scroll = next_scroll.min(u16::MAX as usize) as u16;
         }
     }
 
@@ -567,6 +614,12 @@ fn extract_commit_hash(line: &str) -> Option<String> {
     }
 
     None
+}
+
+fn wrapped_line_rows(line: &str, wrap_width: usize) -> usize {
+    let wrap_width = wrap_width.max(1);
+    let display_width = UnicodeWidthStr::width(line).max(1);
+    display_width.div_ceil(wrap_width)
 }
 
 #[derive(Clone)]

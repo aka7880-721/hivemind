@@ -1319,7 +1319,7 @@ impl App {
         let body_block = Block::default().borders(Borders::ALL).title(" git log ");
         let body_inner = body_block.inner(sections[2]);
         frame.render_widget(body_block, sections[2]);
-        dialog.ensure_selection_visible(body_inner.height as usize);
+        dialog.ensure_selection_visible(body_inner.height as usize, body_inner.width as usize);
         let graph_base_column = git_graph_base_column(&dialog.current_range().lines);
         let body = if dialog.current_range().lines.is_empty() {
             vec![Line::from(
@@ -1352,21 +1352,25 @@ impl App {
             body_inner,
         );
         let visible_rows = body_inner.height as usize;
-        let start = dialog.scroll as usize;
-        let end = (start + visible_rows).min(dialog.current_range().lines.len());
-        for line_index in start..end {
-            if !dialog.line_has_commit(line_index) {
+        let start_row = dialog.scroll as usize;
+        let end_row = start_row + visible_rows;
+        for layout in dialog.line_layouts(body_inner.width as usize) {
+            if !dialog.line_has_commit(layout.line_index)
+                || layout.end_row() <= start_row
+                || layout.start_row >= end_row
+            {
                 continue;
             }
-            let offset = line_index.saturating_sub(start) as u16;
+            let visible_start = layout.start_row.max(start_row);
+            let visible_end = layout.end_row().min(end_row);
             self.hit_targets.push(HitTarget::new(
                 Rect {
                     x: body_inner.x,
-                    y: body_inner.y + offset,
+                    y: body_inner.y + visible_start.saturating_sub(start_row) as u16,
                     width: body_inner.width,
-                    height: 1,
+                    height: visible_end.saturating_sub(visible_start) as u16,
                 },
-                HitAction::SelectRecentChangeLine(RecentChangeView::Popup, line_index),
+                HitAction::SelectRecentChangeLine(RecentChangeView::Popup, layout.line_index),
             ));
         }
 

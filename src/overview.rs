@@ -150,7 +150,7 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
     );
 
     let body_lines = if let Some(dialog) = &mut app.overview_recent_changes {
-        dialog.ensure_selection_visible(sections[1].height as usize);
+        dialog.ensure_selection_visible(sections[1].height as usize, sections[1].width as usize);
         if dialog.current_range().lines.is_empty() {
             vec![Line::from("No recent changes to display.")]
         } else {
@@ -195,21 +195,25 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
         sections[1],
     );
     if let Some(dialog) = &app.overview_recent_changes {
-        let start = dialog.scroll as usize;
-        let end = (start + sections[1].height as usize).min(dialog.current_range().lines.len());
-        for line_index in start..end {
-            if !dialog.line_has_commit(line_index) {
+        let start_row = dialog.scroll as usize;
+        let end_row = start_row + sections[1].height as usize;
+        for layout in dialog.line_layouts(sections[1].width as usize) {
+            if !dialog.line_has_commit(layout.line_index)
+                || layout.end_row() <= start_row
+                || layout.start_row >= end_row
+            {
                 continue;
             }
-            let offset = line_index.saturating_sub(start) as u16;
+            let visible_start = layout.start_row.max(start_row);
+            let visible_end = layout.end_row().min(end_row);
             app.hit_targets.push(HitTarget::new(
                 Rect {
                     x: sections[1].x,
-                    y: sections[1].y + offset,
+                    y: sections[1].y + visible_start.saturating_sub(start_row) as u16,
                     width: sections[1].width,
-                    height: 1,
+                    height: visible_end.saturating_sub(visible_start) as u16,
                 },
-                HitAction::SelectRecentChangeLine(RecentChangeView::Overview, line_index),
+                HitAction::SelectRecentChangeLine(RecentChangeView::Overview, layout.line_index),
             ));
         }
     }
