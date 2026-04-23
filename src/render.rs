@@ -41,6 +41,9 @@ impl App {
         if self.bump_dialog.is_some() {
             self.render_bump_dialog(frame, frame.area());
         }
+        if self.overview_bump_kind_dialog.is_some() {
+            self.render_overview_bump_kind_dialog(frame, frame.area());
+        }
         if self.overview_bump_workflow_dialog.is_some() {
             self.render_overview_bump_workflow_dialog(frame, frame.area());
         }
@@ -785,6 +788,104 @@ impl App {
         );
     }
 
+    fn render_overview_bump_kind_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.overview_bump_kind_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 72, if area.height < 28 { 100 } else { 52 });
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Choose Version Bump ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(6),
+                Constraint::Min(6),
+                Constraint::Length(BUTTON_ROW_HEIGHT),
+            ])
+            .split(inner);
+
+        let preview = dialog
+            .preview_next_version()
+            .unwrap_or_else(|error| error.to_string());
+        let header = vec![
+            Line::from(format!("Project: {}", dialog.project_name)).bold(),
+            Line::from(format!("Scope: {}", dialog.scope_label)),
+            Line::from(format!("Current version: {}", dialog.current_version)),
+            Line::from(format!("Next version: {}", preview)).style(
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Line::from("No tile increment is pending yet. Choose the version step to apply first."),
+        ];
+        frame.render_widget(
+            Paragraph::new(header).wrap(Wrap { trim: false }),
+            sections[0],
+        );
+
+        let option_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(3); dialog.options.len()])
+            .split(sections[1]);
+        for (index, (action, row)) in dialog.options.iter().zip(option_rows.iter()).enumerate() {
+            let selected = index == dialog.selected;
+            let row_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(if selected {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                });
+            let row_inner = row_block.inner(*row);
+            frame.render_widget(row_block, *row);
+            let lines = vec![
+                Line::from(format!("{}. {}", index + 1, action.display_name())).style(
+                    if selected {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    },
+                ),
+                Line::from(
+                    "Compute a valid next version and continue into the tile bump workflow.",
+                ),
+            ];
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), row_inner);
+            self.hit_targets.push(HitTarget::new(
+                *row,
+                HitAction::SelectOverviewBumpKind(index),
+            ));
+        }
+
+        self.render_button_row(
+            frame,
+            sections[2],
+            &[
+                DialogButton::new(
+                    "Continue",
+                    false,
+                    HitAction::ConfirmOverviewBumpKind,
+                    Style::default().fg(Color::Black).bg(Color::Green),
+                ),
+                DialogButton::new(
+                    "Cancel",
+                    false,
+                    HitAction::CancelOverviewBumpKind,
+                    Style::default().fg(Color::White).bg(Color::Red),
+                ),
+            ],
+        );
+    }
+
     fn render_overview_branch_bump_dialog(&mut self, frame: &mut Frame, area: Rect) {
         let Some(dialog) = &self.overview_branch_bump_dialog else {
             return;
@@ -840,12 +941,15 @@ impl App {
             input_row[1],
         );
 
+        let workflow_hint = if dialog.workflow.requires_push() {
+            "Create the branch first, then run the bump, commit, and push workflow."
+        } else {
+            "Create the branch first, then run the bump and commit workflow locally."
+        };
         frame.render_widget(
-            Paragraph::new(
-                "Create the branch first, then run the bump, commit, and push workflow.",
-            )
-            .wrap(Wrap { trim: false })
-            .scroll((0, dialog.scroll)),
+            Paragraph::new(workflow_hint)
+                .wrap(Wrap { trim: false })
+                .scroll((0, dialog.scroll)),
             sections[2],
         );
 
@@ -2727,8 +2831,10 @@ impl App {
             )
         } else if self.bump_dialog.is_some() {
             Line::from("Up/Down scope | Left/Right change bump action | Enter apply | Esc cancel")
+        } else if self.overview_bump_kind_dialog.is_some() {
+            Line::from("1-9 or Up/Down choose bump kind | Enter continue | Esc cancel")
         } else if self.overview_bump_workflow_dialog.is_some() {
-            Line::from("1-3 or Up/Down choose action | Enter run | Esc cancel")
+            Line::from("1-9 or Up/Down choose action | Enter run | Esc cancel")
         } else if self.overview_bump_warning_dialog.is_some() {
             Line::from("1-3 or Up/Down choose warning action | Enter confirm | Esc cancel")
         } else {

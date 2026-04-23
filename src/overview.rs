@@ -931,22 +931,116 @@ fn build_release_tile_display(
 
 pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<()> {
     let project = app.selected_project()?.clone();
-    if !project.integration_mode.requires_repo() {
-        return apply_overview_pending_version(app, scope_index, false);
-    }
-
     let scopes = collect_bump_scopes(&project)?;
     ensure_dashboard_tile_state(app, &scopes);
+    let scope = scopes
+        .get(scope_index)
+        .ok_or_else(|| anyhow!("the selected scope no longer exists"))?;
+    let current_version = scope
+        .current_version
+        .clone()
+        .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
     let next_version = app
         .overview_pending_versions
         .get(scope_index)
         .cloned()
-        .or_else(|| {
-            scopes
-                .get(scope_index)
-                .and_then(|scope| scope.current_version.clone())
-        })
+        .or_else(|| Some(current_version.clone()))
         .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
+    if !version_is_strictly_ahead(scope.scheme, &current_version, &next_version)? {
+        return open_overview_bump_kind_dialog(
+            app,
+            &project,
+            &scopes,
+            scope_index,
+            &current_version,
+        );
+    }
+
+    if !project.integration_mode.requires_repo() {
+        return apply_overview_pending_version(app, scope_index, false);
+    }
+
+    open_overview_bump_workflow_dialog(app, &project, &scopes, scope_index, next_version)
+}
+
+pub(super) fn select_overview_bump_kind(app: &mut App, index: usize) {
+    if let Some(dialog) = &mut app.overview_bump_kind_dialog {
+        dialog.select(index);
+    }
+}
+
+pub(super) fn rotate_overview_bump_kind(app: &mut App, delta: isize) {
+    if let Some(dialog) = &mut app.overview_bump_kind_dialog {
+        dialog.rotate(delta);
+    }
+}
+
+pub(super) fn cancel_overview_bump_kind(app: &mut App) {
+    app.overview_bump_kind_dialog = None;
+    app.status = StatusMessage::info("Tile bump action cancelled.");
+}
+
+pub(super) fn confirm_overview_bump_kind(app: &mut App) -> Result<()> {
+    let Some(dialog) = app.overview_bump_kind_dialog.clone() else {
+        return Ok(());
+    };
+
+    let project = app.selected_project()?.clone();
+    let scopes = collect_bump_scopes(&project)?;
+    ensure_dashboard_tile_state(app, &scopes);
+    let next_version = dialog.preview_next_version()?;
+    if project.unified_versioning {
+        for pending in &mut app.overview_pending_versions {
+            *pending = next_version.clone();
+        }
+    } else if let Some(pending) = app.overview_pending_versions.get_mut(dialog.scope_index) {
+        *pending = next_version.clone();
+    }
+
+    app.overview_bump_kind_dialog = None;
+    if !project.integration_mode.requires_repo() {
+        return apply_overview_pending_version(app, dialog.scope_index, false);
+    }
+
+    open_overview_bump_workflow_dialog(app, &project, &scopes, dialog.scope_index, next_version)
+}
+
+fn open_overview_bump_kind_dialog(
+    app: &mut App,
+    project: &ProjectConfig,
+    scopes: &[BumpScope],
+    scope_index: usize,
+    current_version: &str,
+) -> Result<()> {
+    let scope = scopes
+        .get(scope_index)
+        .ok_or_else(|| anyhow!("the selected scope no longer exists"))?;
+    let scope_label = if project.unified_versioning {
+        "All configured scopes".to_string()
+    } else {
+        scope.display_name.clone()
+    };
+
+    app.overview_bump_kind_dialog = Some(OverviewBumpKindDialog::new(
+        project.name.clone(),
+        scope_label,
+        scope_index,
+        scope.scheme,
+        current_version.to_string(),
+        scope.scheme.supported_actions().to_vec(),
+    ));
+    app.status =
+        StatusMessage::info("Choose a version bump first, then continue with the tile action.");
+    Ok(())
+}
+
+fn open_overview_bump_workflow_dialog(
+    app: &mut App,
+    project: &ProjectConfig,
+    scopes: &[BumpScope],
+    scope_index: usize,
+    next_version: String,
+) -> Result<()> {
     let scope_label = if project.unified_versioning {
         "All configured scopes".to_string()
     } else {
@@ -958,7 +1052,7 @@ pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<(
     let options = overview_bump_workflow_options(project.integration_mode);
 
     app.overview_bump_workflow_dialog = Some(OverviewBumpWorkflowDialog::new(
-        project.name,
+        project.name.clone(),
         scope_label,
         next_version,
         scope_index,
@@ -966,6 +1060,36 @@ pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<(
     ));
     app.status = StatusMessage::info("Choose how the tile bump should be applied.");
     Ok(())
+}
+
+fn version_is_strictly_ahead(
+    scheme: VersionScheme,
+    current_version: &str,
+    next_version: &str,
+) -> Result<bool> {
+    scheme
+        .validate(current_version)
+        .map_err(anyhow::Error::msg)?;
+    scheme.validate(next_version).map_err(anyhow::Error::msg)?;
+    Ok(compare_numeric_versions(current_version, next_version)? == std::cmp::Ordering::Less)
+}
+
+fn compare_numeric_versions(left: &str, right: &str) -> Result<std::cmp::Ordering> {
+    let left_parts = left
+        .split('.')
+        .map(|part| {
+            part.parse::<u32>()
+                .map_err(|_| anyhow!("invalid numeric component '{}'", part))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let right_parts = right
+        .split('.')
+        .map(|part| {
+            part.parse::<u32>()
+                .map_err(|_| anyhow!("invalid numeric component '{}'", part))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(left_parts.cmp(&right_parts))
 }
 
 pub(super) fn select_overview_bump_workflow(app: &mut App, index: usize) {
@@ -981,6 +1105,7 @@ pub(super) fn rotate_overview_bump_workflow(app: &mut App, delta: isize) {
 }
 
 pub(super) fn cancel_overview_bump_workflow(app: &mut App) {
+    app.overview_bump_kind_dialog = None;
     app.overview_bump_workflow_dialog = None;
     app.overview_branch_bump_dialog = None;
     app.status = StatusMessage::info("Tile bump action cancelled.");
@@ -999,6 +1124,7 @@ pub(super) fn rotate_overview_bump_warning(app: &mut App, delta: isize) {
 }
 
 pub(super) fn cancel_overview_bump_warning(app: &mut App) {
+    app.overview_bump_kind_dialog = None;
     app.overview_bump_warning_dialog = None;
     app.overview_branch_bump_dialog = None;
     app.overview_bump_workflow_dialog = None;
@@ -1442,6 +1568,7 @@ pub(super) fn execute_overview_bump_workflow(
 
     app.sync_dashboard_overview_after_repo_change();
 
+    app.overview_bump_kind_dialog = None;
     app.overview_branch_bump_dialog = None;
     let target_count = affected_scope_indexes
         .iter()
@@ -1752,6 +1879,22 @@ mod tests {
         assert!(!uses_dashboard_placeholder(&project));
         assert_eq!(resolved_scope_preview_version(&scope, false), "2.4.6");
         assert!(placeholder_activity(&scope, &project).is_none());
+    }
+
+    #[test]
+    fn version_ahead_validation_rejects_equal_and_lower_versions() {
+        assert!(
+            !version_is_strictly_ahead(VersionScheme::SemVer, "1.2.3", "1.2.3")
+                .expect("equal versions should compare")
+        );
+        assert!(
+            !version_is_strictly_ahead(VersionScheme::SemVer, "1.2.3", "1.2.2")
+                .expect("lower versions should compare")
+        );
+        assert!(
+            version_is_strictly_ahead(VersionScheme::SemVer, "1.2.3", "1.2.4")
+                .expect("higher versions should compare")
+        );
     }
 
     #[test]
