@@ -57,6 +57,10 @@ use crate::{
         find_archived_changelog_markdown, rebuild_history_summary_readme, rls_changelog_gen,
         std_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
     },
+    cli::{
+        CommitRenamePlan, prepare_commit_rename, push_branch_force_with_lease,
+        rename_commit_with_subject,
+    },
     config::{
         AppConfig, BranchConfig, BranchScopeKind, ConfigStore, FooterContent, IntegrationMode,
         ProjectConfig, ProjectType, RepoConfig, TargetFormat, TargetSpec,
@@ -249,6 +253,7 @@ struct App {
     std_changelog_sub_branch_dialog: Option<StdChangelogSubBranchDialog>,
     changelog_preview_dialog: Option<ChangelogPreviewDialog>,
     recent_changes_dialog: Option<RecentChangesDialog>,
+    commit_rename_dialog: Option<CommitRenameDialog>,
     tag_dialog: Option<TagDialog>,
     tag_annotation_dialog: Option<TagAnnotationDialog>,
     release_now_dialog: Option<rls_now::ReleaseNowDialog>,
@@ -282,6 +287,8 @@ struct App {
     hit_targets: Vec<HitTarget>,
     last_text_input_click_target: Option<TextInputClickTarget>,
     last_text_input_click_at: Option<Instant>,
+    last_recent_change_click_target: Option<RecentChangeClickTarget>,
+    last_recent_change_click_at: Option<Instant>,
     status: StatusMessage,
     last_status_toast_id: u64,
     transient_toaster: ToastEngine<()>,
@@ -346,6 +353,7 @@ impl App {
             std_changelog_sub_branch_dialog: None,
             changelog_preview_dialog: None,
             recent_changes_dialog: None,
+            commit_rename_dialog: None,
             tag_dialog: None,
             tag_annotation_dialog: None,
             release_now_dialog: None,
@@ -379,6 +387,8 @@ impl App {
             hit_targets: Vec::new(),
             last_text_input_click_target: None,
             last_text_input_click_at: None,
+            last_recent_change_click_target: None,
+            last_recent_change_click_at: None,
             last_status_toast_id: status.id,
             transient_toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
@@ -436,6 +446,10 @@ impl App {
 
         if self.delete_confirmation_dialog.is_some() {
             return self.handle_delete_confirmation_key(key);
+        }
+
+        if self.commit_rename_dialog.is_some() {
+            return self.handle_commit_rename_key(key);
         }
 
         if self.project_edit_dialog.is_some() {
@@ -524,6 +538,13 @@ impl App {
         }
 
         match key.code {
+            KeyCode::Char('r') | KeyCode::Char('R')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && self.dashboard_focus == DashboardPane::Overview
+                    && self.overview_recent_changes.is_some() =>
+            {
+                return self.open_commit_rename_from_view(RecentChangeView::Overview);
+            }
             KeyCode::Char('n') => self.open_wizard(),
             KeyCode::Char('e') => self.open_project_edit_dialog()?,
             KeyCode::Char('d') | KeyCode::Char('D') => self.request_dashboard_delete()?,
@@ -1090,6 +1111,11 @@ impl App {
                 self.current_recent_changes_job_id = None;
                 self.status = StatusMessage::info("Git log closed.");
             }
+            KeyCode::Char('r') | KeyCode::Char('R')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                return self.open_commit_rename_from_view(RecentChangeView::Popup);
+            }
             KeyCode::Up => self.scroll_recent_changes(-1),
             KeyCode::Down => self.scroll_recent_changes(1),
             KeyCode::PageUp => self.scroll_recent_changes(-8),
@@ -1173,6 +1199,39 @@ impl App {
             KeyCode::Char('t') => self.open_tag_dialog()?,
             _ => {}
         }
+        Ok(())
+    }
+
+    fn handle_commit_rename_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P'))
+        {
+            self.toggle_commit_rename_force_push();
+            return Ok(());
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.commit_rename_dialog = None;
+                self.status = StatusMessage::info("Commit rename cancelled.");
+            }
+            KeyCode::Enter | KeyCode::F(2) => return self.apply_commit_rename(),
+            KeyCode::Tab | KeyCode::Char(' ')
+                if self
+                    .commit_rename_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.plan.touches_pushed_history)
+                    .unwrap_or(false) =>
+            {
+                self.toggle_commit_rename_force_push();
+            }
+            _ => {
+                if let Some(dialog) = &mut self.commit_rename_dialog {
+                    dialog.message_input.handle_key(key);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1421,6 +1480,25 @@ impl App {
             }
         }
 
+        if self.commit_rename_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
+                    }
+                    return;
+                }
+                MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left) => return,
+                _ => return,
+            }
+        }
+
         if self.browser_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
@@ -1584,7 +1662,9 @@ impl App {
                     self.resolve_hit_target(mouse.column, mouse.row, false)
                 {
                     let maybe_click_target = self.text_input_click_target(&action);
+                    let maybe_recent_change_target = self.recent_change_click_target(&action);
                     let mut select_all = false;
+                    let mut open_commit_rename = None;
                     if let Some(target) = maybe_click_target {
                         let now = Instant::now();
                         if self.last_text_input_click_target == Some(target)
@@ -1604,6 +1684,25 @@ impl App {
                         self.last_text_input_click_at = None;
                     }
 
+                    if let Some(target) = maybe_recent_change_target {
+                        let now = Instant::now();
+                        if self.last_recent_change_click_target == Some(target)
+                            && self
+                                .last_recent_change_click_at
+                                .map(|previous| {
+                                    now.duration_since(previous) <= Duration::from_millis(400)
+                                })
+                                .unwrap_or(false)
+                        {
+                            open_commit_rename = Some(target.view);
+                        }
+                        self.last_recent_change_click_target = Some(target);
+                        self.last_recent_change_click_at = Some(now);
+                    } else {
+                        self.last_recent_change_click_target = None;
+                        self.last_recent_change_click_at = None;
+                    }
+
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
                     }
@@ -1614,6 +1713,12 @@ impl App {
                         }
                     } else if maybe_click_target.is_some() {
                         self.set_text_input_cursor_from_mouse(rect, mouse.column);
+                    }
+
+                    if let Some(view) = open_commit_rename
+                        && let Err(error) = self.open_commit_rename_from_view(view)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
                     }
                 }
             }
@@ -1983,6 +2088,15 @@ impl App {
                 self.status = StatusMessage::info("Git log closed.");
             }
             HitAction::ScrollRecentChanges(delta) => self.scroll_recent_changes(delta),
+            HitAction::SelectRecentChangeLine(view, line_index) => {
+                self.select_recent_change_line(view, line_index)
+            }
+            HitAction::ToggleCommitRenameForcePush => self.toggle_commit_rename_force_push(),
+            HitAction::SaveCommitRename => return self.apply_commit_rename(),
+            HitAction::CancelCommitRename => {
+                self.commit_rename_dialog = None;
+                self.status = StatusMessage::info("Commit rename cancelled.");
+            }
             HitAction::OpenTagDialog => return self.open_tag_dialog(),
             HitAction::OpenTagAnnotation => return self.open_tag_annotation_dialog(),
             HitAction::CycleTagScope(delta) => self.rotate_tag_scope(delta),
@@ -2544,6 +2658,17 @@ impl App {
                     return None;
                 }
 
+                if self.commit_rename_dialog.is_some()
+                    && !matches!(
+                        action,
+                        HitAction::ToggleCommitRenameForcePush
+                            | HitAction::SaveCommitRename
+                            | HitAction::CancelCommitRename
+                    )
+                {
+                    return None;
+                }
+
                 if self.release_now_notes_dialog.is_some()
                     && !matches!(
                         action,
@@ -2602,6 +2727,16 @@ impl App {
             }
             _ => return None,
         })
+    }
+
+    fn recent_change_click_target(&self, action: &HitAction) -> Option<RecentChangeClickTarget> {
+        match action {
+            HitAction::SelectRecentChangeLine(view, line_index) => Some(RecentChangeClickTarget {
+                view: *view,
+                line_index: *line_index,
+            }),
+            _ => None,
+        }
     }
 
     fn active_text_input_mut(&mut self) -> Option<&mut TextInput> {
@@ -4093,6 +4228,98 @@ impl App {
         }
     }
 
+    fn open_commit_rename_from_view(&mut self, view: RecentChangeView) -> Result<()> {
+        let (repo_root, commit_hash) = match view {
+            RecentChangeView::Popup => {
+                let dialog = self
+                    .recent_changes_dialog
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("the git log popup is not open"))?;
+                (
+                    dialog.active_scope().repo_root.clone(),
+                    dialog.selected_commit_hash().ok_or_else(|| {
+                        anyhow!("select a commit line before renaming its message")
+                    })?,
+                )
+            }
+            RecentChangeView::Overview => {
+                let dialog = self.overview_recent_changes.as_ref().ok_or_else(|| {
+                    anyhow!("recent changes are not available for the selected project")
+                })?;
+                (
+                    dialog.active_scope().repo_root.clone(),
+                    dialog.selected_commit_hash().ok_or_else(|| {
+                        anyhow!("select a commit line before renaming its message")
+                    })?,
+                )
+            }
+        };
+
+        let plan = prepare_commit_rename(&repo_root, &commit_hash)?;
+        self.commit_rename_dialog = Some(CommitRenameDialog::new(view, plan));
+        self.status = StatusMessage::info("Edit the commit message and press Enter to save it.");
+        Ok(())
+    }
+
+    fn toggle_commit_rename_force_push(&mut self) {
+        if let Some(dialog) = &mut self.commit_rename_dialog
+            && dialog.plan.touches_pushed_history
+        {
+            dialog.push_after_rename = !dialog.push_after_rename;
+        }
+    }
+
+    fn apply_commit_rename(&mut self) -> Result<()> {
+        let Some(dialog) = self.commit_rename_dialog.take() else {
+            return Ok(());
+        };
+
+        let outcome = match rename_commit_with_subject(&dialog.plan, &dialog.message_input.value) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.commit_rename_dialog = Some(dialog);
+                return Err(error);
+            }
+        };
+
+        if dialog.push_after_rename && dialog.plan.touches_pushed_history {
+            if let Err(error) = push_branch_force_with_lease(&dialog.plan.repo_root) {
+                self.commit_rename_dialog = Some(dialog);
+                return Err(error);
+            }
+        }
+
+        self.sync_dashboard_overview_after_repo_change();
+        if let Some(recent_dialog) = &mut self.recent_changes_dialog {
+            let _ = recent_dialog.refresh_current_scope_cancellable(None);
+        }
+
+        let mut summary = format!(
+            "Renamed {} to '{}'.",
+            outcome.target_commit, outcome.new_subject
+        );
+        if dialog.push_after_rename && dialog.plan.touches_pushed_history {
+            summary.push_str(" Force-pushed with --force-with-lease.");
+        }
+        self.status = StatusMessage::success(summary);
+        Ok(())
+    }
+
+    fn select_recent_change_line(&mut self, view: RecentChangeView, line_index: usize) {
+        match view {
+            RecentChangeView::Popup => {
+                if let Some(dialog) = &mut self.recent_changes_dialog {
+                    dialog.select_line(line_index);
+                }
+            }
+            RecentChangeView::Overview => {
+                if let Some(dialog) = &mut self.overview_recent_changes {
+                    dialog.select_line(line_index);
+                }
+            }
+        }
+    }
+
     fn try_handle_toast_shortcut(&mut self, key: KeyEvent) -> bool {
         if key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
@@ -4271,6 +4498,18 @@ impl TextInputClickTarget {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RecentChangeView {
+    Overview,
+    Popup,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RecentChangeClickTarget {
+    view: RecentChangeView,
+    line_index: usize,
+}
+
 #[derive(Clone)]
 pub(crate) enum HitAction {
     Switch(Screen),
@@ -4328,6 +4567,10 @@ pub(crate) enum HitAction {
     CycleRecentChangesScope(isize),
     CloseRecentChanges,
     ScrollRecentChanges(i16),
+    SelectRecentChangeLine(RecentChangeView, usize),
+    ToggleCommitRenameForcePush,
+    SaveCommitRename,
+    CancelCommitRename,
     OpenTagDialog,
     OpenTagAnnotation,
     CycleTagScope(isize),
@@ -6907,6 +7150,26 @@ impl TagAnnotationDialog {
     }
 }
 
+struct CommitRenameDialog {
+    view: RecentChangeView,
+    plan: CommitRenamePlan,
+    message_input: TextInput,
+    push_after_rename: bool,
+}
+
+impl CommitRenameDialog {
+    fn new(view: RecentChangeView, plan: CommitRenamePlan) -> Self {
+        let mut message_input = TextInput::with_value(plan.current_subject.clone());
+        message_input.select_all();
+        Self {
+            view,
+            plan,
+            message_input,
+            push_after_rename: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum BrowseTarget {
     WizardTargetPath,
@@ -7066,6 +7329,16 @@ fn colorize_git_log_line(line: &str, graph_base_column: usize) -> Line<'static> 
     }
 
     Line::from(spans)
+}
+
+fn highlight_git_log_line(line: Line<'static>) -> Line<'static> {
+    let highlight = Style::default().bg(Color::Rgb(55, 80, 140));
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, span.style.patch(highlight)))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn git_hash_color(prefix: &str, graph_base_column: usize) -> Option<Color> {
