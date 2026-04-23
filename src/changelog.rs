@@ -341,6 +341,13 @@ pub(crate) fn rls_changelog_gen(
     document.render_markdown()
 }
 
+pub(crate) fn pr_changelog_gen(
+    branch_name: impl Into<String>,
+    lines: &[String],
+) -> RenderedChangelog {
+    build_document_from_git_log(branch_name, lines).render_markdown()
+}
+
 pub(crate) fn ensure_previous_public_release_header(
     markdown: &str,
     current_tag: &str,
