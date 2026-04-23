@@ -12,7 +12,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -92,6 +92,12 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             run_commit_delete(commit_hash)?;
             Ok(StartupMode::Handled)
         }
+        [command, action, commit_target]
+            if is_commit_command(command) && is_commit_rename_action(action) =>
+        {
+            run_commit_rename(commit_target)?;
+            Ok(StartupMode::Handled)
+        }
         [command, action] if is_bump_command(command) => {
             run_bump(action, None)?;
             Ok(StartupMode::Handled)
@@ -129,6 +135,10 @@ fn is_commit_command(value: &str) -> bool {
 
 fn is_commit_delete_action(value: &str) -> bool {
     matches!(value, "del" | "rm" | "rem" | "delete" | "drop" | "erase")
+}
+
+fn is_commit_rename_action(value: &str) -> bool {
+    matches!(value, "rename" | "rn" | "rnm" | "reword" | "rwrd" | "rwd")
 }
 
 fn is_branch_command(value: &str) -> bool {
@@ -170,9 +180,14 @@ fn print_usage() {
     println!(
         "                             on the current branch and pushing the revert if an upstream exists"
     );
+    println!("  cg commit rename <target>  Rename a commit message on the current branch");
+    println!(
+        "                             <target> may be a commit hash or a HEAD offset (0 = HEAD, 1 = HEAD~1)"
+    );
     println!("          synonyms:");
     println!("            commit: cmt | com | ct");
     println!("            del: del | rm | rem | delete | drop | erase");
+    println!("            rename: rename | rn | rnm | reword | rwrd | rwd");
     println!(" ");
     println!("  BUMPING COMMANDS:");
     println!(" ");
@@ -445,6 +460,43 @@ struct CommitDeleteOutcome {
     upstream_ref: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CommitRenameStrategy {
+    AmendHead,
+    RewordAncestor,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommitRenamePlan {
+    pub(crate) repo_root: String,
+    pub(crate) branch_name: String,
+    pub(crate) target_commit: String,
+    pub(crate) target_short: String,
+    pub(crate) current_subject: String,
+    pub(crate) current_message: String,
+    pub(crate) distance_from_head: usize,
+    pub(crate) strategy: CommitRenameStrategy,
+    pub(crate) upstream_ref: Option<String>,
+    pub(crate) touches_pushed_history: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommitRenameOutcome {
+    pub(crate) repo_root: String,
+    pub(crate) branch_name: String,
+    pub(crate) target_commit: String,
+    pub(crate) previous_subject: String,
+    pub(crate) new_subject: String,
+    pub(crate) head_commit: String,
+    pub(crate) strategy: CommitRenameStrategy,
+}
+
+struct RenameEditorScripts {
+    temp_dir: PathBuf,
+    sequence_editor_command: String,
+    message_editor_command: String,
+}
+
 fn run_commit_delete(commit_hash: &str) -> Result<()> {
     let cwd = env::current_dir().context("failed to read current directory")?;
     let repo_root = current_git_repo_root(&cwd)?;
@@ -470,6 +522,164 @@ fn run_commit_delete(commit_hash: &str) -> Result<()> {
     }
     println!();
 
+    Ok(())
+}
+
+fn run_commit_rename(commit_target: &str) -> Result<()> {
+    let cwd = env::current_dir().context("failed to read current directory")?;
+    let repo_root = current_git_repo_root(&cwd)?;
+    let plan = prepare_commit_rename(&repo_root, commit_target)?;
+
+    if plan.touches_pushed_history {
+        println!();
+        println!(
+            "Warning: {} is already reachable from {}.",
+            plan.target_short,
+            plan.upstream_ref
+                .as_deref()
+                .unwrap_or("the upstream branch")
+        );
+        println!(
+            "Renaming it will rewrite published history on {}.",
+            plan.branch_name
+        );
+        if !prompt_confirm_default_no("Continue with the local rename? [y/N]: ")? {
+            bail!("cancelled by user")
+        }
+    }
+
+    let new_subject = prompt_commit_subject(&plan.current_subject)?;
+    let outcome = rename_commit_with_subject(&plan, &new_subject)?;
+
+    let mut force_pushed = false;
+    if plan.touches_pushed_history && plan.upstream_ref.is_some() {
+        force_pushed = prompt_confirm_default_no(&format!(
+            "Push the rewritten branch to {} with --force-with-lease? [y/N]: ",
+            plan.upstream_ref
+                .as_deref()
+                .unwrap_or("the upstream branch")
+        ))?;
+        if force_pushed {
+            push_branch_force_with_lease(&plan.repo_root)?;
+        }
+    }
+
+    println!();
+    println!(
+        "Renamed {} on branch {}.",
+        outcome.target_commit, outcome.branch_name
+    );
+    println!("Previous subject: {}", outcome.previous_subject);
+    println!("New subject: {}", outcome.new_subject);
+    println!("Current HEAD: {}", outcome.head_commit);
+    if force_pushed {
+        println!(
+            "Force-pushed the rewritten branch to {} with --force-with-lease.",
+            plan.upstream_ref
+                .as_deref()
+                .unwrap_or("the upstream branch")
+        );
+    } else if plan.touches_pushed_history {
+        println!("The history rewrite is local only until you force-push it.");
+    }
+    println!();
+
+    Ok(())
+}
+
+pub(crate) fn prepare_commit_rename(
+    repo_root: &str,
+    commit_target: &str,
+) -> Result<CommitRenamePlan> {
+    let commit_target = commit_target.trim();
+    if commit_target.is_empty() {
+        bail!("commit target cannot be empty")
+    }
+
+    ensure_clean_worktree(repo_root)?;
+
+    let branch_name = current_branch_with_cancel(repo_root, None)?;
+    if branch_name.starts_with("detached (") {
+        bail!("cg commit rename requires a checked-out branch; detached HEAD is not supported")
+    }
+
+    let verified_commit = resolve_commit_target(repo_root, commit_target)?;
+    if !is_commit_ancestor_of_head(repo_root, &verified_commit)? {
+        bail!(
+            "commit {} is not reachable from the current branch {}; switch to the branch that contains it first",
+            verified_commit,
+            branch_name
+        )
+    }
+
+    let distance_from_head = commit_distance_from_head(repo_root, &verified_commit)?;
+    let strategy = if distance_from_head == 0 {
+        CommitRenameStrategy::AmendHead
+    } else {
+        CommitRenameStrategy::RewordAncestor
+    };
+    let current_subject = commit_subject(repo_root, &verified_commit)?;
+    let current_message = commit_message(repo_root, &verified_commit)?;
+    let upstream_ref = current_upstream_ref(repo_root)?;
+    let touches_pushed_history = upstream_ref.as_deref().is_some_and(|upstream| {
+        is_commit_ancestor_of_ref(repo_root, &verified_commit, upstream).unwrap_or(false)
+    });
+
+    Ok(CommitRenamePlan {
+        repo_root: repo_root.to_string(),
+        branch_name,
+        target_short: short_commit_hash(repo_root, &verified_commit)?,
+        target_commit: verified_commit,
+        current_subject,
+        current_message,
+        distance_from_head,
+        strategy,
+        upstream_ref,
+        touches_pushed_history,
+    })
+}
+
+pub(crate) fn rename_commit_with_subject(
+    plan: &CommitRenamePlan,
+    new_subject: &str,
+) -> Result<CommitRenameOutcome> {
+    let new_subject = new_subject.trim();
+    if new_subject.is_empty() {
+        bail!("new commit message cannot be empty")
+    }
+    if new_subject == plan.current_subject {
+        bail!("new commit message matches the current subject")
+    }
+
+    let updated_message = replace_commit_subject(&plan.current_message, new_subject);
+    match plan.strategy {
+        CommitRenameStrategy::AmendHead => {
+            amend_head_commit_message(&plan.repo_root, &updated_message)?
+        }
+        CommitRenameStrategy::RewordAncestor => {
+            reword_ancestor_commit_message(
+                &plan.repo_root,
+                &plan.target_commit,
+                &plan.target_short,
+                &updated_message,
+            )?;
+        }
+    }
+
+    Ok(CommitRenameOutcome {
+        repo_root: plan.repo_root.clone(),
+        branch_name: plan.branch_name.clone(),
+        target_commit: plan.target_short.clone(),
+        previous_subject: plan.current_subject.clone(),
+        new_subject: new_subject.to_string(),
+        head_commit: short_commit_hash(&plan.repo_root, "HEAD")?,
+        strategy: plan.strategy.clone(),
+    })
+}
+
+pub(crate) fn push_branch_force_with_lease(repo_root: &str) -> Result<()> {
+    run_git_checked(repo_root, &["push", "--force-with-lease"])
+        .context("failed to push the rewritten branch with --force-with-lease")?;
     Ok(())
 }
 
@@ -578,6 +788,51 @@ fn is_commit_ancestor_of_head(repo_root: &str, commit_hash: &str) -> Result<bool
     Ok(output.success)
 }
 
+fn is_commit_ancestor_of_ref(repo_root: &str, commit_hash: &str, reference: &str) -> Result<bool> {
+    let output = run_git(
+        repo_root,
+        &["merge-base", "--is-ancestor", commit_hash, reference],
+    )?;
+    Ok(output.success)
+}
+
+fn resolve_commit_target(repo_root: &str, commit_target: &str) -> Result<String> {
+    if commit_target
+        .chars()
+        .all(|character| character.is_ascii_digit())
+    {
+        let offset = commit_target
+            .parse::<usize>()
+            .with_context(|| format!("'{}' is not a valid HEAD offset", commit_target))?;
+        let revision = if offset == 0 {
+            "HEAD".to_string()
+        } else {
+            format!("HEAD~{}", offset)
+        };
+        return verify_commit_hash(repo_root, &revision).with_context(|| {
+            format!(
+                "HEAD offset {} is not available on the current branch",
+                offset
+            )
+        });
+    }
+
+    verify_commit_hash(repo_root, commit_target)
+}
+
+fn commit_distance_from_head(repo_root: &str, commit_hash: &str) -> Result<usize> {
+    let count = run_git_checked(
+        repo_root,
+        &["rev-list", "--count", &format!("{}..HEAD", commit_hash)],
+    )?;
+    count.trim().parse::<usize>().with_context(|| {
+        format!(
+            "failed to measure the distance from {} to HEAD",
+            commit_hash
+        )
+    })
+}
+
 fn revert_uses_mainline_parent(repo_root: &str, commit_hash: &str) -> Result<bool> {
     let output = run_git_checked(
         repo_root,
@@ -605,6 +860,21 @@ fn commit_subject(repo_root: &str, commit_hash: &str) -> Result<String> {
     .to_string())
 }
 
+fn commit_message(repo_root: &str, commit_hash: &str) -> Result<String> {
+    Ok(run_git_checked(
+        repo_root,
+        &["show", "--no-patch", "--format=%B", commit_hash],
+    )?)
+}
+
+fn short_commit_hash(repo_root: &str, commit_hash: &str) -> Result<String> {
+    Ok(
+        run_git_checked(repo_root, &["rev-parse", "--short", commit_hash])?
+            .trim()
+            .to_string(),
+    )
+}
+
 fn current_upstream_ref(repo_root: &str) -> Result<Option<String>> {
     let output = run_git(
         repo_root,
@@ -619,6 +889,332 @@ fn current_upstream_ref(repo_root: &str) -> Result<Option<String>> {
         Ok(None)
     } else {
         Ok(Some(upstream.to_string()))
+    }
+}
+
+fn replace_commit_subject(current_message: &str, new_subject: &str) -> String {
+    if let Some((_, remainder)) = current_message.split_once('\n') {
+        format!("{}\n{}", new_subject, remainder)
+    } else {
+        format!("{}\n", new_subject)
+    }
+}
+
+fn amend_head_commit_message(repo_root: &str, message: &str) -> Result<()> {
+    let temp_file = write_temp_commit_message_file(message)?;
+    let temp_file_arg = temp_file.to_string_lossy().to_string();
+    let result = run_git_checked(
+        repo_root,
+        &["commit", "--amend", "-F", temp_file_arg.as_str()],
+    );
+    let _ = fs::remove_file(&temp_file);
+    result.context("failed to amend the current HEAD commit message")?;
+    Ok(())
+}
+
+fn reword_ancestor_commit_message(
+    repo_root: &str,
+    target_commit: &str,
+    target_short: &str,
+    message: &str,
+) -> Result<()> {
+    let scripts = create_rename_editor_scripts(message, target_commit, target_short)?;
+    let rebase_args = if commit_has_parents(repo_root, target_commit)? {
+        vec![
+            "rebase".to_string(),
+            "-i".to_string(),
+            "--rebase-merges".to_string(),
+            format!("{}^", target_commit),
+        ]
+    } else {
+        vec![
+            "rebase".to_string(),
+            "-i".to_string(),
+            "--rebase-merges".to_string(),
+            "--root".to_string(),
+        ]
+    };
+
+    let output = run_git_command_with_env(
+        repo_root,
+        &rebase_args,
+        &[
+            (
+                "GIT_SEQUENCE_EDITOR",
+                scripts.sequence_editor_command.as_str(),
+            ),
+            ("GIT_EDITOR", scripts.message_editor_command.as_str()),
+        ],
+    )
+    .context("failed to start the commit reword rebase")?;
+
+    let _ = fs::remove_dir_all(&scripts.temp_dir);
+
+    if !output.status.success() {
+        let _ = run_git(repo_root, &["rebase", "--abort"]);
+        bail!(
+            "failed to rename commit {}; git reported: {}",
+            target_short,
+            format_git_command_error(&output)
+        )
+    }
+
+    Ok(())
+}
+
+fn commit_has_parents(repo_root: &str, commit_hash: &str) -> Result<bool> {
+    let output = run_git_checked(
+        repo_root,
+        &["rev-list", "--parents", "-n", "1", commit_hash],
+    )?;
+    Ok(output.split_whitespace().count().saturating_sub(1) > 0)
+}
+
+fn prompt_commit_subject(current_subject: &str) -> Result<String> {
+    println!();
+    println!("Current commit message: {}", current_subject);
+    print!("New commit message: ");
+    io::stdout()
+        .flush()
+        .context("failed to flush commit message prompt")?;
+
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .context("failed to read the new commit message")?;
+
+    let answer = answer.trim().to_string();
+    if answer.is_empty() {
+        bail!("new commit message cannot be empty")
+    }
+
+    Ok(answer)
+}
+
+fn prompt_confirm_default_no(prompt: &str) -> Result<bool> {
+    loop {
+        print!("{}", prompt);
+        io::stdout().flush().context("failed to flush prompt")?;
+
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read response")?;
+
+        match answer.trim().to_lowercase().as_str() {
+            "y" | "yes" => return Ok(true),
+            "" | "n" | "no" => return Ok(false),
+            other => println!("Please answer Y or N. Received: {}", other),
+        }
+    }
+}
+
+fn write_temp_commit_message_file(message: &str) -> Result<PathBuf> {
+    let temp_file = env::temp_dir().join(format!(
+        "comfygit-rename-message-{}-{}.txt",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::write(&temp_file, message).with_context(|| {
+        format!(
+            "failed to write the temporary commit message file at {}",
+            temp_file.display()
+        )
+    })?;
+    Ok(temp_file)
+}
+
+fn create_rename_editor_scripts(
+    message: &str,
+    target_commit: &str,
+    target_short: &str,
+) -> Result<RenameEditorScripts> {
+    let temp_dir = env::temp_dir().join(format!(
+        "comfygit-rename-scripts-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).with_context(|| {
+        format!(
+            "failed to create the temporary rename script directory at {}",
+            temp_dir.display()
+        )
+    })?;
+
+    let message_file = temp_dir.join("commit-message.txt");
+    fs::write(&message_file, message).with_context(|| {
+        format!(
+            "failed to write the temporary commit message file at {}",
+            message_file.display()
+        )
+    })?;
+
+    if cfg!(windows) {
+        let sequence_script = temp_dir.join("sequence-editor.ps1");
+        fs::write(
+            &sequence_script,
+            format!(
+                r#"$todoPath = $args[0]
+$targetFull = '{target_full}'
+$targetShort = '{target_short}'
+$lines = Get-Content -LiteralPath $todoPath
+$updated = $false
+$rewritten = foreach ($line in $lines) {{
+    if (-not $updated -and $line -match "^\s*pick\s+({target_full}|{target_short})(\s|$)") {{
+        $updated = $true
+        $line -replace '^\s*pick\s+', 'reword '
+    }} elseif (-not $updated -and $line -match "^\s*merge\s+-C\s+({target_full}|{target_short})(\s|$)") {{
+        $updated = $true
+        $line -replace '^\s*merge\s+-C\s+', 'merge -c '
+    }} else {{
+        $line
+    }}
+}}
+if (-not $updated) {{
+    Write-Error 'Target commit was not found in the rebase todo list.'
+    exit 1
+}}
+Set-Content -LiteralPath $todoPath -Value $rewritten
+"#,
+                target_full = target_commit,
+                target_short = target_short,
+            ),
+        )
+        .context("failed to write the PowerShell sequence editor script")?;
+        let sequence_wrapper = temp_dir.join("sequence-editor.cmd");
+        fs::write(
+            &sequence_wrapper,
+            format!(
+                "@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+                sequence_script.display()
+            ),
+        )
+        .context("failed to write the sequence editor wrapper")?;
+
+        let message_script = temp_dir.join("message-editor.ps1");
+        fs::write(
+            &message_script,
+            format!(
+                "$destinationPath = $args[0]\nCopy-Item -LiteralPath '{}' -Destination $destinationPath -Force\n",
+                powershell_literal(&message_file)
+            ),
+        )
+        .context("failed to write the PowerShell message editor script")?;
+        let message_wrapper = temp_dir.join("message-editor.cmd");
+        fs::write(
+            &message_wrapper,
+            format!(
+                "@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+                message_script.display()
+            ),
+        )
+        .context("failed to write the message editor wrapper")?;
+
+        return Ok(RenameEditorScripts {
+            temp_dir,
+            sequence_editor_command: format!("\"{}\"", sequence_wrapper.display()),
+            message_editor_command: format!("\"{}\"", message_wrapper.display()),
+        });
+    }
+
+    let sequence_script = temp_dir.join("sequence-editor.sh");
+    fs::write(
+        &sequence_script,
+        format!(
+            "#!/bin/sh\nset -eu\ntodo_path=\"$1\"\nawk 'BEGIN {{ updated = 0 }}\n{{\n  if (!updated && $1 == \"pick\" && ($2 == \"{target_full}\" || $2 == \"{target_short}\")) {{ $1 = \"reword\"; updated = 1 }}\n  else if (!updated && $1 == \"merge\" && $2 == \"-C\" && ($3 == \"{target_full}\" || $3 == \"{target_short}\")) {{ $2 = \"-c\"; updated = 1 }}\n  print\n}}\nEND {{ if (!updated) exit 9 }}' \"$todo_path\" > \"$todo_path.tmp\"\nmv \"$todo_path.tmp\" \"$todo_path\"\n",
+            target_full = target_commit,
+            target_short = target_short,
+        ),
+    )
+    .context("failed to write the shell sequence editor script")?;
+    let message_script = temp_dir.join("message-editor.sh");
+    fs::write(
+        &message_script,
+        format!(
+            "#!/bin/sh\nset -eu\ncat {} > \"$1\"\n",
+            shell_literal(&message_file)
+        ),
+    )
+    .context("failed to write the shell message editor script")?;
+    set_script_executable(&sequence_script)?;
+    set_script_executable(&message_script)?;
+
+    Ok(RenameEditorScripts {
+        temp_dir,
+        sequence_editor_command: shell_literal(&sequence_script),
+        message_editor_command: shell_literal(&message_script),
+    })
+}
+
+fn powershell_literal(path: &Path) -> String {
+    path.display().to_string().replace('\'', "''")
+}
+
+fn shell_literal(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+#[cfg(unix)]
+fn set_script_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .with_context(|| format!("failed to read script permissions for {}", path.display()))?
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(path, permissions)
+        .with_context(|| format!("failed to make {} executable", path.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_script_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+struct GitCommandCapture {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+fn run_git_command_with_env(
+    repo_root: &str,
+    args: &[String],
+    envs: &[(&str, &str)],
+) -> Result<GitCommandCapture> {
+    let mut command = Command::new("git");
+    command.current_dir(repo_root);
+    command.args(args.iter().map(String::as_str));
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().context("failed to run git command")?;
+    Ok(GitCommandCapture {
+        status: output.status,
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+fn format_git_command_error(output: &GitCommandCapture) -> String {
+    let stderr = output.stderr.trim();
+    if !stderr.is_empty() {
+        return stderr.to_string();
+    }
+    let stdout = output.stdout.trim();
+    if !stdout.is_empty() {
+        return stdout.to_string();
+    }
+    match output.status.code() {
+        Some(code) => format!("git exited with status {}", code),
+        None => "git terminated before it returned a status code".to_string(),
     }
 }
 
@@ -1769,6 +2365,25 @@ mod tests {
     }
 
     #[test]
+    fn is_commit_rename_action_accepts_requested_synonyms() {
+        assert!(is_commit_rename_action("rename"));
+        assert!(is_commit_rename_action("rn"));
+        assert!(is_commit_rename_action("rnm"));
+        assert!(is_commit_rename_action("reword"));
+        assert!(is_commit_rename_action("rwrd"));
+        assert!(is_commit_rename_action("rwd"));
+        assert!(!is_commit_rename_action("rew"));
+    }
+
+    #[test]
+    fn replace_commit_subject_preserves_body() {
+        assert_eq!(
+            replace_commit_subject("old subject\n\nbody line\n", "new subject"),
+            "new subject\n\nbody line\n"
+        );
+    }
+
+    #[test]
     fn is_branch_command_accepts_requested_synonyms() {
         assert!(is_branch_command("branch"));
         assert!(is_branch_command("br"));
@@ -2029,6 +2644,107 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("create temp repo dir");
         dir
+    }
+
+    fn init_temp_git_repo(repo_root: &str) {
+        run_git_checked(repo_root, &["init"]).expect("init repo");
+        run_git_checked(repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_main = run_git(repo_root, &["switch", "-c", "main"]).expect("switch main");
+        if !switch_main.success {
+            run_git_checked(repo_root, &["checkout", "-b", "main"]).expect("checkout main");
+        }
+    }
+
+    #[test]
+    fn rename_commit_with_subject_amends_head_commit() {
+        let repo_dir = create_temp_repo_dir("commit-rename-head");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        init_temp_git_repo(&repo_root);
+
+        let tracked_file = repo_dir.join("tracked.txt");
+        fs::write(&tracked_file, "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        fs::write(&tracked_file, "base\nhead\n").expect("write head file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage head file");
+        run_git_checked(&repo_root, &["commit", "-m", "old head subject"])
+            .expect("commit head change");
+
+        let plan = prepare_commit_rename(&repo_root, "0").expect("prepare head rename plan");
+        assert_eq!(plan.strategy, CommitRenameStrategy::AmendHead);
+
+        let outcome =
+            rename_commit_with_subject(&plan, "new head subject").expect("rename head commit");
+
+        assert_eq!(outcome.previous_subject, "old head subject");
+        assert_eq!(outcome.new_subject, "new head subject");
+        assert_eq!(
+            run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
+                .expect("read amended subject")
+                .trim(),
+            "new head subject"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn rename_commit_with_subject_rewords_ancestor_commit() {
+        let repo_dir = create_temp_repo_dir("commit-rename-ancestor");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        init_temp_git_repo(&repo_root);
+
+        let tracked_file = repo_dir.join("tracked.txt");
+        fs::write(&tracked_file, "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        fs::write(&tracked_file, "base\nsecond\n").expect("write second file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage second file");
+        run_git_checked(&repo_root, &["commit", "-m", "old middle subject"])
+            .expect("commit second change");
+        let target_commit = run_git_checked(&repo_root, &["rev-parse", "HEAD"])
+            .expect("read target commit")
+            .trim()
+            .to_string();
+
+        fs::write(&tracked_file, "base\nsecond\nthird\n").expect("write third file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage third file");
+        run_git_checked(&repo_root, &["commit", "-m", "top subject"]).expect("commit top change");
+
+        let plan = prepare_commit_rename(&repo_root, &target_commit)
+            .expect("prepare ancestor rename plan");
+        assert_eq!(plan.strategy, CommitRenameStrategy::RewordAncestor);
+
+        let outcome = rename_commit_with_subject(&plan, "new middle subject")
+            .expect("rename ancestor commit");
+
+        assert_eq!(outcome.previous_subject, "old middle subject");
+        assert_eq!(outcome.new_subject, "new middle subject");
+
+        let subjects = split_output_lines(
+            &run_git_checked(&repo_root, &["log", "--format=%s", "-n", "3"])
+                .expect("read commit subjects"),
+        );
+        assert_eq!(
+            subjects,
+            vec![
+                "top subject".to_string(),
+                "new middle subject".to_string(),
+                "base".to_string(),
+            ]
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
     }
 
     #[test]
