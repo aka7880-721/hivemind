@@ -90,7 +90,7 @@ use crate::{
     },
     tiles::{OverviewTileData, TILE_WIDTH, render_overview_tile, tile_height},
     ui::{center_vertically, centered_rect},
-    versioning::VersionScheme,
+    versioning::{BumpAction, VersionScheme},
 };
 
 #[path = "git_flow.rs"]
@@ -246,6 +246,7 @@ struct App {
     overview_drag_scope: Option<usize>,
     wizard: ProjectWizard,
     bump_dialog: Option<BumpDialog>,
+    overview_bump_kind_dialog: Option<OverviewBumpKindDialog>,
     overview_bump_workflow_dialog: Option<OverviewBumpWorkflowDialog>,
     overview_branch_bump_dialog: Option<OverviewBranchBumpDialog>,
     overview_bump_warning_dialog: Option<OverviewBumpWarningDialog>,
@@ -346,6 +347,7 @@ impl App {
             overview_drag_scope: None,
             wizard: ProjectWizard::default(),
             bump_dialog: None,
+            overview_bump_kind_dialog: None,
             overview_bump_workflow_dialog: None,
             overview_branch_bump_dialog: None,
             overview_bump_warning_dialog: None,
@@ -482,6 +484,10 @@ impl App {
 
         if self.overview_bump_warning_dialog.is_some() {
             return self.handle_overview_bump_warning_key(key);
+        }
+
+        if self.overview_bump_kind_dialog.is_some() {
+            return self.handle_overview_bump_kind_key(key);
         }
 
         if self.overview_branch_bump_dialog.is_some() {
@@ -848,11 +854,28 @@ impl App {
             KeyCode::Esc => self.cancel_overview_bump_workflow(),
             KeyCode::Up | KeyCode::BackTab => self.rotate_overview_bump_workflow(-1),
             KeyCode::Down | KeyCode::Tab => self.rotate_overview_bump_workflow(1),
-            KeyCode::Char('1') => self.select_overview_bump_workflow(0),
-            KeyCode::Char('2') => self.select_overview_bump_workflow(1),
-            KeyCode::Char('3') => self.select_overview_bump_workflow(2),
-            KeyCode::Char('4') => self.select_overview_bump_workflow(3),
+            KeyCode::Char(character) => {
+                if let Some(index) = digit_to_index(character) {
+                    self.select_overview_bump_workflow(index);
+                }
+            }
             KeyCode::Enter | KeyCode::F(2) => return self.request_confirm_overview_bump_workflow(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_overview_bump_kind_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.cancel_overview_bump_kind(),
+            KeyCode::Up | KeyCode::BackTab => self.rotate_overview_bump_kind(-1),
+            KeyCode::Down | KeyCode::Tab => self.rotate_overview_bump_kind(1),
+            KeyCode::Char(character) => {
+                if let Some(index) = digit_to_index(character) {
+                    self.select_overview_bump_kind(index);
+                }
+            }
+            KeyCode::Enter | KeyCode::F(2) => return self.confirm_overview_bump_kind(),
             _ => {}
         }
         Ok(())
@@ -1499,6 +1522,31 @@ impl App {
             }
         }
 
+        if self.overview_bump_kind_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
+                        && let Err(error) = self.handle_hit_action(action)
+                    {
+                        self.status = StatusMessage::error(error.to_string());
+                    }
+                    return;
+                }
+                MouseEventKind::ScrollUp => {
+                    self.rotate_overview_bump_kind(-1);
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.rotate_overview_bump_kind(1);
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left) => return,
+                _ => return,
+            }
+        }
+
         if self.recent_changes_dialog.is_some()
             && self.commit_rename_dialog.is_none()
             && self.tag_dialog.is_none()
@@ -1985,6 +2033,9 @@ impl App {
                 return self.request_confirm_overview_bump_workflow();
             }
             HitAction::CancelOverviewBumpWorkflow => self.cancel_overview_bump_workflow(),
+            HitAction::SelectOverviewBumpKind(index) => self.select_overview_bump_kind(index),
+            HitAction::ConfirmOverviewBumpKind => return self.confirm_overview_bump_kind(),
+            HitAction::CancelOverviewBumpKind => self.cancel_overview_bump_kind(),
             HitAction::SelectOverviewBumpWarningChoice(index) => {
                 self.select_overview_bump_warning(index)
             }
@@ -2687,6 +2738,17 @@ impl App {
                     return None;
                 }
 
+                if self.overview_bump_kind_dialog.is_some()
+                    && !matches!(
+                        action,
+                        HitAction::SelectOverviewBumpKind(_)
+                            | HitAction::ConfirmOverviewBumpKind
+                            | HitAction::CancelOverviewBumpKind
+                    )
+                {
+                    return None;
+                }
+
                 if self.recent_changes_dialog.is_some()
                     && self.commit_rename_dialog.is_none()
                     && self.tag_dialog.is_none()
@@ -2932,6 +2994,22 @@ impl App {
 
     fn begin_overview_bump(&mut self, scope_index: usize) -> Result<()> {
         overview::begin_overview_bump(self, scope_index)
+    }
+
+    fn select_overview_bump_kind(&mut self, index: usize) {
+        overview::select_overview_bump_kind(self, index);
+    }
+
+    fn rotate_overview_bump_kind(&mut self, delta: isize) {
+        overview::rotate_overview_bump_kind(self, delta);
+    }
+
+    fn cancel_overview_bump_kind(&mut self) {
+        overview::cancel_overview_bump_kind(self);
+    }
+
+    fn confirm_overview_bump_kind(&mut self) -> Result<()> {
+        overview::confirm_overview_bump_kind(self)
     }
 
     fn select_overview_bump_workflow(&mut self, index: usize) {
@@ -4569,6 +4647,9 @@ pub(crate) enum HitAction {
     OpenOverviewReleaseNow(usize),
     BeginOverviewBump(usize),
     CycleOverviewTileInfo(usize, OverviewTileInfoRow),
+    SelectOverviewBumpKind(usize),
+    ConfirmOverviewBumpKind,
+    CancelOverviewBumpKind,
     SelectOverviewBumpWorkflow(usize),
     ConfirmOverviewBumpWorkflow,
     CancelOverviewBumpWorkflow,
@@ -5249,8 +5330,8 @@ pub(crate) enum OverviewBumpWorkflow {
     Commit,
     CommitAndTag,
     CommitAndPush,
+    BranchCommit,
     BranchCommitAndPush,
-    CommitPushAndTag,
 }
 
 pub(crate) fn overview_bump_workflow_options(
@@ -5265,8 +5346,9 @@ pub(crate) fn overview_bump_workflow_options(
         ],
         IntegrationMode::GitHubEnabled => vec![
             OverviewBumpWorkflow::JustBump,
+            OverviewBumpWorkflow::Commit,
             OverviewBumpWorkflow::CommitAndPush,
-            OverviewBumpWorkflow::CommitPushAndTag,
+            OverviewBumpWorkflow::BranchCommit,
             OverviewBumpWorkflow::BranchCommitAndPush,
         ],
     }
@@ -5279,8 +5361,8 @@ impl OverviewBumpWorkflow {
             OverviewBumpWorkflow::Commit => "Bump & Commit",
             OverviewBumpWorkflow::CommitAndTag => "Bump & Commit & Tag",
             OverviewBumpWorkflow::CommitAndPush => "Bump & Commit & Push",
+            OverviewBumpWorkflow::BranchCommit => "Branch & Bump & Commit",
             OverviewBumpWorkflow::BranchCommitAndPush => "Branch & Bump & Commit & Push",
-            OverviewBumpWorkflow::CommitPushAndTag => "Bump & Commit & Push & Tag",
         }
     }
 
@@ -5296,11 +5378,11 @@ impl OverviewBumpWorkflow {
             OverviewBumpWorkflow::CommitAndPush => {
                 "Stages and commits the version files, then pushes the bump commit to the configured remote."
             }
+            OverviewBumpWorkflow::BranchCommit => {
+                "Creates a new branch, stages and commits the version files there, and leaves pushing for later."
+            }
             OverviewBumpWorkflow::BranchCommitAndPush => {
                 "Creates a new branch, stages and commits the version files there, then pushes the new branch to the configured remote."
-            }
-            OverviewBumpWorkflow::CommitPushAndTag => {
-                "Stages and commits the version files, pushes the bump commit, then pushes a tag named after the new version."
             }
         }
     }
@@ -5308,22 +5390,31 @@ impl OverviewBumpWorkflow {
     fn requires_push(self) -> bool {
         matches!(
             self,
-            OverviewBumpWorkflow::CommitAndPush
-                | OverviewBumpWorkflow::BranchCommitAndPush
-                | OverviewBumpWorkflow::CommitPushAndTag
+            OverviewBumpWorkflow::CommitAndPush | OverviewBumpWorkflow::BranchCommitAndPush
         )
     }
 
     fn requires_tag(self) -> bool {
-        matches!(
-            self,
-            OverviewBumpWorkflow::CommitAndTag | OverviewBumpWorkflow::CommitPushAndTag
-        )
+        matches!(self, OverviewBumpWorkflow::CommitAndTag)
     }
 
     pub(crate) fn requires_branch(self) -> bool {
-        matches!(self, OverviewBumpWorkflow::BranchCommitAndPush)
+        matches!(
+            self,
+            OverviewBumpWorkflow::BranchCommit | OverviewBumpWorkflow::BranchCommitAndPush
+        )
     }
+}
+
+#[derive(Clone)]
+struct OverviewBumpKindDialog {
+    project_name: String,
+    scope_label: String,
+    scope_index: usize,
+    scheme: VersionScheme,
+    current_version: String,
+    options: Vec<BumpAction>,
+    selected: usize,
 }
 
 #[derive(Clone)]
@@ -5427,6 +5518,56 @@ impl OverviewBumpWorkflowDialog {
             visible_rows,
             Some(self.selected),
         );
+    }
+}
+
+impl OverviewBumpKindDialog {
+    fn new(
+        project_name: String,
+        scope_label: String,
+        scope_index: usize,
+        scheme: VersionScheme,
+        current_version: String,
+        options: Vec<BumpAction>,
+    ) -> Self {
+        let selected = options.len().saturating_sub(1);
+        Self {
+            project_name,
+            scope_label,
+            scope_index,
+            scheme,
+            current_version,
+            options,
+            selected,
+        }
+    }
+
+    fn selected_action(&self) -> BumpAction {
+        self.options[self.selected.min(self.options.len().saturating_sub(1))]
+    }
+
+    fn preview_next_version(&self) -> Result<String> {
+        self.scheme
+            .bump(
+                &self.current_version,
+                self.selected_action(),
+                chrono::Local::now().date_naive(),
+            )
+            .map_err(anyhow::Error::msg)
+    }
+
+    fn select(&mut self, index: usize) {
+        self.selected = index.min(self.options.len().saturating_sub(1));
+    }
+
+    fn rotate(&mut self, delta: isize) {
+        if self.options.is_empty() {
+            self.selected = 0;
+            return;
+        }
+
+        let len = self.options.len() as isize;
+        self.selected = (self.selected as isize + delta).rem_euclid(len) as usize;
     }
 }
 
@@ -7697,6 +7838,13 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
     column >= rect.x && column < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
+fn digit_to_index(character: char) -> Option<usize> {
+    character
+        .to_digit(10)
+        .and_then(|digit| digit.checked_sub(1))
+        .map(|digit| digit as usize)
+}
+
 fn adjust_pending_version_value(
     scheme: VersionScheme,
     current: &str,
@@ -8467,5 +8615,33 @@ mod tests {
         assert_eq!(incremented, "1.3.0");
         assert_eq!(decremented, "1.2.2");
         assert_eq!(major_bumped, "2.0.0");
+    }
+
+    #[test]
+    fn github_bump_workflow_options_match_requested_order() {
+        assert_eq!(
+            overview_bump_workflow_options(IntegrationMode::GitHubEnabled),
+            vec![
+                OverviewBumpWorkflow::JustBump,
+                OverviewBumpWorkflow::Commit,
+                OverviewBumpWorkflow::CommitAndPush,
+                OverviewBumpWorkflow::BranchCommit,
+                OverviewBumpWorkflow::BranchCommitAndPush,
+            ]
+        );
+    }
+
+    #[test]
+    fn overview_bump_kind_defaults_to_lowest_supported_increment() {
+        let dialog = OverviewBumpKindDialog::new(
+            "Demo".to_string(),
+            "All configured scopes".to_string(),
+            0,
+            VersionScheme::SemVer,
+            "1.2.3".to_string(),
+            VersionScheme::SemVer.supported_actions().to_vec(),
+        );
+
+        assert_eq!(dialog.selected_action(), BumpAction::Patch);
     }
 }
