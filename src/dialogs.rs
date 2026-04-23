@@ -10,6 +10,7 @@ use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     config::{IntegrationMode, ProjectConfig},
@@ -32,6 +33,7 @@ pub(crate) struct RecentChangesDialog {
     pub(crate) history_loaded: bool,
     pub(crate) active_tab: RecentChangesTab,
     pub(crate) history_index: usize,
+    pub(crate) selected_line: usize,
     pub(crate) scroll: u16,
     pub(crate) prefetched_recent_ranges: Vec<Option<ChangeRange>>,
     pub(crate) prefetched_history_ranges: Vec<Option<Vec<ChangeRange>>>,
@@ -41,6 +43,19 @@ pub(crate) struct RecentChangesDialog {
 pub(crate) struct ChangeRange {
     pub(crate) label: String,
     pub(crate) lines: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RecentChangeLineLayout {
+    pub(crate) line_index: usize,
+    pub(crate) start_row: usize,
+    pub(crate) row_count: usize,
+}
+
+impl RecentChangeLineLayout {
+    pub(crate) fn end_row(self) -> usize {
+        self.start_row + self.row_count
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -221,10 +236,12 @@ impl RecentChangesDialog {
             history_loaded: false,
             active_tab: RecentChangesTab::Recent,
             history_index: 0,
+            selected_line: 0,
             scroll: 0,
             prefetched_recent_ranges: vec![None; scope_count],
             prefetched_history_ranges: vec![None; scope_count],
-        })
+        }
+        .with_initial_selection())
     }
 
     pub(crate) fn can_select_scope(&self) -> bool {
@@ -239,15 +256,7 @@ impl RecentChangesDialog {
         &mut self,
         cancel: Option<GitCancellation>,
     ) -> Result<()> {
-        let previous_scroll = self.scroll;
         self.reload_selected_scope(false, cancel)?;
-        let max_scroll = self
-            .current_range()
-            .lines
-            .len()
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16;
-        self.scroll = previous_scroll.min(max_scroll);
         Ok(())
     }
 
@@ -338,6 +347,7 @@ impl RecentChangesDialog {
             }
         }
         self.scroll = 0;
+        self.reset_selection();
         Ok(())
     }
 
@@ -359,6 +369,7 @@ impl RecentChangesDialog {
         self.history_index = self
             .history_index
             .min(self.history_ranges.len().saturating_sub(1));
+        self.reset_selection();
         Ok(())
     }
 
@@ -386,6 +397,7 @@ impl RecentChangesDialog {
         }
         self.active_tab = tab;
         self.scroll = 0;
+        self.reset_selection();
         Ok(())
     }
 
@@ -426,22 +438,188 @@ impl RecentChangesDialog {
         if next != self.history_index {
             self.history_index = next;
             self.scroll = 0;
+            self.reset_selection();
+        }
+    }
+
+    pub(crate) fn selected_line(&self) -> Option<usize> {
+        self.current_range()
+            .lines
+            .get(self.selected_line)
+            .and_then(|line| extract_commit_hash(line).map(|_| self.selected_line))
+    }
+
+    pub(crate) fn selected_commit_hash(&self) -> Option<String> {
+        self.selected_line()
+            .and_then(|index| self.current_range().lines.get(index))
+            .and_then(|line| extract_commit_hash(line))
+    }
+
+    pub(crate) fn line_layouts(&self, wrap_width: usize) -> Vec<RecentChangeLineLayout> {
+        let wrap_width = wrap_width.max(1);
+        let mut start_row = 0usize;
+        self.current_range()
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(line_index, line)| {
+                let row_count = wrapped_line_rows(line, wrap_width);
+                let layout = RecentChangeLineLayout {
+                    line_index,
+                    start_row,
+                    row_count,
+                };
+                start_row += row_count;
+                layout
+            })
+            .collect()
+    }
+
+    pub(crate) fn selected_line_layout(&self, wrap_width: usize) -> Option<RecentChangeLineLayout> {
+        let selected_line = self.selected_line()?;
+        self.line_layouts(wrap_width)
+            .into_iter()
+            .find(|layout| layout.line_index == selected_line)
+    }
+
+    pub(crate) fn line_has_commit(&self, line_index: usize) -> bool {
+        self.current_range()
+            .lines
+            .get(line_index)
+            .and_then(|line| extract_commit_hash(line))
+            .is_some()
+    }
+
+    pub(crate) fn select_line(&mut self, line_index: usize) {
+        if self.line_has_commit(line_index) {
+            self.selected_line = line_index;
+        }
+    }
+
+    pub(crate) fn ensure_selection_visible(&mut self, visible_rows: usize, wrap_width: usize) {
+        if visible_rows == 0 {
+            self.scroll = 0;
+            return;
+        }
+
+        let Some(selected_layout) = self.selected_line_layout(wrap_width) else {
+            self.scroll = 0;
+            return;
+        };
+
+        let visible_rows = visible_rows.min(u16::MAX as usize);
+        let scroll = self.scroll as usize;
+        if selected_layout.start_row < scroll {
+            self.scroll = selected_layout.start_row.min(u16::MAX as usize) as u16;
+            return;
+        }
+
+        let viewport_end = scroll + visible_rows;
+        if selected_layout.end_row() > viewport_end {
+            let next_scroll = selected_layout.end_row().saturating_sub(visible_rows);
+            self.scroll = next_scroll.min(u16::MAX as usize) as u16;
         }
     }
 
     pub(crate) fn scroll_by(&mut self, delta: i16) {
-        let max_scroll = self
-            .current_range()
-            .lines
-            .len()
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16;
-        if delta.is_negative() {
-            self.scroll = self.scroll.saturating_sub(delta.unsigned_abs());
-        } else {
-            self.scroll = self.scroll.saturating_add(delta as u16).min(max_scroll);
+        if delta == 0 || self.current_range().lines.is_empty() {
+            return;
+        }
+
+        let step = if delta.is_negative() { -1 } else { 1 };
+        for _ in 0..delta.unsigned_abs() {
+            let Some(next) =
+                next_commit_line(&self.current_range().lines, self.selected_line, step)
+            else {
+                break;
+            };
+            self.selected_line = next;
         }
     }
+
+    fn with_initial_selection(mut self) -> Self {
+        self.reset_selection();
+        self
+    }
+
+    fn reset_selection(&mut self) {
+        self.selected_line = first_commit_line(&self.current_range().lines).unwrap_or(0);
+        self.scroll = 0;
+    }
+}
+
+fn first_commit_line(lines: &[String]) -> Option<usize> {
+    lines
+        .iter()
+        .position(|line| extract_commit_hash(line).is_some())
+}
+
+fn next_commit_line(lines: &[String], start: usize, delta: isize) -> Option<usize> {
+    if lines.is_empty() {
+        return None;
+    }
+
+    if delta < 0 {
+        let mut index = start;
+        while let Some(previous) = index.checked_sub(1) {
+            index = previous;
+            if extract_commit_hash(&lines[index]).is_some() {
+                return Some(index);
+            }
+        }
+        return None;
+    }
+
+    let mut index = start;
+    while index + 1 < lines.len() {
+        index += 1;
+        if extract_commit_hash(&lines[index]).is_some() {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn extract_commit_hash(line: &str) -> Option<String> {
+    let indices = line.char_indices().collect::<Vec<_>>();
+    for (position, (byte_index, character)) in indices.iter().enumerate() {
+        if !character.is_ascii_hexdigit() {
+            continue;
+        }
+
+        let previous_is_space = position == 0 || indices[position - 1].1 == ' ';
+        if !previous_is_space {
+            continue;
+        }
+
+        let mut end = position;
+        while end < indices.len() && indices[end].1.is_ascii_hexdigit() {
+            end += 1;
+        }
+        if end - position < 7 {
+            continue;
+        }
+
+        let next_is_space = end == indices.len() || indices[end].1 == ' ';
+        if !next_is_space {
+            continue;
+        }
+
+        let end_byte = if end < indices.len() {
+            indices[end].0
+        } else {
+            line.len()
+        };
+        return Some(line[*byte_index..end_byte].to_string());
+    }
+
+    None
+}
+
+fn wrapped_line_rows(line: &str, wrap_width: usize) -> usize {
+    let wrap_width = wrap_width.max(1);
+    let display_width = UnicodeWidthStr::width(line).max(1);
+    display_width.div_ceil(wrap_width)
 }
 
 #[derive(Clone)]

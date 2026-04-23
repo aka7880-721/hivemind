@@ -119,6 +119,20 @@ pub(crate) fn create_branch_and_switch(repo_root: &str, branch_name: &str) -> Re
     Ok(())
 }
 
+pub(crate) fn switch_to_existing_branch(repo_root: &str, branch_name: &str) -> Result<()> {
+    let current_branch = current_branch_with_cancel(repo_root, None)?;
+    if current_branch.eq_ignore_ascii_case(branch_name) {
+        return Ok(());
+    }
+
+    let switch_output = run_git(repo_root, &["switch", branch_name])?;
+    if !switch_output.success {
+        run_git_checked(repo_root, &["checkout", branch_name])?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn switch_or_create_branch(repo_root: &str, branch_name: &str) -> Result<()> {
     let current_branch = current_branch_with_cancel(repo_root, None)?;
     if current_branch == branch_name {

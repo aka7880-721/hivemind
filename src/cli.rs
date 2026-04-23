@@ -12,11 +12,18 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
+    sync::{Mutex, OnceLock},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Local;
+use crossterm::{
+    cursor::{MoveToColumn, MoveUp},
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 
@@ -32,9 +39,12 @@ use crate::{
         TargetSpec,
     },
     git::{
-        collect_all_branch_git_scope_contexts, current_branch_with_cancel, last_bump_time,
-        latest_local_tag_with_cancel, run_git, run_git_checked, split_output_lines,
+        GitCancellation, collect_all_branch_git_scope_contexts, current_branch_with_cancel,
+        last_bump_time, latest_local_tag_with_cancel, resolve_main_branch_name, run_git,
+        run_git_checked, run_git_checked_owned_with_cancel, run_git_checked_with_cancel,
+        split_output_lines, switch_to_existing_branch, switch_to_main_branch,
     },
+    git_br::{BranchNameOption, is_release_line_branch, suggest_branch_name_options},
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -42,6 +52,58 @@ use crate::{
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/comfy-home/ComfyGit/releases/latest";
+
+static CLI_GIT_CANCELLATION_SLOT: OnceLock<Mutex<Option<GitCancellation>>> = OnceLock::new();
+static CLI_CTRL_C_HANDLER_RESULT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+
+fn cli_git_cancellation_slot() -> &'static Mutex<Option<GitCancellation>> {
+    CLI_GIT_CANCELLATION_SLOT.get_or_init(|| Mutex::new(None))
+}
+
+fn ensure_cli_ctrl_c_handler() -> Result<()> {
+    let slot = cli_git_cancellation_slot();
+    let install_result = CLI_CTRL_C_HANDLER_RESULT.get_or_init(|| {
+        ctrlc::set_handler(move || {
+            if let Ok(active) = slot.lock()
+                && let Some(cancel) = active.as_ref()
+            {
+                cancel.cancel();
+            }
+        })
+        .map_err(|error| error.to_string())
+    });
+
+    if let Err(message) = install_result {
+        bail!("failed to install Ctrl+C handler: {}", message)
+    }
+
+    Ok(())
+}
+
+fn with_cli_git_cancellation<T>(
+    action: impl FnOnce(Option<GitCancellation>) -> Result<T>,
+) -> Result<T> {
+    ensure_cli_ctrl_c_handler()?;
+
+    let cancel = GitCancellation::new();
+    {
+        let mut active = cli_git_cancellation_slot()
+            .lock()
+            .map_err(|_| anyhow!("failed to acquire Ctrl+C cancellation state"))?;
+        *active = Some(cancel.clone());
+    }
+
+    let result = action(Some(cancel.clone()));
+
+    if let Ok(mut active) = cli_git_cancellation_slot().lock() {
+        *active = None;
+    }
+
+    match result {
+        Err(_error) if cancel.is_cancelled() => bail!("cancelled by user"),
+        other => other,
+    }
+}
 
 pub(crate) enum StartupMode {
     Handled,
@@ -68,6 +130,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             print_branch_status()?;
             Ok(StartupMode::Handled)
         }
+        [command, action] if is_branch_command(command) && is_branch_up_action(action) => {
+            run_branch_up()?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_branch_command(command) && is_branch_main_action(action) => {
+            run_branch_main()?;
+            Ok(StartupMode::Handled)
+        }
         [command, lookup] if is_project_version_command(command) => {
             print_project_version(lookup)?;
             Ok(StartupMode::Handled)
@@ -90,6 +160,12 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             if is_commit_command(command) && is_commit_delete_action(action) =>
         {
             run_commit_delete(commit_hash)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, commit_target]
+            if is_commit_command(command) && is_commit_rename_action(action) =>
+        {
+            run_commit_rename(commit_target)?;
             Ok(StartupMode::Handled)
         }
         [command, action] if is_bump_command(command) => {
@@ -131,8 +207,20 @@ fn is_commit_delete_action(value: &str) -> bool {
     matches!(value, "del" | "rm" | "rem" | "delete" | "drop" | "erase")
 }
 
+fn is_commit_rename_action(value: &str) -> bool {
+    matches!(value, "rename" | "rn" | "rnm" | "reword" | "rwrd" | "rwd")
+}
+
 fn is_branch_command(value: &str) -> bool {
     matches!(value, "branch" | "br" | "brn" | "brnch")
+}
+
+fn is_branch_up_action(value: &str) -> bool {
+    matches!(value, "up" | "..")
+}
+
+fn is_branch_main_action(value: &str) -> bool {
+    matches!(value, "main" | "~")
 }
 
 fn is_project_version_command(value: &str) -> bool {
@@ -164,15 +252,29 @@ fn print_usage() {
     println!(
         "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
     );
-    println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
     println!(
         "                             on the current branch and pushing the revert if an upstream exists"
     );
+    println!("  cg commit rename <target>  Rename a commit message on the current branch");
+    println!(
+        "                             <target> may be a commit hash or a HEAD offset (0 = HEAD, 1 = HEAD~1)"
+    );
     println!("          synonyms:");
     println!("            commit: cmt | com | ct");
     println!("            del: del | rm | rem | delete | drop | erase");
+    println!("            rename: rename | rn | rnm | reword | rwrd | rwd");
+    println!(" ");
+    println!("  BRANCHING COMMANDS:");
+    println!(" ");
+    println!("  cg branch                  Show the current branch and a compact branch tree");
+    println!("  cg branch up | ..          Switch to the parent branch in the current tree");
+    println!("  cg branch main | ~         Switch to main/master/custom main for the project");
+    println!("          synonyms:");
+    println!("            branch: br | brn | brnch");
+    println!("            up: up | ..");
+    println!("            main: main | ~");
     println!(" ");
     println!("  BUMPING COMMANDS:");
     println!(" ");
@@ -181,6 +283,7 @@ fn print_usage() {
     );
     println!("          actions: major | minor | Patch | Auto | Cal ");
     println!("          synonyms:");
+    println!("            bmp: bump | bp | bum");
     println!("            major: maj | mj | mjr | big | .");
     println!("            minor: min | mnr | mr | mn | small | sml | ..");
     println!("            patch: pat | ptch | ph | pth | mini | ...");
@@ -192,7 +295,8 @@ fn print_usage() {
     println!("             1 → Just bump the version");
     println!("             2 → Bump & Commit (locally)");
     println!("             3 → Bump & Commit & Push");
-    println!("             4 → Branch & Bump & Commit & Push (will prompt for branch name)");
+    println!("             4 → Branch & Bump & Commit (will prompt for branch name, local only)");
+    println!("             5 → Branch & Bump & Commit & Push (will prompt for branch name)");
     println!(" ");
 }
 
@@ -214,6 +318,81 @@ fn print_version_status() {
 }
 
 fn print_branch_status() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+
+    println!();
+    println!("current branch: \x1b[33m{}\x1b[0m", context.current_branch);
+    println!("---------------");
+    println!();
+    println!("Generating the tree...");
+    println!("\x1b[90m(ctrl+c to cancel)\x1b[0m");
+    println!();
+    io::stdout()
+        .flush()
+        .context("failed to flush branch status output")?;
+
+    let diagram = with_cli_git_cancellation(|cancel| {
+        load_branch_diagram_with_cancel(
+            &context.repo_root,
+            &context.current_branch,
+            context.main_branch_name.as_deref(),
+            cancel,
+        )
+    })?;
+
+    println!("{}", render_branch_tree(diagram.as_ref()));
+    println!();
+    Ok(())
+}
+
+fn run_branch_up() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    let target_branch = with_cli_git_cancellation(|cancel| {
+        resolve_parent_branch_name_with_cancel(
+            &context.repo_root,
+            &context.current_branch,
+            context.main_branch_name.as_deref(),
+            cancel,
+        )
+    })?;
+    switch_to_existing_branch(&context.repo_root, &target_branch)?;
+
+    println!();
+    println!(
+        "switched current branch: \x1b[33m{}\x1b[0m → \x1b[33m{}\x1b[0m",
+        context.current_branch, target_branch
+    );
+    println!();
+    Ok(())
+}
+
+fn run_branch_main() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    let target_branch =
+        resolve_main_branch_target(&context.repo_root, context.main_branch_name.as_deref())?;
+    switch_to_main_branch(
+        &context.repo_root,
+        None,
+        false,
+        context.main_branch_name.as_deref(),
+    )?;
+
+    println!();
+    println!(
+        "switched current branch: \x1b[33m{}\x1b[0m → \x1b[33m{}\x1b[0m",
+        context.current_branch, target_branch
+    );
+    println!();
+    Ok(())
+}
+
+struct ActiveBranchCliContext {
+    repo_root: String,
+    main_branch_name: Option<String>,
+    current_branch: String,
+}
+
+fn load_active_branch_cli_context() -> Result<ActiveBranchCliContext> {
     let config = load_config()?;
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
@@ -232,26 +411,11 @@ fn print_branch_status() -> Result<()> {
         .ok_or_else(|| anyhow!("git scope metadata is unavailable for the current branch view"))?;
     let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
 
-    println!();
-    println!("current branch: \x1b[33m{}\x1b[0m", current_branch);
-    println!("---------------");
-    println!();
-    println!("Generating the tree...");
-    println!("\x1b[90m(ctrl+c to cancel)\x1b[0m");
-    println!();
-    io::stdout()
-        .flush()
-        .context("failed to flush branch status output")?;
-
-    let diagram = load_branch_diagram(
-        &context.repo_root,
-        &current_branch,
-        context.main_branch_name.as_deref(),
-    )?;
-
-    println!("{}", render_branch_tree(diagram.as_ref()));
-    println!();
-    Ok(())
+    Ok(ActiveBranchCliContext {
+        repo_root: context.repo_root.clone(),
+        main_branch_name: context.main_branch_name.clone(),
+        current_branch,
+    })
 }
 
 fn print_project_version(lookup: &str) -> Result<()> {
@@ -342,13 +506,15 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
         .bump(&current_version, action, Local::now().date_naive())
         .map_err(anyhow::Error::msg)?;
 
+    let mut git_contexts = Vec::new();
+    let mut non_main_repo_states = Vec::new();
     let mut repo_operations = Vec::new();
     if workflow != OverviewBumpWorkflow::JustBump {
         if !project.integration_mode.requires_repo() {
             bail!("selected bump option requires a git-backed project")
         }
 
-        let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
+        git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
         repo_operations = collect_repo_bump_operations(
             &resolved_project,
             &scopes,
@@ -357,7 +523,7 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
         )?;
 
         if workflow.requires_branch() {
-            let non_main_repo_states = collect_non_main_repo_states(
+            non_main_repo_states = collect_non_main_repo_states(
                 &resolved_project,
                 &scopes,
                 &git_contexts,
@@ -384,7 +550,21 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
     }
 
     let branch_name = if workflow.requires_branch() {
-        Some(prompt_branch_name()?)
+        let branch_prompt_source = resolve_branch_prompt_source(
+            &repo_operations,
+            &git_contexts,
+            &non_main_repo_states,
+            scheme,
+        )?;
+        let branch_name_options = suggest_branch_name_options(
+            scheme,
+            &branch_prompt_source.current_branch,
+            &current_version,
+            &next_version,
+            branch_prompt_source.custom_main_branch.as_deref(),
+            Local::now().date_naive(),
+        )?;
+        Some(prompt_branch_name(&branch_name_options)?)
     } else {
         None
     };
@@ -445,6 +625,43 @@ struct CommitDeleteOutcome {
     upstream_ref: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CommitRenameStrategy {
+    AmendHead,
+    RewordAncestor,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommitRenamePlan {
+    pub(crate) repo_root: String,
+    pub(crate) branch_name: String,
+    pub(crate) target_commit: String,
+    pub(crate) target_short: String,
+    pub(crate) current_subject: String,
+    pub(crate) current_message: String,
+    pub(crate) distance_from_head: usize,
+    pub(crate) strategy: CommitRenameStrategy,
+    pub(crate) upstream_ref: Option<String>,
+    pub(crate) touches_pushed_history: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommitRenameOutcome {
+    pub(crate) repo_root: String,
+    pub(crate) branch_name: String,
+    pub(crate) target_commit: String,
+    pub(crate) previous_subject: String,
+    pub(crate) new_subject: String,
+    pub(crate) head_commit: String,
+    pub(crate) strategy: CommitRenameStrategy,
+}
+
+struct RenameEditorScripts {
+    temp_dir: PathBuf,
+    sequence_editor_command: String,
+    message_editor_command: String,
+}
+
 fn run_commit_delete(commit_hash: &str) -> Result<()> {
     let cwd = env::current_dir().context("failed to read current directory")?;
     let repo_root = current_git_repo_root(&cwd)?;
@@ -470,6 +687,164 @@ fn run_commit_delete(commit_hash: &str) -> Result<()> {
     }
     println!();
 
+    Ok(())
+}
+
+fn run_commit_rename(commit_target: &str) -> Result<()> {
+    let cwd = env::current_dir().context("failed to read current directory")?;
+    let repo_root = current_git_repo_root(&cwd)?;
+    let plan = prepare_commit_rename(&repo_root, commit_target)?;
+
+    if plan.touches_pushed_history {
+        println!();
+        println!(
+            "Warning: {} is already reachable from {}.",
+            plan.target_short,
+            plan.upstream_ref
+                .as_deref()
+                .unwrap_or("the upstream branch")
+        );
+        println!(
+            "Renaming it will rewrite published history on {}.\nDo this only if:\n  A) This is a solo project\n  B) This is a very recent pushed commit\n  C) You are 100% sure no one else is basing work on it\n  D) You coordinate with everyone who is basing work on it to update their branches after you push the rewrite",
+            plan.branch_name
+        );
+        if !prompt_confirm_default_no("Continue with the local rename? [y/N]: ")? {
+            bail!("cancelled by user")
+        }
+    }
+
+    let new_subject = prompt_commit_subject(&plan.current_subject)?;
+    let outcome = rename_commit_with_subject(&plan, &new_subject)?;
+
+    let mut force_pushed = false;
+    if plan.touches_pushed_history && plan.upstream_ref.is_some() {
+        force_pushed = prompt_confirm_default_no(&format!(
+            "Push the rewritten branch to {} with --force-with-lease? [y/N]: ",
+            plan.upstream_ref
+                .as_deref()
+                .unwrap_or("the upstream branch")
+        ))?;
+        if force_pushed {
+            push_branch_force_with_lease(&plan.repo_root)?;
+        }
+    }
+
+    println!();
+    println!(
+        "Renamed {} on branch {}.",
+        outcome.target_commit, outcome.branch_name
+    );
+    println!("Previous subject: {}", outcome.previous_subject);
+    println!("New subject: {}", outcome.new_subject);
+    println!("Current HEAD: {}", outcome.head_commit);
+    if force_pushed {
+        println!(
+            "Force-pushed the rewritten branch to {} with --force-with-lease.",
+            plan.upstream_ref
+                .as_deref()
+                .unwrap_or("the upstream branch")
+        );
+    } else if plan.touches_pushed_history {
+        println!("The history rewrite is local only until you force-push it.");
+    }
+    println!();
+
+    Ok(())
+}
+
+pub(crate) fn prepare_commit_rename(
+    repo_root: &str,
+    commit_target: &str,
+) -> Result<CommitRenamePlan> {
+    let commit_target = commit_target.trim();
+    if commit_target.is_empty() {
+        bail!("commit target cannot be empty")
+    }
+
+    ensure_clean_worktree(repo_root)?;
+
+    let branch_name = current_branch_with_cancel(repo_root, None)?;
+    if branch_name.starts_with("detached (") {
+        bail!("cg commit rename requires a checked-out branch; detached HEAD is not supported")
+    }
+
+    let verified_commit = resolve_commit_target(repo_root, commit_target)?;
+    if !is_commit_ancestor_of_head(repo_root, &verified_commit)? {
+        bail!(
+            "commit {} is not reachable from the current branch {}; switch to the branch that contains it first",
+            verified_commit,
+            branch_name
+        )
+    }
+
+    let distance_from_head = commit_distance_from_head(repo_root, &verified_commit)?;
+    let strategy = if distance_from_head == 0 {
+        CommitRenameStrategy::AmendHead
+    } else {
+        CommitRenameStrategy::RewordAncestor
+    };
+    let current_subject = commit_subject(repo_root, &verified_commit)?;
+    let current_message = commit_message(repo_root, &verified_commit)?;
+    let upstream_ref = current_upstream_ref(repo_root)?;
+    let touches_pushed_history = upstream_ref.as_deref().is_some_and(|upstream| {
+        is_commit_ancestor_of_ref(repo_root, &verified_commit, upstream).unwrap_or(false)
+    });
+
+    Ok(CommitRenamePlan {
+        repo_root: repo_root.to_string(),
+        branch_name,
+        target_short: short_commit_hash(repo_root, &verified_commit)?,
+        target_commit: verified_commit,
+        current_subject,
+        current_message,
+        distance_from_head,
+        strategy,
+        upstream_ref,
+        touches_pushed_history,
+    })
+}
+
+pub(crate) fn rename_commit_with_subject(
+    plan: &CommitRenamePlan,
+    new_subject: &str,
+) -> Result<CommitRenameOutcome> {
+    let new_subject = new_subject.trim();
+    if new_subject.is_empty() {
+        bail!("new commit message cannot be empty")
+    }
+    if new_subject == plan.current_subject {
+        bail!("new commit message matches the current subject")
+    }
+
+    let updated_message = replace_commit_subject(&plan.current_message, new_subject);
+    match plan.strategy {
+        CommitRenameStrategy::AmendHead => {
+            amend_head_commit_message(&plan.repo_root, &updated_message)?
+        }
+        CommitRenameStrategy::RewordAncestor => {
+            reword_ancestor_commit_message(
+                &plan.repo_root,
+                &plan.target_commit,
+                &plan.target_short,
+                &updated_message,
+            )?;
+        }
+    }
+
+    Ok(CommitRenameOutcome {
+        repo_root: plan.repo_root.clone(),
+        branch_name: plan.branch_name.clone(),
+        target_commit: plan.target_short.clone(),
+        previous_subject: plan.current_subject.clone(),
+        new_subject: new_subject.to_string(),
+        head_commit: short_commit_hash(&plan.repo_root, "HEAD")?,
+        strategy: plan.strategy.clone(),
+    })
+}
+
+pub(crate) fn push_branch_force_with_lease(repo_root: &str) -> Result<()> {
+    run_git_checked(repo_root, &["push", "--force-with-lease"])
+        .context("failed to push the rewritten branch with --force-with-lease")?;
     Ok(())
 }
 
@@ -578,6 +953,51 @@ fn is_commit_ancestor_of_head(repo_root: &str, commit_hash: &str) -> Result<bool
     Ok(output.success)
 }
 
+fn is_commit_ancestor_of_ref(repo_root: &str, commit_hash: &str, reference: &str) -> Result<bool> {
+    let output = run_git(
+        repo_root,
+        &["merge-base", "--is-ancestor", commit_hash, reference],
+    )?;
+    Ok(output.success)
+}
+
+fn resolve_commit_target(repo_root: &str, commit_target: &str) -> Result<String> {
+    if commit_target
+        .chars()
+        .all(|character| character.is_ascii_digit())
+    {
+        let offset = commit_target
+            .parse::<usize>()
+            .with_context(|| format!("'{}' is not a valid HEAD offset", commit_target))?;
+        let revision = if offset == 0 {
+            "HEAD".to_string()
+        } else {
+            format!("HEAD~{}", offset)
+        };
+        return verify_commit_hash(repo_root, &revision).with_context(|| {
+            format!(
+                "HEAD offset {} is not available on the current branch",
+                offset
+            )
+        });
+    }
+
+    verify_commit_hash(repo_root, commit_target)
+}
+
+fn commit_distance_from_head(repo_root: &str, commit_hash: &str) -> Result<usize> {
+    let count = run_git_checked(
+        repo_root,
+        &["rev-list", "--count", &format!("{}..HEAD", commit_hash)],
+    )?;
+    count.trim().parse::<usize>().with_context(|| {
+        format!(
+            "failed to measure the distance from {} to HEAD",
+            commit_hash
+        )
+    })
+}
+
 fn revert_uses_mainline_parent(repo_root: &str, commit_hash: &str) -> Result<bool> {
     let output = run_git_checked(
         repo_root,
@@ -605,6 +1025,21 @@ fn commit_subject(repo_root: &str, commit_hash: &str) -> Result<String> {
     .to_string())
 }
 
+fn commit_message(repo_root: &str, commit_hash: &str) -> Result<String> {
+    run_git_checked(
+        repo_root,
+        &["show", "--no-patch", "--format=%B", commit_hash],
+    )
+}
+
+fn short_commit_hash(repo_root: &str, commit_hash: &str) -> Result<String> {
+    Ok(
+        run_git_checked(repo_root, &["rev-parse", "--short", commit_hash])?
+            .trim()
+            .to_string(),
+    )
+}
+
 fn current_upstream_ref(repo_root: &str) -> Result<Option<String>> {
     let output = run_git(
         repo_root,
@@ -622,34 +1057,499 @@ fn current_upstream_ref(repo_root: &str) -> Result<Option<String>> {
     }
 }
 
+fn replace_commit_subject(current_message: &str, new_subject: &str) -> String {
+    if let Some((_, remainder)) = current_message.split_once('\n') {
+        format!("{}\n{}", new_subject, remainder)
+    } else {
+        format!("{}\n", new_subject)
+    }
+}
+
+fn amend_head_commit_message(repo_root: &str, message: &str) -> Result<()> {
+    let temp_file = write_temp_commit_message_file(message)?;
+    let temp_file_arg = temp_file.to_string_lossy().to_string();
+    let result = run_git_checked(
+        repo_root,
+        &["commit", "--amend", "-F", temp_file_arg.as_str()],
+    );
+    let _ = fs::remove_file(&temp_file);
+    result.context("failed to amend the current HEAD commit message")?;
+    Ok(())
+}
+
+fn reword_ancestor_commit_message(
+    repo_root: &str,
+    target_commit: &str,
+    target_short: &str,
+    message: &str,
+) -> Result<()> {
+    let scripts = create_rename_editor_scripts(message, target_commit, target_short)?;
+    let rebase_args = if commit_has_parents(repo_root, target_commit)? {
+        vec![
+            "rebase".to_string(),
+            "-i".to_string(),
+            "--rebase-merges".to_string(),
+            format!("{}^", target_commit),
+        ]
+    } else {
+        vec![
+            "rebase".to_string(),
+            "-i".to_string(),
+            "--rebase-merges".to_string(),
+            "--root".to_string(),
+        ]
+    };
+
+    let output = run_git_command_with_env(
+        repo_root,
+        &rebase_args,
+        &[
+            (
+                "GIT_SEQUENCE_EDITOR",
+                scripts.sequence_editor_command.as_str(),
+            ),
+            ("GIT_EDITOR", scripts.message_editor_command.as_str()),
+        ],
+    )
+    .context("failed to start the commit reword rebase")?;
+
+    let _ = fs::remove_dir_all(&scripts.temp_dir);
+
+    if !output.status.success() {
+        let _ = run_git(repo_root, &["rebase", "--abort"]);
+        bail!(
+            "failed to rename commit {}; git reported: {}",
+            target_short,
+            format_git_command_error(&output)
+        )
+    }
+
+    Ok(())
+}
+
+fn commit_has_parents(repo_root: &str, commit_hash: &str) -> Result<bool> {
+    let output = run_git_checked(
+        repo_root,
+        &["rev-list", "--parents", "-n", "1", commit_hash],
+    )?;
+    Ok(output.split_whitespace().count().saturating_sub(1) > 0)
+}
+
+fn prompt_commit_subject(current_subject: &str) -> Result<String> {
+    println!();
+    println!("Current commit message: {}", current_subject);
+    print!("New commit message: ");
+    io::stdout()
+        .flush()
+        .context("failed to flush commit message prompt")?;
+
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .context("failed to read the new commit message")?;
+
+    let answer = answer.trim().to_string();
+    if answer.is_empty() {
+        bail!("new commit message cannot be empty")
+    }
+
+    Ok(answer)
+}
+
+fn prompt_confirm_default_no(prompt: &str) -> Result<bool> {
+    loop {
+        print!("{}", prompt);
+        io::stdout().flush().context("failed to flush prompt")?;
+
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read response")?;
+
+        match answer.trim().to_lowercase().as_str() {
+            "y" | "yes" => return Ok(true),
+            "" | "n" | "no" => return Ok(false),
+            other => println!("Please answer Y or N. Received: {}", other),
+        }
+    }
+}
+
+fn write_temp_commit_message_file(message: &str) -> Result<PathBuf> {
+    let temp_file = env::temp_dir().join(format!(
+        "comfygit-rename-message-{}-{}.txt",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::write(&temp_file, message).with_context(|| {
+        format!(
+            "failed to write the temporary commit message file at {}",
+            temp_file.display()
+        )
+    })?;
+    Ok(temp_file)
+}
+
+fn create_rename_editor_scripts(
+    message: &str,
+    target_commit: &str,
+    target_short: &str,
+) -> Result<RenameEditorScripts> {
+    let temp_dir = env::temp_dir().join(format!(
+        "comfygit-rename-scripts-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).with_context(|| {
+        format!(
+            "failed to create the temporary rename script directory at {}",
+            temp_dir.display()
+        )
+    })?;
+
+    let message_file = temp_dir.join("commit-message.txt");
+    fs::write(&message_file, message).with_context(|| {
+        format!(
+            "failed to write the temporary commit message file at {}",
+            message_file.display()
+        )
+    })?;
+
+    if cfg!(windows) {
+        let sequence_script = temp_dir.join("sequence-editor.ps1");
+        fs::write(
+            &sequence_script,
+            format!(
+                r#"$todoPath = $args[0]
+$targetFull = '{target_full}'
+$targetShort = '{target_short}'
+$lines = Get-Content -LiteralPath $todoPath
+$updated = $false
+$rewritten = foreach ($line in $lines) {{
+    if (-not $updated -and $line -match "^\s*pick\s+({target_full}|{target_short})(\s|$)") {{
+        $updated = $true
+        $line -replace '^\s*pick\s+', 'reword '
+    }} elseif (-not $updated -and $line -match "^\s*merge\s+-C\s+({target_full}|{target_short})(\s|$)") {{
+        $updated = $true
+        $line -replace '^\s*merge\s+-C\s+', 'merge -c '
+    }} else {{
+        $line
+    }}
+}}
+if (-not $updated) {{
+    Write-Error 'Target commit was not found in the rebase todo list.'
+    exit 1
+}}
+Set-Content -LiteralPath $todoPath -Value $rewritten
+"#,
+                target_full = target_commit,
+                target_short = target_short,
+            ),
+        )
+        .context("failed to write the PowerShell sequence editor script")?;
+        let sequence_wrapper = temp_dir.join("sequence-editor.cmd");
+        fs::write(
+            &sequence_wrapper,
+            format!(
+                "@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+                sequence_script.display()
+            ),
+        )
+        .context("failed to write the sequence editor wrapper")?;
+
+        let message_script = temp_dir.join("message-editor.ps1");
+        fs::write(
+            &message_script,
+            format!(
+                "$destinationPath = $args[0]\nCopy-Item -LiteralPath '{}' -Destination $destinationPath -Force\n",
+                powershell_literal(&message_file)
+            ),
+        )
+        .context("failed to write the PowerShell message editor script")?;
+        let message_wrapper = temp_dir.join("message-editor.cmd");
+        fs::write(
+            &message_wrapper,
+            format!(
+                "@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+                message_script.display()
+            ),
+        )
+        .context("failed to write the message editor wrapper")?;
+
+        return Ok(RenameEditorScripts {
+            temp_dir,
+            sequence_editor_command: format!("\"{}\"", sequence_wrapper.display()),
+            message_editor_command: format!("\"{}\"", message_wrapper.display()),
+        });
+    }
+
+    let sequence_script = temp_dir.join("sequence-editor.sh");
+    fs::write(
+        &sequence_script,
+        format!(
+            "#!/bin/sh\nset -eu\ntodo_path=\"$1\"\nawk 'BEGIN {{ updated = 0 }}\n{{\n  if (!updated && $1 == \"pick\" && ($2 == \"{target_full}\" || $2 == \"{target_short}\")) {{ $1 = \"reword\"; updated = 1 }}\n  else if (!updated && $1 == \"merge\" && $2 == \"-C\" && ($3 == \"{target_full}\" || $3 == \"{target_short}\")) {{ $2 = \"-c\"; updated = 1 }}\n  print\n}}\nEND {{ if (!updated) exit 9 }}' \"$todo_path\" > \"$todo_path.tmp\"\nmv \"$todo_path.tmp\" \"$todo_path\"\n",
+            target_full = target_commit,
+            target_short = target_short,
+        ),
+    )
+    .context("failed to write the shell sequence editor script")?;
+    let message_script = temp_dir.join("message-editor.sh");
+    fs::write(
+        &message_script,
+        format!(
+            "#!/bin/sh\nset -eu\ncat {} > \"$1\"\n",
+            shell_literal(&message_file)
+        ),
+    )
+    .context("failed to write the shell message editor script")?;
+    set_script_executable(&sequence_script)?;
+    set_script_executable(&message_script)?;
+
+    Ok(RenameEditorScripts {
+        temp_dir,
+        sequence_editor_command: shell_literal(&sequence_script),
+        message_editor_command: shell_literal(&message_script),
+    })
+}
+
+fn powershell_literal(path: &Path) -> String {
+    path.display().to_string().replace('\'', "''")
+}
+
+fn shell_literal(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+#[cfg(unix)]
+fn set_script_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .with_context(|| format!("failed to read script permissions for {}", path.display()))?
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(path, permissions)
+        .with_context(|| format!("failed to make {} executable", path.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_script_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+struct GitCommandCapture {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+fn run_git_command_with_env(
+    repo_root: &str,
+    args: &[String],
+    envs: &[(&str, &str)],
+) -> Result<GitCommandCapture> {
+    let mut command = Command::new("git");
+    command.current_dir(repo_root);
+    command.args(args.iter().map(String::as_str));
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().context("failed to run git command")?;
+    Ok(GitCommandCapture {
+        status: output.status,
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+fn format_git_command_error(output: &GitCommandCapture) -> String {
+    let stderr = output.stderr.trim();
+    if !stderr.is_empty() {
+        return stderr.to_string();
+    }
+    let stdout = output.stdout.trim();
+    if !stdout.is_empty() {
+        return stdout.to_string();
+    }
+    match output.status.code() {
+        Some(code) => format!("git exited with status {}", code),
+        None => "git terminated before it returned a status code".to_string(),
+    }
+}
+
 fn parse_cli_bump_option(value: Option<&str>) -> Result<OverviewBumpWorkflow> {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         None => Ok(OverviewBumpWorkflow::JustBump),
         Some("1") => Ok(OverviewBumpWorkflow::JustBump),
         Some("2") => Ok(OverviewBumpWorkflow::Commit),
         Some("3") => Ok(OverviewBumpWorkflow::CommitAndPush),
-        Some("4") => Ok(OverviewBumpWorkflow::BranchCommitAndPush),
-        Some(other) => bail!("unsupported bump option '{}'; expected 1-4", other),
+        Some("4") => Ok(OverviewBumpWorkflow::BranchCommit),
+        Some("5") => Ok(OverviewBumpWorkflow::BranchCommitAndPush),
+        Some(other) => bail!("unsupported bump option '{}'; expected 1-5", other),
     }
 }
 
-fn prompt_branch_name() -> Result<String> {
-    print!("Enter branch name: ");
+#[derive(Clone)]
+struct BranchPromptSource {
+    current_branch: String,
+    custom_main_branch: Option<String>,
+}
+
+struct CliRawModeGuard;
+
+impl CliRawModeGuard {
+    fn enter() -> Result<Self> {
+        enable_raw_mode().context("failed to enable raw mode for branch name selection")?;
+        Ok(Self)
+    }
+}
+
+impl Drop for CliRawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+fn resolve_branch_prompt_source(
+    repo_operations: &[crate::app::RepoBumpOperation],
+    git_contexts: &[crate::git::GitScopeContext],
+    non_main_repo_states: &[crate::app::git_flow::RepoBranchState],
+    scheme: VersionScheme,
+) -> Result<BranchPromptSource> {
+    let preferred_repo_root = non_main_repo_states
+        .iter()
+        .find(|state| is_release_line_branch(scheme, &state.current_branch))
+        .or_else(|| non_main_repo_states.first())
+        .map(|state| state.repo_root.as_str())
+        .or_else(|| {
+            repo_operations
+                .first()
+                .map(|operation| operation.repo_root.as_str())
+        })
+        .ok_or_else(|| anyhow!("the selected workflow requires a git-backed repository"))?;
+
+    let context = git_contexts
+        .iter()
+        .find(|context| context.repo_root == preferred_repo_root)
+        .ok_or_else(|| anyhow!("git scope metadata is unavailable for the selected repository"))?;
+    let current_branch = non_main_repo_states
+        .iter()
+        .find(|state| state.repo_root == preferred_repo_root)
+        .map(|state| state.current_branch.clone())
+        .unwrap_or(current_branch_with_cancel(preferred_repo_root, None)?);
+
+    Ok(BranchPromptSource {
+        current_branch,
+        custom_main_branch: context.main_branch_name.clone(),
+    })
+}
+
+fn prompt_branch_name(options: &[BranchNameOption]) -> Result<String> {
+    if options.is_empty() {
+        bail!("branch name options are unavailable")
+    }
+
+    let mut selected = 0usize;
+    let raw_mode = CliRawModeGuard::enter()?;
+    let mut rendered_lines = 0usize;
+
+    loop {
+        render_cli_branch_name_picker(options, selected, &mut rendered_lines)?;
+
+        let Event::Key(key) = event::read().context("failed to read branch name selection")? else {
+            continue;
+        };
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                drop(raw_mode);
+                println!();
+                bail!("Cancelled by user")
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                selected = selected.checked_sub(1).unwrap_or(options.len() - 1);
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                selected = (selected + 1) % options.len();
+            }
+            KeyCode::Char(character) => {
+                if let Some(index) = digit_to_index(character) {
+                    selected = index.min(options.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Enter | KeyCode::F(2) => {
+                let option = options[selected].clone();
+                drop(raw_mode);
+                println!();
+                let input = if option.requires_input() {
+                    Some(prompt_branch_name_input(option.input_label())?)
+                } else {
+                    None
+                };
+                return option.resolve_name(input.as_deref());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn render_cli_branch_name_picker(
+    options: &[BranchNameOption],
+    selected: usize,
+    rendered_lines: &mut usize,
+) -> Result<()> {
+    let mut stdout = io::stdout();
+    if *rendered_lines > 0 {
+        execute!(
+            stdout,
+            MoveUp(*rendered_lines as u16),
+            MoveToColumn(0),
+            Clear(ClearType::FromCursorDown)
+        )
+        .context("failed to redraw branch name picker")?;
+    }
+
+    println!("Choose the new branch name:");
+    println!("Use Up/Down or Tab to select, then press Enter.");
+    for (index, option) in options.iter().enumerate() {
+        let marker = if index == selected { ">" } else { " " };
+        println!("{} {}. {}", marker, index + 1, option.preview());
+    }
+    stdout
+        .flush()
+        .context("failed to flush branch name picker")?;
+    *rendered_lines = options.len() + 2;
+    Ok(())
+}
+
+fn prompt_branch_name_input(label: &str) -> Result<String> {
+    print!("{}: ", label);
     io::stdout()
         .flush()
-        .context("failed to flush branch name prompt")?;
+        .context("failed to flush branch name input prompt")?;
 
     let mut branch_name = String::new();
     io::stdin()
         .read_line(&mut branch_name)
-        .context("failed to read branch name")?;
+        .context("failed to read branch name input")?;
 
-    let branch_name = branch_name.trim().to_string();
-    if branch_name.is_empty() {
-        bail!("branch name cannot be empty")
-    }
+    Ok(branch_name.trim().to_string())
+}
 
-    Ok(branch_name)
+fn digit_to_index(character: char) -> Option<usize> {
+    character
+        .to_digit(10)
+        .and_then(|digit| digit.checked_sub(1))
+        .map(|digit| digit as usize)
 }
 
 fn prompt_confirm_default_yes(prompt: &str) -> Result<bool> {
@@ -706,14 +1606,24 @@ struct BranchDiagram {
     path: Vec<BranchDiagramSegment>,
 }
 
-fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
-    let output = run_git_checked(
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchLineage {
+    root: BranchRef,
+    path: Vec<BranchRef>,
+}
+
+fn list_local_branch_refs_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<BranchRef>> {
+    let output = run_git_checked_with_cancel(
         repo_root,
         &[
             "for-each-ref",
             "--format=%(refname:short)|%(refname)|%(objectname)",
             "refs/heads",
         ],
+        cancel,
     )?;
     let mut branches = split_output_lines(&output)
         .into_iter()
@@ -740,17 +1650,204 @@ fn list_local_branch_refs(repo_root: &str) -> Result<Vec<BranchRef>> {
     Ok(branches)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchTreeData {
+    root: BranchRef,
+    family: Vec<BranchRef>,
+    path: Vec<BranchRef>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn load_branch_diagram(
     repo_root: &str,
     current_branch: &str,
     custom_main_branch: Option<&str>,
 ) -> Result<Option<BranchDiagram>> {
-    let mut branches = list_local_branch_refs(repo_root)?;
+    load_branch_diagram_with_cancel(repo_root, current_branch, custom_main_branch, None)
+}
+
+fn load_branch_diagram_with_cancel(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<BranchDiagram>> {
+    let Some(tree) = build_branch_tree_data_with_cancel(
+        repo_root,
+        current_branch,
+        custom_main_branch,
+        true,
+        cancel.clone(),
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let mut path = tree
+        .path
+        .iter()
+        .map(|branch| BranchDiagramSegment {
+            branch: BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state: if branch.name.eq_ignore_ascii_case(current_branch) {
+                    BranchDiagramState::Current
+                } else {
+                    BranchDiagramState::Open
+                },
+            },
+            merged: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+
+    let merged_sets = tree
+        .path
+        .iter()
+        .map(|branch| {
+            local_branch_names_merged_into_with_cancel(repo_root, &branch.refname, cancel.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    for branch in tree.family {
+        if tree
+            .path
+            .iter()
+            .any(|path_branch| path_branch.object_id == branch.object_id)
+        {
+            continue;
+        }
+
+        let branch_lookup = normalize_lookup(&branch.name);
+        if let Some(index) = merged_sets
+            .iter()
+            .position(|merged| merged.contains(&branch_lookup))
+        {
+            path[index].merged.push(BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state: BranchDiagramState::Merged,
+            });
+        }
+    }
+
+    for segment in &mut path {
+        segment.merged.sort_by(|left, right| {
+            normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name))
+        });
+    }
+
+    Ok(Some(BranchDiagram {
+        root: BranchDiagramNode {
+            name: display_branch_name(&tree.root.name),
+            state: BranchDiagramState::Main,
+        },
+        path,
+    }))
+}
+
+fn load_branch_lineage_with_cancel(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<BranchLineage>> {
+    let Some(tree) = build_branch_tree_data_with_cancel(
+        repo_root,
+        current_branch,
+        custom_main_branch,
+        false,
+        cancel,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(BranchLineage {
+        root: tree.root,
+        path: tree.path,
+    }))
+}
+
+fn build_branch_tree_data_with_cancel(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+    focus_descendant_from_root: bool,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<BranchTreeData>> {
+    let mut branches = list_local_branch_refs_with_cancel(repo_root, cancel.clone())?;
     if branches.is_empty() {
         return Ok(None);
     }
 
-    let root_index = branches
+    let root_index = select_root_branch_index(&branches, current_branch, custom_main_branch);
+    let root_branch = branches.remove(root_index);
+    populate_root_distances_with_cancel(
+        repo_root,
+        &root_branch.refname,
+        &mut branches,
+        cancel.clone(),
+    )?;
+
+    let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
+        if focus_descendant_from_root {
+            select_branch_diagram_focus(repo_root, &root_branch, &branches)?
+                .unwrap_or_else(|| root_branch.clone())
+        } else {
+            root_branch.clone()
+        }
+    } else {
+        branches
+            .iter()
+            .find(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+            .cloned()
+            .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
+    };
+
+    let first_parent_commits =
+        first_parent_commit_ids_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
+    let merged_into_current = local_branch_names_merged_into_with_cancel(
+        repo_root,
+        &current_ref.refname,
+        cancel.clone(),
+    )?;
+    let merged_into_root =
+        local_branch_names_merged_into_with_cancel(repo_root, &root_branch.refname, cancel)?;
+
+    let family = branches
+        .into_iter()
+        .filter(|branch| {
+            let branch_lookup = normalize_lookup(&branch.name);
+            merged_into_current.contains(&branch_lookup)
+                && !merged_into_root.contains(&branch_lookup)
+        })
+        .collect::<Vec<_>>();
+
+    let mut path = family
+        .iter()
+        .filter(|branch| first_parent_commits.contains(&branch.object_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !root_branch.name.eq_ignore_ascii_case(current_branch)
+        && path
+            .iter()
+            .all(|branch| !branch.name.eq_ignore_ascii_case(current_branch))
+    {
+        path.push(current_ref);
+    }
+    sort_branch_path(&mut path, current_branch);
+
+    Ok(Some(BranchTreeData {
+        root: root_branch,
+        family,
+        path,
+    }))
+}
+
+fn select_root_branch_index(
+    branches: &[BranchRef],
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> usize {
+    branches
         .iter()
         .position(|branch| {
             custom_main_branch.is_some_and(|custom| branch.name.eq_ignore_ascii_case(custom.trim()))
@@ -770,53 +1867,33 @@ fn load_branch_diagram(
                 .iter()
                 .position(|branch| branch.name.eq_ignore_ascii_case(current_branch))
         })
-        .unwrap_or(0);
-    let root_branch = branches.remove(root_index);
+        .unwrap_or(0)
+}
 
-    for branch in &mut branches {
-        branch.root_distance =
-            branch_unique_commit_count(repo_root, &root_branch.refname, &branch.refname)?;
+fn populate_root_distances_with_cancel(
+    repo_root: &str,
+    root_ref: &str,
+    branches: &mut [BranchRef],
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    for branch in branches.iter_mut() {
+        let range = format!("{}..{}", root_ref, branch.refname);
+        let output = run_git_checked_owned_with_cancel(
+            repo_root,
+            vec!["rev-list".to_string(), "--count".to_string(), range.clone()],
+            cancel.clone(),
+        )?;
+        branch.root_distance = output
+            .trim()
+            .parse::<usize>()
+            .with_context(|| format!("failed to parse git ancestry distance for {}", range))?;
     }
 
-    let current_ref = if root_branch.name.eq_ignore_ascii_case(current_branch) {
-        select_branch_diagram_focus(repo_root, &root_branch, &branches)?
-            .unwrap_or_else(|| root_branch.clone())
-    } else {
-        branches
-            .iter()
-            .find(|branch| branch.name.eq_ignore_ascii_case(current_branch))
-            .cloned()
-            .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
-    };
+    Ok(())
+}
 
-    let first_parent_commits = first_parent_commit_ids(repo_root, &current_ref.refname)?;
-    let mut family_branches = Vec::new();
-    for branch in branches {
-        if !is_branch_ancestor(repo_root, &branch.refname, &current_ref.refname)? {
-            continue;
-        }
-
-        if is_branch_ancestor(repo_root, &branch.refname, &root_branch.refname)? {
-            continue;
-        }
-
-        family_branches.push(branch);
-    }
-
-    let mut path_branches = family_branches
-        .iter()
-        .filter(|branch| first_parent_commits.contains(&branch.object_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !root_branch.name.eq_ignore_ascii_case(current_branch)
-        && path_branches
-            .iter()
-            .all(|branch| !branch.name.eq_ignore_ascii_case(current_branch))
-    {
-        path_branches.push(current_ref.clone());
-    }
-
-    path_branches.sort_by(|left, right| {
+fn sort_branch_path(path: &mut [BranchRef], current_branch: &str) {
+    path.sort_by(|left, right| {
         let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
         let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
         left.root_distance
@@ -824,68 +1901,46 @@ fn load_branch_diagram(
             .then_with(|| left_is_current.cmp(&right_is_current).reverse())
             .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
     });
+}
 
-    let mut path = path_branches
+#[cfg_attr(not(test), allow(dead_code))]
+fn resolve_parent_branch_name(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> Result<String> {
+    resolve_parent_branch_name_with_cancel(repo_root, current_branch, custom_main_branch, None)
+}
+
+fn resolve_parent_branch_name_with_cancel(
+    repo_root: &str,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let lineage =
+        load_branch_lineage_with_cancel(repo_root, current_branch, custom_main_branch, cancel)?
+            .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
+    if lineage.root.name.eq_ignore_ascii_case(current_branch) {
+        bail!("current branch is already the main branch")
+    }
+
+    let current_index = lineage
+        .path
         .iter()
-        .map(|branch| BranchDiagramSegment {
-            branch: BranchDiagramNode {
-                name: display_branch_name(&branch.name),
-                state: if branch.name.eq_ignore_ascii_case(current_branch) {
-                    BranchDiagramState::Current
-                } else {
-                    BranchDiagramState::Open
-                },
-            },
-            merged: Vec::new(),
-        })
-        .collect::<Vec<_>>();
+        .position(|branch| branch.name.eq_ignore_ascii_case(current_branch))
+        .ok_or_else(|| anyhow!("current branch is not part of the current branch tree"))?;
 
-    for branch in family_branches {
-        if path_branches
-            .iter()
-            .any(|path_branch| path_branch.object_id == branch.object_id)
-        {
-            continue;
-        }
+    let target = if current_index == 0 {
+        lineage.root.name
+    } else {
+        lineage.path[current_index - 1].name.clone()
+    };
+    Ok(target)
+}
 
-        let mut best_attachment = None;
-        for (index, path_branch) in path_branches.iter().enumerate() {
-            if !is_branch_ancestor(repo_root, &branch.refname, &path_branch.refname)? {
-                continue;
-            }
-
-            let distance = commit_distance(repo_root, &branch.refname, &path_branch.refname)?;
-            if distance == 0 {
-                continue;
-            }
-
-            match best_attachment {
-                Some((_, best_distance)) if distance >= best_distance => {}
-                _ => best_attachment = Some((index, distance)),
-            }
-        }
-
-        if let Some((index, _)) = best_attachment {
-            path[index].merged.push(BranchDiagramNode {
-                name: display_branch_name(&branch.name),
-                state: BranchDiagramState::Merged,
-            });
-        }
-    }
-
-    for segment in &mut path {
-        segment.merged.sort_by(|left, right| {
-            normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name))
-        });
-    }
-
-    Ok(Some(BranchDiagram {
-        root: BranchDiagramNode {
-            name: display_branch_name(&root_branch.name),
-            state: BranchDiagramState::Main,
-        },
-        path,
-    }))
+fn resolve_main_branch_target(repo_root: &str, custom_main_branch: Option<&str>) -> Result<String> {
+    resolve_main_branch_name(repo_root, custom_main_branch)
 }
 
 fn select_branch_diagram_focus(
@@ -910,30 +1965,39 @@ fn select_branch_diagram_focus(
     Ok(descendants.into_iter().next())
 }
 
-fn first_parent_commit_ids(repo_root: &str, branch_ref: &str) -> Result<HashSet<String>> {
-    let output = run_git_checked(repo_root, &["rev-list", "--first-parent", branch_ref])?;
+fn first_parent_commit_ids_with_cancel(
+    repo_root: &str,
+    branch_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<HashSet<String>> {
+    let output = run_git_checked_with_cancel(
+        repo_root,
+        &["rev-list", "--first-parent", branch_ref],
+        cancel,
+    )?;
     Ok(split_output_lines(&output).into_iter().collect())
 }
 
-fn is_branch_ancestor(repo_root: &str, ancestor_ref: &str, descendant_ref: &str) -> Result<bool> {
-    let output = run_git(
+fn local_branch_names_merged_into_with_cancel(
+    repo_root: &str,
+    descendant_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<HashSet<String>> {
+    let output = run_git_checked_with_cancel(
         repo_root,
-        &["merge-base", "--is-ancestor", ancestor_ref, descendant_ref],
+        &[
+            "for-each-ref",
+            "--merged",
+            descendant_ref,
+            "--format=%(refname:short)",
+            "refs/heads",
+        ],
+        cancel,
     )?;
-    Ok(output.success)
-}
-
-fn branch_unique_commit_count(repo_root: &str, base_ref: &str, branch_ref: &str) -> Result<usize> {
-    commit_distance(repo_root, base_ref, branch_ref)
-}
-
-fn commit_distance(repo_root: &str, base_ref: &str, branch_ref: &str) -> Result<usize> {
-    let range = format!("{}..{}", base_ref, branch_ref);
-    let output = run_git_checked(repo_root, &["rev-list", "--count", &range])?;
-    output
-        .trim()
-        .parse::<usize>()
-        .with_context(|| format!("failed to parse git ancestry distance for {}", range))
+    Ok(split_output_lines(&output)
+        .into_iter()
+        .map(|branch| normalize_lookup(&branch))
+        .collect())
 }
 
 fn display_branch_name(branch: &str) -> String {
@@ -1735,6 +2799,10 @@ mod tests {
         );
         assert_eq!(
             parse_cli_bump_option(Some("4")).expect("option 4 should parse"),
+            OverviewBumpWorkflow::BranchCommit
+        );
+        assert_eq!(
+            parse_cli_bump_option(Some("5")).expect("option 5 should parse"),
             OverviewBumpWorkflow::BranchCommitAndPush
         );
     }
@@ -1769,12 +2837,45 @@ mod tests {
     }
 
     #[test]
+    fn is_commit_rename_action_accepts_requested_synonyms() {
+        assert!(is_commit_rename_action("rename"));
+        assert!(is_commit_rename_action("rn"));
+        assert!(is_commit_rename_action("rnm"));
+        assert!(is_commit_rename_action("reword"));
+        assert!(is_commit_rename_action("rwrd"));
+        assert!(is_commit_rename_action("rwd"));
+        assert!(!is_commit_rename_action("rew"));
+    }
+
+    #[test]
+    fn replace_commit_subject_preserves_body() {
+        assert_eq!(
+            replace_commit_subject("old subject\n\nbody line\n", "new subject"),
+            "new subject\n\nbody line\n"
+        );
+    }
+
+    #[test]
     fn is_branch_command_accepts_requested_synonyms() {
         assert!(is_branch_command("branch"));
         assert!(is_branch_command("br"));
         assert!(is_branch_command("brn"));
         assert!(is_branch_command("brnch"));
         assert!(!is_branch_command("bran"));
+    }
+
+    #[test]
+    fn is_branch_up_action_accepts_requested_synonyms() {
+        assert!(is_branch_up_action("up"));
+        assert!(is_branch_up_action(".."));
+        assert!(!is_branch_up_action("parent"));
+    }
+
+    #[test]
+    fn is_branch_main_action_accepts_requested_synonyms() {
+        assert!(is_branch_main_action("main"));
+        assert!(is_branch_main_action("~"));
+        assert!(!is_branch_main_action("root"));
     }
 
     #[test]
@@ -2031,6 +3132,107 @@ mod tests {
         dir
     }
 
+    fn init_temp_git_repo(repo_root: &str) {
+        run_git_checked(repo_root, &["init"]).expect("init repo");
+        run_git_checked(repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_main = run_git(repo_root, &["switch", "-c", "main"]).expect("switch main");
+        if !switch_main.success {
+            run_git_checked(repo_root, &["checkout", "-b", "main"]).expect("checkout main");
+        }
+    }
+
+    #[test]
+    fn rename_commit_with_subject_amends_head_commit() {
+        let repo_dir = create_temp_repo_dir("commit-rename-head");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        init_temp_git_repo(&repo_root);
+
+        let tracked_file = repo_dir.join("tracked.txt");
+        fs::write(&tracked_file, "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        fs::write(&tracked_file, "base\nhead\n").expect("write head file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage head file");
+        run_git_checked(&repo_root, &["commit", "-m", "old head subject"])
+            .expect("commit head change");
+
+        let plan = prepare_commit_rename(&repo_root, "0").expect("prepare head rename plan");
+        assert_eq!(plan.strategy, CommitRenameStrategy::AmendHead);
+
+        let outcome =
+            rename_commit_with_subject(&plan, "new head subject").expect("rename head commit");
+
+        assert_eq!(outcome.previous_subject, "old head subject");
+        assert_eq!(outcome.new_subject, "new head subject");
+        assert_eq!(
+            run_git_checked(&repo_root, &["show", "--no-patch", "--format=%s", "HEAD"])
+                .expect("read amended subject")
+                .trim(),
+            "new head subject"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn rename_commit_with_subject_rewords_ancestor_commit() {
+        let repo_dir = create_temp_repo_dir("commit-rename-ancestor");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        init_temp_git_repo(&repo_root);
+
+        let tracked_file = repo_dir.join("tracked.txt");
+        fs::write(&tracked_file, "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        fs::write(&tracked_file, "base\nsecond\n").expect("write second file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage second file");
+        run_git_checked(&repo_root, &["commit", "-m", "old middle subject"])
+            .expect("commit second change");
+        let target_commit = run_git_checked(&repo_root, &["rev-parse", "HEAD"])
+            .expect("read target commit")
+            .trim()
+            .to_string();
+
+        fs::write(&tracked_file, "base\nsecond\nthird\n").expect("write third file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage third file");
+        run_git_checked(&repo_root, &["commit", "-m", "top subject"]).expect("commit top change");
+
+        let plan = prepare_commit_rename(&repo_root, &target_commit)
+            .expect("prepare ancestor rename plan");
+        assert_eq!(plan.strategy, CommitRenameStrategy::RewordAncestor);
+
+        let outcome = rename_commit_with_subject(&plan, "new middle subject")
+            .expect("rename ancestor commit");
+
+        assert_eq!(outcome.previous_subject, "old middle subject");
+        assert_eq!(outcome.new_subject, "new middle subject");
+
+        let subjects = split_output_lines(
+            &run_git_checked(&repo_root, &["log", "--format=%s", "-n", "3"])
+                .expect("read commit subjects"),
+        );
+        assert_eq!(
+            subjects,
+            vec![
+                "top subject".to_string(),
+                "new middle subject".to_string(),
+                "base".to_string(),
+            ]
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
     #[test]
     fn revert_commit_safely_creates_local_revert_commit() {
         let repo_dir = create_temp_repo_dir("commit-del");
@@ -2232,6 +3434,78 @@ mod tests {
                 .path
                 .iter()
                 .all(|segment| segment.branch.state == BranchDiagramState::Open)
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn resolve_parent_branch_name_uses_previous_level_in_branch_tree() {
+        let repo_dir = create_temp_repo_dir("branch-parent-target");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        init_temp_git_repo(&repo_root);
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        let switch_dev =
+            run_git(&repo_root, &["switch", "-c", "v0.12.x-dev"]).expect("switch dev branch");
+        if !switch_dev.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.12.x-dev"])
+                .expect("checkout dev branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\ndev\n").expect("write dev file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage dev file");
+        run_git_checked(&repo_root, &["commit", "-m", "dev"]).expect("commit dev file");
+
+        let switch_patch =
+            run_git(&repo_root, &["switch", "-c", "v0.12.2"]).expect("switch patch branch");
+        if !switch_patch.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.12.2"])
+                .expect("checkout patch branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\ndev\npatch\n").expect("write patch file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage patch file");
+        run_git_checked(&repo_root, &["commit", "-m", "patch"]).expect("commit patch file");
+
+        assert_eq!(
+            resolve_parent_branch_name(&repo_root, "v0.12.2", None).expect("resolve parent branch"),
+            "v0.12.x-dev"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn resolve_main_branch_target_prefers_custom_main_branch() {
+        let repo_dir = create_temp_repo_dir("branch-main-target");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_trunk =
+            run_git(&repo_root, &["switch", "-c", "trunk"]).expect("switch trunk branch");
+        if !switch_trunk.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "trunk"])
+                .expect("checkout trunk branch");
+        }
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        assert_eq!(
+            resolve_main_branch_target(&repo_root, Some("trunk"))
+                .expect("resolve main branch target"),
+            "trunk"
         );
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");

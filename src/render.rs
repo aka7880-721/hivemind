@@ -41,6 +41,9 @@ impl App {
         if self.bump_dialog.is_some() {
             self.render_bump_dialog(frame, frame.area());
         }
+        if self.overview_bump_kind_dialog.is_some() {
+            self.render_overview_bump_kind_dialog(frame, frame.area());
+        }
         if self.overview_bump_workflow_dialog.is_some() {
             self.render_overview_bump_workflow_dialog(frame, frame.area());
         }
@@ -58,6 +61,9 @@ impl App {
         }
         if self.recent_changes_dialog.is_some() {
             self.render_recent_changes_dialog(frame, frame.area());
+        }
+        if self.commit_rename_dialog.is_some() {
+            self.render_commit_rename_dialog(frame, frame.area());
         }
         if self.tag_dialog.is_some() {
             self.render_tag_dialog(frame, frame.area());
@@ -782,6 +788,104 @@ impl App {
         );
     }
 
+    fn render_overview_bump_kind_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.overview_bump_kind_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 72, if area.height < 28 { 100 } else { 52 });
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Choose Version Bump ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(6),
+                Constraint::Min(6),
+                Constraint::Length(BUTTON_ROW_HEIGHT),
+            ])
+            .split(inner);
+
+        let preview = dialog
+            .preview_next_version()
+            .unwrap_or_else(|error| error.to_string());
+        let header = vec![
+            Line::from(format!("Project: {}", dialog.project_name)).bold(),
+            Line::from(format!("Scope: {}", dialog.scope_label)),
+            Line::from(format!("Current version: {}", dialog.current_version)),
+            Line::from(format!("Next version: {}", preview)).style(
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Line::from("No tile increment is pending yet. Choose the version step to apply first."),
+        ];
+        frame.render_widget(
+            Paragraph::new(header).wrap(Wrap { trim: false }),
+            sections[0],
+        );
+
+        let option_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Length(3); dialog.options.len()])
+            .split(sections[1]);
+        for (index, (action, row)) in dialog.options.iter().zip(option_rows.iter()).enumerate() {
+            let selected = index == dialog.selected;
+            let row_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(if selected {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                });
+            let row_inner = row_block.inner(*row);
+            frame.render_widget(row_block, *row);
+            let lines = vec![
+                Line::from(format!("{}. {}", index + 1, action.display_name())).style(
+                    if selected {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    },
+                ),
+                Line::from(
+                    "Compute a valid next version and continue into the tile bump workflow.",
+                ),
+            ];
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), row_inner);
+            self.hit_targets.push(HitTarget::new(
+                *row,
+                HitAction::SelectOverviewBumpKind(index),
+            ));
+        }
+
+        self.render_button_row(
+            frame,
+            sections[2],
+            &[
+                DialogButton::new(
+                    "Continue",
+                    false,
+                    HitAction::ConfirmOverviewBumpKind,
+                    Style::default().fg(Color::Black).bg(Color::Green),
+                ),
+                DialogButton::new(
+                    "Cancel",
+                    false,
+                    HitAction::CancelOverviewBumpKind,
+                    Style::default().fg(Color::White).bg(Color::Red),
+                ),
+            ],
+        );
+    }
+
     fn render_overview_branch_bump_dialog(&mut self, frame: &mut Frame, area: Rect) {
         let Some(dialog) = &self.overview_branch_bump_dialog else {
             return;
@@ -799,7 +903,8 @@ impl App {
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5),
+                Constraint::Length(6),
+                Constraint::Length(dialog.options.len() as u16 + 2),
                 Constraint::Length(3),
                 Constraint::Min(2),
                 Constraint::Length(BUTTON_ROW_HEIGHT),
@@ -815,40 +920,94 @@ impl App {
                     .add_modifier(Modifier::BOLD),
             ),
             Line::from(format!("Workflow: {}", dialog.workflow.display_name())),
+            Line::from(format!("Resolved branch: {}", dialog.branch_preview()))
+                .style(Style::default().fg(Color::Cyan)),
         ];
         frame.render_widget(
             Paragraph::new(header).wrap(Wrap { trim: false }),
             sections[0],
         );
 
+        let mut option_state = ListState::default();
+        option_state.select(Some(dialog.selected));
+        let option_items = dialog
+            .options
+            .iter()
+            .enumerate()
+            .map(|(index, option)| {
+                let mut line = vec![Span::raw(format!("{}. {}", index + 1, option.preview()))];
+                if index == 0 {
+                    line.push(Span::styled(
+                        "  default",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                ListItem::new(Line::from(line))
+            })
+            .collect::<Vec<_>>();
+        let option_list = List::new(option_items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" suggestions ")
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("> ");
+        frame.render_stateful_widget(option_list, sections[1], &mut option_state);
+
         let input_row = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(20), Constraint::Min(10)])
-            .split(sections[1]);
-        frame.render_widget(Paragraph::new("Branch name"), input_row[0]);
+            .split(sections[2]);
+        frame.render_widget(Paragraph::new(dialog.input_label()), input_row[0]);
         let input_block = Block::default()
             .borders(Borders::ALL)
             .title(" value ")
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(if dialog.input_enabled() {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }));
         frame.render_widget(
-            Paragraph::new(dialog.branch_name.display_value(true))
-                .block(input_block)
-                .style(Style::default().fg(Color::White)),
+            Paragraph::new(if dialog.input_enabled() {
+                dialog.branch_name.display_value(true)
+            } else {
+                dialog.branch_preview()
+            })
+            .block(input_block)
+            .style(Style::default().fg(if dialog.input_enabled() {
+                Color::White
+            } else {
+                Color::DarkGray
+            })),
             input_row[1],
         );
 
+        let workflow_hint = format!(
+            "{}\n{}",
+            dialog.input_hint(),
+            if dialog.workflow.requires_push() {
+                "The selected workflow will create the branch, then run the bump, commit, and push flow."
+            } else {
+                "The selected workflow will create the branch, then run the bump and commit flow locally."
+            }
+        );
         frame.render_widget(
-            Paragraph::new(
-                "Create the branch first, then run the bump, commit, and push workflow.",
-            )
-            .wrap(Wrap { trim: false })
-            .scroll((0, dialog.scroll)),
-            sections[2],
+            Paragraph::new(workflow_hint)
+                .wrap(Wrap { trim: false })
+                .scroll((0, dialog.scroll)),
+            sections[3],
         );
 
         self.render_button_row(
             frame,
-            sections[3],
+            sections[4],
             &[
                 DialogButton::new(
                     "Run",
@@ -1240,7 +1399,7 @@ impl App {
         );
     }
     fn render_recent_changes_dialog(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(dialog) = &self.recent_changes_dialog else {
+        let Some(dialog) = &mut self.recent_changes_dialog else {
             return;
         };
 
@@ -1316,6 +1475,7 @@ impl App {
         let body_block = Block::default().borders(Borders::ALL).title(" git log ");
         let body_inner = body_block.inner(sections[2]);
         frame.render_widget(body_block, sections[2]);
+        dialog.ensure_selection_visible(body_inner.height as usize, body_inner.width as usize);
         let graph_base_column = git_graph_base_column(&dialog.current_range().lines);
         let body = if dialog.current_range().lines.is_empty() {
             vec![Line::from(
@@ -1330,7 +1490,15 @@ impl App {
                 .current_range()
                 .lines
                 .iter()
-                .map(|line| colorize_git_log_line(line, graph_base_column))
+                .enumerate()
+                .map(|(index, line)| {
+                    let rendered = colorize_git_log_line(line, graph_base_column);
+                    if dialog.selected_line() == Some(index) {
+                        highlight_git_log_line(rendered)
+                    } else {
+                        rendered
+                    }
+                })
                 .collect::<Vec<_>>()
         };
         frame.render_widget(
@@ -1339,6 +1507,28 @@ impl App {
                 .scroll((dialog.scroll, 0)),
             body_inner,
         );
+        let visible_rows = body_inner.height as usize;
+        let start_row = dialog.scroll as usize;
+        let end_row = start_row + visible_rows;
+        for layout in dialog.line_layouts(body_inner.width as usize) {
+            if !dialog.line_has_commit(layout.line_index)
+                || layout.end_row() <= start_row
+                || layout.start_row >= end_row
+            {
+                continue;
+            }
+            let visible_start = layout.start_row.max(start_row);
+            let visible_end = layout.end_row().min(end_row);
+            self.hit_targets.push(HitTarget::new(
+                Rect {
+                    x: body_inner.x,
+                    y: body_inner.y + visible_start.saturating_sub(start_row) as u16,
+                    width: body_inner.width,
+                    height: visible_end.saturating_sub(visible_start) as u16,
+                },
+                HitAction::SelectRecentChangeLine(RecentChangeView::Popup, layout.line_index),
+            ));
+        }
 
         let mut buttons = Vec::new();
         if dialog.can_select_scope() {
@@ -1367,6 +1557,124 @@ impl App {
             "Close",
             false,
             HitAction::CloseRecentChanges,
+            Style::default().fg(Color::White).bg(Color::Red),
+        ));
+        self.render_button_row(frame, sections[3], &buttons);
+    }
+
+    fn render_commit_rename_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.commit_rename_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 76, if area.height < 26 { 100 } else { 48 });
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Rename Commit ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(BUTTON_ROW_HEIGHT),
+            ])
+            .split(inner);
+
+        let header = vec![
+            Line::from(format!("Branch: {}", dialog.plan.branch_name)).bold(),
+            Line::from(format!("Commit: {}", dialog.plan.target_short)),
+            Line::from(format!("Current message: {}", dialog.plan.current_subject)),
+            Line::from(match dialog.view {
+                RecentChangeView::Popup => "Opened from: Gitlog Viewer",
+                RecentChangeView::Overview => "Opened from: Recent Changes",
+            }),
+        ];
+        frame.render_widget(
+            Paragraph::new(header).wrap(Wrap { trim: false }),
+            sections[0],
+        );
+
+        let input_row = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(20), Constraint::Min(10)])
+            .split(sections[1]);
+        frame.render_widget(Paragraph::new("New message"), input_row[0]);
+        let input_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" value ")
+            .border_style(Style::default().fg(Color::Cyan));
+        frame.render_widget(
+            Paragraph::new(dialog.message_input.display_value(true))
+                .block(input_block)
+                .style(Style::default().fg(Color::White)),
+            input_row[1],
+        );
+
+        let mut body = vec![Line::from(
+            "Enter saves. Esc cancels. Ctrl+P toggles force-push after rename.",
+        )];
+        if dialog.plan.touches_pushed_history {
+            body.push(
+                Line::from(format!(
+                    "\nWarning: this commit is already on {}! Renaming it will rewrite published history on {}.\n
+                    Do this only if:\n  A) This is a solo project\n  B) This is a very recent pushed commit\n  C) You are 100% sure no one else is basing work on it\n  D) You coordinate with everyone who is",
+                    dialog
+                        .plan
+                        .upstream_ref
+                        .as_deref()
+                        .unwrap_or("the upstream branch"),
+                    dialog.plan.branch_name
+                ))
+                .style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+            body.push(Line::from(format!(
+                "Force push after rename: {}",
+                if dialog.push_after_rename {
+                    "Yes"
+                } else {
+                    "No"
+                }
+            )));
+        } else {
+            body.push(Line::from(
+                "This rename stays local until you choose to push it.",
+            ));
+        }
+        frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), sections[2]);
+
+        let mut buttons = Vec::new();
+        if dialog.plan.touches_pushed_history {
+            buttons.push(DialogButton::new(
+                if dialog.push_after_rename {
+                    "Force Push: Yes"
+                } else {
+                    "Force Push: No"
+                },
+                false,
+                HitAction::ToggleCommitRenameForcePush,
+                Style::default().fg(Color::Black).bg(Color::Yellow),
+            ));
+        }
+        buttons.push(DialogButton::new(
+            "Save",
+            false,
+            HitAction::SaveCommitRename,
+            Style::default().fg(Color::Black).bg(Color::Green),
+        ));
+        buttons.push(DialogButton::new(
+            "Cancel",
+            false,
+            HitAction::CancelCommitRename,
             Style::default().fg(Color::White).bg(Color::Red),
         ));
         self.render_button_row(frame, sections[3], &buttons);
@@ -2575,8 +2883,10 @@ impl App {
             )
         } else if self.bump_dialog.is_some() {
             Line::from("Up/Down scope | Left/Right change bump action | Enter apply | Esc cancel")
+        } else if self.overview_bump_kind_dialog.is_some() {
+            Line::from("1-9 or Up/Down choose bump kind | Enter continue | Esc cancel")
         } else if self.overview_bump_workflow_dialog.is_some() {
-            Line::from("1-3 or Up/Down choose action | Enter run | Esc cancel")
+            Line::from("1-9 or Up/Down choose action | Enter run | Esc cancel")
         } else if self.overview_bump_warning_dialog.is_some() {
             Line::from("1-3 or Up/Down choose warning action | Enter confirm | Esc cancel")
         } else {

@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.11.3"
+version = "0.12.4"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -30,6 +30,7 @@ anyhow = "1"
 arboard = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crossterm = "0.29"
+ctrlc = "3"
 directories = "6"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 ratatui = "0.30"
@@ -37,7 +38,7 @@ ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
 ratatui-explorer = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 toml = "1"
 toml_edit = "0.25"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

@@ -6,9 +6,9 @@
 // For details, see the LICENSE file in the repository root.
 
 use super::git_flow::{
-    append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
-    collect_unexpected_staged_paths_with_cancel, refresh_target_artifacts, stage_path_for_file,
-    unstage_paths,
+    append_repo_stage_paths, apply_repo_bump_workflow, collect_non_main_repo_states,
+    collect_repo_bump_operations, collect_unexpected_staged_paths_with_cancel,
+    refresh_target_artifacts, stage_path_for_file, unstage_paths,
 };
 use super::*;
 use crate::changelog::{
@@ -16,9 +16,15 @@ use crate::changelog::{
 };
 use crate::{
     dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
-    git::{GitCancellation, sorted_local_tags_with_cancel, switch_or_create_branch},
+    git::{
+        GitCancellation, current_branch_with_cancel, sorted_local_tags_with_cancel,
+        switch_or_create_branch,
+    },
+    git_br::{is_release_line_branch, suggest_branch_name_options},
     git_stt::format_relative_git_timestamp,
+    targets::shared_bump_version,
 };
+use chrono::Local;
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
 
@@ -106,8 +112,13 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
     app.overview_recent_viewport = Some(recent_inner);
     frame.render_widget(recent_block, area);
 
-    let recent_lines = if let Some(dialog) = &app.overview_recent_changes {
-        let mut lines = vec![
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(3)])
+        .split(recent_inner);
+
+    let header_lines = if let Some(dialog) = &app.overview_recent_changes {
+        vec![
             Line::from(format!(
                 "Scope: {} ({})",
                 dialog.active_scope().display_name,
@@ -124,21 +135,8 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
             ),
             Line::from(format!("View: {}", dialog.current_range().label))
                 .style(Style::default().fg(Color::Gray)),
-            Line::raw(""),
-        ];
-        if dialog.current_range().lines.is_empty() {
-            lines.push(Line::from("No recent changes to display."));
-        } else {
-            let graph_base_column = git_graph_base_column(&dialog.current_range().lines);
-            lines.extend(
-                dialog
-                    .current_range()
-                    .lines
-                    .iter()
-                    .map(|line| colorize_git_log_line(line, graph_base_column)),
-            );
-        }
-        lines
+            Line::from("Ctrl+R renames the selected commit. Double-click a commit row to open it."),
+        ]
     } else if let Some(error) = &app.overview_recent_error {
         vec![
             Line::from("Recent changes are unavailable.").style(
@@ -147,7 +145,37 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
                     .add_modifier(Modifier::BOLD),
             ),
             Line::from(error.clone()),
+            Line::raw(""),
         ]
+    } else {
+        vec![Line::from("Recent changes"), Line::raw(""), Line::raw("")]
+    };
+    frame.render_widget(
+        Paragraph::new(header_lines).wrap(Wrap { trim: false }),
+        sections[0],
+    );
+
+    let body_lines = if let Some(dialog) = &mut app.overview_recent_changes {
+        dialog.ensure_selection_visible(sections[1].height as usize, sections[1].width as usize);
+        if dialog.current_range().lines.is_empty() {
+            vec![Line::from("No recent changes to display.")]
+        } else {
+            let graph_base_column = git_graph_base_column(&dialog.current_range().lines);
+            dialog
+                .current_range()
+                .lines
+                .iter()
+                .enumerate()
+                .map(|(index, line)| {
+                    let rendered = colorize_git_log_line(line, graph_base_column);
+                    if dialog.selected_line() == Some(index) {
+                        highlight_git_log_line(rendered)
+                    } else {
+                        rendered
+                    }
+                })
+                .collect::<Vec<_>>()
+        }
     } else if let Some(project) = app.config.projects.get(app.selected_project) {
         if uses_dashboard_placeholder(project) {
             placeholder_recent_changes_lines(project)
@@ -167,11 +195,34 @@ pub(super) fn render_overview_recent_changes(app: &mut App, frame: &mut Frame, a
         .map(|dialog| dialog.scroll)
         .unwrap_or(0);
     frame.render_widget(
-        Paragraph::new(recent_lines)
+        Paragraph::new(body_lines)
             .scroll((scroll, 0))
             .wrap(Wrap { trim: false }),
-        recent_inner,
+        sections[1],
     );
+    if let Some(dialog) = &app.overview_recent_changes {
+        let start_row = dialog.scroll as usize;
+        let end_row = start_row + sections[1].height as usize;
+        for layout in dialog.line_layouts(sections[1].width as usize) {
+            if !dialog.line_has_commit(layout.line_index)
+                || layout.end_row() <= start_row
+                || layout.start_row >= end_row
+            {
+                continue;
+            }
+            let visible_start = layout.start_row.max(start_row);
+            let visible_end = layout.end_row().min(end_row);
+            app.hit_targets.push(HitTarget::new(
+                Rect {
+                    x: sections[1].x,
+                    y: sections[1].y + visible_start.saturating_sub(start_row) as u16,
+                    width: sections[1].width,
+                    height: visible_end.saturating_sub(visible_start) as u16,
+                },
+                HitAction::SelectRecentChangeLine(RecentChangeView::Overview, layout.line_index),
+            ));
+        }
+    }
 }
 
 pub(super) fn should_use_recent_changes_tab(app: &App, area: Rect) -> bool {
@@ -886,22 +937,116 @@ fn build_release_tile_display(
 
 pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<()> {
     let project = app.selected_project()?.clone();
-    if !project.integration_mode.requires_repo() {
-        return apply_overview_pending_version(app, scope_index, false);
-    }
-
     let scopes = collect_bump_scopes(&project)?;
     ensure_dashboard_tile_state(app, &scopes);
+    let scope = scopes
+        .get(scope_index)
+        .ok_or_else(|| anyhow!("the selected scope no longer exists"))?;
+    let current_version = scope
+        .current_version
+        .clone()
+        .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
     let next_version = app
         .overview_pending_versions
         .get(scope_index)
         .cloned()
-        .or_else(|| {
-            scopes
-                .get(scope_index)
-                .and_then(|scope| scope.current_version.clone())
-        })
+        .or_else(|| Some(current_version.clone()))
         .ok_or_else(|| anyhow!("the selected scope does not have a resolved version value"))?;
+    if !version_is_strictly_ahead(scope.scheme, &current_version, &next_version)? {
+        return open_overview_bump_kind_dialog(
+            app,
+            &project,
+            &scopes,
+            scope_index,
+            &current_version,
+        );
+    }
+
+    if !project.integration_mode.requires_repo() {
+        return apply_overview_pending_version(app, scope_index, false);
+    }
+
+    open_overview_bump_workflow_dialog(app, &project, &scopes, scope_index, next_version)
+}
+
+pub(super) fn select_overview_bump_kind(app: &mut App, index: usize) {
+    if let Some(dialog) = &mut app.overview_bump_kind_dialog {
+        dialog.select(index);
+    }
+}
+
+pub(super) fn rotate_overview_bump_kind(app: &mut App, delta: isize) {
+    if let Some(dialog) = &mut app.overview_bump_kind_dialog {
+        dialog.rotate(delta);
+    }
+}
+
+pub(super) fn cancel_overview_bump_kind(app: &mut App) {
+    app.overview_bump_kind_dialog = None;
+    app.status = StatusMessage::info("Tile bump action cancelled.");
+}
+
+pub(super) fn confirm_overview_bump_kind(app: &mut App) -> Result<()> {
+    let Some(dialog) = app.overview_bump_kind_dialog.clone() else {
+        return Ok(());
+    };
+
+    let project = app.selected_project()?.clone();
+    let scopes = collect_bump_scopes(&project)?;
+    ensure_dashboard_tile_state(app, &scopes);
+    let next_version = dialog.preview_next_version()?;
+    if project.unified_versioning {
+        for pending in &mut app.overview_pending_versions {
+            *pending = next_version.clone();
+        }
+    } else if let Some(pending) = app.overview_pending_versions.get_mut(dialog.scope_index) {
+        *pending = next_version.clone();
+    }
+
+    app.overview_bump_kind_dialog = None;
+    if !project.integration_mode.requires_repo() {
+        return apply_overview_pending_version(app, dialog.scope_index, false);
+    }
+
+    open_overview_bump_workflow_dialog(app, &project, &scopes, dialog.scope_index, next_version)
+}
+
+fn open_overview_bump_kind_dialog(
+    app: &mut App,
+    project: &ProjectConfig,
+    scopes: &[BumpScope],
+    scope_index: usize,
+    current_version: &str,
+) -> Result<()> {
+    let scope = scopes
+        .get(scope_index)
+        .ok_or_else(|| anyhow!("the selected scope no longer exists"))?;
+    let scope_label = if project.unified_versioning {
+        "All configured scopes".to_string()
+    } else {
+        scope.display_name.clone()
+    };
+
+    app.overview_bump_kind_dialog = Some(OverviewBumpKindDialog::new(
+        project.name.clone(),
+        scope_label,
+        scope_index,
+        scope.scheme,
+        current_version.to_string(),
+        scope.scheme.supported_actions().to_vec(),
+    ));
+    app.status =
+        StatusMessage::info("Choose a version bump first, then continue with the tile action.");
+    Ok(())
+}
+
+fn open_overview_bump_workflow_dialog(
+    app: &mut App,
+    project: &ProjectConfig,
+    scopes: &[BumpScope],
+    scope_index: usize,
+    next_version: String,
+) -> Result<()> {
     let scope_label = if project.unified_versioning {
         "All configured scopes".to_string()
     } else {
@@ -913,7 +1058,7 @@ pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<(
     let options = overview_bump_workflow_options(project.integration_mode);
 
     app.overview_bump_workflow_dialog = Some(OverviewBumpWorkflowDialog::new(
-        project.name,
+        project.name.clone(),
         scope_label,
         next_version,
         scope_index,
@@ -921,6 +1066,36 @@ pub(super) fn begin_overview_bump(app: &mut App, scope_index: usize) -> Result<(
     ));
     app.status = StatusMessage::info("Choose how the tile bump should be applied.");
     Ok(())
+}
+
+fn version_is_strictly_ahead(
+    scheme: VersionScheme,
+    current_version: &str,
+    next_version: &str,
+) -> Result<bool> {
+    scheme
+        .validate(current_version)
+        .map_err(anyhow::Error::msg)?;
+    scheme.validate(next_version).map_err(anyhow::Error::msg)?;
+    Ok(compare_numeric_versions(current_version, next_version)? == std::cmp::Ordering::Less)
+}
+
+fn compare_numeric_versions(left: &str, right: &str) -> Result<std::cmp::Ordering> {
+    let left_parts = left
+        .split('.')
+        .map(|part| {
+            part.parse::<u32>()
+                .map_err(|_| anyhow!("invalid numeric component '{}'", part))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let right_parts = right
+        .split('.')
+        .map(|part| {
+            part.parse::<u32>()
+                .map_err(|_| anyhow!("invalid numeric component '{}'", part))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(left_parts.cmp(&right_parts))
 }
 
 pub(super) fn select_overview_bump_workflow(app: &mut App, index: usize) {
@@ -936,6 +1111,7 @@ pub(super) fn rotate_overview_bump_workflow(app: &mut App, delta: isize) {
 }
 
 pub(super) fn cancel_overview_bump_workflow(app: &mut App) {
+    app.overview_bump_kind_dialog = None;
     app.overview_bump_workflow_dialog = None;
     app.overview_branch_bump_dialog = None;
     app.status = StatusMessage::info("Tile bump action cancelled.");
@@ -954,6 +1130,7 @@ pub(super) fn rotate_overview_bump_warning(app: &mut App, delta: isize) {
 }
 
 pub(super) fn cancel_overview_bump_warning(app: &mut App) {
+    app.overview_bump_kind_dialog = None;
     app.overview_bump_warning_dialog = None;
     app.overview_branch_bump_dialog = None;
     app.overview_bump_workflow_dialog = None;
@@ -1157,14 +1334,62 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
     let workflow = dialog.selected_workflow();
 
     if workflow.requires_branch() {
+        let project = app.selected_project()?.clone();
+        let scopes = collect_bump_scopes(&project)?;
+        let scope = scopes
+            .get(dialog.scope_index)
+            .ok_or_else(|| anyhow!("the selected scope is no longer available"))?;
+        let affected_scope_indexes = if project.unified_versioning {
+            (0..scopes.len()).collect::<Vec<_>>()
+        } else {
+            vec![dialog.scope_index]
+        };
+        let current_version = if project.unified_versioning {
+            shared_bump_version(&scopes)
+                .ok_or_else(|| anyhow!("the selected scope set has mixed version values"))?
+        } else {
+            scope.current_version.clone().ok_or_else(|| {
+                anyhow!("the selected scope does not have a resolved version value")
+            })?
+        };
+        let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+        let repo_operations = collect_repo_bump_operations(
+            &project,
+            &scopes,
+            &git_contexts,
+            &affected_scope_indexes,
+        )?;
+        let non_main_repo_states = collect_non_main_repo_states(
+            &project,
+            &scopes,
+            &git_contexts,
+            &affected_scope_indexes,
+        )?;
+        let branch_prompt_source = resolve_overview_branch_prompt_source(
+            &repo_operations,
+            &git_contexts,
+            &non_main_repo_states,
+            scope.scheme,
+        )?;
+        let branch_name_options = suggest_branch_name_options(
+            scope.scheme,
+            &branch_prompt_source.current_branch,
+            &current_version,
+            &dialog.next_version,
+            branch_prompt_source.custom_main_branch.as_deref(),
+            Local::now().date_naive(),
+        )?;
         app.overview_branch_bump_dialog = Some(OverviewBranchBumpDialog::new(
             dialog.project_name,
             dialog.scope_label,
             dialog.next_version,
             dialog.scope_index,
             workflow,
+            branch_name_options,
         ));
-        app.status = StatusMessage::info("Enter the new branch name for the bump workflow.");
+        app.status = StatusMessage::info(
+            "Choose the new branch name for the bump workflow, then press Enter.",
+        );
         return Ok(());
     }
 
@@ -1193,9 +1418,7 @@ pub(super) fn confirm_overview_branch_bump(app: &mut App) -> Result<()> {
         return Ok(());
     };
 
-    if dialog.branch_name.value.trim().is_empty() {
-        bail!("branch name cannot be empty");
-    }
+    dialog.resolved_branch_name()?;
 
     let project = app.selected_project()?.clone();
     app.schedule_progress_job(
@@ -1220,7 +1443,8 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
     let branch_name = if dialog.workflow.requires_branch() {
         app.overview_branch_bump_dialog
             .as_ref()
-            .map(|branch_dialog| branch_dialog.branch_name.value.trim().to_string())
+            .map(|branch_dialog| branch_dialog.resolved_branch_name())
+            .transpose()?
     } else {
         None
     };
@@ -1270,6 +1494,46 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
         OverviewBumpWarningChoice::Cancel => cancel_overview_bump_warning(app),
     }
     Ok(())
+}
+
+#[derive(Clone)]
+struct OverviewBranchPromptSource {
+    current_branch: String,
+    custom_main_branch: Option<String>,
+}
+
+fn resolve_overview_branch_prompt_source(
+    repo_operations: &[crate::app::RepoBumpOperation],
+    git_contexts: &[crate::git::GitScopeContext],
+    non_main_repo_states: &[crate::app::git_flow::RepoBranchState],
+    scheme: VersionScheme,
+) -> Result<OverviewBranchPromptSource> {
+    let preferred_repo_root = non_main_repo_states
+        .iter()
+        .find(|state| is_release_line_branch(scheme, &state.current_branch))
+        .or_else(|| non_main_repo_states.first())
+        .map(|state| state.repo_root.as_str())
+        .or_else(|| {
+            repo_operations
+                .first()
+                .map(|operation| operation.repo_root.as_str())
+        })
+        .ok_or_else(|| anyhow!("the selected workflow requires a git-backed repository"))?;
+
+    let context = git_contexts
+        .iter()
+        .find(|context| context.repo_root == preferred_repo_root)
+        .ok_or_else(|| anyhow!("git scope metadata is unavailable for the selected repository"))?;
+    let current_branch = non_main_repo_states
+        .iter()
+        .find(|state| state.repo_root == preferred_repo_root)
+        .map(|state| state.current_branch.clone())
+        .unwrap_or(current_branch_with_cancel(preferred_repo_root, None)?);
+
+    Ok(OverviewBranchPromptSource {
+        current_branch,
+        custom_main_branch: context.main_branch_name.clone(),
+    })
 }
 
 pub(super) fn collect_overview_bump_warnings(
@@ -1397,6 +1661,7 @@ pub(super) fn execute_overview_bump_workflow(
 
     app.sync_dashboard_overview_after_repo_change();
 
+    app.overview_bump_kind_dialog = None;
     app.overview_branch_bump_dialog = None;
     let target_count = affected_scope_indexes
         .iter()
@@ -1707,6 +1972,22 @@ mod tests {
         assert!(!uses_dashboard_placeholder(&project));
         assert_eq!(resolved_scope_preview_version(&scope, false), "2.4.6");
         assert!(placeholder_activity(&scope, &project).is_none());
+    }
+
+    #[test]
+    fn version_ahead_validation_rejects_equal_and_lower_versions() {
+        assert!(
+            !version_is_strictly_ahead(VersionScheme::SemVer, "1.2.3", "1.2.3")
+                .expect("equal versions should compare")
+        );
+        assert!(
+            !version_is_strictly_ahead(VersionScheme::SemVer, "1.2.3", "1.2.2")
+                .expect("lower versions should compare")
+        );
+        assert!(
+            version_is_strictly_ahead(VersionScheme::SemVer, "1.2.3", "1.2.4")
+                .expect("higher versions should compare")
+        );
     }
 
     #[test]
