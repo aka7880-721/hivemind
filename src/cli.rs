@@ -191,9 +191,6 @@ fn print_usage() {
     println!(
         "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
     );
-    println!("  cg branch                  Show the current branch and a compact branch tree");
-    println!("  cg branch up | ..          Switch to the parent branch in the current tree");
-    println!("  cg branch main | ~         Switch to main/master/custom main for the project");
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
     println!(
@@ -207,6 +204,16 @@ fn print_usage() {
     println!("            commit: cmt | com | ct");
     println!("            del: del | rm | rem | delete | drop | erase");
     println!("            rename: rename | rn | rnm | reword | rwrd | rwd");
+    println!(" ");
+    println!("  BRANCHING COMMANDS:");
+    println!(" ");      
+    println!("  cg branch                  Show the current branch and a compact branch tree");
+    println!("  cg branch up | ..          Switch to the parent branch in the current tree");
+    println!("  cg branch main | ~         Switch to main/master/custom main for the project"); 
+    println!("          synonyms:");
+    println!("            branch: br | brn | brnch");
+    println!("            up: up | ..");
+    println!("            main: main | ~");
     println!(" ");
     println!("  BUMPING COMMANDS:");
     println!(" ");
