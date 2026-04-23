@@ -6,9 +6,9 @@
 // For details, see the LICENSE file in the repository root.
 
 use super::git_flow::{
-    append_repo_stage_paths, apply_repo_bump_workflow, collect_repo_bump_operations,
-    collect_unexpected_staged_paths_with_cancel, refresh_target_artifacts, stage_path_for_file,
-    unstage_paths,
+    append_repo_stage_paths, apply_repo_bump_workflow, collect_non_main_repo_states,
+    collect_repo_bump_operations, collect_unexpected_staged_paths_with_cancel,
+    refresh_target_artifacts, stage_path_for_file, unstage_paths,
 };
 use super::*;
 use crate::changelog::{
@@ -16,9 +16,15 @@ use crate::changelog::{
 };
 use crate::{
     dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
-    git::{GitCancellation, sorted_local_tags_with_cancel, switch_or_create_branch},
+    git::{
+        GitCancellation, current_branch_with_cancel, sorted_local_tags_with_cancel,
+        switch_or_create_branch,
+    },
+    git_br::{is_release_line_branch, suggest_branch_name_options},
     git_stt::format_relative_git_timestamp,
+    targets::shared_bump_version,
 };
+use chrono::Local;
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
 
@@ -1328,14 +1334,62 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
     let workflow = dialog.selected_workflow();
 
     if workflow.requires_branch() {
+        let project = app.selected_project()?.clone();
+        let scopes = collect_bump_scopes(&project)?;
+        let scope = scopes
+            .get(dialog.scope_index)
+            .ok_or_else(|| anyhow!("the selected scope is no longer available"))?;
+        let affected_scope_indexes = if project.unified_versioning {
+            (0..scopes.len()).collect::<Vec<_>>()
+        } else {
+            vec![dialog.scope_index]
+        };
+        let current_version = if project.unified_versioning {
+            shared_bump_version(&scopes)
+                .ok_or_else(|| anyhow!("the selected scope set has mixed version values"))?
+        } else {
+            scope.current_version.clone().ok_or_else(|| {
+                anyhow!("the selected scope does not have a resolved version value")
+            })?
+        };
+        let git_contexts = collect_all_branch_git_scope_contexts(&project)?;
+        let repo_operations = collect_repo_bump_operations(
+            &project,
+            &scopes,
+            &git_contexts,
+            &affected_scope_indexes,
+        )?;
+        let non_main_repo_states = collect_non_main_repo_states(
+            &project,
+            &scopes,
+            &git_contexts,
+            &affected_scope_indexes,
+        )?;
+        let branch_prompt_source = resolve_overview_branch_prompt_source(
+            &repo_operations,
+            &git_contexts,
+            &non_main_repo_states,
+            scope.scheme,
+        )?;
+        let branch_name_options = suggest_branch_name_options(
+            scope.scheme,
+            &branch_prompt_source.current_branch,
+            &current_version,
+            &dialog.next_version,
+            branch_prompt_source.custom_main_branch.as_deref(),
+            Local::now().date_naive(),
+        )?;
         app.overview_branch_bump_dialog = Some(OverviewBranchBumpDialog::new(
             dialog.project_name,
             dialog.scope_label,
             dialog.next_version,
             dialog.scope_index,
             workflow,
+            branch_name_options,
         ));
-        app.status = StatusMessage::info("Enter the new branch name for the bump workflow.");
+        app.status = StatusMessage::info(
+            "Choose the new branch name for the bump workflow, then press Enter.",
+        );
         return Ok(());
     }
 
@@ -1364,9 +1418,7 @@ pub(super) fn confirm_overview_branch_bump(app: &mut App) -> Result<()> {
         return Ok(());
     };
 
-    if dialog.branch_name.value.trim().is_empty() {
-        bail!("branch name cannot be empty");
-    }
+    dialog.resolved_branch_name()?;
 
     let project = app.selected_project()?.clone();
     app.schedule_progress_job(
@@ -1391,7 +1443,8 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
     let branch_name = if dialog.workflow.requires_branch() {
         app.overview_branch_bump_dialog
             .as_ref()
-            .map(|branch_dialog| branch_dialog.branch_name.value.trim().to_string())
+            .map(|branch_dialog| branch_dialog.resolved_branch_name())
+            .transpose()?
     } else {
         None
     };
@@ -1441,6 +1494,46 @@ pub(super) fn confirm_overview_bump_warning(app: &mut App) -> Result<()> {
         OverviewBumpWarningChoice::Cancel => cancel_overview_bump_warning(app),
     }
     Ok(())
+}
+
+#[derive(Clone)]
+struct OverviewBranchPromptSource {
+    current_branch: String,
+    custom_main_branch: Option<String>,
+}
+
+fn resolve_overview_branch_prompt_source(
+    repo_operations: &[crate::app::RepoBumpOperation],
+    git_contexts: &[crate::git::GitScopeContext],
+    non_main_repo_states: &[crate::app::git_flow::RepoBranchState],
+    scheme: VersionScheme,
+) -> Result<OverviewBranchPromptSource> {
+    let preferred_repo_root = non_main_repo_states
+        .iter()
+        .find(|state| is_release_line_branch(scheme, &state.current_branch))
+        .or_else(|| non_main_repo_states.first())
+        .map(|state| state.repo_root.as_str())
+        .or_else(|| {
+            repo_operations
+                .first()
+                .map(|operation| operation.repo_root.as_str())
+        })
+        .ok_or_else(|| anyhow!("the selected workflow requires a git-backed repository"))?;
+
+    let context = git_contexts
+        .iter()
+        .find(|context| context.repo_root == preferred_repo_root)
+        .ok_or_else(|| anyhow!("git scope metadata is unavailable for the selected repository"))?;
+    let current_branch = non_main_repo_states
+        .iter()
+        .find(|state| state.repo_root == preferred_repo_root)
+        .map(|state| state.current_branch.clone())
+        .unwrap_or(current_branch_with_cancel(preferred_repo_root, None)?);
+
+    Ok(OverviewBranchPromptSource {
+        current_branch,
+        custom_main_branch: context.main_branch_name.clone(),
+    })
 }
 
 pub(super) fn collect_overview_bump_warnings(

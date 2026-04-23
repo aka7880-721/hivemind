@@ -18,6 +18,12 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Local;
+use crossterm::{
+    cursor::{MoveToColumn, MoveUp},
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 
@@ -38,6 +44,7 @@ use crate::{
         run_git_checked, run_git_checked_owned_with_cancel, run_git_checked_with_cancel,
         split_output_lines, switch_to_existing_branch, switch_to_main_branch,
     },
+    git_br::{BranchNameOption, is_release_line_branch, suggest_branch_name_options},
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -499,13 +506,15 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
         .bump(&current_version, action, Local::now().date_naive())
         .map_err(anyhow::Error::msg)?;
 
+    let mut git_contexts = Vec::new();
+    let mut non_main_repo_states = Vec::new();
     let mut repo_operations = Vec::new();
     if workflow != OverviewBumpWorkflow::JustBump {
         if !project.integration_mode.requires_repo() {
             bail!("selected bump option requires a git-backed project")
         }
 
-        let git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
+        git_contexts = collect_all_branch_git_scope_contexts(&resolved_project)?;
         repo_operations = collect_repo_bump_operations(
             &resolved_project,
             &scopes,
@@ -514,7 +523,7 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
         )?;
 
         if workflow.requires_branch() {
-            let non_main_repo_states = collect_non_main_repo_states(
+            non_main_repo_states = collect_non_main_repo_states(
                 &resolved_project,
                 &scopes,
                 &git_contexts,
@@ -541,7 +550,21 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
     }
 
     let branch_name = if workflow.requires_branch() {
-        Some(prompt_branch_name()?)
+        let branch_prompt_source = resolve_branch_prompt_source(
+            &repo_operations,
+            &git_contexts,
+            &non_main_repo_states,
+            scheme,
+        )?;
+        let branch_name_options = suggest_branch_name_options(
+            scheme,
+            &branch_prompt_source.current_branch,
+            &current_version,
+            &next_version,
+            branch_prompt_source.custom_main_branch.as_deref(),
+            Local::now().date_naive(),
+        )?;
+        Some(prompt_branch_name(&branch_name_options)?)
     } else {
         None
     };
@@ -1372,23 +1395,161 @@ fn parse_cli_bump_option(value: Option<&str>) -> Result<OverviewBumpWorkflow> {
     }
 }
 
-fn prompt_branch_name() -> Result<String> {
-    print!("Enter branch name: ");
+#[derive(Clone)]
+struct BranchPromptSource {
+    current_branch: String,
+    custom_main_branch: Option<String>,
+}
+
+struct CliRawModeGuard;
+
+impl CliRawModeGuard {
+    fn enter() -> Result<Self> {
+        enable_raw_mode().context("failed to enable raw mode for branch name selection")?;
+        Ok(Self)
+    }
+}
+
+impl Drop for CliRawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+fn resolve_branch_prompt_source(
+    repo_operations: &[crate::app::RepoBumpOperation],
+    git_contexts: &[crate::git::GitScopeContext],
+    non_main_repo_states: &[crate::app::git_flow::RepoBranchState],
+    scheme: VersionScheme,
+) -> Result<BranchPromptSource> {
+    let preferred_repo_root = non_main_repo_states
+        .iter()
+        .find(|state| is_release_line_branch(scheme, &state.current_branch))
+        .or_else(|| non_main_repo_states.first())
+        .map(|state| state.repo_root.as_str())
+        .or_else(|| {
+            repo_operations
+                .first()
+                .map(|operation| operation.repo_root.as_str())
+        })
+        .ok_or_else(|| anyhow!("the selected workflow requires a git-backed repository"))?;
+
+    let context = git_contexts
+        .iter()
+        .find(|context| context.repo_root == preferred_repo_root)
+        .ok_or_else(|| anyhow!("git scope metadata is unavailable for the selected repository"))?;
+    let current_branch = non_main_repo_states
+        .iter()
+        .find(|state| state.repo_root == preferred_repo_root)
+        .map(|state| state.current_branch.clone())
+        .unwrap_or(current_branch_with_cancel(preferred_repo_root, None)?);
+
+    Ok(BranchPromptSource {
+        current_branch,
+        custom_main_branch: context.main_branch_name.clone(),
+    })
+}
+
+fn prompt_branch_name(options: &[BranchNameOption]) -> Result<String> {
+    if options.is_empty() {
+        bail!("branch name options are unavailable")
+    }
+
+    let mut selected = 0usize;
+    let raw_mode = CliRawModeGuard::enter()?;
+    let mut rendered_lines = 0usize;
+
+    loop {
+        render_cli_branch_name_picker(options, selected, &mut rendered_lines)?;
+
+        let Event::Key(key) = event::read().context("failed to read branch name selection")? else {
+            continue;
+        };
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                drop(raw_mode);
+                println!();
+                bail!("Cancelled by user")
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                selected = selected.checked_sub(1).unwrap_or(options.len() - 1);
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                selected = (selected + 1) % options.len();
+            }
+            KeyCode::Char(character) => {
+                if let Some(index) = digit_to_index(character) {
+                    selected = index.min(options.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Enter | KeyCode::F(2) => {
+                let option = options[selected].clone();
+                drop(raw_mode);
+                println!();
+                let input = if option.requires_input() {
+                    Some(prompt_branch_name_input(option.input_label())?)
+                } else {
+                    None
+                };
+                return option.resolve_name(input.as_deref());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn render_cli_branch_name_picker(
+    options: &[BranchNameOption],
+    selected: usize,
+    rendered_lines: &mut usize,
+) -> Result<()> {
+    let mut stdout = io::stdout();
+    if *rendered_lines > 0 {
+        execute!(
+            stdout,
+            MoveUp(*rendered_lines as u16),
+            MoveToColumn(0),
+            Clear(ClearType::FromCursorDown)
+        )
+        .context("failed to redraw branch name picker")?;
+    }
+
+    println!("Choose the new branch name:");
+    println!("Use Up/Down or Tab to select, then press Enter.");
+    for (index, option) in options.iter().enumerate() {
+        let marker = if index == selected { ">" } else { " " };
+        println!("{} {}. {}", marker, index + 1, option.preview());
+    }
+    stdout
+        .flush()
+        .context("failed to flush branch name picker")?;
+    *rendered_lines = options.len() + 2;
+    Ok(())
+}
+
+fn prompt_branch_name_input(label: &str) -> Result<String> {
+    print!("{}: ", label);
     io::stdout()
         .flush()
-        .context("failed to flush branch name prompt")?;
+        .context("failed to flush branch name input prompt")?;
 
     let mut branch_name = String::new();
     io::stdin()
         .read_line(&mut branch_name)
-        .context("failed to read branch name")?;
+        .context("failed to read branch name input")?;
 
-    let branch_name = branch_name.trim().to_string();
-    if branch_name.is_empty() {
-        bail!("branch name cannot be empty")
-    }
+    Ok(branch_name.trim().to_string())
+}
 
-    Ok(branch_name)
+fn digit_to_index(character: char) -> Option<usize> {
+    character
+        .to_digit(10)
+        .and_then(|digit| digit.checked_sub(1))
+        .map(|digit| digit as usize)
 }
 
 fn prompt_confirm_default_yes(prompt: &str) -> Result<bool> {

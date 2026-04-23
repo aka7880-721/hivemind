@@ -77,6 +77,7 @@ use crate::{
         load_scope_activity_summary_with_cancel, run_git, run_git_checked,
         sorted_local_tags_with_cancel, split_output_lines,
     },
+    git_br::BranchNameOption,
     mmr::{
         load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error,
         record_std_changelog_generated, record_std_changelog_postponed,
@@ -884,42 +885,77 @@ impl App {
     fn handle_overview_branch_bump_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Esc => self.cancel_overview_branch_bump(),
+            KeyCode::Up | KeyCode::BackTab => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.rotate(-1);
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                    dialog.rotate(1);
+                }
+            }
+            KeyCode::Char(character) if key.modifiers.is_empty() => {
+                if let Some(index) = digit_to_index(character) {
+                    if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                        dialog.select(index);
+                    }
+                    return Ok(());
+                }
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog
+                    && dialog.input_enabled()
+                {
+                    dialog.branch_name.insert(character);
+                }
+            }
+            KeyCode::Char(character) if key.modifiers == KeyModifiers::SHIFT => {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog
+                    && dialog.input_enabled()
+                {
+                    dialog.branch_name.insert(character);
+                }
+            }
             KeyCode::Enter | KeyCode::F(2) => return self.confirm_overview_branch_bump(),
             KeyCode::Backspace => {
-                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog
+                    && dialog.input_enabled()
+                {
                     dialog.branch_name.backspace();
                 }
             }
             KeyCode::Delete => {
-                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog
+                    && dialog.input_enabled()
+                {
                     dialog.branch_name.delete();
                 }
             }
             KeyCode::Left => {
-                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog
+                    && dialog.input_enabled()
+                {
                     dialog.branch_name.move_left();
                 }
             }
             KeyCode::Right => {
-                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog
+                    && dialog.input_enabled()
+                {
                     dialog.branch_name.move_right();
                 }
             }
             KeyCode::Home => {
-                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog
+                    && dialog.input_enabled()
+                {
                     dialog.branch_name.home();
                 }
             }
             KeyCode::End => {
-                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
+                if let Some(dialog) = &mut self.overview_branch_bump_dialog
+                    && dialog.input_enabled()
+                {
                     dialog.branch_name.end();
-                }
-            }
-            KeyCode::Char(character)
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-            {
-                if let Some(dialog) = &mut self.overview_branch_bump_dialog {
-                    dialog.branch_name.insert(character);
                 }
             }
             KeyCode::PageUp => {
@@ -5442,6 +5478,8 @@ struct OverviewBranchBumpDialog {
     next_version: String,
     scope_index: usize,
     workflow: OverviewBumpWorkflow,
+    options: Vec<BranchNameOption>,
+    selected: usize,
     branch_name: TextInput,
     scroll: u16,
 }
@@ -5453,6 +5491,7 @@ impl OverviewBranchBumpDialog {
         next_version: String,
         scope_index: usize,
         workflow: OverviewBumpWorkflow,
+        options: Vec<BranchNameOption>,
     ) -> Self {
         Self {
             project_name,
@@ -5460,9 +5499,51 @@ impl OverviewBranchBumpDialog {
             next_version,
             scope_index,
             workflow,
+            options,
+            selected: 0,
             branch_name: TextInput::with_value(""),
             scroll: 0,
         }
+    }
+
+    fn selected_option(&self) -> &BranchNameOption {
+        &self.options[self.selected.min(self.options.len().saturating_sub(1))]
+    }
+
+    fn select(&mut self, index: usize) {
+        self.selected = index.min(self.options.len().saturating_sub(1));
+    }
+
+    fn rotate(&mut self, delta: isize) {
+        if self.options.is_empty() {
+            self.selected = 0;
+            return;
+        }
+
+        let len = self.options.len() as isize;
+        self.selected = (self.selected as isize + delta).rem_euclid(len) as usize;
+    }
+
+    fn input_enabled(&self) -> bool {
+        self.selected_option().requires_input()
+    }
+
+    fn input_label(&self) -> &'static str {
+        self.selected_option().input_label()
+    }
+
+    fn input_hint(&self) -> &'static str {
+        self.selected_option().input_hint()
+    }
+
+    fn branch_preview(&self) -> String {
+        self.selected_option()
+            .preview_with_input(Some(self.branch_name.value.trim()))
+    }
+
+    fn resolved_branch_name(&self) -> Result<String> {
+        self.selected_option()
+            .resolve_name(Some(self.branch_name.value.trim()))
     }
 
     fn scroll_by(&mut self, delta: i16) {
