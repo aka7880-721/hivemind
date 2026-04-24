@@ -6,10 +6,13 @@
 // For details, see the LICENSE file in the repository root.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
+    env, fs,
     io::{self, Write},
+    path::Path,
+    process::Command,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -25,6 +28,14 @@ use crate::{
 const PR_PREVIEW_SECONDS: u64 = 5;
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_RESET: &str = "\x1b[0m";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PullRequestPlan {
+    target_branch: String,
+    current_branch: String,
+    title: String,
+    body: String,
+}
 
 pub(crate) fn run_pr(
     repo_root: &str,
@@ -56,10 +67,22 @@ pub(crate) fn run_pr(
         );
     }
 
-    let title = format!("{} (via ComfyGit)", current_branch);
-    let body = build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?;
+    let plan = PullRequestPlan {
+        title: format!("{} (via ComfyGit)", current_branch),
+        body: build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?,
+        target_branch,
+        current_branch,
+    };
 
-    preview_pr(&target_branch, &current_branch, &title, &body, cancel)?;
+    preview_pr(&plan, cancel)?;
+    let pr_url = create_pull_request(repo_root, &plan)?;
+
+    println!();
+    println!(
+        "Created pull request: {}{}{}",
+        ANSI_YELLOW, pr_url, ANSI_RESET
+    );
+
     Ok(())
 }
 
@@ -91,32 +114,14 @@ fn build_pr_body(
     Ok(pr_changelog_gen(current_branch, &lines).markdown)
 }
 
-fn preview_pr(
-    target_branch: &str,
-    current_branch: &str,
-    title: &str,
-    body: &str,
-    cancel: Option<GitCancellation>,
-) -> Result<()> {
+fn preview_pr(plan: &PullRequestPlan, cancel: Option<GitCancellation>) -> Result<()> {
+    println!();
+    println!("{}", render_preview_summary(plan));
+    println!();
+    println!("{}", plan.body);
     println!();
     println!(
-        "{}Dry-run PR preview{}\n  {}Target branch:{} {}\n  {}Source branch:{} {}\n  {}Title:{} {}\n",
-        ANSI_YELLOW,
-        ANSI_RESET,
-        ANSI_YELLOW,
-        ANSI_RESET,
-        target_branch,
-        ANSI_YELLOW,
-        ANSI_RESET,
-        current_branch,
-        ANSI_YELLOW,
-        ANSI_RESET,
-        title
-    );
-    println!("{}", body);
-    println!();
-    println!(
-        "{}Preview will complete in {} seconds. Press Ctrl+C to abort.{}",
+        "Flow proceeds automatically in {}{}{} seconds. Press Ctrl+C to abort.",
         ANSI_YELLOW, PR_PREVIEW_SECONDS, ANSI_RESET
     );
     io::stdout()
@@ -125,9 +130,91 @@ fn preview_pr(
 
     wait_for_preview(cancel, PR_PREVIEW_SECONDS)?;
     println!();
-    println!("PR preview complete. No pull request was created by this command.");
+    println!("Creating pull request...");
 
     Ok(())
+}
+
+fn render_preview_summary(plan: &PullRequestPlan) -> String {
+    format!(
+        "ComfyGit is about to create PR {}{}{} from the branch {}{}{} that will request merge into {}{}{}. Press Ctrl+C within {}{}{} seconds to abort.",
+        ANSI_YELLOW,
+        plan.title,
+        ANSI_RESET,
+        ANSI_YELLOW,
+        plan.current_branch,
+        ANSI_RESET,
+        ANSI_YELLOW,
+        plan.target_branch,
+        ANSI_RESET,
+        ANSI_YELLOW,
+        PR_PREVIEW_SECONDS,
+        ANSI_RESET,
+    )
+}
+
+fn create_pull_request(repo_root: &str, plan: &PullRequestPlan) -> Result<String> {
+    let body_file = write_pr_body_file(&plan.body)?;
+    let args = build_pr_create_args(plan, &body_file);
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .args(&args)
+        .output()
+        .context(
+            "failed to execute `gh pr create`; ensure GitHub CLI is installed and authenticated",
+        )?;
+    let _ = fs::remove_file(&body_file);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        bail!("`gh pr create` failed: {}", detail);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let pr_url = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    if pr_url.is_empty() {
+        bail!("`gh pr create` succeeded but did not return a pull request URL");
+    }
+
+    Ok(pr_url)
+}
+
+fn write_pr_body_file(body: &str) -> Result<std::path::PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?
+        .as_nanos();
+    let path = env::temp_dir().join(format!(
+        "comfygit-pr-body-{}-{}.md",
+        std::process::id(),
+        timestamp
+    ));
+    fs::write(&path, body.trim_end())
+        .with_context(|| format!("failed to write temporary PR body file {}", path.display()))?;
+    Ok(path)
+}
+
+fn build_pr_create_args(plan: &PullRequestPlan, body_file: &Path) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "create".to_string(),
+        "--base".to_string(),
+        plan.target_branch.clone(),
+        "--head".to_string(),
+        plan.current_branch.clone(),
+        "--title".to_string(),
+        plan.title.clone(),
+        "--body-file".to_string(),
+        body_file.display().to_string(),
+    ]
 }
 
 fn wait_for_preview(cancel: Option<GitCancellation>, seconds: u64) -> Result<()> {
@@ -212,6 +299,14 @@ struct BranchTreeData {
     path: Vec<BranchRef>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchPathCandidate {
+    branch: BranchRef,
+    branch_point_index: usize,
+    tip_index: Option<usize>,
+    created_at: Option<i64>,
+}
+
 fn build_branch_tree_data_with_cancel(
     repo_root: &str,
     current_branch: &str,
@@ -247,30 +342,87 @@ fn build_branch_tree_data_with_cancel(
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("current branch is not available among local refs"))?
     };
+    let current_branch_created_at =
+        branch_creation_timestamp_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
 
     let first_parent_commits =
-        first_parent_commit_ids_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
-    let merged_into_current = local_branch_names_merged_into_with_cancel(
+        first_parent_commit_path_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
+    let first_parent_indexes = first_parent_commits
+        .iter()
+        .enumerate()
+        .map(|(index, commit)| (commit.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let merged_into_root = local_branch_names_merged_into_with_cancel(
         repo_root,
-        &current_ref.refname,
+        &root_branch.refname,
         cancel.clone(),
     )?;
-    let merged_into_root =
-        local_branch_names_merged_into_with_cancel(repo_root, &root_branch.refname, cancel)?;
 
-    let family = branches
+    let mut path_candidates = branches
         .into_iter()
-        .filter(|branch| {
-            let branch_lookup = normalize_lookup(&branch.name);
-            merged_into_current.contains(&branch_lookup)
-                && !merged_into_root.contains(&branch_lookup)
+        .filter(|branch| !merged_into_root.contains(&normalize_lookup(&branch.name)))
+        .filter_map(|branch| {
+            let branch_point = merge_base_with_cancel(
+                repo_root,
+                &current_ref.refname,
+                &branch.refname,
+                cancel.clone(),
+            )
+            .ok()?;
+            let branch_point_index = first_parent_indexes.get(&branch_point).copied()?;
+            let tip_index = first_parent_indexes.get(&branch.object_id).copied();
+            let created_at =
+                branch_creation_timestamp_with_cancel(repo_root, &branch.refname, cancel.clone())
+                    .ok()
+                    .flatten();
+
+            Some(BranchPathCandidate {
+                branch,
+                branch_point_index,
+                tip_index,
+                created_at,
+            })
         })
         .collect::<Vec<_>>();
 
-    let mut path = family
+    if !focus_descendant_from_root
+        && let Some(current_branch_created_at) = current_branch_created_at
+    {
+        path_candidates.retain(|candidate| {
+            candidate
+                .created_at
+                .is_none_or(|created_at| created_at <= current_branch_created_at)
+        });
+    }
+
+    let family = path_candidates
         .iter()
-        .filter(|branch| first_parent_commits.contains(&branch.object_id))
-        .cloned()
+        .map(|candidate| candidate.branch.clone())
+        .collect::<Vec<_>>();
+
+    path_candidates.sort_by(|left, right| {
+        left.branch_point_index
+            .cmp(&right.branch_point_index)
+            .then_with(|| right.tip_index.is_some().cmp(&left.tip_index.is_some()))
+            .then_with(|| {
+                right
+                    .tip_index
+                    .unwrap_or(0)
+                    .cmp(&left.tip_index.unwrap_or(0))
+            })
+            .then_with(|| {
+                normalize_lookup(&left.branch.name).cmp(&normalize_lookup(&right.branch.name))
+            })
+    });
+
+    let mut seen_branch_points = HashSet::new();
+    let mut path = path_candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            seen_branch_points
+                .insert(candidate.branch_point_index)
+                .then_some(candidate.branch)
+        })
         .collect::<Vec<_>>();
     if !root_branch.name.eq_ignore_ascii_case(current_branch)
         && path
@@ -279,7 +431,6 @@ fn build_branch_tree_data_with_cancel(
     {
         path.push(current_ref);
     }
-    sort_branch_path(&mut path, current_branch);
 
     Ok(Some(BranchTreeData {
         root: root_branch,
@@ -398,28 +549,55 @@ fn select_branch_diagram_focus(
     Ok(descendants.into_iter().next())
 }
 
-fn sort_branch_path(path: &mut [BranchRef], current_branch: &str) {
-    path.sort_by(|left, right| {
-        let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
-        let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
-        left.root_distance
-            .cmp(&right.root_distance)
-            .then_with(|| left_is_current.cmp(&right_is_current).reverse())
-            .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
-    });
-}
-
-fn first_parent_commit_ids_with_cancel(
+fn first_parent_commit_path_with_cancel(
     repo_root: &str,
     branch_ref: &str,
     cancel: Option<GitCancellation>,
-) -> Result<HashSet<String>> {
+) -> Result<Vec<String>> {
     let output = run_git_checked_with_cancel(
         repo_root,
-        &["rev-list", "--first-parent", branch_ref],
+        &["rev-list", "--first-parent", "--reverse", branch_ref],
         cancel,
     )?;
-    Ok(split_output_lines(&output).into_iter().collect())
+    Ok(split_output_lines(&output))
+}
+
+fn merge_base_with_cancel(
+    repo_root: &str,
+    left_ref: &str,
+    right_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    Ok(
+        run_git_checked_with_cancel(repo_root, &["merge-base", left_ref, right_ref], cancel)?
+            .trim()
+            .to_string(),
+    )
+}
+
+fn branch_creation_timestamp_with_cancel(
+    repo_root: &str,
+    branch_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<i64>> {
+    let output = run_git_checked_with_cancel(
+        repo_root,
+        &["log", "-g", "--format=%ct|%gs", branch_ref],
+        cancel,
+    )?;
+    let mut created_at = None;
+    for line in split_output_lines(&output) {
+        let Some((timestamp, subject)) = line.split_once('|') else {
+            continue;
+        };
+        if !subject.starts_with("branch: Created") {
+            continue;
+        }
+        if let Ok(timestamp) = timestamp.trim().parse::<i64>() {
+            created_at = Some(timestamp);
+        }
+    }
+    Ok(created_at)
 }
 
 fn local_branch_names_merged_into_with_cancel(
@@ -446,4 +624,60 @@ fn local_branch_names_merged_into_with_cancel(
 
 fn normalize_lookup(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_summary_highlights_dynamic_values() {
+        let plan = PullRequestPlan {
+            target_branch: "v0.13.x".to_string(),
+            current_branch: "v0.13.1-dev".to_string(),
+            title: "v0.13.1-dev (via ComfyGit)".to_string(),
+            body: "body".to_string(),
+        };
+
+        let summary = render_preview_summary(&plan);
+
+        assert!(summary.contains(&format!("{}{}{}", ANSI_YELLOW, plan.title, ANSI_RESET)));
+        assert!(summary.contains(&format!(
+            "{}{}{}",
+            ANSI_YELLOW, plan.current_branch, ANSI_RESET
+        )));
+        assert!(summary.contains(&format!(
+            "{}{}{}",
+            ANSI_YELLOW, plan.target_branch, ANSI_RESET
+        )));
+    }
+
+    #[test]
+    fn build_pr_create_args_uses_non_interactive_flags() {
+        let plan = PullRequestPlan {
+            target_branch: "main".to_string(),
+            current_branch: "feature/demo".to_string(),
+            title: "feature/demo (via ComfyGit)".to_string(),
+            body: "body".to_string(),
+        };
+        let body_file = Path::new("pr_temp.md");
+
+        let args = build_pr_create_args(&plan, body_file);
+
+        assert_eq!(
+            args,
+            vec![
+                "pr",
+                "create",
+                "--base",
+                "main",
+                "--head",
+                "feature/demo",
+                "--title",
+                "feature/demo (via ComfyGit)",
+                "--body-file",
+                "pr_temp.md",
+            ]
+        );
+    }
 }
