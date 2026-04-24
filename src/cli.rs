@@ -45,6 +45,7 @@ use crate::{
         split_output_lines, switch_to_existing_branch, switch_to_main_branch,
     },
     git_br::{BranchNameOption, is_release_line_branch, suggest_branch_name_options},
+    git_pr::run_pr,
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -138,6 +139,24 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             run_branch_main()?;
             Ok(StartupMode::Handled)
         }
+        [command] if is_pr_command(command) => {
+            let cwd = env::current_dir().context("failed to read current directory")?;
+            let repo_root = current_git_repo_root(&cwd)?;
+            let custom_main_branch = find_repo_custom_main_branch(&repo_root);
+            with_cli_git_cancellation(|cancel| {
+                run_pr(&repo_root, false, custom_main_branch.as_deref(), cancel)
+            })?;
+            Ok(StartupMode::Handled)
+        }
+        [command, option] if is_pr_command(command) && is_pr_main_option(option) => {
+            let cwd = env::current_dir().context("failed to read current directory")?;
+            let repo_root = current_git_repo_root(&cwd)?;
+            let custom_main_branch = find_repo_custom_main_branch(&repo_root);
+            with_cli_git_cancellation(|cancel| {
+                run_pr(&repo_root, true, custom_main_branch.as_deref(), cancel)
+            })?;
+            Ok(StartupMode::Handled)
+        }
         [command, lookup] if is_project_version_command(command) => {
             print_project_version(lookup)?;
             Ok(StartupMode::Handled)
@@ -223,6 +242,14 @@ fn is_branch_main_action(value: &str) -> bool {
     matches!(value, "main" | "~")
 }
 
+fn is_pr_command(value: &str) -> bool {
+    matches!(value, "pr")
+}
+
+fn is_pr_main_option(value: &str) -> bool {
+    matches!(value, "--main" | "-main")
+}
+
 fn is_project_version_command(value: &str) -> bool {
     value == "v"
 }
@@ -271,6 +298,12 @@ fn print_usage() {
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
+    println!(
+        "  cg pr                      Generate a pull request title/body for the current branch"
+    );
+    println!(
+        "  cg pr --main | -main       Generate a pull request title/body against main/master/custom main"
+    );
     println!("          synonyms:");
     println!("            branch: br | brn | brnch");
     println!("            up: up | ..");
@@ -2231,6 +2264,31 @@ fn latest_public_release_tag_for_repo(repo_root: &str) -> Option<String> {
 
 fn load_config() -> Result<AppConfig> {
     ConfigStore::locate()?.load()
+}
+
+fn find_repo_custom_main_branch(repo_root: &str) -> Option<String> {
+    let canonical_repo_root = best_effort_canonicalize(Path::new(repo_root));
+    let config = load_config().ok()?;
+
+    for project in &config.projects {
+        if let Some(repo) = project.repo.as_ref()
+            && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+            && let Some(branch) = repo.custom_main_branch_name()
+        {
+            return Some(branch.to_string());
+        }
+
+        for branch in &project.branches {
+            if let Some(repo) = branch.repo.as_ref()
+                && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+                && let Some(branch_name) = repo.custom_main_branch_name()
+            {
+                return Some(branch_name.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 fn all_configured_repo_roots(projects: &[ProjectConfig]) -> Vec<PathBuf> {

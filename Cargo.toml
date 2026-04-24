@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.12.4"
+version = "0.13.2"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -49,3 +49,6 @@ tui-markdown = "0.3.7"
 tui-checkbox = "0.4.4"
 unicode-segmentation = "1"
 unicode-width = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }

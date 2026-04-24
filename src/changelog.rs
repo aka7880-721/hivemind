@@ -107,6 +107,7 @@ pub(crate) struct ParsedCommit {
     pub(crate) specific: Option<String>,
     pub(crate) specific_heading: Option<&'static str>,
     pub(crate) is_new: bool,
+    pub(crate) is_dotted_new: bool,
     pub(crate) is_breaking: bool,
     pub(crate) is_ignored: bool,
     pub(crate) message_items: Vec<MessageItem>,
@@ -131,6 +132,7 @@ impl ParsedCommit {
         let mut remainder = raw_subject.as_str().trim();
         let mut is_breaking = false;
         let mut is_new = false;
+        let mut is_dotted_new = false;
         let mut is_ignored = false;
 
         loop {
@@ -142,6 +144,7 @@ impl ParsedCommit {
             }
             if let Some(next) = trimmed.strip_prefix('@') {
                 is_new = true;
+                is_dotted_new = next.trim_start().starts_with('.');
                 remainder = next;
                 continue;
             }
@@ -165,6 +168,7 @@ impl ParsedCommit {
             specific,
             specific_heading,
             is_new,
+            is_dotted_new,
             is_breaking,
             is_ignored,
             message_items,
@@ -292,14 +296,21 @@ impl ChangelogDocument {
             .filter(|commit| !commit.is_breaking)
             .collect::<Vec<_>>();
 
-        let rendered_new_specific = render_new_specific_sections(&mut lines, &non_breaking);
+        let rendered_dotted_new_specific =
+            render_new_specific_sections(&mut lines, &non_breaking, true);
+        render_new_plain_section(&mut lines, &non_breaking, true);
+
+        let rendered_new_specific = render_new_specific_sections(&mut lines, &non_breaking, false);
+        render_new_plain_section(&mut lines, &non_breaking, false);
+
         let rendered_specific = render_specific_sections(&mut lines, &non_breaking);
-        if (rendered_new_specific || rendered_specific) && has_general_improvements(&non_breaking) {
+        if (rendered_dotted_new_specific || rendered_new_specific || rendered_specific)
+            && has_general_improvements(&non_breaking)
+        {
             lines.push("### 🛠️ General:".to_string());
             lines.push(String::new());
         }
 
-        render_new_plain_section(&mut lines, &non_breaking);
         render_plain_category_sections(&mut lines, &non_breaking);
 
         if lines.last().is_some_and(|line| !line.is_empty()) {
@@ -339,6 +350,13 @@ pub(crate) fn rls_changelog_gen(
         document = document.with_previous_public_release(last_public);
     }
     document.render_markdown()
+}
+
+pub(crate) fn pr_changelog_gen(
+    branch_name: impl Into<String>,
+    lines: &[String],
+) -> RenderedChangelog {
+    build_document_from_git_log(branch_name, lines).render_markdown()
 }
 
 pub(crate) fn ensure_previous_public_release_header(
@@ -1066,12 +1084,18 @@ fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
     render_category_subsections(lines, &unspecific, 3);
 }
 
-fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) -> bool {
+fn render_new_specific_sections(
+    lines: &mut Vec<String>,
+    commits: &[&ParsedCommit],
+    dotted_only: bool,
+) -> bool {
     let specific_keys = ordered_new_specific_keys(
         &commits
             .iter()
             .copied()
-            .filter(|commit| commit.is_new && commit.specific.is_some())
+            .filter(|commit| {
+                commit.is_new && commit.is_dotted_new == dotted_only && commit.specific.is_some()
+            })
             .collect::<Vec<_>>(),
     );
     if specific_keys.is_empty() {
@@ -1090,11 +1114,12 @@ fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommi
                 .copied()
                 .filter(|commit| {
                     commit.is_new
+                        && commit.is_dotted_new == dotted_only
                         && commit.specific.as_deref() == Some(specific_name.as_str())
                         && commit.specific_heading == Some(specific_heading)
                 })
                 .collect::<Vec<_>>();
-            for commit in section_commits {
+            for commit in section_commits.iter().rev().copied() {
                 render_commit_bullets(lines, commit);
             }
             end_specific_section(lines);
@@ -1106,6 +1131,7 @@ fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommi
                 .copied()
                 .filter(|commit| {
                     commit.is_new
+                        && commit.is_dotted_new == dotted_only
                         && commit.specific.as_deref() == Some(specific_name.as_str())
                         && commit.specific_heading == specific_heading
                 })
@@ -1118,11 +1144,13 @@ fn render_new_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommi
     true
 }
 
-fn render_new_plain_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
+fn render_new_plain_section(lines: &mut Vec<String>, commits: &[&ParsedCommit], dotted_only: bool) {
     let new_commits: Vec<&ParsedCommit> = commits
         .iter()
         .copied()
-        .filter(|commit| commit.is_new && commit.specific.is_none())
+        .filter(|commit| {
+            commit.is_new && commit.is_dotted_new == dotted_only && commit.specific.is_none()
+        })
         .collect::<Vec<_>>();
     if new_commits.is_empty() {
         return;
@@ -1186,6 +1214,7 @@ fn render_plain_category_sections(lines: &mut Vec<String>, commits: &[&ParsedCom
         lines.push(String::new());
         for commit in plain_commits
             .iter()
+            .rev()
             .filter(|commit| commit.effective_category() == category)
         {
             render_commit_bullets(lines, commit);
@@ -1206,6 +1235,7 @@ where
         lines.push(String::new());
         for commit in commits
             .iter()
+            .rev()
             .map(std::borrow::Borrow::borrow)
             .filter(|commit| commit.effective_category() == category)
         {
@@ -1257,7 +1287,7 @@ where
     T: std::borrow::Borrow<ParsedCommit>,
 {
     let mut names = Vec::new();
-    for commit in commits {
+    for commit in commits.iter().rev() {
         let commit = commit.borrow();
         if let Some(name) = &commit.specific
             && !names.iter().any(|existing| existing == name)
@@ -1273,7 +1303,7 @@ where
     T: std::borrow::Borrow<ParsedCommit>,
 {
     let mut keys = Vec::new();
-    for commit in commits {
+    for commit in commits.iter().rev() {
         let commit = commit.borrow();
         if let Some(name) = &commit.specific {
             let candidate = (name.clone(), commit.specific_heading);
@@ -1698,6 +1728,107 @@ mod tests {
 
         assert!(specific_index < separator_index);
         assert!(separator_index < general_fix_index);
+    }
+
+    #[test]
+    fn renders_priority_sections_in_requested_order() {
+        let changelog = ChangelogDocument::new(
+            "v0.4.0",
+            vec![
+                ParsedCommit::parse("fix: general fix", "f5e6d7c"),
+                ParsedCommit::parse("enh(Git): tune ancestry detection", "e4d5c6b"),
+                ParsedCommit::parse("@feat(UI): add branch health panel", "d3c4b5a"),
+                ParsedCommit::parse("@.enh(Changelog Preview): add save action", "c2b3a4f"),
+                ParsedCommit::parse("!fix: remove legacy auth flow", "b1a2f3e"),
+            ],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 4, 12).unwrap())
+        .with_release_message("Heads-up: this release updates the public dashboard.")
+        .render_markdown();
+
+        let release_notes_index = changelog
+            .markdown
+            .find("Heads-up: this release updates the public dashboard.")
+            .expect("release notes should render");
+        let changes_index = changelog
+            .markdown
+            .find("#### What's changed:")
+            .expect("changes heading should render");
+        let breaking_index = changelog
+            .markdown
+            .find("## 💥⚠️ BREAKING CHANGE ⚠️💥")
+            .expect("breaking section should render");
+        let dotted_new_index = changelog
+            .markdown
+            .find("### ✨ New Enhancement: Changelog Preview")
+            .expect("dotted new section should render");
+        let new_index = changelog
+            .markdown
+            .find("### ✨ New in UI:")
+            .expect("new specific section should render");
+        let specific_index = changelog
+            .markdown
+            .find("### Changed in Git")
+            .expect("specific section should render");
+        let general_index = changelog
+            .markdown
+            .rfind("### 🐛 Fix(es)")
+            .expect("general category section should render");
+
+        assert!(release_notes_index < changes_index);
+        assert!(changes_index < breaking_index);
+        assert!(breaking_index < dotted_new_index);
+        assert!(dotted_new_index < new_index);
+        assert!(new_index < specific_index);
+        assert!(specific_index < general_index);
+    }
+
+    #[test]
+    fn renders_grouped_specific_commits_oldest_first() {
+        let changelog = ChangelogDocument::new(
+            "v0.4.0",
+            vec![
+                ParsedCommit::parse("fix(Git): second patch", "b2c3d4e"),
+                ParsedCommit::parse("fix(Git): first patch", "a1b2c3d"),
+            ],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 4, 12).unwrap())
+        .render_markdown();
+
+        let first_index = changelog
+            .markdown
+            .find("first patch")
+            .expect("first grouped commit should render");
+        let second_index = changelog
+            .markdown
+            .find("second patch")
+            .expect("second grouped commit should render");
+
+        assert!(first_index < second_index);
+    }
+
+    #[test]
+    fn renders_grouped_general_commits_oldest_first() {
+        let changelog = ChangelogDocument::new(
+            "v0.4.0",
+            vec![
+                ParsedCommit::parse("fix: second patch", "b2c3d4e"),
+                ParsedCommit::parse("fix: first patch", "a1b2c3d"),
+            ],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 4, 12).unwrap())
+        .render_markdown();
+
+        let first_index = changelog
+            .markdown
+            .find("first patch")
+            .expect("first grouped commit should render");
+        let second_index = changelog
+            .markdown
+            .find("second patch")
+            .expect("second grouped commit should render");
+
+        assert!(first_index < second_index);
     }
 
     #[test]
