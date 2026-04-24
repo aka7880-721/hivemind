@@ -1695,6 +1695,7 @@ struct BranchPathCandidate {
     branch: BranchRef,
     branch_point_index: usize,
     tip_index: Option<usize>,
+    created_at: Option<i64>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1723,8 +1724,20 @@ fn load_branch_diagram_with_cancel(
         return Ok(None);
     };
 
-    let mut path = tree
+    let path_branches = if tree.root.name.eq_ignore_ascii_case(current_branch) {
+        tree.path.clone()
+    } else {
+        load_branch_lineage_with_cancel(
+            repo_root,
+            current_branch,
+            custom_main_branch,
+            cancel.clone(),
+        )?
+        .ok_or_else(|| anyhow!("no local branches are available in this repository"))?
         .path
+    };
+
+    let mut path = path_branches
         .iter()
         .map(|branch| BranchDiagramSegment {
             branch: BranchDiagramNode {
@@ -1739,8 +1752,7 @@ fn load_branch_diagram_with_cancel(
         })
         .collect::<Vec<_>>();
 
-    let merged_sets = tree
-        .path
+    let merged_sets = path_branches
         .iter()
         .map(|branch| {
             local_branch_names_merged_into_with_cancel(repo_root, &branch.refname, cancel.clone())
@@ -1748,8 +1760,7 @@ fn load_branch_diagram_with_cancel(
         .collect::<Result<Vec<_>>>()?;
 
     for branch in tree.family {
-        if tree
-            .path
+        if path_branches
             .iter()
             .any(|path_branch| path_branch.object_id == branch.object_id)
         {
@@ -1757,9 +1768,32 @@ fn load_branch_diagram_with_cancel(
         }
 
         let branch_lookup = normalize_lookup(&branch.name);
-        if let Some(index) = merged_sets
+        let mut attached = false;
+        if let Ok(parent_name) = resolve_parent_branch_name_with_cancel(
+            repo_root,
+            &branch.name,
+            custom_main_branch,
+            cancel.clone(),
+        ) && let Some(index) = path_branches
             .iter()
-            .position(|merged| merged.contains(&branch_lookup))
+            .position(|path_branch| path_branch.name.eq_ignore_ascii_case(&parent_name))
+        {
+            let state = if merged_sets[index].contains(&branch_lookup) {
+                BranchDiagramState::Merged
+            } else {
+                BranchDiagramState::Open
+            };
+            path[index].merged.push(BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state,
+            });
+            attached = true;
+        }
+
+        if !attached
+            && let Some(index) = merged_sets
+                .iter()
+                .position(|merged| merged.contains(&branch_lookup))
         {
             path[index].merged.push(BranchDiagramNode {
                 name: display_branch_name(&branch.name),
@@ -1841,6 +1875,8 @@ fn build_branch_tree_data_with_cancel(
             .cloned()
             .ok_or_else(|| anyhow!("current branch is not available among local refs"))?
     };
+    let current_branch_created_at =
+        branch_creation_timestamp_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
 
     let first_parent_commits =
         first_parent_commit_path_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
@@ -1868,14 +1904,29 @@ fn build_branch_tree_data_with_cancel(
             .ok()?;
             let branch_point_index = first_parent_indexes.get(&branch_point).copied()?;
             let tip_index = first_parent_indexes.get(&branch.object_id).copied();
+            let created_at =
+                branch_creation_timestamp_with_cancel(repo_root, &branch.refname, cancel.clone())
+                    .ok()
+                    .flatten();
 
             Some(BranchPathCandidate {
                 branch,
                 branch_point_index,
                 tip_index,
+                created_at,
             })
         })
         .collect::<Vec<_>>();
+
+    if !focus_descendant_from_root
+        && let Some(current_branch_created_at) = current_branch_created_at
+    {
+        path_candidates.retain(|candidate| {
+            candidate
+                .created_at
+                .is_none_or(|created_at| created_at <= current_branch_created_at)
+        });
+    }
 
     let family = path_candidates
         .iter()
@@ -2057,6 +2108,31 @@ fn merge_base_with_cancel(
             .trim()
             .to_string(),
     )
+}
+
+fn branch_creation_timestamp_with_cancel(
+    repo_root: &str,
+    branch_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<i64>> {
+    let output = run_git_checked_with_cancel(
+        repo_root,
+        &["log", "-g", "--format=%ct|%gs", branch_ref],
+        cancel,
+    )?;
+    let mut created_at = None;
+    for line in split_output_lines(&output) {
+        let Some((timestamp, subject)) = line.split_once('|') else {
+            continue;
+        };
+        if !subject.starts_with("branch: Created") {
+            continue;
+        }
+        if let Ok(timestamp) = timestamp.trim().parse::<i64>() {
+            created_at = Some(timestamp);
+        }
+    }
+    Ok(created_at)
 }
 
 fn local_branch_names_merged_into_with_cancel(
@@ -3540,6 +3616,70 @@ mod tests {
                 .path
                 .iter()
                 .all(|segment| segment.branch.state == BranchDiagramState::Open)
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn load_branch_diagram_keeps_child_branch_attached_to_current_parent() {
+        let repo_dir = create_temp_repo_dir("branch-diagram-current-parent-focus");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        init_temp_git_repo(&repo_root);
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        let switch_release =
+            run_git(&repo_root, &["switch", "-c", "0.13.x"]).expect("switch release branch");
+        if !switch_release.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "0.13.x"])
+                .expect("checkout release branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\nrelease\n").expect("write release file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage release file");
+        run_git_checked(&repo_root, &["commit", "-m", "release line"])
+            .expect("commit release file");
+
+        let switch_dev =
+            run_git(&repo_root, &["switch", "-c", "v0.13.1-dev"]).expect("switch dev branch");
+        if !switch_dev.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.13.1-dev"])
+                .expect("checkout dev branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\nrelease\ndev\n").expect("write dev file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage dev file");
+        run_git_checked(&repo_root, &["commit", "-m", "dev line"]).expect("commit dev file");
+
+        let switch_release_back =
+            run_git(&repo_root, &["switch", "0.13.x"]).expect("switch back to release branch");
+        if !switch_release_back.success {
+            run_git_checked(&repo_root, &["checkout", "0.13.x"]).expect("checkout release branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\nrelease\nrelease+1\n")
+            .expect("write advanced release file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage advanced release file");
+        run_git_checked(&repo_root, &["commit", "-m", "release advanced"])
+            .expect("commit advanced release file");
+
+        let diagram = load_branch_diagram(&repo_root, "0.13.x", None)
+            .expect("load branch diagram")
+            .expect("diagram should exist");
+
+        let path_names = diagram
+            .path
+            .iter()
+            .map(|segment| segment.branch.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(path_names, vec!["0.13.x".to_string()]);
+        assert_eq!(
+            diagram.path[0].merged,
+            vec![BranchDiagramNode {
+                name: "v0.13.1-dev".to_string(),
+                state: BranchDiagramState::Open,
+            }]
         );
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");

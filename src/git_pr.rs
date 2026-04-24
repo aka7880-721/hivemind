@@ -304,6 +304,7 @@ struct BranchPathCandidate {
     branch: BranchRef,
     branch_point_index: usize,
     tip_index: Option<usize>,
+    created_at: Option<i64>,
 }
 
 fn build_branch_tree_data_with_cancel(
@@ -341,6 +342,8 @@ fn build_branch_tree_data_with_cancel(
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("current branch is not available among local refs"))?
     };
+    let current_branch_created_at =
+        branch_creation_timestamp_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
 
     let first_parent_commits =
         first_parent_commit_path_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
@@ -368,14 +371,29 @@ fn build_branch_tree_data_with_cancel(
             .ok()?;
             let branch_point_index = first_parent_indexes.get(&branch_point).copied()?;
             let tip_index = first_parent_indexes.get(&branch.object_id).copied();
+            let created_at =
+                branch_creation_timestamp_with_cancel(repo_root, &branch.refname, cancel.clone())
+                    .ok()
+                    .flatten();
 
             Some(BranchPathCandidate {
                 branch,
                 branch_point_index,
                 tip_index,
+                created_at,
             })
         })
         .collect::<Vec<_>>();
+
+    if !focus_descendant_from_root
+        && let Some(current_branch_created_at) = current_branch_created_at
+    {
+        path_candidates.retain(|candidate| {
+            candidate
+                .created_at
+                .is_none_or(|created_at| created_at <= current_branch_created_at)
+        });
+    }
 
     let family = path_candidates
         .iter()
@@ -555,6 +573,31 @@ fn merge_base_with_cancel(
             .trim()
             .to_string(),
     )
+}
+
+fn branch_creation_timestamp_with_cancel(
+    repo_root: &str,
+    branch_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<i64>> {
+    let output = run_git_checked_with_cancel(
+        repo_root,
+        &["log", "-g", "--format=%ct|%gs", branch_ref],
+        cancel,
+    )?;
+    let mut created_at = None;
+    for line in split_output_lines(&output) {
+        let Some((timestamp, subject)) = line.split_once('|') else {
+            continue;
+        };
+        if !subject.starts_with("branch: Created") {
+            continue;
+        }
+        if let Ok(timestamp) = timestamp.trim().parse::<i64>() {
+            created_at = Some(timestamp);
+        }
+    }
+    Ok(created_at)
 }
 
 fn local_branch_names_merged_into_with_cancel(
