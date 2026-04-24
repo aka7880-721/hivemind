@@ -7,7 +7,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -1690,6 +1690,13 @@ struct BranchTreeData {
     path: Vec<BranchRef>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchPathCandidate {
+    branch: BranchRef,
+    branch_point_index: usize,
+    tip_index: Option<usize>,
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 fn load_branch_diagram(
     repo_root: &str,
@@ -1836,28 +1843,68 @@ fn build_branch_tree_data_with_cancel(
     };
 
     let first_parent_commits =
-        first_parent_commit_ids_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
-    let merged_into_current = local_branch_names_merged_into_with_cancel(
+        first_parent_commit_path_with_cancel(repo_root, &current_ref.refname, cancel.clone())?;
+    let first_parent_indexes = first_parent_commits
+        .iter()
+        .enumerate()
+        .map(|(index, commit)| (commit.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let merged_into_root = local_branch_names_merged_into_with_cancel(
         repo_root,
-        &current_ref.refname,
+        &root_branch.refname,
         cancel.clone(),
     )?;
-    let merged_into_root =
-        local_branch_names_merged_into_with_cancel(repo_root, &root_branch.refname, cancel)?;
 
-    let family = branches
+    let mut path_candidates = branches
         .into_iter()
-        .filter(|branch| {
-            let branch_lookup = normalize_lookup(&branch.name);
-            merged_into_current.contains(&branch_lookup)
-                && !merged_into_root.contains(&branch_lookup)
+        .filter(|branch| !merged_into_root.contains(&normalize_lookup(&branch.name)))
+        .filter_map(|branch| {
+            let branch_point = merge_base_with_cancel(
+                repo_root,
+                &current_ref.refname,
+                &branch.refname,
+                cancel.clone(),
+            )
+            .ok()?;
+            let branch_point_index = first_parent_indexes.get(&branch_point).copied()?;
+            let tip_index = first_parent_indexes.get(&branch.object_id).copied();
+
+            Some(BranchPathCandidate {
+                branch,
+                branch_point_index,
+                tip_index,
+            })
         })
         .collect::<Vec<_>>();
 
-    let mut path = family
+    let family = path_candidates
         .iter()
-        .filter(|branch| first_parent_commits.contains(&branch.object_id))
-        .cloned()
+        .map(|candidate| candidate.branch.clone())
+        .collect::<Vec<_>>();
+
+    path_candidates.sort_by(|left, right| {
+        left.branch_point_index
+            .cmp(&right.branch_point_index)
+            .then_with(|| right.tip_index.is_some().cmp(&left.tip_index.is_some()))
+            .then_with(|| {
+                right
+                    .tip_index
+                    .unwrap_or(0)
+                    .cmp(&left.tip_index.unwrap_or(0))
+            })
+            .then_with(|| {
+                normalize_lookup(&left.branch.name).cmp(&normalize_lookup(&right.branch.name))
+            })
+    });
+
+    let mut seen_branch_points = HashSet::new();
+    let mut path = path_candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            seen_branch_points
+                .insert(candidate.branch_point_index)
+                .then_some(candidate.branch)
+        })
         .collect::<Vec<_>>();
     if !root_branch.name.eq_ignore_ascii_case(current_branch)
         && path
@@ -1866,7 +1913,6 @@ fn build_branch_tree_data_with_cancel(
     {
         path.push(current_ref);
     }
-    sort_branch_path(&mut path, current_branch);
 
     Ok(Some(BranchTreeData {
         root: root_branch,
@@ -1923,17 +1969,6 @@ fn populate_root_distances_with_cancel(
     }
 
     Ok(())
-}
-
-fn sort_branch_path(path: &mut [BranchRef], current_branch: &str) {
-    path.sort_by(|left, right| {
-        let left_is_current = left.name.eq_ignore_ascii_case(current_branch);
-        let right_is_current = right.name.eq_ignore_ascii_case(current_branch);
-        left.root_distance
-            .cmp(&right.root_distance)
-            .then_with(|| left_is_current.cmp(&right_is_current).reverse())
-            .then_with(|| normalize_lookup(&left.name).cmp(&normalize_lookup(&right.name)))
-    });
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1998,17 +2033,30 @@ fn select_branch_diagram_focus(
     Ok(descendants.into_iter().next())
 }
 
-fn first_parent_commit_ids_with_cancel(
+fn first_parent_commit_path_with_cancel(
     repo_root: &str,
     branch_ref: &str,
     cancel: Option<GitCancellation>,
-) -> Result<HashSet<String>> {
+) -> Result<Vec<String>> {
     let output = run_git_checked_with_cancel(
         repo_root,
-        &["rev-list", "--first-parent", branch_ref],
+        &["rev-list", "--first-parent", "--reverse", branch_ref],
         cancel,
     )?;
-    Ok(split_output_lines(&output).into_iter().collect())
+    Ok(split_output_lines(&output))
+}
+
+fn merge_base_with_cancel(
+    repo_root: &str,
+    left_ref: &str,
+    right_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    Ok(
+        run_git_checked_with_cancel(repo_root, &["merge-base", left_ref, right_ref], cancel)?
+            .trim()
+            .to_string(),
+    )
 }
 
 fn local_branch_names_merged_into_with_cancel(
@@ -3531,6 +3579,71 @@ mod tests {
         assert_eq!(
             resolve_parent_branch_name(&repo_root, "v0.12.2", None).expect("resolve parent branch"),
             "v0.12.x-dev"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn branch_tree_keeps_parent_when_parent_advances_after_child_branching() {
+        let repo_dir = create_temp_repo_dir("branch-parent-advances-after-fork");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        init_temp_git_repo(&repo_root);
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write base file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage base file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        let switch_release =
+            run_git(&repo_root, &["switch", "-c", "0.13.x"]).expect("switch release branch");
+        if !switch_release.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "0.13.x"])
+                .expect("checkout release branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\nrelease\n").expect("write release file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage release file");
+        run_git_checked(&repo_root, &["commit", "-m", "release line"])
+            .expect("commit release file");
+
+        let switch_dev =
+            run_git(&repo_root, &["switch", "-c", "v0.13.1-dev"]).expect("switch dev branch");
+        if !switch_dev.success {
+            run_git_checked(&repo_root, &["checkout", "-b", "v0.13.1-dev"])
+                .expect("checkout dev branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\nrelease\ndev\n").expect("write dev file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage dev file");
+        run_git_checked(&repo_root, &["commit", "-m", "dev line"]).expect("commit dev file");
+
+        let switch_release_back =
+            run_git(&repo_root, &["switch", "0.13.x"]).expect("switch back to release branch");
+        if !switch_release_back.success {
+            run_git_checked(&repo_root, &["checkout", "0.13.x"]).expect("checkout release branch");
+        }
+        fs::write(repo_dir.join("tracked.txt"), "base\nrelease\nrelease+1\n")
+            .expect("write advanced release file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage advanced release file");
+        run_git_checked(&repo_root, &["commit", "-m", "release advanced"])
+            .expect("commit advanced release file");
+
+        assert_eq!(
+            resolve_parent_branch_name(&repo_root, "v0.13.1-dev", None)
+                .expect("resolve parent branch after parent advanced"),
+            "0.13.x"
+        );
+
+        let diagram = load_branch_diagram(&repo_root, "v0.13.1-dev", None)
+            .expect("load branch diagram")
+            .expect("diagram should exist");
+        let path_names = diagram
+            .path
+            .iter()
+            .map(|segment| segment.branch.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            path_names,
+            vec!["0.13.x".to_string(), "v0.13.1-dev".to_string()]
         );
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
