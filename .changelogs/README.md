@@ -2,6 +2,107 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.13.2
+2026-04-24
+
+#### What's changed:
+
+### ✨ New Feature: Pull Requests via CLI
+
+Brand new `cg pr` CLI command:   _(18a9303)_
+* Fully automated
+* Aware of ancestory
+* With automated context parsing as PR changelog into PR description
+
+<sup>💡 >> alpha implementation - needs further testing</sup>
+
+---
+
+### ✨ New in `cg pr`:
+
+#### 💎 Enhancements
+
+* added a proper `create` to existing `dry run`   _(180ece2)_
+
+---
+
+### Changed in Git
+
+#### 🐛 Fix(es)
+
+attempted fix to ancestory detection, outcome:   _(0b8f811)_
+* System is able to detect all ancestors now
+* System retained the original over 60% speed boost against alpha after this upgrade
+* System can't determine the correct point of origin yet
+
+<sup>💡 >> Needs more work...</sup>
+
+attempted fix to point of origin detection:   _(c611a8c)_
+* System now can determine PoO
+  * Upsides:
+    * correct execution (as expected) of `cg br ..` and `cg pr`
+  * Downsides:
+    * Execution of `cg br` is much slower and can take over 10 seconds due to extensive validations
+* Known bugs:
+  * `cg br` renders +1 branch as merged when current possition is 0 and main is located at -1
+
+<sup>💡 >> Still needs testin but it appers that speed has to be sacrificed to make it work properly unless Git updates its logic and defines branches as more than just pointers and allows relations between them and commits. In theory this can be implemented within ComfyGit, but much later due to complexity</sup>
+
+---
+
+### Changed in Changelog Ordering Logic
+
+#### 💎 Enhancements
+
+Ordering now follows new rules:   _(bafc628)_
+* ordering within one group changed to oldest→latest
+  * this should help end-users with context understanding
+* Ordering by category/modifier is now:
+  * Release notes
+  * `!` Breaking Change
+  * `@.` New announcement
+  * `@` New in...
+  * `...()` "Changed in", eg `enh(Login Flow)`
+  * `...` "Standard", eg `fix`, or `feat`
+
+---
+
+### Changed in Issue #40
+
+#### 🐛 Fix(es)
+
+attempted fix for #40:   _(90a9e2a)_
+* confirmed resolution when repeated reproducing steps
+* confirmed fix for win and pwsh 7.6.1
+
+<sup>💡 >> not closing the issue yet, has to be tested at least on one more platform</sup>
+
+---
+
+### 🛠️ General:
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.13.0   _(158db05)_
+
+* CG app version bump to v0.13.1   _(33b0aac)_
+
+* CG app version bump to v0.13.2   _(2bb2055)_
+
+### 📝 Other
+
+* Merge branch '0.13.x' into v0.13.1-dev   _(03a81d2)_
+
+* Revert "Merge branch '0.13.x' into v0.13.1-dev"   _(35953ca)_
+
+* Merge pull request #41 from comfy-home/v0.13.1-dev   _(4b86966)_
+
+* Merge pull request #42 from comfy-home/v0.13.2-dev   _(70e5887)_
+
+* Merge pull request #43 from comfy-home/0.13.x   _(436586f)_
+
+---
+
 ## Changelog v0.12.4
 2026-04-23
 
