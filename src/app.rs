@@ -14,6 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+
 use anyhow::{Context, Result, anyhow, bail};
 use arboard::Clipboard;
 use crossterm::{
@@ -49,6 +52,12 @@ use tokio::{
 };
 use tui_tabs::TabNav;
 use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTextArea};
+
+#[cfg(windows)]
+use windows_sys::Win32::System::Console::{
+    ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+    ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleMode, SetConsoleMode,
+};
 
 use crate::{
     branding::{PixelLogo, choose_header_content},
@@ -131,10 +140,41 @@ const GIT_BRANCH_COLORS: [Color; 6] = [
 ];
 
 pub fn run() -> Result<()> {
+    restore_console_input_mode();
     let mut terminal = setup_terminal()?;
     let result = run_app(&mut terminal);
-    restore_terminal(&mut terminal)?;
+    let restore_result = restore_terminal(&mut terminal);
+    restore_console_input_mode();
+    restore_result?;
     result
+}
+
+fn restore_console_input_mode() {
+    #[cfg(windows)]
+    {
+        let handle = io::stdin().as_raw_handle();
+        if handle.is_null() {
+            return;
+        }
+
+        let mut mode = 0;
+        let stdin = handle as windows_sys::Win32::Foundation::HANDLE;
+
+        unsafe {
+            if GetConsoleMode(stdin, &mut mode) == 0 {
+                return;
+            }
+
+            let restored_mode = (mode
+                | ENABLE_PROCESSED_INPUT
+                | ENABLE_LINE_INPUT
+                | ENABLE_ECHO_INPUT
+                | ENABLE_EXTENDED_FLAGS)
+                & !ENABLE_VIRTUAL_TERMINAL_INPUT;
+
+            let _ = SetConsoleMode(stdin, restored_mode);
+        }
+    }
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
