@@ -46,6 +46,7 @@ use crate::{
         split_output_lines, switch_to_existing_branch, switch_to_main_branch,
     },
     git_br::{BranchNameOption, is_release_line_branch, suggest_branch_name_options},
+    git_mg::run_merge,
     git_pr::run_pr,
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
@@ -158,6 +159,12 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             })?;
             Ok(StartupMode::Handled)
         }
+        [command] if is_merge_command(command) => {
+            let cwd = env::current_dir().context("failed to read current directory")?;
+            let repo_root = current_git_repo_root(&cwd)?;
+            with_cli_git_cancellation(|cancel| run_merge(&repo_root, cancel))?;
+            Ok(StartupMode::Handled)
+        }
         [command, lookup] if is_project_version_command(command) => {
             print_project_version(lookup)?;
             Ok(StartupMode::Handled)
@@ -247,6 +254,10 @@ fn is_pr_command(value: &str) -> bool {
     matches!(value, "pr")
 }
 
+fn is_merge_command(value: &str) -> bool {
+    matches!(value, "merge" | "mg" | "mrg")
+}
+
 fn is_pr_main_option(value: &str) -> bool {
     matches!(value, "--main" | "-main")
 }
@@ -305,10 +316,12 @@ fn print_usage() {
     println!(
         "  cg pr --main | -main       Generate a pull request title/body against main/master/custom main"
     );
+    println!("  cg merge                   Interactively choose and merge an open pull request");
     println!("          synonyms:");
     println!("            branch: br | brn | brnch");
     println!("            up: up | ..");
     println!("            main: main | ~");
+    println!("            merge: mg | mrg");
     println!(" ");
     println!("  BUMPING COMMANDS:");
     println!(" ");
@@ -2959,6 +2972,14 @@ mod tests {
         assert!(is_branch_main_action("main"));
         assert!(is_branch_main_action("~"));
         assert!(!is_branch_main_action("root"));
+    }
+
+    #[test]
+    fn is_merge_command_accepts_requested_synonyms() {
+        assert!(is_merge_command("merge"));
+        assert!(is_merge_command("mg"));
+        assert!(is_merge_command("mrg"));
+        assert!(!is_merge_command("mrg2"));
     }
 
     #[test]
