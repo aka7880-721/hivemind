@@ -279,7 +279,7 @@ impl ChangelogDocument {
             lines.push(String::new());
         }
 
-        lines.push("#### What's changed:".to_string());
+        lines.push("#### What's new:".to_string());
         lines.push(String::new());
 
         let visible_commits = self
@@ -1643,20 +1643,14 @@ mod tests {
 
     #[test]
     fn ensure_previous_public_release_header_updates_plain_archived_release_header() {
-        let markdown = [
-            "## Changelog v0.11.2",
-            "2026-04-22",
-            "",
-            "#### What's changed:",
-        ]
-        .join("\n");
+        let markdown = ["## Changelog v0.11.2", "2026-04-22", "", "#### What's new:"].join("\n");
 
         let updated = ensure_previous_public_release_header(&markdown, "v0.11.2", Some("v0.10.11"));
 
         assert!(updated.contains(
             "## Changelog v0.11.2 <sub><sup>← v0.10.11 (Previous Public Version)</sup></sub>"
         ));
-        assert!(updated.contains("#### What's changed:"));
+        assert!(updated.contains("#### What's new:"));
     }
 
     #[test]
@@ -1752,7 +1746,7 @@ mod tests {
             .expect("release notes should render");
         let changes_index = changelog
             .markdown
-            .find("#### What's changed:")
+            .find("#### What's new:")
             .expect("changes heading should render");
         let breaking_index = changelog
             .markdown
