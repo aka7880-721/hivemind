@@ -122,7 +122,11 @@ fn preview_pr(
             PreviewAction::Create => return Ok(body),
             PreviewAction::Edit => {
                 drop(raw_mode);
-                body = edit_pr_body(&body, cancel.clone())?;
+                match edit_pr_body(&body, cancel.clone())? {
+                    EditorExit::Save(updated_body) => body = updated_body,
+                    EditorExit::Discard => {}
+                    EditorExit::Terminate => bail!("cancelled by user"),
+                }
             }
             PreviewAction::Cancel => bail!("cancelled by user"),
         }
@@ -241,7 +245,7 @@ fn render_preview_screen(
     Ok(())
 }
 
-fn edit_pr_body(body: &str, cancel: Option<GitCancellation>) -> Result<String> {
+fn edit_pr_body(body: &str, cancel: Option<GitCancellation>) -> Result<EditorExit> {
     let raw_mode = TerminalRawModeGuard::enter()?;
     let mut editor = PrBodyEditor::new(body);
 
@@ -263,9 +267,16 @@ fn edit_pr_body(body: &str, cancel: Option<GitCancellation>) -> Result<String> {
             EditorAction::None => {}
             EditorAction::Save => {
                 drop(raw_mode);
-                return Ok(editor.into_string());
+                return Ok(EditorExit::Save(editor.into_string()));
             }
-            EditorAction::Cancel => bail!("cancelled by user"),
+            EditorAction::Discard => {
+                drop(raw_mode);
+                return Ok(EditorExit::Discard);
+            }
+            EditorAction::Terminate => {
+                drop(raw_mode);
+                return Ok(EditorExit::Terminate);
+            }
         }
     }
 }
@@ -282,7 +293,7 @@ fn render_editor_screen(editor: &PrBodyEditor) -> Result<()> {
         stdout,
         MoveToColumn(0),
         Print(format!(
-            "{}Edit PR body{}\r\nUse Down on the last line to reach <Save Changes> or <Cancel>. Press Enter to activate a button. Ctrl+C aborts.\r\n\r\n",
+            "{}Edit PR body{}\r\nUse Down on the last line to reach <Save Changes>, <Discard Changes>, or <Terminate>. Press Enter to activate a button. Ctrl+C aborts.\r\n\r\n",
             ANSI_YELLOW, ANSI_RESET
         ))
     )
@@ -301,12 +312,16 @@ fn render_editor_screen(editor: &PrBodyEditor) -> Result<()> {
     }
 
     let save_button = editor.render_button(EditorFocus::Save);
-    let cancel_button = editor.render_button(EditorFocus::Cancel);
+    let discard_button = editor.render_button(EditorFocus::Discard);
+    let terminate_button = editor.render_button(EditorFocus::Terminate);
     queue!(
         stdout,
         MoveToColumn(0),
         Print("\r\n"),
-        Print(format!("{}  {}\r\n", save_button, cancel_button))
+        Print(format!(
+            "{}  {}  {}\r\n",
+            save_button, discard_button, terminate_button
+        ))
     )
     .context("failed to queue PR body editor buttons")?;
 
@@ -320,14 +335,23 @@ fn render_editor_screen(editor: &PrBodyEditor) -> Result<()> {
 enum EditorFocus {
     Body,
     Save,
-    Cancel,
+    Discard,
+    Terminate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EditorExit {
+    Save(String),
+    Discard,
+    Terminate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EditorAction {
     None,
     Save,
-    Cancel,
+    Discard,
+    Terminate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -361,12 +385,14 @@ impl PrBodyEditor {
 
     fn handle_key(&mut self, key: KeyEvent) -> EditorAction {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return EditorAction::Cancel;
+            return EditorAction::Terminate;
         }
 
         match self.focus {
             EditorFocus::Body => self.handle_body_key(key),
-            EditorFocus::Save | EditorFocus::Cancel => self.handle_button_key(key),
+            EditorFocus::Save | EditorFocus::Discard | EditorFocus::Terminate => {
+                self.handle_button_key(key)
+            }
         }
     }
 
@@ -404,23 +430,26 @@ impl PrBodyEditor {
         match key.code {
             KeyCode::Tab | KeyCode::Right => {
                 self.focus = match self.focus {
-                    EditorFocus::Save => EditorFocus::Cancel,
-                    EditorFocus::Cancel => EditorFocus::Body,
+                    EditorFocus::Save => EditorFocus::Discard,
+                    EditorFocus::Discard => EditorFocus::Terminate,
+                    EditorFocus::Terminate => EditorFocus::Body,
                     EditorFocus::Body => EditorFocus::Save,
                 };
             }
             KeyCode::BackTab | KeyCode::Left => {
                 self.focus = match self.focus {
                     EditorFocus::Save => EditorFocus::Body,
-                    EditorFocus::Cancel => EditorFocus::Save,
-                    EditorFocus::Body => EditorFocus::Cancel,
+                    EditorFocus::Discard => EditorFocus::Save,
+                    EditorFocus::Terminate => EditorFocus::Discard,
+                    EditorFocus::Body => EditorFocus::Terminate,
                 };
             }
             KeyCode::Up | KeyCode::Esc => self.focus = EditorFocus::Body,
             KeyCode::Enter => {
                 return match self.focus {
                     EditorFocus::Save => EditorAction::Save,
-                    EditorFocus::Cancel => EditorAction::Cancel,
+                    EditorFocus::Discard => EditorAction::Discard,
+                    EditorFocus::Terminate => EditorAction::Terminate,
                     EditorFocus::Body => EditorAction::None,
                 };
             }
@@ -432,7 +461,9 @@ impl PrBodyEditor {
 
     fn viewport(&self, terminal_height: usize) -> EditorViewport {
         let content_rows = terminal_height.saturating_sub(5).max(1);
-        let start_row = self.cursor_row.saturating_sub(content_rows.saturating_sub(1));
+        let start_row = self
+            .cursor_row
+            .saturating_sub(content_rows.saturating_sub(1));
         let start_row = start_row.min(self.lines.len().saturating_sub(1));
         let available_rows = self.lines.len().saturating_sub(start_row);
         let visible_rows = available_rows.min(content_rows);
@@ -460,10 +491,22 @@ impl PrBodyEditor {
                 (cursor_x, cursor_y)
             }
             EditorFocus::Save => (2, (viewport.content_rows + 4).min(u16::MAX as usize) as u16),
-            EditorFocus::Cancel => {
+            EditorFocus::Discard => {
                 let save_width = self.render_button(EditorFocus::Save).chars().count();
                 let cursor_x = (save_width + 4).min(u16::MAX as usize) as u16;
-                (cursor_x, (viewport.content_rows + 4).min(u16::MAX as usize) as u16)
+                (
+                    cursor_x,
+                    (viewport.content_rows + 4).min(u16::MAX as usize) as u16,
+                )
+            }
+            EditorFocus::Terminate => {
+                let save_width = self.render_button(EditorFocus::Save).chars().count();
+                let discard_width = self.render_button(EditorFocus::Discard).chars().count();
+                let cursor_x = (save_width + discard_width + 6).min(u16::MAX as usize) as u16;
+                (
+                    cursor_x,
+                    (viewport.content_rows + 4).min(u16::MAX as usize) as u16,
+                )
             }
         }
     }
@@ -471,7 +514,8 @@ impl PrBodyEditor {
     fn render_button(&self, button: EditorFocus) -> String {
         let (label, focused) = match button {
             EditorFocus::Save => ("<Save Changes>", self.focus == EditorFocus::Save),
-            EditorFocus::Cancel => ("<Cancel>", self.focus == EditorFocus::Cancel),
+            EditorFocus::Discard => ("<Discard Changes>", self.focus == EditorFocus::Discard),
+            EditorFocus::Terminate => ("<Terminate>", self.focus == EditorFocus::Terminate),
             EditorFocus::Body => return String::new(),
         };
 
@@ -1049,8 +1093,58 @@ mod tests {
         let mut editor = PrBodyEditor::new("body");
         editor.cursor_row = editor.lines.len().saturating_sub(1);
 
-        assert_eq!(editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)), EditorAction::None);
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            EditorAction::None
+        );
         assert_eq!(editor.focus, EditorFocus::Save);
-        assert_eq!(editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), EditorAction::Save);
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            EditorAction::Save
+        );
+    }
+
+    #[test]
+    fn pr_body_editor_buttons_allow_discard_without_saving() {
+        let mut editor = PrBodyEditor::new("body");
+        editor.cursor_row = editor.lines.len().saturating_sub(1);
+
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            EditorAction::None
+        );
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            EditorAction::None
+        );
+        assert_eq!(editor.focus, EditorFocus::Discard);
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            EditorAction::Discard
+        );
+    }
+
+    #[test]
+    fn pr_body_editor_buttons_allow_terminate_flow() {
+        let mut editor = PrBodyEditor::new("body");
+        editor.cursor_row = editor.lines.len().saturating_sub(1);
+
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            EditorAction::None
+        );
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            EditorAction::None
+        );
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            EditorAction::None
+        );
+        assert_eq!(editor.focus, EditorFocus::Terminate);
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            EditorAction::Terminate
+        );
     }
 }
