@@ -21,7 +21,8 @@ use chrono::Local;
 use crossterm::{
     cursor::{MoveToColumn, MoveUp},
     event::{self, Event, KeyCode, KeyEventKind},
-    execute,
+    execute, queue,
+    style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
 use reqwest::blocking::Client;
@@ -1551,11 +1552,35 @@ fn render_cli_branch_name_picker(
         .context("failed to redraw branch name picker")?;
     }
 
-    println!("Choose the new branch name:");
-    println!("Use Up/Down or Tab to select, then press Enter.");
+    queue!(
+        stdout,
+        MoveToColumn(0),
+        Print("Choose the new branch name:\r\n"),
+        MoveToColumn(0),
+        Print("Use Up/Down or Tab to select, then press Enter.\r\n")
+    )
+    .context("failed to render branch name picker")?;
+
     for (index, option) in options.iter().enumerate() {
         let marker = if index == selected { ">" } else { " " };
-        println!("{} {}. {}", marker, index + 1, option.preview());
+        let color = if index == selected {
+            Color::Yellow
+        } else {
+            Color::DarkGrey
+        };
+        queue!(
+            stdout,
+            MoveToColumn(0),
+            SetForegroundColor(color),
+            Print(format!(
+                "{} {}. {}\r\n",
+                marker,
+                index + 1,
+                option.preview()
+            )),
+            ResetColor
+        )
+        .context("failed to render branch name picker option")?;
     }
     stdout
         .flush()
