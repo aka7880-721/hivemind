@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Local};
 use crossterm::{
     cursor::{MoveToColumn, MoveUp},
@@ -46,6 +46,30 @@ pub(crate) fn run_merge(repo_root: &str, cancel: Option<GitCancellation>) -> Res
 
     let entries = fetch_open_pull_requests(repo_root, cancel.clone())?;
     let selected = prompt_pull_request_selection(&entries, cancel)?;
+    merge_pull_request(repo_root, &selected)
+}
+
+pub(crate) fn run_merge_for_pull_request(
+    repo_root: &str,
+    pr_number: u64,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let current_branch = current_branch_with_cancel(repo_root, cancel.clone())?;
+    if current_branch.starts_with("detached (") {
+        bail!("cannot run cg merge from a detached HEAD");
+    }
+
+    ensure_clean_worktree_with_cancel(repo_root, "cg merge", cancel.clone())?;
+    ensure_local_branch_published_and_in_sync_with_cancel(
+        repo_root,
+        &current_branch,
+        "current branch",
+        "cg merge",
+        cancel.clone(),
+    )?;
+
+    let entries = fetch_open_pull_requests(repo_root, cancel)?;
+    let selected = select_pull_request_by_number(&entries, pr_number)?;
     merge_pull_request(repo_root, &selected)
 }
 
@@ -135,6 +159,22 @@ fn fetch_pull_request(repo_root: &str, pr_number: u64) -> Result<PullRequestEntr
     let entry = serde_json::from_slice::<GhPullRequest>(&output.stdout)
         .context("failed to parse gh pr view output")?;
     Ok(PullRequestEntry::from_gh(entry))
+}
+
+fn select_pull_request_by_number(
+    entries: &[PullRequestEntry],
+    pr_number: u64,
+) -> Result<PullRequestEntry> {
+    entries
+        .iter()
+        .find(|entry| entry.number == pr_number)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "PR #{} is not currently listed as an open pull request for this repository",
+                pr_number
+            )
+        })
 }
 
 fn prompt_pull_request_selection(
@@ -693,6 +733,57 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn select_pull_request_by_number_returns_matching_open_entry() {
+        let entries = vec![
+            PullRequestEntry {
+                number: 41,
+                title: "Older PR".to_string(),
+                target_branch: "main".to_string(),
+                created_label: "2026-04-24 10:00".to_string(),
+                created_at_unix: 100,
+                author: "alice".to_string(),
+                status: "CLEAN".to_string(),
+                mergeable_state: "MERGEABLE".to_string(),
+            },
+            PullRequestEntry {
+                number: 67,
+                title: "Target PR".to_string(),
+                target_branch: "main".to_string(),
+                created_label: "2026-04-25 10:00".to_string(),
+                created_at_unix: 200,
+                author: "bob".to_string(),
+                status: "CLEAN".to_string(),
+                mergeable_state: "MERGEABLE".to_string(),
+            },
+        ];
+
+        let selected = select_pull_request_by_number(&entries, 67).expect("select matching PR");
+
+        assert_eq!(selected.number, 67);
+        assert_eq!(selected.title, "Target PR");
+    }
+
+    #[test]
+    fn select_pull_request_by_number_rejects_missing_entry() {
+        let entries = vec![PullRequestEntry {
+            number: 41,
+            title: "Older PR".to_string(),
+            target_branch: "main".to_string(),
+            created_label: "2026-04-24 10:00".to_string(),
+            created_at_unix: 100,
+            author: "alice".to_string(),
+            status: "CLEAN".to_string(),
+            mergeable_state: "MERGEABLE".to_string(),
+        }];
+
+        let error =
+            select_pull_request_by_number(&entries, 67).expect_err("missing PR should fail");
+
+        assert!(error.to_string().contains("PR #67"));
+        assert!(error.to_string().contains("open pull request"));
     }
 
     #[test]

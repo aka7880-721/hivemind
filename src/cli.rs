@@ -46,7 +46,7 @@ use crate::{
         split_output_lines, switch_to_existing_branch, switch_to_main_branch,
     },
     git_br::{BranchNameOption, is_release_line_branch, suggest_branch_name_options},
-    git_mg::run_merge,
+    git_mg::{run_merge, run_merge_for_pull_request},
     git_pr::run_pr,
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
@@ -165,6 +165,15 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             with_cli_git_cancellation(|cancel| run_merge(&repo_root, cancel))?;
             Ok(StartupMode::Handled)
         }
+        [command, selector] if is_merge_command(command) => {
+            let pr_number = parse_merge_pull_request_selector(selector)?;
+            let cwd = env::current_dir().context("failed to read current directory")?;
+            let repo_root = current_git_repo_root(&cwd)?;
+            with_cli_git_cancellation(|cancel| {
+                run_merge_for_pull_request(&repo_root, pr_number, cancel)
+            })?;
+            Ok(StartupMode::Handled)
+        }
         [command, lookup] if is_project_version_command(command) => {
             print_project_version(lookup)?;
             Ok(StartupMode::Handled)
@@ -258,6 +267,29 @@ fn is_merge_command(value: &str) -> bool {
     matches!(value, "merge" | "mg" | "mrg")
 }
 
+fn parse_merge_pull_request_selector(value: &str) -> Result<u64> {
+    let trimmed = value.trim();
+    let numeric = trimmed.strip_prefix('#').ok_or_else(|| {
+        anyhow!(
+            "merge selector '{}' is invalid; use the form #<pull-request-number>",
+            value
+        )
+    })?;
+    let pr_number = numeric.parse::<u64>().with_context(|| {
+        format!(
+            "merge selector '{}' is invalid; use the form #<pull-request-number>",
+            value
+        )
+    })?;
+    if pr_number == 0 {
+        bail!(
+            "merge selector '{}' is invalid; pull request numbers start at 1",
+            value
+        )
+    }
+    Ok(pr_number)
+}
+
 fn is_pr_main_option(value: &str) -> bool {
     matches!(value, "--main" | "-main")
 }
@@ -317,6 +349,7 @@ fn print_usage() {
         "  cg pr --main | -main       Generate a pull request title/body against main/master/custom main"
     );
     println!("  cg merge                   Interactively choose and merge an open pull request");
+    println!("  cg merge #67               Merge open pull request #67 directly");
     println!("          synonyms:");
     println!("            branch: br | brn | brnch");
     println!("            up: up | ..");
@@ -2980,6 +3013,25 @@ mod tests {
         assert!(is_merge_command("mg"));
         assert!(is_merge_command("mrg"));
         assert!(!is_merge_command("mrg2"));
+    }
+
+    #[test]
+    fn parse_merge_pull_request_selector_accepts_hash_prefixed_numbers() {
+        assert_eq!(
+            parse_merge_pull_request_selector("#67").expect("parse selector"),
+            67
+        );
+        assert_eq!(
+            parse_merge_pull_request_selector("#1").expect("parse selector"),
+            1
+        );
+    }
+
+    #[test]
+    fn parse_merge_pull_request_selector_rejects_invalid_values() {
+        assert!(parse_merge_pull_request_selector("67").is_err());
+        assert!(parse_merge_pull_request_selector("#0").is_err());
+        assert!(parse_merge_pull_request_selector("#abc").is_err());
     }
 
     #[test]
