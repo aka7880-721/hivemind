@@ -41,6 +41,140 @@ pub(crate) fn current_branch_with_cancel(
     Ok(format!("detached ({})", head.trim()))
 }
 
+pub(crate) fn ensure_clean_worktree_with_cancel(
+    repo_root: &str,
+    action: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let status = run_git_checked_with_cancel(repo_root, &["status", "--porcelain"], cancel)?;
+    if status.trim().is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "the git working tree has uncommitted changes; commit, stash, or discard them before running {}",
+            action
+        )
+    }
+}
+
+pub(crate) fn ensure_local_branch_published_and_in_sync_with_cancel(
+    repo_root: &str,
+    branch_name: &str,
+    branch_role: &str,
+    action: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let upstream_ref = branch_upstream_ref_with_cancel(repo_root, branch_name, cancel.clone())?
+        .ok_or_else(|| {
+            anyhow!(
+                "{} '{}' is not published to a tracked remote branch; push it with upstream tracking before running {}",
+                branch_role,
+                branch_name,
+                action
+            )
+        })?;
+
+    fetch_remote_for_upstream_with_cancel(repo_root, &upstream_ref, cancel.clone())?;
+    let (ahead_count, behind_count) =
+        branch_divergence_counts_with_cancel(repo_root, branch_name, &upstream_ref, cancel)?;
+
+    match (ahead_count, behind_count) {
+        (0, 0) => Ok(upstream_ref),
+        (ahead, 0) => bail!(
+            "{} '{}' is ahead of '{}' by {} commit(s); push before running {}",
+            branch_role,
+            branch_name,
+            upstream_ref,
+            ahead,
+            action
+        ),
+        (0, behind) => bail!(
+            "{} '{}' is behind '{}' by {} commit(s); pull or rebase before running {}",
+            branch_role,
+            branch_name,
+            upstream_ref,
+            behind,
+            action
+        ),
+        (ahead, behind) => bail!(
+            "{} '{}' has diverged from '{}' (ahead {}, behind {}); reconcile it before running {}",
+            branch_role,
+            branch_name,
+            upstream_ref,
+            ahead,
+            behind,
+            action
+        ),
+    }
+}
+
+fn branch_upstream_ref_with_cancel(
+    repo_root: &str,
+    branch_name: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Option<String>> {
+    let branch_ref = format!("refs/heads/{}", branch_name);
+    let output = run_git_checked_with_cancel(
+        repo_root,
+        &["for-each-ref", "--format=%(upstream:short)", &branch_ref],
+        cancel,
+    )?;
+    Ok(split_output_lines(&output).into_iter().next())
+}
+
+fn fetch_remote_for_upstream_with_cancel(
+    repo_root: &str,
+    upstream_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let remote_name = upstream_remote_name(upstream_ref)?;
+    let _ = run_git_checked_with_cancel(repo_root, &["fetch", "--quiet", remote_name], cancel)?;
+    Ok(())
+}
+
+fn upstream_remote_name(upstream_ref: &str) -> Result<&str> {
+    upstream_ref
+        .split_once('/')
+        .map(|(remote_name, _)| remote_name)
+        .filter(|remote_name| !remote_name.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "upstream ref '{}' is not a valid remote-tracking branch",
+                upstream_ref
+            )
+        })
+}
+
+fn branch_divergence_counts_with_cancel(
+    repo_root: &str,
+    branch_name: &str,
+    upstream_ref: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<(usize, usize)> {
+    let comparison = format!("{}...{}", branch_name, upstream_ref);
+    let output = run_git_checked_with_cancel(
+        repo_root,
+        &["rev-list", "--left-right", "--count", &comparison],
+        cancel,
+    )?;
+    parse_left_right_counts(&output)
+}
+
+fn parse_left_right_counts(output: &str) -> Result<(usize, usize)> {
+    let mut counts = output.split_whitespace();
+    let ahead_count = counts
+        .next()
+        .ok_or_else(|| anyhow!("git rev-list did not report an ahead count"))?
+        .parse::<usize>()
+        .context("failed to parse git ahead count")?;
+    let behind_count = counts
+        .next()
+        .ok_or_else(|| anyhow!("git rev-list did not report a behind count"))?
+        .parse::<usize>()
+        .context("failed to parse git behind count")?;
+    Ok((ahead_count, behind_count))
+}
+
 pub(crate) fn switch_to_main_branch(
     repo_root: &str,
     remote_spec: Option<&str>,
@@ -752,6 +886,56 @@ mod tests {
         git_stt::format_relative_git_timestamp,
         versioning::VersionScheme,
     };
+    use std::{
+        env, fs,
+        path::PathBuf,
+        process::Command,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn create_temp_repo_dir(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "comfygit-git-tests-{}-{}-{}",
+            test_name,
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&dir).expect("create temp repo dir");
+        dir
+    }
+
+    fn init_temp_git_repo(repo_root: &str) {
+        run_git_checked(repo_root, &["init"]).expect("init repo");
+        run_git_checked(repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_main = run_git(repo_root, &["switch", "-c", "main"]).expect("switch main");
+        if !switch_main.success {
+            run_git_checked(repo_root, &["checkout", "-b", "main"]).expect("checkout main");
+        }
+    }
+
+    fn clone_repo(source: &str, target: &str) {
+        let output = Command::new("git")
+            .arg("clone")
+            .arg(source)
+            .arg(target)
+            .output()
+            .expect("clone repo");
+        assert!(
+            output.status.success(),
+            "git clone failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn collect_git_scope_contexts_prefers_branch_repo_overrides() {
@@ -957,5 +1141,121 @@ mod tests {
             format_relative_git_timestamp(&two_days_ago).expect("timestamp should format");
 
         assert_eq!(formatted, "2d ago");
+    }
+
+    #[test]
+    fn ensure_local_branch_published_and_in_sync_accepts_synced_branch() {
+        let bare_dir = create_temp_repo_dir("sync-bare");
+        let bare_root = bare_dir.to_string_lossy().to_string();
+        run_git_checked(&bare_root, &["init", "--bare"]).expect("init bare repo");
+
+        let repo_dir = create_temp_repo_dir("sync-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write tracked file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+        run_git_checked(&repo_root, &["remote", "add", "origin", &bare_root])
+            .expect("add origin remote");
+        run_git_checked(&repo_root, &["push", "-u", "origin", "main"]).expect("push main");
+
+        let upstream = ensure_local_branch_published_and_in_sync_with_cancel(
+            &repo_root,
+            "main",
+            "current branch",
+            "cg pr",
+            None,
+        )
+        .expect("synced branch should validate");
+
+        assert_eq!(upstream, "origin/main");
+
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
+        fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+
+    #[test]
+    fn ensure_local_branch_published_and_in_sync_rejects_unpublished_branch() {
+        let bare_dir = create_temp_repo_dir("unpublished-bare");
+        let bare_root = bare_dir.to_string_lossy().to_string();
+        run_git_checked(&bare_root, &["init", "--bare"]).expect("init bare repo");
+
+        let repo_dir = create_temp_repo_dir("unpublished-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write tracked file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+        run_git_checked(&repo_root, &["remote", "add", "origin", &bare_root])
+            .expect("add origin remote");
+        run_git_checked(&repo_root, &["push", "-u", "origin", "main"]).expect("push main");
+        create_branch_and_switch(&repo_root, "feature/unpublished").expect("create branch");
+
+        let error = ensure_local_branch_published_and_in_sync_with_cancel(
+            &repo_root,
+            "feature/unpublished",
+            "current branch",
+            "cg pr",
+            None,
+        )
+        .expect_err("unpublished branch should fail");
+
+        assert!(error.to_string().contains("not published"));
+
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
+        fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+
+    #[test]
+    fn ensure_local_branch_published_and_in_sync_rejects_behind_branch() {
+        let bare_dir = create_temp_repo_dir("behind-bare");
+        let bare_root = bare_dir.to_string_lossy().to_string();
+        run_git_checked(&bare_root, &["init", "--bare"]).expect("init bare repo");
+
+        let repo_dir = create_temp_repo_dir("behind-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write tracked file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+        run_git_checked(&repo_root, &["remote", "add", "origin", &bare_root])
+            .expect("add origin remote");
+        run_git_checked(&repo_root, &["push", "-u", "origin", "main"]).expect("push main");
+        run_git_checked(&bare_root, &["symbolic-ref", "HEAD", "refs/heads/main"])
+            .expect("point bare HEAD at main");
+
+        let clone_dir = create_temp_repo_dir("behind-clone");
+        let clone_root = clone_dir.to_string_lossy().to_string();
+        clone_repo(&bare_root, &clone_root);
+        run_git_checked(&clone_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure clone user.name");
+        run_git_checked(
+            &clone_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure clone user.email");
+        fs::write(clone_dir.join("tracked.txt"), "base\nremote\n").expect("write clone file");
+        run_git_checked(&clone_root, &["add", "tracked.txt"]).expect("stage clone file");
+        run_git_checked(&clone_root, &["commit", "-m", "remote change"])
+            .expect("commit clone change");
+        run_git_checked(&clone_root, &["push", "origin", "main"]).expect("push clone change");
+
+        let error = ensure_local_branch_published_and_in_sync_with_cancel(
+            &repo_root,
+            "main",
+            "current branch",
+            "cg merge",
+            None,
+        )
+        .expect_err("behind branch should fail");
+
+        assert!(error.to_string().contains("behind"));
+
+        fs::remove_dir_all(&clone_dir).expect("remove clone repo dir");
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
+        fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
     }
 }

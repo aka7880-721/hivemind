@@ -115,23 +115,59 @@ pub(crate) fn apply_repo_bump_workflow(
                 .remote_spec
                 .as_deref()
                 .ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+            let push_remote = resolve_push_remote_name(&operation.repo_root, remote_spec)?;
             if workflow.requires_branch() {
                 let branch_name = trimmed_branch_name
                     .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
                 run_git_checked(
                     &operation.repo_root,
-                    &["push", "-u", remote_spec, branch_name],
+                    &["push", "-u", &push_remote, branch_name],
                 )?;
             } else {
-                run_git_checked(&operation.repo_root, &["push", remote_spec])?;
+                run_git_checked(&operation.repo_root, &["push", &push_remote])?;
             }
             if workflow.requires_tag() {
-                run_git_checked(&operation.repo_root, &["push", remote_spec, next_version])?;
+                run_git_checked(&operation.repo_root, &["push", &push_remote, next_version])?;
             }
         }
     }
 
     Ok(())
+}
+
+fn resolve_push_remote_name(repo_root: &str, configured_remote: &str) -> Result<String> {
+    let configured_remote = configured_remote.trim();
+    if configured_remote.is_empty() {
+        bail!("no remote is configured for this project")
+    }
+
+    let remotes = split_output_lines(&run_git_checked(repo_root, &["remote"])?);
+    if remotes.iter().any(|remote| remote == configured_remote) {
+        return Ok(configured_remote.to_string());
+    }
+
+    for remote in &remotes {
+        let remote_url = run_git_checked(repo_root, &["remote", "get-url", remote])?
+            .trim()
+            .to_string();
+        if remote_url == configured_remote {
+            return Ok(remote.clone());
+        }
+    }
+
+    if remotes.len() == 1 {
+        return Ok(remotes[0].clone());
+    }
+
+    if let Some(origin) = remotes.iter().find(|remote| remote.as_str() == "origin") {
+        return Ok(origin.clone());
+    }
+
+    bail!(
+        "configured remote '{}' does not match any git remote name or URL in {}",
+        configured_remote,
+        repo_root
+    )
 }
 
 pub(super) fn collect_non_main_repo_states_with_cancel(
@@ -382,4 +418,126 @@ fn comparable_git_path(path: &str) -> String {
 fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_git_checked(repo_root, &arg_refs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        env, fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn create_temp_repo_dir(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "comfygit-git-flow-{}-{}-{}",
+            test_name,
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&dir).expect("create temp repo dir");
+        dir
+    }
+
+    fn init_temp_git_repo(repo_root: &str) {
+        run_git_checked(repo_root, &["init"]).expect("init repo");
+        run_git_checked(repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_main =
+            crate::git::run_git(repo_root, &["switch", "-c", "main"]).expect("switch main");
+        if !switch_main.success {
+            run_git_checked(repo_root, &["checkout", "-b", "main"]).expect("checkout main");
+        }
+    }
+
+    #[test]
+    fn branch_commit_and_push_sets_upstream_when_remote_config_uses_url() {
+        let bare_dir = create_temp_repo_dir("bump-remote-bare");
+        let bare_root = bare_dir.to_string_lossy().to_string();
+        run_git_checked(&bare_root, &["init", "--bare"]).expect("init bare repo");
+
+        let repo_dir = create_temp_repo_dir("bump-remote-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+
+        let tracked_file = repo_dir.join("Cargo.toml");
+        fs::write(
+            &tracked_file,
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write manifest");
+        run_git_checked(&repo_root, &["add", "Cargo.toml"]).expect("stage manifest");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base manifest");
+        run_git_checked(&repo_root, &["remote", "add", "origin", &bare_root])
+            .expect("add origin remote");
+        run_git_checked(&repo_root, &["push", "-u", "origin", "main"]).expect("publish main");
+
+        fs::write(
+            &tracked_file,
+            "[package]\nname = \"demo\"\nversion = \"0.2.0\"\n",
+        )
+        .expect("write bumped manifest");
+
+        let operations = vec![RepoBumpOperation {
+            repo_root: repo_root.clone(),
+            remote_spec: Some(bare_root.clone()),
+            stage_paths: vec!["Cargo.toml".to_string()],
+        }];
+
+        apply_repo_bump_workflow(
+            &operations,
+            "0.2.0",
+            OverviewBumpWorkflow::BranchCommitAndPush,
+            Some("release/0.2.0"),
+        )
+        .expect("apply branch push workflow");
+
+        let upstream = run_git_checked(
+            &repo_root,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        )
+        .expect("read upstream")
+        .trim()
+        .to_string();
+
+        assert_eq!(upstream, "origin/release/0.2.0");
+
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
+        fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+
+    #[test]
+    fn resolve_push_remote_name_accepts_remote_name_or_matching_url() {
+        let bare_dir = create_temp_repo_dir("resolve-remote-bare");
+        let bare_root = bare_dir.to_string_lossy().to_string();
+        run_git_checked(&bare_root, &["init", "--bare"]).expect("init bare repo");
+
+        let repo_dir = create_temp_repo_dir("resolve-remote-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+        run_git_checked(&repo_root, &["remote", "add", "origin", &bare_root])
+            .expect("add origin remote");
+
+        assert_eq!(
+            resolve_push_remote_name(&repo_root, "origin").expect("resolve by remote name"),
+            "origin"
+        );
+        assert_eq!(
+            resolve_push_remote_name(&repo_root, &bare_root).expect("resolve by remote URL"),
+            "origin"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
+        fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
 }
