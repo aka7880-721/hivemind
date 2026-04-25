@@ -46,6 +46,7 @@ use crate::{
         split_output_lines, switch_to_existing_branch, switch_to_main_branch,
     },
     git_br::{BranchNameOption, is_release_line_branch, suggest_branch_name_options},
+    git_br_end::run_branch_done,
     git_mg::{run_merge, run_merge_for_pull_request},
     git_pr::run_pr,
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
@@ -139,6 +140,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command, action] if is_branch_command(command) && is_branch_main_action(action) => {
             run_branch_main()?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_branch_command(command) && is_branch_done_action(action) => {
+            run_branch_done_command()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_pr_command(command) => {
@@ -259,6 +264,10 @@ fn is_branch_main_action(value: &str) -> bool {
     matches!(value, "main" | "~")
 }
 
+fn is_branch_done_action(value: &str) -> bool {
+    matches!(value, "done" | "end" | "close" | "merge" | "mrg" | "mg")
+}
+
 fn is_pr_command(value: &str) -> bool {
     matches!(value, "pr")
 }
@@ -342,6 +351,7 @@ fn print_usage() {
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
+    println!("  cg branch done             Create PR, merge it, switch to target, and sync");
     println!(
         "  cg pr                      Generate a pull request title/body for the current branch"
     );
@@ -354,6 +364,7 @@ fn print_usage() {
     println!("            branch: br | brn | brnch");
     println!("            up: up | ..");
     println!("            main: main | ~");
+    println!("            done: done | end | close | merge | mrg | mg");
     println!("            merge: mg | mrg");
     println!(" ");
     println!("  BUMPING COMMANDS:");
@@ -464,6 +475,17 @@ fn run_branch_main() -> Result<()> {
     );
     println!();
     Ok(())
+}
+
+fn run_branch_done_command() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    with_cli_git_cancellation(|cancel| {
+        run_branch_done(
+            &context.repo_root,
+            context.main_branch_name.as_deref(),
+            cancel,
+        )
+    })
 }
 
 struct ActiveBranchCliContext {
@@ -3005,6 +3027,17 @@ mod tests {
         assert!(is_branch_main_action("main"));
         assert!(is_branch_main_action("~"));
         assert!(!is_branch_main_action("root"));
+    }
+
+    #[test]
+    fn is_branch_done_action_accepts_requested_synonyms() {
+        assert!(is_branch_done_action("done"));
+        assert!(is_branch_done_action("end"));
+        assert!(is_branch_done_action("close"));
+        assert!(is_branch_done_action("merge"));
+        assert!(is_branch_done_action("mrg"));
+        assert!(is_branch_done_action("mg"));
+        assert!(!is_branch_done_action("finish"));
     }
 
     #[test]
