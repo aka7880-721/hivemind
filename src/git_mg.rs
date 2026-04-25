@@ -98,10 +98,14 @@ fn prompt_pull_request_selection(
     let mut selected = 0usize;
     let mut rendered_lines = 0usize;
     let mut message = None::<String>;
+    let mut needs_render = true;
     let raw_mode = MergePickerRawModeGuard::enter()?;
 
     loop {
-        render_pull_request_picker(entries, selected, message.as_deref(), &mut rendered_lines)?;
+        if needs_render {
+            render_pull_request_picker(entries, selected, message.as_deref(), &mut rendered_lines)?;
+            needs_render = false;
+        }
 
         if cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
             drop(raw_mode);
@@ -113,51 +117,56 @@ fn prompt_pull_request_selection(
             continue;
         }
 
-        let Event::Key(key) = event::read().context("failed to read merge picker input")? else {
-            continue;
-        };
-        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-            continue;
-        }
+        match event::read().context("failed to read merge picker input")? {
+            Event::Resize(_, _) => {
+                needs_render = true;
+            }
+            Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                match key.code {
+                    KeyCode::Esc => {
+                        drop(raw_mode);
+                        println!();
+                        bail!("cancelled by user")
+                    }
+                    KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        drop(raw_mode);
+                        println!();
+                        bail!("cancelled by user")
+                    }
+                    KeyCode::Up | KeyCode::BackTab => {
+                        selected = selected.checked_sub(1).unwrap_or(entries.len() - 1);
+                        message = None;
+                        needs_render = true;
+                    }
+                    KeyCode::Down | KeyCode::Tab => {
+                        selected = (selected + 1) % entries.len();
+                        message = None;
+                        needs_render = true;
+                    }
+                    KeyCode::Char(character) => {
+                        if let Some(index) = digit_to_index(character) {
+                            selected = index.min(entries.len().saturating_sub(1));
+                            message = None;
+                            needs_render = true;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        let entry = entries[selected].clone();
+                        if !entry.is_mergeable() {
+                            message = Some(format!(
+                                "PR #{} cannot be merged yet. Select a row where Mergeable is True.",
+                                entry.number
+                            ));
+                            needs_render = true;
+                            continue;
+                        }
 
-        match key.code {
-            KeyCode::Esc => {
-                drop(raw_mode);
-                println!();
-                bail!("cancelled by user")
-            }
-            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                drop(raw_mode);
-                println!();
-                bail!("cancelled by user")
-            }
-            KeyCode::Up | KeyCode::BackTab => {
-                selected = selected.checked_sub(1).unwrap_or(entries.len() - 1);
-                message = None;
-            }
-            KeyCode::Down | KeyCode::Tab => {
-                selected = (selected + 1) % entries.len();
-                message = None;
-            }
-            KeyCode::Char(character) => {
-                if let Some(index) = digit_to_index(character) {
-                    selected = index.min(entries.len().saturating_sub(1));
-                    message = None;
+                        drop(raw_mode);
+                        println!();
+                        return Ok(entry);
+                    }
+                    _ => {}
                 }
-            }
-            KeyCode::Enter => {
-                let entry = entries[selected].clone();
-                if !entry.is_mergeable() {
-                    message = Some(format!(
-                        "PR #{} cannot be merged yet. Select a row where Mergeable is True.",
-                        entry.number
-                    ));
-                    continue;
-                }
-
-                drop(raw_mode);
-                println!();
-                return Ok(entry);
             }
             _ => {}
         }
@@ -182,6 +191,7 @@ fn render_pull_request_picker(
     }
 
     let (terminal_width, _) = size().context("failed to read terminal size")?;
+    let layout = build_table_layout(entries, terminal_width as usize);
     queue!(
         stdout,
         MoveToColumn(0),
@@ -189,19 +199,27 @@ fn render_pull_request_picker(
         MoveToColumn(0),
         Print("Use Up/Down or Tab to select. Press Enter to merge. Esc exits.\r\n"),
         MoveToColumn(0),
-        Print("|#|PR Name|Target|Created|Author|Status|Mergeable|\r\n")
+        Print(format_table_border(&layout)),
+        Print("\r\n"),
+        Print(format_table_header(&layout)),
+        Print("\r\n"),
+        Print(format_table_border(&layout)),
+        Print("\r\n")
     )
     .context("failed to render merge picker header")?;
 
     for (index, entry) in entries.iter().enumerate() {
-        render_pull_request_row(
-            &mut stdout,
-            entry,
-            index == selected,
-            terminal_width as usize,
-        )
-        .context("failed to render merge picker row")?;
+        render_pull_request_row(&mut stdout, entry, index == selected, &layout)
+            .context("failed to render merge picker row")?;
     }
+
+    queue!(
+        stdout,
+        MoveToColumn(0),
+        Print(format_table_border(&layout)),
+        Print("\r\n")
+    )
+    .context("failed to render merge picker footer")?;
 
     if let Some(message) = message {
         queue!(
@@ -216,7 +234,7 @@ fn render_pull_request_picker(
     }
 
     stdout.flush().context("failed to flush merge picker")?;
-    *rendered_lines = entries.len() + 3 + usize::from(message.is_some());
+    *rendered_lines = entries.len() + 6 + usize::from(message.is_some());
     Ok(())
 }
 
@@ -224,7 +242,7 @@ fn render_pull_request_row(
     stdout: &mut io::Stdout,
     entry: &PullRequestEntry,
     selected: bool,
-    terminal_width: usize,
+    layout: &PullRequestTableLayout,
 ) -> Result<()> {
     let row_color = if selected {
         Color::Yellow
@@ -236,46 +254,133 @@ fn render_pull_request_row(
     } else {
         Color::Red
     };
-    let created_width = 16usize;
-    let target_width = 14usize;
-    let author_width = 14usize;
-    let status_width = 12usize;
-    let mergeable_width = 5usize;
-    let title_width = terminal_width
-        .saturating_sub(
-            5 + created_width + target_width + author_width + status_width + mergeable_width + 14,
-        )
-        .max(12);
 
     queue!(stdout, MoveToColumn(0), SetForegroundColor(row_color))
         .context("failed to queue merge picker row color")?;
     queue!(
         stdout,
-        Print("|"),
-        Print(entry.number.to_string()),
-        Print("|"),
-        Print(fit_cell(&entry.title, title_width)),
-        Print("|"),
-        Print(fit_cell(&entry.target_branch, target_width)),
-        Print("|"),
-        Print(fit_cell(&entry.created_label, created_width)),
-        Print("|"),
-        Print(fit_cell(&entry.author, author_width)),
-        Print("|"),
-        Print(fit_cell(&entry.status, status_width)),
-        Print("|")
+        Print("| "),
+        Print(pad_cell(&entry.number.to_string(), layout.number_width)),
+        Print(" | "),
+        Print(pad_cell(
+            &fit_cell(&entry.title, layout.title_width),
+            layout.title_width
+        )),
+        Print(" | "),
+        Print(pad_cell(
+            &fit_cell(&entry.target_branch, layout.target_width),
+            layout.target_width,
+        )),
+        Print(" | "),
+        Print(pad_cell(
+            &fit_cell(&entry.created_label, layout.created_width),
+            layout.created_width,
+        )),
+        Print(" | "),
+        Print(pad_cell(
+            &fit_cell(&entry.author, layout.author_width),
+            layout.author_width,
+        )),
+        Print(" | "),
+        Print(pad_cell(
+            &fit_cell(&entry.status, layout.status_width),
+            layout.status_width,
+        )),
+        Print(" | ")
     )
     .context("failed to queue merge picker row body")?;
     queue!(
         stdout,
         SetForegroundColor(mergeable_color),
-        Print(fit_cell(entry.mergeable_label(), mergeable_width)),
+        Print(pad_cell(entry.mergeable_label(), layout.mergeable_width)),
         SetForegroundColor(row_color),
-        Print("|\r\n"),
+        Print(" |\r\n"),
         ResetColor
     )
     .context("failed to queue merge picker row mergeable state")?;
     Ok(())
+}
+
+fn build_table_layout(
+    entries: &[PullRequestEntry],
+    terminal_width: usize,
+) -> PullRequestTableLayout {
+    let number_width = entries
+        .iter()
+        .map(|entry| entry.number.to_string().chars().count())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let target_width = entries
+        .iter()
+        .map(|entry| entry.target_branch.chars().count())
+        .max()
+        .unwrap_or(6)
+        .clamp(6, 14)
+        .max("Target".len());
+    let created_width = 16usize.max("Created".len());
+    let author_width = entries
+        .iter()
+        .map(|entry| entry.author.chars().count())
+        .max()
+        .unwrap_or(6)
+        .clamp(6, 14)
+        .max("Author".len());
+    let status_width = entries
+        .iter()
+        .map(|entry| entry.status.chars().count())
+        .max()
+        .unwrap_or(6)
+        .clamp(6, 12)
+        .max("Status".len());
+    let mergeable_width = "Mergeable".len();
+    let minimum_title_width = "PR Name".len().max(12);
+    let non_title_width =
+        number_width + target_width + created_width + author_width + status_width + mergeable_width;
+    let separators_width = 22usize;
+    let title_width = terminal_width
+        .saturating_sub(non_title_width + separators_width)
+        .max(minimum_title_width);
+
+    PullRequestTableLayout {
+        number_width,
+        title_width,
+        target_width,
+        created_width,
+        author_width,
+        status_width,
+        mergeable_width,
+    }
+}
+
+fn format_table_border(layout: &PullRequestTableLayout) -> String {
+    let mut line = String::from("+");
+    for width in [
+        layout.number_width,
+        layout.title_width,
+        layout.target_width,
+        layout.created_width,
+        layout.author_width,
+        layout.status_width,
+        layout.mergeable_width,
+    ] {
+        line.push_str(&"-".repeat(width + 2));
+        line.push('+');
+    }
+    line
+}
+
+fn format_table_header(layout: &PullRequestTableLayout) -> String {
+    format!(
+        "| {} | {} | {} | {} | {} | {} | {} |",
+        pad_cell("#", layout.number_width),
+        pad_cell("PR Name", layout.title_width),
+        pad_cell("Target", layout.target_width),
+        pad_cell("Created", layout.created_width),
+        pad_cell("Author", layout.author_width),
+        pad_cell("Status", layout.status_width),
+        pad_cell("Mergeable", layout.mergeable_width),
+    )
 }
 
 fn merge_pull_request(repo_root: &str, entry: &PullRequestEntry) -> Result<()> {
@@ -346,6 +451,18 @@ fn fit_cell(value: &str, width: usize) -> String {
     truncated
 }
 
+fn pad_cell(value: &str, width: usize) -> String {
+    let value_width = value.chars().count();
+    if value_width >= width {
+        return value.to_string();
+    }
+
+    let mut padded = String::with_capacity(width);
+    padded.push_str(value);
+    padded.push_str(&" ".repeat(width - value_width));
+    padded
+}
+
 fn digit_to_index(character: char) -> Option<usize> {
     character
         .to_digit(10)
@@ -354,6 +471,17 @@ fn digit_to_index(character: char) -> Option<usize> {
 }
 
 struct MergePickerRawModeGuard;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PullRequestTableLayout {
+    number_width: usize,
+    title_width: usize,
+    target_width: usize,
+    created_width: usize,
+    author_width: usize,
+    status_width: usize,
+    mergeable_width: usize,
+}
 
 impl MergePickerRawModeGuard {
     fn enter() -> Result<Self> {
@@ -557,5 +685,46 @@ mod tests {
         assert_eq!(digit_to_index('1'), Some(0));
         assert_eq!(digit_to_index('3'), Some(2));
         assert_eq!(digit_to_index('0'), None);
+    }
+
+    #[test]
+    fn format_table_header_uses_ascii_grid_and_aligned_columns() {
+        let layout = PullRequestTableLayout {
+            number_width: 2,
+            title_width: 12,
+            target_width: 8,
+            created_width: 16,
+            author_width: 10,
+            status_width: 8,
+            mergeable_width: 9,
+        };
+
+        assert_eq!(
+            format_table_header(&layout),
+            "| #  | PR Name      | Target   | Created          | Author     | Status   | Mergeable |"
+        );
+        assert_eq!(
+            format_table_border(&layout),
+            "+----+--------------+----------+------------------+------------+----------+-----------+"
+        );
+    }
+
+    #[test]
+    fn build_table_layout_keeps_mergeable_column_wide_enough_for_header() {
+        let entries = [PullRequestEntry {
+            number: 50,
+            title: "demo".to_string(),
+            target_branch: "0.15.x".to_string(),
+            created_label: "2026-04-25 17:06".to_string(),
+            created_at_unix: 1,
+            author: "comfy-home".to_string(),
+            status: "CLEAN".to_string(),
+            mergeable_state: "MERGEABLE".to_string(),
+        }];
+
+        let layout = build_table_layout(&entries, 100);
+
+        assert_eq!(layout.mergeable_width, "Mergeable".len());
+        assert!(layout.title_width >= 12);
     }
 }
