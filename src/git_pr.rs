@@ -17,7 +17,7 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute, queue,
     style::Print,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
 };
 
 use crate::{
@@ -259,44 +259,75 @@ fn edit_pr_body(body: &str, cancel: Option<GitCancellation>) -> Result<String> {
             continue;
         }
 
-        match key.code {
-            KeyCode::Char('e' | 'E') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        match editor.handle_key(key) {
+            EditorAction::None => {}
+            EditorAction::Save => {
                 drop(raw_mode);
                 return Ok(editor.into_string());
             }
-            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                bail!("cancelled by user");
-            }
-            _ => editor.handle_key(key),
+            EditorAction::Cancel => bail!("cancelled by user"),
         }
     }
 }
 
 fn render_editor_screen(editor: &PrBodyEditor) -> Result<()> {
     let mut stdout = io::stdout();
+    let (terminal_width, terminal_height) = size().context("failed to read terminal size")?;
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))
         .context("failed to render PR body editor")?;
+
+    let viewport = editor.viewport(terminal_height as usize);
 
     queue!(
         stdout,
         MoveToColumn(0),
         Print(format!(
-            "{}Edit PR body{}\r\nPress Ctrl+E to finish editing and return to preview. Press Ctrl+C to abort.\r\n\r\n",
+            "{}Edit PR body{}\r\nUse Down on the last line to reach <Save Changes> or <Cancel>. Press Enter to activate a button. Ctrl+C aborts.\r\n\r\n",
             ANSI_YELLOW, ANSI_RESET
         ))
     )
     .context("failed to queue PR body editor header")?;
 
-    for line in &editor.lines {
+    for line in editor.visible_lines(viewport) {
+        let line = truncate_for_terminal(line, terminal_width as usize);
         queue!(stdout, MoveToColumn(0), Print(line), Print("\r\n"))
             .context("failed to queue PR body editor content")?;
     }
 
-    let cursor_x = editor.cursor_col.min(u16::MAX as usize) as u16;
-    let cursor_y = (editor.cursor_row + 3).min(u16::MAX as usize) as u16;
+    let content_rows = terminal_height.saturating_sub(5) as usize;
+    for _ in editor.visible_lines(viewport).count()..content_rows {
+        queue!(stdout, MoveToColumn(0), Print("\r\n"))
+            .context("failed to queue PR body editor spacer")?;
+    }
+
+    let save_button = editor.render_button(EditorFocus::Save);
+    let cancel_button = editor.render_button(EditorFocus::Cancel);
+    queue!(
+        stdout,
+        MoveToColumn(0),
+        Print("\r\n"),
+        Print(format!("{}  {}\r\n", save_button, cancel_button))
+    )
+    .context("failed to queue PR body editor buttons")?;
+
+    let (cursor_x, cursor_y) = editor.cursor_position(viewport, terminal_width as usize);
     execute!(stdout, MoveTo(cursor_x, cursor_y)).context("failed to position PR editor cursor")?;
     stdout.flush().context("failed to flush PR body editor")?;
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorFocus {
+    Body,
+    Save,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorAction {
+    None,
+    Save,
+    Cancel,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -304,6 +335,7 @@ struct PrBodyEditor {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_col: usize,
+    focus: EditorFocus,
 }
 
 impl PrBodyEditor {
@@ -319,6 +351,7 @@ impl PrBodyEditor {
             lines,
             cursor_row,
             cursor_col,
+            focus: EditorFocus::Body,
         }
     }
 
@@ -326,7 +359,18 @@ impl PrBodyEditor {
         self.lines.join("\n")
     }
 
-    fn handle_key(&mut self, key: KeyEvent) {
+    fn handle_key(&mut self, key: KeyEvent) -> EditorAction {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return EditorAction::Cancel;
+        }
+
+        match self.focus {
+            EditorFocus::Body => self.handle_body_key(key),
+            EditorFocus::Save | EditorFocus::Cancel => self.handle_button_key(key),
+        }
+    }
+
+    fn handle_body_key(&mut self, key: KeyEvent) -> EditorAction {
         match key.code {
             KeyCode::Char(character)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -341,10 +385,100 @@ impl PrBodyEditor {
             KeyCode::Left => self.move_left(),
             KeyCode::Right => self.move_right(),
             KeyCode::Up => self.move_up(),
-            KeyCode::Down => self.move_down(),
+            KeyCode::Down => {
+                if self.cursor_row + 1 >= self.lines.len() {
+                    self.focus = EditorFocus::Save;
+                } else {
+                    self.move_down();
+                }
+            }
             KeyCode::Home => self.cursor_col = 0,
             KeyCode::End => self.cursor_col = line_char_len(&self.lines[self.cursor_row]),
             _ => {}
+        }
+
+        EditorAction::None
+    }
+
+    fn handle_button_key(&mut self, key: KeyEvent) -> EditorAction {
+        match key.code {
+            KeyCode::Tab | KeyCode::Right => {
+                self.focus = match self.focus {
+                    EditorFocus::Save => EditorFocus::Cancel,
+                    EditorFocus::Cancel => EditorFocus::Body,
+                    EditorFocus::Body => EditorFocus::Save,
+                };
+            }
+            KeyCode::BackTab | KeyCode::Left => {
+                self.focus = match self.focus {
+                    EditorFocus::Save => EditorFocus::Body,
+                    EditorFocus::Cancel => EditorFocus::Save,
+                    EditorFocus::Body => EditorFocus::Cancel,
+                };
+            }
+            KeyCode::Up | KeyCode::Esc => self.focus = EditorFocus::Body,
+            KeyCode::Enter => {
+                return match self.focus {
+                    EditorFocus::Save => EditorAction::Save,
+                    EditorFocus::Cancel => EditorAction::Cancel,
+                    EditorFocus::Body => EditorAction::None,
+                };
+            }
+            _ => {}
+        }
+
+        EditorAction::None
+    }
+
+    fn viewport(&self, terminal_height: usize) -> EditorViewport {
+        let content_rows = terminal_height.saturating_sub(5).max(1);
+        let start_row = self.cursor_row.saturating_sub(content_rows.saturating_sub(1));
+        let start_row = start_row.min(self.lines.len().saturating_sub(1));
+        let available_rows = self.lines.len().saturating_sub(start_row);
+        let visible_rows = available_rows.min(content_rows);
+        EditorViewport {
+            start_row,
+            visible_rows,
+            content_rows,
+        }
+    }
+
+    fn visible_lines<'a>(&'a self, viewport: EditorViewport) -> impl Iterator<Item = &'a str> + 'a {
+        self.lines
+            .iter()
+            .skip(viewport.start_row)
+            .take(viewport.visible_rows)
+            .map(String::as_str)
+    }
+
+    fn cursor_position(&self, viewport: EditorViewport, terminal_width: usize) -> (u16, u16) {
+        match self.focus {
+            EditorFocus::Body => {
+                let cursor_x = self.cursor_col.min(terminal_width.saturating_sub(1)) as u16;
+                let cursor_y = (self.cursor_row.saturating_sub(viewport.start_row) + 2)
+                    .min(u16::MAX as usize) as u16;
+                (cursor_x, cursor_y)
+            }
+            EditorFocus::Save => (2, (viewport.content_rows + 4).min(u16::MAX as usize) as u16),
+            EditorFocus::Cancel => {
+                let save_width = self.render_button(EditorFocus::Save).chars().count();
+                let cursor_x = (save_width + 4).min(u16::MAX as usize) as u16;
+                (cursor_x, (viewport.content_rows + 4).min(u16::MAX as usize) as u16)
+            }
+        }
+    }
+
+    fn render_button(&self, button: EditorFocus) -> String {
+        let (label, focused) = match button {
+            EditorFocus::Save => ("<Save Changes>", self.focus == EditorFocus::Save),
+            EditorFocus::Cancel => ("<Cancel>", self.focus == EditorFocus::Cancel),
+            EditorFocus::Body => return String::new(),
+        };
+
+        if focused {
+            format!("{}{}{}", ANSI_YELLOW, label, ANSI_RESET)
+        } else {
+            label.to_string()
         }
     }
 
@@ -460,6 +594,21 @@ fn char_to_byte_index(value: &str, char_index: usize) -> usize {
 
 fn line_char_len(value: &str) -> usize {
     value.chars().count()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EditorViewport {
+    start_row: usize,
+    visible_rows: usize,
+    content_rows: usize,
+}
+
+fn truncate_for_terminal(value: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+
+    value.chars().take(width).collect()
 }
 
 fn build_pr_create_args(
@@ -880,5 +1029,28 @@ mod tests {
         editor.insert_str("middle");
 
         assert_eq!(editor.into_string(), "first\nmiddle\nsecond");
+    }
+
+    #[test]
+    fn pr_body_editor_scrolls_cursor_into_view() {
+        let mut editor = PrBodyEditor::new("one\ntwo\nthree\nfour\nfive\nsix");
+        editor.cursor_row = 5;
+        editor.cursor_col = 2;
+
+        let viewport = editor.viewport(8);
+
+        assert_eq!(viewport.start_row, 3);
+        assert_eq!(viewport.visible_rows, 3);
+        assert_eq!(editor.cursor_position(viewport, 80), (2, 4));
+    }
+
+    #[test]
+    fn pr_body_editor_buttons_allow_save_without_ctrl_shortcut() {
+        let mut editor = PrBodyEditor::new("body");
+        editor.cursor_row = editor.lines.len().saturating_sub(1);
+
+        assert_eq!(editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)), EditorAction::None);
+        assert_eq!(editor.focus, EditorFocus::Save);
+        assert_eq!(editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), EditorAction::Save);
     }
 }
