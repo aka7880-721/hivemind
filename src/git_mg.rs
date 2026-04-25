@@ -21,11 +21,29 @@ use crossterm::{
 };
 use serde::Deserialize;
 
-use crate::git::GitCancellation;
+use crate::git::{
+    GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
+    ensure_local_branch_published_and_in_sync_with_cancel,
+};
 
 const PR_LIST_LIMIT: usize = 200;
+const GH_PR_FIELDS: &str = "number,title,baseRefName,createdAt,author,mergeable,mergeStateStatus";
 
 pub(crate) fn run_merge(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
+    let current_branch = current_branch_with_cancel(repo_root, cancel.clone())?;
+    if current_branch.starts_with("detached (") {
+        bail!("cannot run cg merge from a detached HEAD");
+    }
+
+    ensure_clean_worktree_with_cancel(repo_root, "cg merge", cancel.clone())?;
+    ensure_local_branch_published_and_in_sync_with_cancel(
+        repo_root,
+        &current_branch,
+        "current branch",
+        "cg merge",
+        cancel.clone(),
+    )?;
+
     let entries = fetch_open_pull_requests(repo_root, cancel.clone())?;
     let selected = prompt_pull_request_selection(&entries, cancel)?;
     merge_pull_request(repo_root, &selected)
@@ -48,7 +66,7 @@ fn fetch_open_pull_requests(
         "--limit".to_string(),
         limit,
         "--json".to_string(),
-        "number,title,baseRefName,createdAt,author,mergeable,mergeStateStatus".to_string(),
+        GH_PR_FIELDS.to_string(),
     ];
     let output = Command::new("gh")
         .current_dir(repo_root)
@@ -89,6 +107,34 @@ fn fetch_open_pull_requests(
     }
 
     Ok(entries)
+}
+
+fn fetch_pull_request(repo_root: &str, pr_number: u64) -> Result<PullRequestEntry> {
+    let args = build_pull_request_view_args(pr_number);
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .args(args.iter().map(String::as_str))
+        .output()
+        .context("failed to execute gh pr view")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !stderr.is_empty() {
+            bail!("gh pr view failed: {}", stderr)
+        }
+        if !stdout.is_empty() {
+            bail!("gh pr view failed: {}", stdout)
+        }
+        bail!(
+            "gh pr view failed with exit code {:?}",
+            output.status.code()
+        )
+    }
+
+    let entry = serde_json::from_slice::<GhPullRequest>(&output.stdout)
+        .context("failed to parse gh pr view output")?;
+    Ok(PullRequestEntry::from_gh(entry))
 }
 
 fn prompt_pull_request_selection(
@@ -384,8 +430,18 @@ fn format_table_header(layout: &PullRequestTableLayout) -> String {
 }
 
 fn merge_pull_request(repo_root: &str, entry: &PullRequestEntry) -> Result<()> {
-    let subject = build_merge_commit_subject(entry.number);
-    let args = build_merge_args(entry.number, &subject);
+    let refreshed = fetch_pull_request(repo_root, entry.number)?;
+    if !refreshed.is_mergeable() {
+        bail!(
+            "PR #{} is no longer mergeable (status: {}, mergeable: {}); refresh the list and resolve it before running cg merge",
+            refreshed.number,
+            refreshed.status,
+            refreshed.mergeable_state
+        )
+    }
+
+    let subject = build_merge_commit_subject(refreshed.number);
+    let args = build_merge_args(refreshed.number, &subject);
     let output = Command::new("gh")
         .current_dir(repo_root)
         .args(args.iter().map(String::as_str))
@@ -416,6 +472,16 @@ fn merge_pull_request(repo_root: &str, entry: &PullRequestEntry) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn build_pull_request_view_args(pr_number: u64) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "view".to_string(),
+        pr_number.to_string(),
+        "--json".to_string(),
+        GH_PR_FIELDS.to_string(),
+    ]
 }
 
 fn build_merge_commit_subject(pr_number: u64) -> String {
@@ -603,6 +669,25 @@ mod tests {
                 "--merge",
                 "--subject",
                 "Merge pull request #42 (via ComfyGit)",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn build_pull_request_view_args_requests_current_mergeability_fields() {
+        let args = build_pull_request_view_args(42);
+
+        assert_eq!(
+            args,
+            vec![
+                "pr",
+                "view",
+                "42",
+                "--json",
+                "number,title,baseRefName,createdAt,author,mergeable,mergeStateStatus",
             ]
             .into_iter()
             .map(str::to_string)

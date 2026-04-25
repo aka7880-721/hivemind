@@ -23,7 +23,8 @@ use crossterm::{
 use crate::{
     changelog::{pr_changelog_gen, write_temp_changelog_markdown},
     git::{
-        GitCancellation, current_branch_with_cancel, resolve_main_branch_name,
+        GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
+        ensure_local_branch_published_and_in_sync_with_cancel, resolve_main_branch_name,
         run_git_checked_with_cancel, split_output_lines,
     },
 };
@@ -61,6 +62,22 @@ pub(crate) fn run_pr(
             target_branch
         );
     }
+
+    ensure_clean_worktree_with_cancel(repo_root, "cg pr", cancel.clone())?;
+    ensure_local_branch_published_and_in_sync_with_cancel(
+        repo_root,
+        &current_branch,
+        "current branch",
+        "cg pr",
+        cancel.clone(),
+    )?;
+    ensure_local_branch_published_and_in_sync_with_cancel(
+        repo_root,
+        &target_branch,
+        "target branch",
+        "cg pr",
+        cancel.clone(),
+    )?;
 
     let title = format!("{} (via ComfyGit)", current_branch);
     let body = build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?;
