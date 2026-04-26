@@ -824,12 +824,11 @@ fn prompt_patch_release_line_branch(
 }
 
 fn semver_release_version_from_branch_name(branch_name: &str) -> Option<String> {
-    let normalized = branch_name
-        .trim()
-        .trim_start_matches('v')
+    let normalized = branch_name.trim().trim_start_matches('v');
+    let normalized = normalized
         .split_once("--")
         .map(|(base, _)| base)
-        .unwrap_or(branch_name.trim());
+        .unwrap_or(normalized);
     let release_line = normalized.strip_suffix(".x")?;
     let mut parts = release_line.split('.');
     let major = parts.next()?.parse::<u32>().ok()?;
@@ -841,12 +840,11 @@ fn semver_release_version_from_branch_name(branch_name: &str) -> Option<String> 
 }
 
 fn semver_release_line_branch_from_dev_branch(branch_name: &str) -> Option<String> {
-    let normalized = branch_name
-        .trim()
-        .trim_start_matches('v')
+    let normalized = branch_name.trim().trim_start_matches('v');
+    let normalized = normalized
         .split_once("--")
         .map(|(base, _)| base)
-        .unwrap_or(branch_name.trim());
+        .unwrap_or(normalized);
     let release_version = normalized.strip_suffix("-dev")?;
     let mut parts = release_version.split('.');
     let major = parts.next()?.parse::<u32>().ok()?;
@@ -3219,6 +3217,18 @@ mod tests {
         assert_eq!(
             semver_release_version_from_branch_name("0.2.x--specific"),
             Some("0.2.0".to_string())
+        );
+    }
+
+    #[test]
+    fn semver_release_line_branch_from_dev_branch_handles_plain_and_specific_names() {
+        assert_eq!(
+            semver_release_line_branch_from_dev_branch("v0.4.1-dev"),
+            Some("0.4.x".to_string())
+        );
+        assert_eq!(
+            semver_release_line_branch_from_dev_branch("v0.4.1-dev--specific"),
+            Some("0.4.x".to_string())
         );
     }
 
