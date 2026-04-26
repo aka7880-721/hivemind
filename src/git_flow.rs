@@ -9,7 +9,8 @@
 use super::*;
 use crate::git::{
     GitCancellation, current_branch_with_cancel, is_mainline_branch_name,
-    run_git_checked_with_cancel, switch_or_create_branch, switch_to_main_branch,
+    publish_branch_with_upstream, resolve_push_remote_name, run_git_checked_with_cancel,
+    switch_or_create_branch, switch_to_main_branch,
 };
 
 #[derive(Clone)]
@@ -119,9 +120,11 @@ pub(crate) fn apply_repo_bump_workflow(
             if workflow.requires_branch() {
                 let branch_name = trimmed_branch_name
                     .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
-                run_git_checked(
+                let _ = publish_branch_with_upstream(
                     &operation.repo_root,
-                    &["push", "-u", &push_remote, branch_name],
+                    branch_name,
+                    Some(remote_spec),
+                    None,
                 )?;
             } else {
                 run_git_checked(&operation.repo_root, &["push", &push_remote])?;
@@ -133,41 +136,6 @@ pub(crate) fn apply_repo_bump_workflow(
     }
 
     Ok(())
-}
-
-fn resolve_push_remote_name(repo_root: &str, configured_remote: &str) -> Result<String> {
-    let configured_remote = configured_remote.trim();
-    if configured_remote.is_empty() {
-        bail!("no remote is configured for this project")
-    }
-
-    let remotes = split_output_lines(&run_git_checked(repo_root, &["remote"])?);
-    if remotes.iter().any(|remote| remote == configured_remote) {
-        return Ok(configured_remote.to_string());
-    }
-
-    for remote in &remotes {
-        let remote_url = run_git_checked(repo_root, &["remote", "get-url", remote])?
-            .trim()
-            .to_string();
-        if remote_url == configured_remote {
-            return Ok(remote.clone());
-        }
-    }
-
-    if remotes.len() == 1 {
-        return Ok(remotes[0].clone());
-    }
-
-    if let Some(origin) = remotes.iter().find(|remote| remote.as_str() == "origin") {
-        return Ok(origin.clone());
-    }
-
-    bail!(
-        "configured remote '{}' does not match any git remote name or URL in {}",
-        configured_remote,
-        repo_root
-    )
 }
 
 pub(super) fn collect_non_main_repo_states_with_cancel(

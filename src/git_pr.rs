@@ -19,6 +19,7 @@ use crossterm::{
     style::Print,
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
 };
+use serde::Deserialize;
 
 use crate::{
     changelog::{pr_changelog_gen, write_temp_changelog_markdown},
@@ -32,6 +33,14 @@ use crate::{
 const PR_PREVIEW_SECONDS: u64 = 30;
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_RESET: &str = "\x1b[0m";
+const GH_CREATED_PR_LOOKUP_FIELDS: &str = "number,url,baseRefName";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CreatedPullRequest {
+    pub(crate) number: u64,
+    pub(crate) target_branch: String,
+    pub(crate) url: String,
+}
 
 pub(crate) fn run_pr(
     repo_root: &str,
@@ -39,6 +48,15 @@ pub(crate) fn run_pr(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
+    run_pr_and_capture(repo_root, force_main, custom_main_branch, cancel).map(|_| ())
+}
+
+pub(crate) fn run_pr_and_capture(
+    repo_root: &str,
+    force_main: bool,
+    custom_main_branch: Option<&str>,
+    cancel: Option<GitCancellation>,
+) -> Result<CreatedPullRequest> {
     let current_branch = current_branch_with_cancel(repo_root, cancel.clone())?;
     if current_branch.starts_with("detached (") {
         bail!("cannot create a PR from a detached HEAD");
@@ -64,20 +82,22 @@ pub(crate) fn run_pr(
     }
 
     ensure_clean_worktree_with_cancel(repo_root, "cg pr", cancel.clone())?;
-    ensure_local_branch_published_and_in_sync_with_cancel(
+    let current_upstream_ref = ensure_local_branch_published_and_in_sync_with_cancel(
         repo_root,
         &current_branch,
         "current branch",
         "cg pr",
         cancel.clone(),
     )?;
-    ensure_local_branch_published_and_in_sync_with_cancel(
+    let target_upstream_ref = ensure_local_branch_published_and_in_sync_with_cancel(
         repo_root,
         &target_branch,
         "target branch",
         "cg pr",
         cancel.clone(),
     )?;
+    let current_pr_branch = pull_request_branch_name_from_upstream_ref(&current_upstream_ref)?;
+    let target_pr_branch = pull_request_branch_name_from_upstream_ref(&target_upstream_ref)?;
 
     let title = format!("{} (via ComfyGit)", current_branch);
     let body = build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?;
@@ -89,9 +109,14 @@ pub(crate) fn run_pr(
         cancel.clone(),
     )?;
     let body_path = write_temp_changelog_markdown(repo_root, &body)?;
-    let args = build_pr_create_args(&target_branch, &current_branch, &title, &body_path);
-    create_pr(repo_root, &args)?;
-    Ok(())
+    let args = build_pr_create_args(&target_pr_branch, &current_pr_branch, &title, &body_path);
+    let create_output = create_pr(repo_root, &args)?;
+    resolve_created_pull_request(
+        repo_root,
+        &current_pr_branch,
+        &target_branch,
+        &create_output,
+    )
 }
 
 fn build_pr_body(
@@ -692,7 +717,7 @@ fn build_pr_create_args(
     ]
 }
 
-fn create_pr(repo_root: &str, args: &[String]) -> Result<()> {
+fn create_pr(repo_root: &str, args: &[String]) -> Result<String> {
     let output = Command::new("gh")
         .current_dir(repo_root)
         .args(args)
@@ -722,7 +747,119 @@ fn create_pr(repo_root: &str, args: &[String]) -> Result<()> {
         println!("{}", stdout);
     }
 
-    Ok(())
+    Ok(stdout)
+}
+
+fn resolve_created_pull_request(
+    repo_root: &str,
+    current_branch: &str,
+    target_branch: &str,
+    create_output: &str,
+) -> Result<CreatedPullRequest> {
+    if let Some(url) = find_pull_request_url_in_output(create_output)
+        && let Some(number) = pull_request_number_from_url(&url)
+    {
+        return Ok(CreatedPullRequest {
+            number,
+            target_branch: target_branch.to_string(),
+            url,
+        });
+    }
+
+    lookup_created_pull_request(repo_root, current_branch, target_branch)
+}
+
+fn find_pull_request_url_in_output(output: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .rev()
+        .find(|token| token.starts_with("http://") || token.starts_with("https://"))
+        .map(|token| token.trim_end_matches('/').to_string())
+}
+
+fn pull_request_number_from_url(url: &str) -> Option<u64> {
+    url.rsplit('/')
+        .next()
+        .and_then(|segment| segment.parse::<u64>().ok())
+}
+
+fn pull_request_branch_name_from_upstream_ref(upstream_ref: &str) -> Result<String> {
+    upstream_ref
+        .split_once('/')
+        .map(|(_, branch_name)| branch_name.trim())
+        .filter(|branch_name| !branch_name.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "upstream ref '{}' is not a valid remote-tracking branch",
+                upstream_ref
+            )
+        })
+}
+
+fn lookup_created_pull_request(
+    repo_root: &str,
+    current_branch: &str,
+    target_branch: &str,
+) -> Result<CreatedPullRequest> {
+    let output = Command::new("gh")
+        .current_dir(repo_root)
+        .args([
+            "pr",
+            "list",
+            "--head",
+            current_branch,
+            "--state",
+            "open",
+            "--limit",
+            "20",
+            "--json",
+            GH_CREATED_PR_LOOKUP_FIELDS,
+        ])
+        .output()
+        .context("failed to execute gh pr list for the newly created branch")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !stderr.is_empty() {
+            bail!("gh pr list failed after PR creation: {}", stderr);
+        }
+        if !stdout.is_empty() {
+            bail!("gh pr list failed after PR creation: {}", stdout);
+        }
+        bail!(
+            "gh pr list failed after PR creation with exit code {:?}",
+            output.status.code()
+        );
+    }
+
+    let listed = serde_json::from_slice::<Vec<CreatedPullRequestLookup>>(&output.stdout)
+        .context("failed to parse gh pr list output for the newly created branch")?;
+    let matched = listed
+        .into_iter()
+        .find(|pull_request| pull_request.base_ref_name == target_branch)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "created PR for branch '{}' targeting '{}' could not be resolved",
+                current_branch,
+                target_branch
+            )
+        })?;
+
+    Ok(CreatedPullRequest {
+        number: matched.number,
+        target_branch: target_branch.to_string(),
+        url: matched.url,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatedPullRequestLookup {
+    number: u64,
+    url: String,
+    base_ref_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1063,6 +1200,47 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn find_pull_request_url_in_output_prefers_last_http_link() {
+        let output = "created\nhttps://github.com/comfy-home/ComfyGit/pull/67\n";
+
+        assert_eq!(
+            find_pull_request_url_in_output(output).expect("extract PR URL"),
+            "https://github.com/comfy-home/ComfyGit/pull/67"
+        );
+    }
+
+    #[test]
+    fn pull_request_number_from_url_reads_last_path_segment() {
+        assert_eq!(
+            pull_request_number_from_url("https://github.com/comfy-home/ComfyGit/pull/67"),
+            Some(67)
+        );
+        assert_eq!(
+            pull_request_number_from_url("https://github.com/foo/bar"),
+            None
+        );
+    }
+
+    #[test]
+    fn pull_request_branch_name_from_upstream_ref_uses_remote_branch_tail() {
+        assert_eq!(
+            pull_request_branch_name_from_upstream_ref("origin/main").expect("main branch tail"),
+            "main"
+        );
+        assert_eq!(
+            pull_request_branch_name_from_upstream_ref("origin/release/0.16.x")
+                .expect("release branch tail"),
+            "release/0.16.x"
+        );
+    }
+
+    #[test]
+    fn pull_request_branch_name_from_upstream_ref_rejects_invalid_refs() {
+        assert!(pull_request_branch_name_from_upstream_ref("main").is_err());
+        assert!(pull_request_branch_name_from_upstream_ref("origin/").is_err());
     }
 
     #[test]
