@@ -4,13 +4,21 @@
 // Licensed under the ComfyGit License v1.2
 //
 // For details, see the LICENSE file in the repository root.
-use std::{process::Command, thread, time::Duration};
+use std::{
+    io::{self, Write},
+    process::Command,
+    thread,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::{
-    git::{GitCancellation, run_git_checked_with_cancel, switch_to_existing_branch},
+    git::{
+        GitCancellation, publish_branch_with_upstream, run_git_checked_with_cancel,
+        switch_to_existing_branch,
+    },
     git_mg::run_merge_for_pull_request,
     git_pr::run_pr_and_capture,
 };
@@ -24,7 +32,22 @@ pub(crate) fn run_branch_done(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
-    let created_pr = run_pr_and_capture(repo_root, false, custom_main_branch, cancel.clone())?;
+    let created_pr = match run_pr_and_capture(repo_root, false, custom_main_branch, cancel.clone())
+    {
+        Ok(created_pr) => created_pr,
+        Err(error) => {
+            let Some(target_branch) = unpublished_target_branch_name_from_error(&error) else {
+                return Err(error);
+            };
+
+            if !prompt_publish_target_branch(&target_branch)? {
+                bail!("Cancelled by user")
+            }
+
+            let _ = publish_branch_with_upstream(repo_root, &target_branch, None, cancel.clone())?;
+            run_pr_and_capture(repo_root, false, custom_main_branch, cancel.clone())?
+        }
+    };
     ensure_pull_request_mergeable(repo_root, created_pr.number)?;
     run_merge_for_pull_request(repo_root, created_pr.number, cancel.clone())?;
     switch_to_existing_branch(repo_root, &created_pr.target_branch)?;
@@ -37,6 +60,44 @@ pub(crate) fn run_branch_done(
     );
     println!();
     Ok(())
+}
+
+fn unpublished_target_branch_name_from_error(error: &anyhow::Error) -> Option<String> {
+    let message = error.to_string();
+    let prefix = "target branch '";
+    let suffix = "' is not published to a tracked remote branch; push it with upstream tracking before running cg pr";
+    let start = message.find(prefix)? + prefix.len();
+    let remainder = &message[start..];
+    let end = remainder.find(suffix)?;
+    Some(remainder[..end].to_string())
+}
+
+fn prompt_publish_target_branch(branch_name: &str) -> Result<bool> {
+    println!();
+    println!(
+        "target branch '{}' is not published to a tracked remote branch; push it with upstream tracking before running cg pr",
+        branch_name
+    );
+    println!("1. Publish branch {} and continue", branch_name);
+    println!("2. Abort");
+
+    loop {
+        print!("Choose 1 or 2: ");
+        io::stdout()
+            .flush()
+            .context("failed to flush publish prompt")?;
+
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read publish prompt response")?;
+
+        match answer.trim() {
+            "1" => return Ok(true),
+            "2" => return Ok(false),
+            _ => println!("Please enter 1 or 2."),
+        }
+    }
 }
 
 fn ensure_pull_request_mergeable(repo_root: &str, pr_number: u64) -> Result<()> {
@@ -165,6 +226,18 @@ mod tests {
         assert_eq!(
             MERGEABILITY_UNKNOWN_MESSAGE,
             "Ooops, something's not right. Check this PR on GitHub for more info..."
+        );
+    }
+
+    #[test]
+    fn unpublished_target_branch_error_parser_extracts_branch_name() {
+        let error = anyhow::anyhow!(
+            "target branch '0.1.x' is not published to a tracked remote branch; push it with upstream tracking before running cg pr"
+        );
+
+        assert_eq!(
+            unpublished_target_branch_name_from_error(&error).as_deref(),
+            Some("0.1.x")
         );
     }
 }
