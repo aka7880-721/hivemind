@@ -20,7 +20,7 @@ use crate::{
         GitCancellation, current_branch_with_cancel, sorted_local_tags_with_cancel,
         switch_or_create_branch,
     },
-    git_br::{is_release_line_branch, suggest_branch_name_options},
+    git_br::{BranchNameSuggestionRequest, is_release_line_branch, suggest_branch_name_options},
     git_stt::format_relative_git_timestamp,
     targets::shared_bump_version,
     versioning::BumpAction,
@@ -1372,16 +1372,16 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
             &non_main_repo_states,
             scope.scheme,
         )?;
-        let branch_name_options = suggest_branch_name_options(
-            scope.scheme,
-            BumpAction::Auto,
-            &branch_prompt_source.current_branch,
-            &current_version,
-            &dialog.next_version,
-            branch_prompt_source.custom_main_branch.as_deref(),
-            &[],
-            Local::now().date_naive(),
-        )?;
+        let branch_name_options = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: scope.scheme,
+            action: BumpAction::Auto,
+            current_branch: &branch_prompt_source.current_branch,
+            current_version: &current_version,
+            next_version: &dialog.next_version,
+            custom_main_branch: branch_prompt_source.custom_main_branch.as_deref(),
+            existing_branches: &[],
+            today: Local::now().date_naive(),
+        })?;
         app.overview_branch_bump_dialog = Some(OverviewBranchBumpDialog::new(
             dialog.project_name,
             dialog.scope_label,
