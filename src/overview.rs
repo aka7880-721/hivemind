@@ -23,6 +23,7 @@ use crate::{
     git_br::{is_release_line_branch, suggest_branch_name_options},
     git_stt::format_relative_git_timestamp,
     targets::shared_bump_version,
+    versioning::BumpAction,
 };
 use chrono::Local;
 use std::sync::Arc;
@@ -1373,10 +1374,12 @@ pub(super) fn confirm_overview_bump_workflow(app: &mut App) -> Result<()> {
         )?;
         let branch_name_options = suggest_branch_name_options(
             scope.scheme,
+            BumpAction::Auto,
             &branch_prompt_source.current_branch,
             &current_version,
             &dialog.next_version,
             branch_prompt_source.custom_main_branch.as_deref(),
+            &[],
             Local::now().date_naive(),
         )?;
         app.overview_branch_bump_dialog = Some(OverviewBranchBumpDialog::new(

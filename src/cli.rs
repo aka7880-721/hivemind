@@ -45,7 +45,10 @@ use crate::{
         run_git_checked, run_git_checked_owned_with_cancel, run_git_checked_with_cancel,
         split_output_lines, switch_to_existing_branch, switch_to_main_branch,
     },
-    git_br::{BranchNameOption, is_release_line_branch, suggest_branch_name_options},
+    git_br::{
+        BranchNameOption, fixed_branch_name_option_with_value, is_release_line_branch,
+        suggest_branch_name_options,
+    },
     git_br_end::run_branch_done,
     git_mg::{run_merge, run_merge_for_pull_request},
     git_pr::run_pr,
@@ -592,20 +595,10 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
         .ok_or_else(|| anyhow!("the selected scope no longer exists"))?;
     ensure_action_supported(scheme, action)?;
 
-    let current_version =
-        if project.project_type == ProjectType::AllInOne || project.unified_versioning {
-            shared_bump_version(&scopes).ok_or_else(|| {
-                anyhow!("the project has mixed target versions; unify them before running cg bmp")
-            })?
-        } else {
-            scopes[scope_index]
-                .current_version
-                .clone()
-                .ok_or_else(|| anyhow!("the selected scope has mixed target versions"))?
-        };
-
-    let next_version = scheme
-        .bump(&current_version, action, Local::now().date_naive())
+    let today = Local::now().date_naive();
+    let mut current_version = resolve_bump_current_version(project, &scopes, scope_index)?;
+    let mut next_version = scheme
+        .bump(&current_version, action, today)
         .map_err(anyhow::Error::msg)?;
 
     let mut git_contexts = Vec::new();
@@ -658,15 +651,37 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
             &non_main_repo_states,
             scheme,
         )?;
-        let branch_name_options = suggest_branch_name_options(
+        if should_route_patch_bump_via_release_line(
+            action,
             scheme,
             &branch_prompt_source.current_branch,
-            &current_version,
-            &next_version,
             branch_prompt_source.custom_main_branch.as_deref(),
-            Local::now().date_naive(),
-        )?;
-        Some(prompt_branch_name(&branch_name_options)?)
+        ) {
+            let release_line_branch = prompt_patch_release_line_branch(
+                &branch_prompt_source.unmerged_release_line_branches,
+            )?;
+            switch_repo_operations_to_existing_branch(&repo_operations, &release_line_branch)?;
+
+            let refreshed_scopes = collect_bump_scopes(&resolved_project)?;
+            current_version =
+                resolve_bump_current_version(project, &refreshed_scopes, scope_index)?;
+            next_version = scheme
+                .bump(&current_version, action, today)
+                .map_err(anyhow::Error::msg)?;
+            Some(format!("v{}-dev", next_version))
+        } else {
+            let branch_name_options = suggest_branch_name_options(
+                scheme,
+                action,
+                &branch_prompt_source.current_branch,
+                &current_version,
+                &next_version,
+                branch_prompt_source.custom_main_branch.as_deref(),
+                &branch_prompt_source.existing_branches,
+                today,
+            )?;
+            Some(prompt_branch_name(&branch_name_options)?)
+        }
     } else {
         None
     };
@@ -713,6 +728,64 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+fn resolve_bump_current_version(
+    project: &ProjectConfig,
+    scopes: &[crate::targets::BumpScope],
+    scope_index: usize,
+) -> Result<String> {
+    if project.project_type == ProjectType::AllInOne || project.unified_versioning {
+        shared_bump_version(scopes).ok_or_else(|| {
+            anyhow!("the project has mixed target versions; unify them before running cg bmp")
+        })
+    } else {
+        scopes[scope_index]
+            .current_version
+            .clone()
+            .ok_or_else(|| anyhow!("the selected scope has mixed target versions"))
+    }
+}
+
+fn should_route_patch_bump_via_release_line(
+    action: BumpAction,
+    scheme: VersionScheme,
+    current_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> bool {
+    scheme == VersionScheme::SemVer
+        && action == BumpAction::Patch
+        && crate::git::is_mainline_branch_name(current_branch, custom_main_branch)
+}
+
+fn prompt_patch_release_line_branch(release_line_branches: &[String]) -> Result<String> {
+    if release_line_branches.is_empty() {
+        bail!(
+            "patch bumps from the main branch require at least one unmerged local '.x' release branch; switch to that release line first or create one before running cg bmp patch 4/5"
+        )
+    }
+
+    let options = release_line_branches
+        .iter()
+        .map(|branch| {
+            fixed_branch_name_option_with_value(
+                format!("{} -> create the next -dev patch branch", branch),
+                branch.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    prompt_branch_name(&options)
+}
+
+fn switch_repo_operations_to_existing_branch(
+    operations: &[crate::app::RepoBumpOperation],
+    branch_name: &str,
+) -> Result<()> {
+    for operation in operations {
+        switch_to_existing_branch(&operation.repo_root, branch_name)?;
+    }
     Ok(())
 }
 
@@ -1501,6 +1574,8 @@ fn parse_cli_bump_option(value: Option<&str>) -> Result<OverviewBumpWorkflow> {
 struct BranchPromptSource {
     current_branch: String,
     custom_main_branch: Option<String>,
+    existing_branches: Vec<String>,
+    unmerged_release_line_branches: Vec<String>,
 }
 
 struct CliRawModeGuard;
@@ -1546,10 +1621,60 @@ fn resolve_branch_prompt_source(
         .map(|state| state.current_branch.clone())
         .unwrap_or(current_branch_with_cancel(preferred_repo_root, None)?);
 
+    let mut existing_branches = Vec::new();
+    for repo_root in repo_operations
+        .iter()
+        .map(|operation| operation.repo_root.as_str())
+        .chain(std::iter::once(preferred_repo_root))
+    {
+        for branch in list_local_branch_refs_with_cancel(repo_root, None)?
+            .into_iter()
+            .map(|branch| branch.name)
+        {
+            if !existing_branches
+                .iter()
+                .any(|candidate: &String| candidate.eq_ignore_ascii_case(&branch))
+            {
+                existing_branches.push(branch);
+            }
+        }
+    }
+    existing_branches.sort_by_cached_key(|branch| normalize_lookup(branch));
+
+    let main_branch =
+        resolve_main_branch_name(preferred_repo_root, context.main_branch_name.as_deref())?;
+    let mut unmerged_release_line_branches = split_output_lines(&run_git_checked(
+        preferred_repo_root,
+        &[
+            "branch",
+            "--format=%(refname:short)",
+            "--no-merged",
+            &main_branch,
+        ],
+    )?)
+    .into_iter()
+    .filter(|branch| is_release_line_branch(scheme, branch))
+    .collect::<Vec<_>>();
+    unmerged_release_line_branches
+        .sort_by_cached_key(|branch| normalize_release_line_branch(branch));
+    unmerged_release_line_branches.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+
     Ok(BranchPromptSource {
         current_branch,
         custom_main_branch: context.main_branch_name.clone(),
+        existing_branches,
+        unmerged_release_line_branches,
     })
+}
+
+fn normalize_release_line_branch(branch_name: &str) -> Vec<u32> {
+    branch_name
+        .trim()
+        .trim_start_matches('v')
+        .trim_end_matches(".x")
+        .split('.')
+        .filter_map(|part| part.parse::<u32>().ok())
+        .collect()
 }
 
 fn prompt_branch_name(options: &[BranchNameOption]) -> Result<String> {
