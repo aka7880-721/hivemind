@@ -2,6 +2,173 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.16.5
+2026-04-26
+
+#### What's new:
+
+### ✨ New Feature: `cg merge` CLI command
+
+* Interactive merging wizard, listing all available PR's with details   _(503190b)_
+
+---
+
+### ✨ New in CLI commands:
+
+#### 💎 Enhancements
+
+`cg branch done`:   _(361d334)_
+* used when user wants to end work on the branch they are currently on, and quickly create PR→check→merge
+* `done` synonyms→`end`, `close`, `merge`, `mrg`, `mg`
+
+---
+
+### Changed in `cg merge`
+
+#### 🐛 Fix(es)
+
+* fixed 100ms redraw bug in CLI   _(e177f44)_
+
+#### 💎 Enhancements
+
+* proper ASCII table   _(e177f44)_
+
+---
+
+### Changed in via ComfyGit
+
+#### 📝 Other
+
+* Merge pull request #50 (via ComfyGit)   _(f41ee99)_
+
+* Merge pull request #51 (via ComfyGit)   _(b5d3d7f)_
+
+* Merge pull request #53 (via ComfyGit)   _(a0ec8ff)_
+
+* Merge pull request #54 (via ComfyGit)   _(2ccd0b2)_
+
+* Merge pull request #55 (via ComfyGit)   _(687211b)_
+
+* Merge pull request #56 (via ComfyGit)   _(f17ee96)_
+
+* Merge pull request #58 (via ComfyGit)   _(9938ec8)_
+
+* Merge pull request #60 (via ComfyGit)   _(e40ec0d)_
+
+* Merge pull request #61 (via ComfyGit)   _(28a04bb)_
+
+* Merge pull request #62 (via ComfyGit)   _(22dbb47)_
+
+---
+
+### Changed in `cg branch done`
+
+#### 🐛 Fix(es)
+
+* added delay for mergeability check,, plus 2 retries   _(84ac7b5)_
+
+---
+
+### Changed in `cg pr`
+
+#### 🐛 Fix(es)
+
+* fixed failing PR creation when user uses a custom name for `main` branch   _(14295a8)_
+
+---
+
+### Changed in CLI
+
+#### 🧩 Features
+
+* add functionality to handle unpublished target branches during PR creation   _(26b4836)_
+
+* enhance version bumping logic with semver support and branch handling   _(5a45730)_
+
+#### 🐛 Fix(es)
+
+* fix for `failed to derive the source rls` error   _(01fde72)_
+
+#### ♻️ Refactor
+
+* streamline version bump logic and enhance branch handling   _(b8ac27f)_
+
+* improve unpublished branch error handling and rename related functions   _(66635db)_
+
+---
+
+### Changed in Git
+
+#### 🧩 Features
+
+* enhance branch name suggestion logic with bump action handling   _(f5ff190)_
+
+* implement branch publishing with upstream and remove unused remote resolution function   _(848c81a)_
+
+* add functionality to publish branches with upstream and resolve push remote names   _(01ea318)_
+
+* refactor branch name suggestion to use a request struct for improved clarity and maintainability   _(d82d023)_
+
+---
+
+### Changed in TUI
+
+#### 🧩 Features
+
+* integrate BumpAction for branch name suggestion in bump workflow   _(9935115)_
+
+* refactor branch name suggestion to use a structured request for improved clarity   _(f643993)_
+
+---
+
+### 🛠️ General:
+
+### 🧩 Features
+
+* `cg merge #<#>` direct merge call, mostly for internal use   _(da12c74)_
+
+### 🐛 Fix(es)
+
+* fixes `bump` option 5 being unable to publish new branch   _(df45395)_
+
+* added checks and validations for `merge` and `pr` flows   _(f2b4467)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.15.0   _(168af46)_
+
+* CG app version bump to v0.15.1   _(c51c879)_
+
+* CG app version bump to v0.15.2   _(a1bd25c)_
+
+* CG app version bump to v0.15.1   _(f512b1d)_
+
+* CG app version bump to v0.15.3   _(abfae76)_
+
+* CG app version bump to v0.15.4   _(9957b85)_
+
+* CG app version bump to v0.15.5   _(9655deb)_
+
+* CG app version bump to v0.16.0   _(06a557f)_
+
+* CG app version bump to v0.16.1   _(e49a51c)_
+
+* CG app version bump to v0.16.2   _(e0a27c2)_
+
+* CG app version bump to v0.16.3   _(6478532)_
+
+* CG app version bump to v0.16.4   _(f9f4347)_
+
+* CG app version bump to v0.16.5   _(61bb1f3)_
+
+### 📝 Other
+
+* Merge remote-tracking branch 'origin/0.15.x' into v0-15-2-dev   _(19278a4)_
+
+* Merge pull request #52 from comfy-home/0.15.x   _(b6de02b)_
+
+---
+
 ## Changelog v0.14.2
 2026-04-25
 
