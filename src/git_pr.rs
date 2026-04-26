@@ -82,20 +82,22 @@ pub(crate) fn run_pr_and_capture(
     }
 
     ensure_clean_worktree_with_cancel(repo_root, "cg pr", cancel.clone())?;
-    ensure_local_branch_published_and_in_sync_with_cancel(
+    let current_upstream_ref = ensure_local_branch_published_and_in_sync_with_cancel(
         repo_root,
         &current_branch,
         "current branch",
         "cg pr",
         cancel.clone(),
     )?;
-    ensure_local_branch_published_and_in_sync_with_cancel(
+    let target_upstream_ref = ensure_local_branch_published_and_in_sync_with_cancel(
         repo_root,
         &target_branch,
         "target branch",
         "cg pr",
         cancel.clone(),
     )?;
+    let current_pr_branch = pull_request_branch_name_from_upstream_ref(&current_upstream_ref)?;
+    let target_pr_branch = pull_request_branch_name_from_upstream_ref(&target_upstream_ref)?;
 
     let title = format!("{} (via ComfyGit)", current_branch);
     let body = build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?;
@@ -107,9 +109,14 @@ pub(crate) fn run_pr_and_capture(
         cancel.clone(),
     )?;
     let body_path = write_temp_changelog_markdown(repo_root, &body)?;
-    let args = build_pr_create_args(&target_branch, &current_branch, &title, &body_path);
+    let args = build_pr_create_args(&target_pr_branch, &current_pr_branch, &title, &body_path);
     let create_output = create_pr(repo_root, &args)?;
-    resolve_created_pull_request(repo_root, &current_branch, &target_branch, &create_output)
+    resolve_created_pull_request(
+        repo_root,
+        &current_pr_branch,
+        &target_branch,
+        &create_output,
+    )
 }
 
 fn build_pr_body(
@@ -776,6 +783,20 @@ fn pull_request_number_from_url(url: &str) -> Option<u64> {
         .and_then(|segment| segment.parse::<u64>().ok())
 }
 
+fn pull_request_branch_name_from_upstream_ref(upstream_ref: &str) -> Result<String> {
+    upstream_ref
+        .split_once('/')
+        .map(|(_, branch_name)| branch_name.trim())
+        .filter(|branch_name| !branch_name.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "upstream ref '{}' is not a valid remote-tracking branch",
+                upstream_ref
+            )
+        })
+}
+
 fn lookup_created_pull_request(
     repo_root: &str,
     current_branch: &str,
@@ -1201,6 +1222,25 @@ mod tests {
             pull_request_number_from_url("https://github.com/foo/bar"),
             None
         );
+    }
+
+    #[test]
+    fn pull_request_branch_name_from_upstream_ref_uses_remote_branch_tail() {
+        assert_eq!(
+            pull_request_branch_name_from_upstream_ref("origin/main").expect("main branch tail"),
+            "main"
+        );
+        assert_eq!(
+            pull_request_branch_name_from_upstream_ref("origin/release/0.16.x")
+                .expect("release branch tail"),
+            "release/0.16.x"
+        );
+    }
+
+    #[test]
+    fn pull_request_branch_name_from_upstream_ref_rejects_invalid_refs() {
+        assert!(pull_request_branch_name_from_upstream_ref("main").is_err());
+        assert!(pull_request_branch_name_from_upstream_ref("origin/").is_err());
     }
 
     #[test]
