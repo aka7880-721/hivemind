@@ -84,33 +84,41 @@ impl BranchNameOption {
     }
 }
 
-pub(crate) fn suggest_branch_name_options(
-    scheme: VersionScheme,
-    action: BumpAction,
-    current_branch: &str,
-    current_version: &str,
-    next_version: &str,
-    custom_main_branch: Option<&str>,
-    existing_branches: &[String],
-    today: NaiveDate,
-) -> Result<Vec<BranchNameOption>> {
-    scheme
-        .validate(current_version)
-        .map_err(anyhow::Error::msg)?;
-    scheme.validate(next_version).map_err(anyhow::Error::msg)?;
+pub(crate) struct BranchNameSuggestionRequest<'a> {
+    pub(crate) scheme: VersionScheme,
+    pub(crate) action: BumpAction,
+    pub(crate) current_branch: &'a str,
+    pub(crate) current_version: &'a str,
+    pub(crate) next_version: &'a str,
+    pub(crate) custom_main_branch: Option<&'a str>,
+    pub(crate) existing_branches: &'a [String],
+    pub(crate) today: NaiveDate,
+}
 
-    if is_mainline_branch_name(current_branch, custom_main_branch) {
+pub(crate) fn suggest_branch_name_options(
+    request: BranchNameSuggestionRequest<'_>,
+) -> Result<Vec<BranchNameOption>> {
+    request
+        .scheme
+        .validate(request.current_version)
+        .map_err(anyhow::Error::msg)?;
+    request
+        .scheme
+        .validate(request.next_version)
+        .map_err(anyhow::Error::msg)?;
+
+    if is_mainline_branch_name(request.current_branch, request.custom_main_branch) {
         return mainline_branch_name_options(
-            scheme,
-            action,
-            current_version,
-            existing_branches,
-            today,
+            request.scheme,
+            request.action,
+            request.current_version,
+            request.existing_branches,
+            request.today,
         );
     }
 
     Ok(vec![
-        fixed_branch_name_option(format!("v{}-dev", next_version)),
+        fixed_branch_name_option(format!("v{}-dev", request.next_version)),
         custom_branch_name_option(),
     ])
 }
@@ -347,16 +355,16 @@ mod tests {
     #[test]
     fn semver_mainline_suggestions_include_minor_major_and_custom_variants() {
         let today = NaiveDate::from_ymd_opt(2026, 4, 23).unwrap();
-        let options = suggest_branch_name_options(
-            VersionScheme::SemVer,
-            BumpAction::Minor,
-            "main",
-            "0.24.8",
-            "0.25.0",
-            None,
-            &[],
+        let options = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::SemVer,
+            action: BumpAction::Minor,
+            current_branch: "main",
+            current_version: "0.24.8",
+            next_version: "0.25.0",
+            custom_main_branch: None,
+            existing_branches: &[],
             today,
-        )
+        })
         .expect("semver suggestions");
 
         assert_eq!(
@@ -383,16 +391,16 @@ mod tests {
     #[test]
     fn release_line_suggestions_use_next_version_dev() {
         let today = NaiveDate::from_ymd_opt(2026, 4, 23).unwrap();
-        let options = suggest_branch_name_options(
-            VersionScheme::SemVer,
-            BumpAction::Patch,
-            "0.25.x",
-            "0.25.3",
-            "0.25.4",
-            None,
-            &[],
+        let options = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::SemVer,
+            action: BumpAction::Patch,
+            current_branch: "0.25.x",
+            current_version: "0.25.3",
+            next_version: "0.25.4",
+            custom_main_branch: None,
+            existing_branches: &[],
             today,
-        )
+        })
         .expect("release line suggestions");
 
         assert_eq!(
@@ -406,76 +414,76 @@ mod tests {
 
     #[test]
     fn calver_year_month_mainline_rolls_to_next_month() {
-        let options = suggest_branch_name_options(
-            VersionScheme::CalVerYearMonthMicro,
-            BumpAction::Auto,
-            "main",
-            "2026.09.1",
-            "2026.10.0",
-            None,
-            &[],
-            NaiveDate::from_ymd_opt(2026, 9, 5).unwrap(),
-        )
+        let options = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::CalVerYearMonthMicro,
+            action: BumpAction::Auto,
+            current_branch: "main",
+            current_version: "2026.09.1",
+            next_version: "2026.10.0",
+            custom_main_branch: None,
+            existing_branches: &[],
+            today: NaiveDate::from_ymd_opt(2026, 9, 5).unwrap(),
+        })
         .expect("calver month suggestions");
 
         assert_eq!(options[0].preview(), "2026.10.x");
 
-        let december = suggest_branch_name_options(
-            VersionScheme::CalVerYearMonthMicro,
-            BumpAction::Auto,
-            "main",
-            "2026.12.2",
-            "2027.01.0",
-            None,
-            &[],
-            NaiveDate::from_ymd_opt(2026, 12, 5).unwrap(),
-        )
+        let december = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::CalVerYearMonthMicro,
+            action: BumpAction::Auto,
+            current_branch: "main",
+            current_version: "2026.12.2",
+            next_version: "2027.01.0",
+            custom_main_branch: None,
+            existing_branches: &[],
+            today: NaiveDate::from_ymd_opt(2026, 12, 5).unwrap(),
+        })
         .expect("december calver month suggestions");
         assert_eq!(december[0].preview(), "2027.01.x");
     }
 
     #[test]
     fn hybrid_year_minor_patch_mainline_uses_next_minor_window() {
-        let options = suggest_branch_name_options(
-            VersionScheme::HybridYearMinorPatch,
-            BumpAction::Minor,
-            "main",
-            "2026.16.2",
-            "2026.17.0",
-            None,
-            &[],
-            NaiveDate::from_ymd_opt(2026, 10, 5).unwrap(),
-        )
+        let options = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::HybridYearMinorPatch,
+            action: BumpAction::Minor,
+            current_branch: "main",
+            current_version: "2026.16.2",
+            next_version: "2026.17.0",
+            custom_main_branch: None,
+            existing_branches: &[],
+            today: NaiveDate::from_ymd_opt(2026, 10, 5).unwrap(),
+        })
         .expect("hybrid suggestions");
 
         assert_eq!(options[0].preview(), "2026.17.x");
 
-        let next_year = suggest_branch_name_options(
-            VersionScheme::HybridYearMinorPatch,
-            BumpAction::Minor,
-            "main",
-            "2026.16.2",
-            "2027.1.0",
-            None,
-            &[],
-            NaiveDate::from_ymd_opt(2027, 1, 5).unwrap(),
-        )
+        let next_year = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::HybridYearMinorPatch,
+            action: BumpAction::Minor,
+            current_branch: "main",
+            current_version: "2026.16.2",
+            next_version: "2027.1.0",
+            custom_main_branch: None,
+            existing_branches: &[],
+            today: NaiveDate::from_ymd_opt(2027, 1, 5).unwrap(),
+        })
         .expect("hybrid next year suggestions");
         assert_eq!(next_year[0].preview(), "2027.1.x");
     }
 
     #[test]
     fn semver_minor_suggestions_skip_existing_release_lines() {
-        let options = suggest_branch_name_options(
-            VersionScheme::SemVer,
-            BumpAction::Minor,
-            "main",
-            "0.0.3",
-            "0.1.0",
-            None,
-            &["0.1.x".to_string()],
-            NaiveDate::from_ymd_opt(2026, 4, 23).unwrap(),
-        )
+        let options = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::SemVer,
+            action: BumpAction::Minor,
+            current_branch: "main",
+            current_version: "0.0.3",
+            next_version: "0.1.0",
+            custom_main_branch: None,
+            existing_branches: &["0.1.x".to_string()],
+            today: NaiveDate::from_ymd_opt(2026, 4, 23).unwrap(),
+        })
         .expect("minor suggestions");
 
         assert_eq!(
@@ -496,16 +504,16 @@ mod tests {
 
     #[test]
     fn semver_major_suggestions_only_offer_next_available_major_line() {
-        let options = suggest_branch_name_options(
-            VersionScheme::SemVer,
-            BumpAction::Major,
-            "main",
-            "0.0.3",
-            "1.0.0",
-            None,
-            &["1.0.x".to_string()],
-            NaiveDate::from_ymd_opt(2026, 4, 23).unwrap(),
-        )
+        let options = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::SemVer,
+            action: BumpAction::Major,
+            current_branch: "main",
+            current_version: "0.0.3",
+            next_version: "1.0.0",
+            custom_main_branch: None,
+            existing_branches: &["1.0.x".to_string()],
+            today: NaiveDate::from_ymd_opt(2026, 4, 23).unwrap(),
+        })
         .expect("major suggestions");
 
         assert_eq!(
