@@ -32,20 +32,25 @@ pub(crate) fn run_branch_done(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
-    let created_pr = match run_pr_and_capture(repo_root, false, custom_main_branch, cancel.clone())
-    {
-        Ok(created_pr) => created_pr,
-        Err(error) => {
-            let Some(target_branch) = unpublished_target_branch_name_from_error(&error) else {
-                return Err(error);
-            };
+    let created_pr = loop {
+        match run_pr_and_capture(repo_root, false, custom_main_branch, cancel.clone()) {
+            Ok(created_pr) => break created_pr,
+            Err(error) => {
+                let Some(unpublished_branch) = unpublished_branch_name_from_error(&error) else {
+                    return Err(error);
+                };
 
-            if !prompt_publish_target_branch(&target_branch)? {
-                bail!("Cancelled by user")
+                if !prompt_publish_target_branch(&unpublished_branch)? {
+                    bail!("Cancelled by user")
+                }
+
+                let _ = publish_branch_with_upstream(
+                    repo_root,
+                    &unpublished_branch,
+                    None,
+                    cancel.clone(),
+                )?;
             }
-
-            let _ = publish_branch_with_upstream(repo_root, &target_branch, None, cancel.clone())?;
-            run_pr_and_capture(repo_root, false, custom_main_branch, cancel.clone())?
         }
     };
     ensure_pull_request_mergeable(repo_root, created_pr.number)?;
@@ -62,14 +67,21 @@ pub(crate) fn run_branch_done(
     Ok(())
 }
 
-fn unpublished_target_branch_name_from_error(error: &anyhow::Error) -> Option<String> {
+fn unpublished_branch_name_from_error(error: &anyhow::Error) -> Option<String> {
     let message = error.to_string();
-    let prefix = "target branch '";
-    let suffix = "' is not published to a tracked remote branch; push it with upstream tracking before running cg pr";
-    let start = message.find(prefix)? + prefix.len();
-    let remainder = &message[start..];
-    let end = remainder.find(suffix)?;
-    Some(remainder[..end].to_string())
+    for prefix in ["current branch '", "target branch '"] {
+        let suffix = "' is not published to a tracked remote branch; push it with upstream tracking before running cg pr";
+        let Some(start) = message.find(prefix).map(|index| index + prefix.len()) else {
+            continue;
+        };
+        let remainder = &message[start..];
+        let Some(end) = remainder.find(suffix) else {
+            continue;
+        };
+        return Some(remainder[..end].to_string());
+    }
+
+    None
 }
 
 fn prompt_publish_target_branch(branch_name: &str) -> Result<bool> {
@@ -230,14 +242,26 @@ mod tests {
     }
 
     #[test]
-    fn unpublished_target_branch_error_parser_extracts_branch_name() {
+    fn unpublished_branch_error_parser_extracts_target_branch_name() {
         let error = anyhow::anyhow!(
             "target branch '0.1.x' is not published to a tracked remote branch; push it with upstream tracking before running cg pr"
         );
 
         assert_eq!(
-            unpublished_target_branch_name_from_error(&error).as_deref(),
+            unpublished_branch_name_from_error(&error).as_deref(),
             Some("0.1.x")
+        );
+    }
+
+    #[test]
+    fn unpublished_branch_error_parser_extracts_current_branch_name() {
+        let error = anyhow::anyhow!(
+            "current branch 'v0.1.2-dev' is not published to a tracked remote branch; push it with upstream tracking before running cg pr"
+        );
+
+        assert_eq!(
+            unpublished_branch_name_from_error(&error).as_deref(),
+            Some("v0.1.2-dev")
         );
     }
 }
