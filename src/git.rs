@@ -108,6 +108,87 @@ pub(crate) fn ensure_local_branch_published_and_in_sync_with_cancel(
     }
 }
 
+pub(crate) fn publish_branch_with_upstream(
+    repo_root: &str,
+    branch_name: &str,
+    configured_remote: Option<&str>,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let push_remote = configured_remote
+        .map(str::trim)
+        .filter(|remote| !remote.is_empty())
+        .map(|remote| resolve_push_remote_name(repo_root, remote))
+        .transpose()?
+        .unwrap_or(default_push_remote_name(repo_root)?);
+
+    let _ = run_git_checked_with_cancel(
+        repo_root,
+        &["push", "-u", &push_remote, branch_name],
+        cancel,
+    )?;
+    Ok(format!("{}/{}", push_remote, branch_name))
+}
+
+pub(crate) fn resolve_push_remote_name(repo_root: &str, configured_remote: &str) -> Result<String> {
+    let configured_remote = configured_remote.trim();
+    if configured_remote.is_empty() {
+        bail!("no remote is configured for this project")
+    }
+
+    let remotes = git_remote_names(repo_root)?;
+    if remotes.iter().any(|remote| remote == configured_remote) {
+        return Ok(configured_remote.to_string());
+    }
+
+    for remote in &remotes {
+        let remote_url = run_git_checked(repo_root, &["remote", "get-url", remote])?
+            .trim()
+            .to_string();
+        if remote_url == configured_remote {
+            return Ok(remote.clone());
+        }
+    }
+
+    if remotes.len() == 1 {
+        return Ok(remotes[0].clone());
+    }
+
+    if let Some(origin) = remotes.iter().find(|remote| remote.as_str() == "origin") {
+        return Ok(origin.clone());
+    }
+
+    bail!(
+        "configured remote '{}' does not match any git remote name or URL in {}",
+        configured_remote,
+        repo_root
+    )
+}
+
+pub(crate) fn default_push_remote_name(repo_root: &str) -> Result<String> {
+    let configured = run_git_checked(repo_root, &["config", "--get", "remote.pushDefault"])
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(configured) = configured {
+        return resolve_push_remote_name(repo_root, &configured);
+    }
+
+    let remotes = git_remote_names(repo_root)?;
+    if remotes.is_empty() {
+        bail!("no git remotes are configured for this repository")
+    }
+    if remotes.len() == 1 {
+        return Ok(remotes[0].clone());
+    }
+    if let Some(origin) = remotes.iter().find(|remote| remote.as_str() == "origin") {
+        return Ok(origin.clone());
+    }
+
+    bail!(
+        "could not determine a push remote; configure remote.pushDefault or add an 'origin' remote"
+    )
+}
+
 fn branch_upstream_ref_with_cancel(
     repo_root: &str,
     branch_name: &str,
@@ -143,6 +224,13 @@ fn upstream_remote_name(upstream_ref: &str) -> Result<&str> {
                 upstream_ref
             )
         })
+}
+
+fn git_remote_names(repo_root: &str) -> Result<Vec<String>> {
+    Ok(split_output_lines(&run_git_checked(
+        repo_root,
+        &["remote"],
+    )?))
 }
 
 fn branch_divergence_counts_with_cancel(
@@ -1255,6 +1343,42 @@ mod tests {
         assert!(error.to_string().contains("behind"));
 
         fs::remove_dir_all(&clone_dir).expect("remove clone repo dir");
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
+        fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+
+    #[test]
+    fn publish_branch_with_upstream_uses_origin_when_remote_is_unspecified() {
+        let bare_dir = create_temp_repo_dir("publish-default-bare");
+        let bare_root = bare_dir.to_string_lossy().to_string();
+        run_git_checked(&bare_root, &["init", "--bare"]).expect("init bare repo");
+
+        let repo_dir = create_temp_repo_dir("publish-default-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write tracked file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+        run_git_checked(&repo_root, &["remote", "add", "origin", &bare_root])
+            .expect("add origin remote");
+        run_git_checked(&repo_root, &["push", "-u", "origin", "main"]).expect("push main");
+        create_branch_and_switch(&repo_root, "0.1.x").expect("create release branch");
+
+        let upstream = publish_branch_with_upstream(&repo_root, "0.1.x", None, None)
+            .expect("publish release branch");
+
+        assert_eq!(upstream, "origin/0.1.x");
+        assert_eq!(
+            run_git_checked(
+                &repo_root,
+                &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+            )
+            .expect("read upstream")
+            .trim(),
+            "origin/0.1.x"
+        );
+
         fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
         fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
     }
