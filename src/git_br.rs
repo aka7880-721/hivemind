@@ -8,7 +8,10 @@
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
 
-use crate::{git::is_mainline_branch_name, versioning::VersionScheme};
+use crate::{
+    git::is_mainline_branch_name,
+    versioning::{BumpAction, VersionScheme},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BranchNameOption {
@@ -83,10 +86,12 @@ impl BranchNameOption {
 
 pub(crate) fn suggest_branch_name_options(
     scheme: VersionScheme,
+    action: BumpAction,
     current_branch: &str,
     current_version: &str,
     next_version: &str,
     custom_main_branch: Option<&str>,
+    existing_branches: &[String],
     today: NaiveDate,
 ) -> Result<Vec<BranchNameOption>> {
     scheme
@@ -95,7 +100,13 @@ pub(crate) fn suggest_branch_name_options(
     scheme.validate(next_version).map_err(anyhow::Error::msg)?;
 
     if is_mainline_branch_name(current_branch, custom_main_branch) {
-        return mainline_branch_name_options(scheme, current_version, today);
+        return mainline_branch_name_options(
+            scheme,
+            action,
+            current_version,
+            existing_branches,
+            today,
+        );
     }
 
     Ok(vec![
@@ -121,11 +132,15 @@ pub(crate) fn is_release_line_branch(scheme: VersionScheme, branch_name: &str) -
 
 fn mainline_branch_name_options(
     scheme: VersionScheme,
+    action: BumpAction,
     current_version: &str,
+    existing_branches: &[String],
     today: NaiveDate,
 ) -> Result<Vec<BranchNameOption>> {
     Ok(match scheme {
-        VersionScheme::SemVer => semver_mainline_branch_name_options(current_version)?,
+        VersionScheme::SemVer => {
+            semver_mainline_branch_name_options(current_version, action, existing_branches)?
+        }
         VersionScheme::CalVerYearMonthMicro => {
             let (year, month) = next_month_window(today);
             vec![
@@ -179,12 +194,43 @@ fn mainline_branch_name_options(
     })
 }
 
-fn semver_mainline_branch_name_options(current_version: &str) -> Result<Vec<BranchNameOption>> {
+fn semver_mainline_branch_name_options(
+    current_version: &str,
+    action: BumpAction,
+    existing_branches: &[String],
+) -> Result<Vec<BranchNameOption>> {
     let [major, minor, _patch]: [u32; 3] = parse_numeric_parts(current_version)?
         .try_into()
         .map_err(|_| anyhow::anyhow!("expected 3 semver components"))?;
     let next_minor = format!("{}.{}.x", major, minor + 1);
     let next_major = format!("{}.0.x", major + 1);
+
+    if action == BumpAction::Major {
+        let major_option = next_available_major_line(major, existing_branches);
+        return Ok(vec![
+            fixed_branch_name_option(major_option.clone()),
+            specific_suffix_branch_name_option(major_option),
+            custom_branch_name_option(),
+        ]);
+    }
+
+    if action == BumpAction::Minor {
+        let mut options = Vec::new();
+        let minor_option = next_available_minor_line(major, minor + 1, existing_branches);
+        options.push(fixed_branch_name_option(minor_option.clone()));
+        options.push(specific_suffix_branch_name_option(minor_option.clone()));
+        if !minor_option.eq_ignore_ascii_case(&next_minor)
+            && branch_exists(existing_branches, &next_minor)
+        {
+            options.push(specific_suffix_branch_name_option(next_minor));
+        }
+
+        let major_option = next_available_major_line(major, existing_branches);
+        options.push(fixed_branch_name_option(major_option.clone()));
+        options.push(specific_suffix_branch_name_option(major_option));
+        options.push(custom_branch_name_option());
+        return Ok(options);
+    }
 
     Ok(vec![
         fixed_branch_name_option(next_minor.clone()),
@@ -204,10 +250,17 @@ fn next_month_window(today: NaiveDate) -> (u32, u32) {
 }
 
 fn fixed_branch_name_option(preview: String) -> BranchNameOption {
+    fixed_branch_name_option_with_value(preview.clone(), preview)
+}
+
+pub(crate) fn fixed_branch_name_option_with_value(
+    preview: String,
+    value: String,
+) -> BranchNameOption {
     BranchNameOption {
-        preview: preview.clone(),
+        preview,
         input_mode: BranchNameInputMode::None,
-        mode: BranchNameOptionMode::Fixed(preview),
+        mode: BranchNameOptionMode::Fixed(value),
     }
 }
 
@@ -237,6 +290,38 @@ fn parse_numeric_parts(value: &str) -> Result<Vec<u32>> {
         .collect()
 }
 
+fn branch_exists(existing_branches: &[String], candidate: &str) -> bool {
+    existing_branches
+        .iter()
+        .any(|branch| branch.eq_ignore_ascii_case(candidate))
+}
+
+fn next_available_minor_line(
+    major: u32,
+    starting_minor: u32,
+    existing_branches: &[String],
+) -> String {
+    let mut minor = starting_minor;
+    loop {
+        let candidate = format!("{}.{}.x", major, minor);
+        if !branch_exists(existing_branches, &candidate) {
+            return candidate;
+        }
+        minor += 1;
+    }
+}
+
+fn next_available_major_line(major: u32, existing_branches: &[String]) -> String {
+    let mut next_major = major + 1;
+    loop {
+        let candidate = format!("{}.0.x", next_major);
+        if !branch_exists(existing_branches, &candidate) {
+            return candidate;
+        }
+        next_major += 1;
+    }
+}
+
 fn sanitize_branch_fragment(value: &str) -> Option<String> {
     let mut sanitized = String::new();
     let mut last_was_separator = true;
@@ -264,10 +349,12 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 4, 23).unwrap();
         let options = suggest_branch_name_options(
             VersionScheme::SemVer,
+            BumpAction::Minor,
             "main",
             "0.24.8",
             "0.25.0",
             None,
+            &[],
             today,
         )
         .expect("semver suggestions");
@@ -298,10 +385,12 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 4, 23).unwrap();
         let options = suggest_branch_name_options(
             VersionScheme::SemVer,
+            BumpAction::Patch,
             "0.25.x",
             "0.25.3",
             "0.25.4",
             None,
+            &[],
             today,
         )
         .expect("release line suggestions");
@@ -319,10 +408,12 @@ mod tests {
     fn calver_year_month_mainline_rolls_to_next_month() {
         let options = suggest_branch_name_options(
             VersionScheme::CalVerYearMonthMicro,
+            BumpAction::Auto,
             "main",
             "2026.09.1",
             "2026.10.0",
             None,
+            &[],
             NaiveDate::from_ymd_opt(2026, 9, 5).unwrap(),
         )
         .expect("calver month suggestions");
@@ -331,10 +422,12 @@ mod tests {
 
         let december = suggest_branch_name_options(
             VersionScheme::CalVerYearMonthMicro,
+            BumpAction::Auto,
             "main",
             "2026.12.2",
             "2027.01.0",
             None,
+            &[],
             NaiveDate::from_ymd_opt(2026, 12, 5).unwrap(),
         )
         .expect("december calver month suggestions");
@@ -345,10 +438,12 @@ mod tests {
     fn hybrid_year_minor_patch_mainline_uses_next_minor_window() {
         let options = suggest_branch_name_options(
             VersionScheme::HybridYearMinorPatch,
+            BumpAction::Minor,
             "main",
             "2026.16.2",
             "2026.17.0",
             None,
+            &[],
             NaiveDate::from_ymd_opt(2026, 10, 5).unwrap(),
         )
         .expect("hybrid suggestions");
@@ -357,14 +452,69 @@ mod tests {
 
         let next_year = suggest_branch_name_options(
             VersionScheme::HybridYearMinorPatch,
+            BumpAction::Minor,
             "main",
             "2026.16.2",
             "2027.1.0",
             None,
+            &[],
             NaiveDate::from_ymd_opt(2027, 1, 5).unwrap(),
         )
         .expect("hybrid next year suggestions");
         assert_eq!(next_year[0].preview(), "2027.1.x");
+    }
+
+    #[test]
+    fn semver_minor_suggestions_skip_existing_release_lines() {
+        let options = suggest_branch_name_options(
+            VersionScheme::SemVer,
+            BumpAction::Minor,
+            "main",
+            "0.0.3",
+            "0.1.0",
+            None,
+            &["0.1.x".to_string()],
+            NaiveDate::from_ymd_opt(2026, 4, 23).unwrap(),
+        )
+        .expect("minor suggestions");
+
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| option.preview())
+                .collect::<Vec<_>>(),
+            vec![
+                "0.2.x",
+                "0.2.x--specific",
+                "0.1.x--specific",
+                "1.0.x",
+                "1.0.x--specific",
+                "custom",
+            ]
+        );
+    }
+
+    #[test]
+    fn semver_major_suggestions_only_offer_next_available_major_line() {
+        let options = suggest_branch_name_options(
+            VersionScheme::SemVer,
+            BumpAction::Major,
+            "main",
+            "0.0.3",
+            "1.0.0",
+            None,
+            &["1.0.x".to_string()],
+            NaiveDate::from_ymd_opt(2026, 4, 23).unwrap(),
+        )
+        .expect("major suggestions");
+
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| option.preview())
+                .collect::<Vec<_>>(),
+            vec!["2.0.x", "2.0.x--specific", "custom"]
+        );
     }
 
     #[test]
