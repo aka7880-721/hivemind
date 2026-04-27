@@ -750,6 +750,16 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                 semver_release_version_from_branch_name(&selected_branch_name)
             {
                 next_version = selected_version;
+            } else if scheme == VersionScheme::SemVer
+                && action == BumpAction::Patch
+                && !crate::git::is_mainline_branch_name(
+                    &branch_prompt_source.current_branch,
+                    branch_prompt_source.custom_main_branch.as_deref(),
+                )
+                && let Some(selected_version) =
+                    semver_version_from_dev_branch(&selected_branch_name)
+            {
+                next_version = selected_version;
             }
             Some(selected_branch_name)
         }
@@ -901,6 +911,23 @@ fn semver_release_line_branch_from_dev_branch(branch_name: &str) -> Option<Strin
         return None;
     }
     Some(format!("{}.{}.x", major, minor))
+}
+
+fn semver_version_from_dev_branch(branch_name: &str) -> Option<String> {
+    let normalized = branch_name.trim().trim_start_matches('v');
+    let normalized = normalized
+        .split_once("--")
+        .map(|(base, _)| base)
+        .unwrap_or(normalized);
+    let release_version = normalized.strip_suffix("-dev")?;
+    let mut parts = release_version.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{}.{}.{}", major, minor, patch))
 }
 
 fn next_available_semver_dev_branch_for_release_line(
@@ -3342,6 +3369,18 @@ mod tests {
         assert_eq!(
             semver_release_line_branch_from_dev_branch("v0.4.1-dev--specific"),
             Some("0.4.x".to_string())
+        );
+    }
+
+    #[test]
+    fn semver_version_from_dev_branch_handles_plain_and_specific_names() {
+        assert_eq!(
+            semver_version_from_dev_branch("v0.4.1-dev"),
+            Some("0.4.1".to_string())
+        );
+        assert_eq!(
+            semver_version_from_dev_branch("v0.4.1-dev--specific"),
+            Some("0.4.1".to_string())
         );
     }
 
