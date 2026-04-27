@@ -52,6 +52,7 @@ use crate::{
     git_br_end::run_branch_done,
     git_mg::{run_merge, run_merge_for_pull_request},
     git_pr::run_pr,
+    git_rrt::{RerootMode, run_reroot},
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -204,6 +205,34 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             with_cli_git_cancellation(|cancel| run_merge(&repo_root, cancel))?;
             Ok(StartupMode::Handled)
         }
+        [command] if is_reroot_command(command) => {
+            let cwd = env::current_dir().context("failed to read current directory")?;
+            let repo_root = current_git_repo_root(&cwd)?;
+            let custom_main_branch = find_repo_custom_main_branch(&repo_root);
+            with_cli_git_cancellation(|cancel| {
+                run_reroot(
+                    &repo_root,
+                    custom_main_branch.as_deref(),
+                    RerootMode::Merge,
+                    cancel,
+                )
+            })?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_reroot_command(command) && is_reroot_rebase_action(action) => {
+            let cwd = env::current_dir().context("failed to read current directory")?;
+            let repo_root = current_git_repo_root(&cwd)?;
+            let custom_main_branch = find_repo_custom_main_branch(&repo_root);
+            with_cli_git_cancellation(|cancel| {
+                run_reroot(
+                    &repo_root,
+                    custom_main_branch.as_deref(),
+                    RerootMode::Rebase,
+                    cancel,
+                )
+            })?;
+            Ok(StartupMode::Handled)
+        }
         [command, selector] if is_merge_command(command) => {
             let pr_number = parse_merge_pull_request_selector(selector)?;
             let cwd = env::current_dir().context("failed to read current directory")?;
@@ -322,6 +351,14 @@ fn is_merge_command(value: &str) -> bool {
     matches!(value, "merge" | "mg" | "mrg")
 }
 
+fn is_reroot_command(value: &str) -> bool {
+    matches!(value, "reroot" | "rrt")
+}
+
+fn is_reroot_rebase_action(value: &str) -> bool {
+    matches!(value, "rebase" | "force" | "rbs")
+}
+
 fn is_new_command(value: &str) -> bool {
     matches!(value, "new")
 }
@@ -410,12 +447,20 @@ fn print_usage() {
     );
     println!("  cg merge                   Interactively choose and merge an open pull request");
     println!("  cg merge #67               Merge open pull request #67 directly");
+    println!(
+        "  cg reroot                  Merge a selected source branch into the current non-main branch"
+    );
+    println!(
+        "  cg reroot rebase           Rebase the current non-main branch onto a selected source branch"
+    );
     println!("          synonyms:");
     println!("            branch: br | brn | brnch");
     println!("            up: up | ..");
     println!("            main: main | ~");
     println!("            done: done | end | close | merge | mrg | mg");
     println!("            merge: mg | mrg");
+    println!("            reroot: rrt");
+    println!("            rebase: rebase | force | rbs");
     println!(" ");
     println!("  BUMPING COMMANDS:");
     println!(" ");
