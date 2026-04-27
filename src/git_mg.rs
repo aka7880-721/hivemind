@@ -23,11 +23,12 @@ use serde::Deserialize;
 
 use crate::git::{
     GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
-    ensure_local_branch_published_and_in_sync_with_cancel,
+    ensure_local_branch_published_and_in_sync_with_cancel, github_repository_web_url,
 };
 
 const PR_LIST_LIMIT: usize = 200;
 const GH_PR_FIELDS: &str = "number,title,baseRefName,createdAt,author,mergeable,mergeStateStatus";
+const ISSUE_LINK_LABEL: &str = "<See Issues>";
 
 pub(crate) fn run_merge(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
     let current_branch = current_branch_with_cancel(repo_root, cancel.clone())?;
@@ -115,9 +116,10 @@ fn fetch_open_pull_requests(
 
     let listed = serde_json::from_slice::<Vec<GhPullRequest>>(&output.stdout)
         .context("failed to parse gh pr list output")?;
+    let repository_issue_root = github_repository_web_url(repo_root);
     let mut entries = listed
         .into_iter()
-        .map(PullRequestEntry::from_gh)
+        .map(|pr| PullRequestEntry::from_gh(pr, repository_issue_root.as_deref()))
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         right
@@ -158,7 +160,11 @@ fn fetch_pull_request(repo_root: &str, pr_number: u64) -> Result<PullRequestEntr
 
     let entry = serde_json::from_slice::<GhPullRequest>(&output.stdout)
         .context("failed to parse gh pr view output")?;
-    Ok(PullRequestEntry::from_gh(entry))
+    let repository_issue_root = github_repository_web_url(repo_root);
+    Ok(PullRequestEntry::from_gh(
+        entry,
+        repository_issue_root.as_deref(),
+    ))
 }
 
 fn select_pull_request_by_number(
@@ -348,10 +354,11 @@ fn render_pull_request_row(
         Print("| "),
         Print(pad_cell(&entry.number.to_string(), layout.number_width)),
         Print(" | "),
-        Print(pad_cell(
-            &fit_cell(&entry.title, layout.title_width),
-            layout.title_width
-        )),
+    )
+    .context("failed to queue merge picker row prefix")?;
+    render_pull_request_title_cell(stdout, entry, row_color, layout.title_width)?;
+    queue!(
+        stdout,
         Print(" | "),
         Print(pad_cell(
             &fit_cell(&entry.target_branch, layout.target_width),
@@ -384,6 +391,45 @@ fn render_pull_request_row(
         ResetColor
     )
     .context("failed to queue merge picker row mergeable state")?;
+    Ok(())
+}
+
+fn render_pull_request_title_cell(
+    stdout: &mut io::Stdout,
+    entry: &PullRequestEntry,
+    row_color: Color,
+    width: usize,
+) -> Result<()> {
+    let Some(issue_url) = entry.issue_url.as_deref() else {
+        queue!(
+            stdout,
+            Print(pad_cell(&fit_cell(&entry.title, width), width))
+        )
+        .context("failed to render merge picker plain title")?;
+        return Ok(());
+    };
+
+    let label_width = ISSUE_LINK_LABEL.chars().count();
+    if width <= label_width + 2 {
+        queue!(
+            stdout,
+            Print(pad_cell(&fit_cell(&entry.title, width), width))
+        )
+        .context("failed to render merge picker narrow title")?;
+        return Ok(());
+    }
+
+    let title_width = width - label_width - 2;
+    let padded_title = pad_cell(&fit_cell(&entry.title, title_width), title_width);
+    queue!(stdout, Print(padded_title), Print("  "))
+        .context("failed to render merge picker title prefix")?;
+    queue!(
+        stdout,
+        SetForegroundColor(Color::Magenta),
+        Print(format_terminal_hyperlink(issue_url, ISSUE_LINK_LABEL)),
+        SetForegroundColor(row_color)
+    )
+    .context("failed to render merge picker issue link")?;
     Ok(())
 }
 
@@ -472,12 +518,16 @@ fn format_table_header(layout: &PullRequestTableLayout) -> String {
 fn merge_pull_request(repo_root: &str, entry: &PullRequestEntry) -> Result<()> {
     let refreshed = fetch_pull_request(repo_root, entry.number)?;
     if !refreshed.is_mergeable() {
-        bail!(
+        let mut message = format!(
             "PR #{} is no longer mergeable (status: {}, mergeable: {}); refresh the list and resolve it before running cg merge",
-            refreshed.number,
-            refreshed.status,
-            refreshed.mergeable_state
-        )
+            refreshed.number, refreshed.status, refreshed.mergeable_state
+        );
+        if let Some(conflicts_url) = refreshed.issue_url.as_deref() {
+            message.push_str("\n\nTo see the issues, please visit:\n\n");
+            message.push_str(conflicts_url);
+            message.push('\n');
+        }
+        bail!("{}", message)
     }
 
     let subject = build_merge_commit_subject(refreshed.number);
@@ -569,6 +619,10 @@ fn pad_cell(value: &str, width: usize) -> String {
     padded
 }
 
+fn format_terminal_hyperlink(url: &str, label: &str) -> String {
+    format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", url, label)
+}
+
 fn digit_to_index(character: char) -> Option<usize> {
     character
         .to_digit(10)
@@ -612,10 +666,19 @@ struct PullRequestEntry {
     author: String,
     status: String,
     mergeable_state: String,
+    issue_url: Option<String>,
 }
 
 impl PullRequestEntry {
-    fn from_gh(pr: GhPullRequest) -> Self {
+    fn from_gh(pr: GhPullRequest, repository_issue_root: Option<&str>) -> Self {
+        let mergeable_state = pr.mergeable;
+        let status = pr.merge_state_status;
+        let issue_url = repository_issue_root
+            .filter(|_| {
+                !mergeable_state.eq_ignore_ascii_case("MERGEABLE")
+                    || !status.eq_ignore_ascii_case("CLEAN")
+            })
+            .map(|root| format!("{}/pull/{}/conflicts", root, pr.number));
         let author = pr
             .author
             .and_then(|author| {
@@ -635,8 +698,9 @@ impl PullRequestEntry {
             created_label: format_created_at_label(&pr.created_at),
             created_at_unix,
             author,
-            status: pr.merge_state_status,
-            mergeable_state: pr.mergeable,
+            status,
+            mergeable_state,
+            issue_url,
         }
     }
 
@@ -747,6 +811,7 @@ mod tests {
                 author: "alice".to_string(),
                 status: "CLEAN".to_string(),
                 mergeable_state: "MERGEABLE".to_string(),
+                issue_url: None,
             },
             PullRequestEntry {
                 number: 67,
@@ -757,6 +822,7 @@ mod tests {
                 author: "bob".to_string(),
                 status: "CLEAN".to_string(),
                 mergeable_state: "MERGEABLE".to_string(),
+                issue_url: None,
             },
         ];
 
@@ -777,6 +843,7 @@ mod tests {
             author: "alice".to_string(),
             status: "CLEAN".to_string(),
             mergeable_state: "MERGEABLE".to_string(),
+            issue_url: None,
         }];
 
         let error =
@@ -797,6 +864,7 @@ mod tests {
             author: "alice".to_string(),
             status: "CLEAN".to_string(),
             mergeable_state: "MERGEABLE".to_string(),
+            issue_url: None,
         };
         let not_ready = PullRequestEntry {
             mergeable_state: "CONFLICTING".to_string(),
@@ -827,6 +895,7 @@ mod tests {
                 author: "alice".to_string(),
                 status: "CLEAN".to_string(),
                 mergeable_state: "MERGEABLE".to_string(),
+                issue_url: None,
             },
             PullRequestEntry {
                 number: 2,
@@ -837,6 +906,7 @@ mod tests {
                 author: "bob".to_string(),
                 status: "CLEAN".to_string(),
                 mergeable_state: "MERGEABLE".to_string(),
+                issue_url: None,
             },
         ];
 
@@ -896,11 +966,47 @@ mod tests {
             author: "comfy-home".to_string(),
             status: "CLEAN".to_string(),
             mergeable_state: "MERGEABLE".to_string(),
+            issue_url: None,
         }];
 
         let layout = build_table_layout(&entries, 100);
 
         assert_eq!(layout.mergeable_width, "Mergeable".len());
         assert!(layout.title_width >= 12);
+    }
+
+    #[test]
+    fn render_pull_request_title_cell_reserves_space_for_issue_link() {
+        let entry = PullRequestEntry {
+            number: 12,
+            title: "0.4.x (via ComfyGit)".to_string(),
+            target_branch: "main".to_string(),
+            created_label: "2026-04-27 08:01".to_string(),
+            created_at_unix: 1,
+            author: "comfy-home".to_string(),
+            status: "DIRTY".to_string(),
+            mergeable_state: "CONFLICTING".to_string(),
+            issue_url: Some(
+                "https://github.com/comfy-home/ComfyGit-test-project/pull/12/conflicts".to_string(),
+            ),
+        };
+
+        let title_width = 40usize;
+        let label_width = ISSUE_LINK_LABEL.chars().count();
+        let title_visible = fit_cell(&entry.title, title_width - label_width - 2);
+        let rendered_width = pad_cell(&title_visible, title_width - label_width - 2)
+            .chars()
+            .count()
+            + 2
+            + label_width;
+
+        assert_eq!(rendered_width, title_width);
+        assert!(
+            format_terminal_hyperlink(
+                entry.issue_url.as_deref().unwrap_or_default(),
+                ISSUE_LINK_LABEL
+            )
+            .contains(ISSUE_LINK_LABEL)
+        );
     }
 }
