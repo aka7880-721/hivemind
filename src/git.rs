@@ -189,6 +189,35 @@ pub(crate) fn default_push_remote_name(repo_root: &str) -> Result<String> {
     )
 }
 
+pub(crate) fn github_repository_web_url(repo_root: &str) -> Option<String> {
+    let remote_name = default_push_remote_name(repo_root).ok()?;
+    let remote_url = run_git_checked(repo_root, &["remote", "get-url", &remote_name]).ok()?;
+    github_repository_web_url_from_remote_url(remote_url.trim())
+}
+
+pub(crate) fn github_pull_conflicts_url(repo_root: &str, pr_number: u64) -> Option<String> {
+    let repository_url = github_repository_web_url(repo_root)?;
+    Some(format!("{}/pull/{}/conflicts", repository_url, pr_number))
+}
+
+fn github_repository_web_url_from_remote_url(remote_url: &str) -> Option<String> {
+    let remote_url = remote_url.trim();
+    let path = remote_url
+        .strip_prefix("git@github.com:")
+        .or_else(|| remote_url.strip_prefix("https://github.com/"))
+        .or_else(|| remote_url.strip_prefix("ssh://git@github.com/"))?;
+
+    let path = path.trim_end_matches(".git");
+    let mut segments = path.split('/');
+    let owner = segments.next()?.trim();
+    let repo = segments.next()?.trim();
+    if owner.is_empty() || repo.is_empty() || segments.next().is_some() {
+        return None;
+    }
+
+    Some(format!("https://github.com/{}/{}", owner, repo))
+}
+
 fn branch_upstream_ref_with_cancel(
     repo_root: &str,
     branch_name: &str,
@@ -1381,5 +1410,30 @@ mod tests {
 
         fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
         fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+
+    #[test]
+    fn github_repository_web_url_parser_accepts_https_and_ssh_formats() {
+        assert_eq!(
+            github_repository_web_url_from_remote_url(
+                "https://github.com/comfy-home/ComfyGit-test-project.git"
+            )
+            .as_deref(),
+            Some("https://github.com/comfy-home/ComfyGit-test-project")
+        );
+        assert_eq!(
+            github_repository_web_url_from_remote_url(
+                "git@github.com:comfy-home/ComfyGit-test-project.git"
+            )
+            .as_deref(),
+            Some("https://github.com/comfy-home/ComfyGit-test-project")
+        );
+    }
+
+    #[test]
+    fn github_repository_web_url_parser_rejects_non_github_remotes() {
+        assert!(
+            github_repository_web_url_from_remote_url("https://example.com/org/repo.git").is_none()
+        );
     }
 }
