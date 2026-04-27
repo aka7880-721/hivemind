@@ -2,6 +2,86 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.17.5
+2026-04-27
+
+#### What's new:
+
+### Changed in Failed Merging
+
+#### 🧩 Features
+
+* added "Remote URL" parsing for use with other functions   _(8436048)_
+
+#### 💎 Enhancements
+
+* `cg merge` ASCII table now provides a direct link to conflict resolutions (if they exists)   _(0026560)_
+
+* `cg branch done` / `cg br end` now provides a direct link to conflict resolutions if the flow ended with conflict   _(c2b3ac1)_
+
+New improvements:   _(1784274)_
+* Refactored `cg merge`
+  * User now can invoke VSCode merge conflict resolver directly from CLI table
+  * Works also from an external terminal /if VSCode is installed/
+
+---
+
+### Changed in CLI
+
+#### 💎 Enhancements
+
+* Brand new `cg new` wizard, and `cg new <action> <option>` flow   _(42ea145)_
+
+* New commands - `cg reroot` and `cg reroot rebase` /needs testing/   _(ba5ba68)_
+
+---
+
+### Changed in via ComfyGit
+
+#### 📝 Other
+
+* Merge pull request #63 (via ComfyGit)   _(79460bf)_
+
+* Merge pull request #64 (via ComfyGit)   _(f3f798f)_
+
+* Merge pull request #65 (via ComfyGit)   _(d9e5df2)_
+
+* Merge pull request #66 (via ComfyGit)   _(e9602f4)_
+
+* Merge pull request #67 (via ComfyGit)   _(955bdd5)_
+
+* Merge pull request #68 (via ComfyGit)   _(0e82cb7)_
+
+---
+
+### 🛠️ General:
+
+### 🧩 Features
+
+* automatically deletes the temp worktree created during merge conflict resolution   _(321fe0c)_
+
+### 🐛 Fix(es)
+
+* fixes bad patch branch naming options if created from non-main branch eg `.x`   _(1bfbde1)_
+
+* fixes bad package version bump if `cg bmp ... 4/5` is performed from non-main branch eg `.x`   _(fdcb0f6)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.17.0   _(2c438d8)_
+
+* CG app version bump to v0.17.1   _(4ace72e)_
+
+* CG app version bump to v0.17.2   _(64c930b)_
+
+* CG app version bump to v0.17.3   _(b5d0401)_
+
+* CG app version bump to v0.17.4   _(21410bd)_
+
+* CG app version bump to v0.17.5   _(02b9440)_
+
+---
+
 ## Changelog v0.16.5
 2026-04-26
 
