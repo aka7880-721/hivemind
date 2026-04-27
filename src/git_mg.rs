@@ -5,7 +5,7 @@
 //
 // For details, see the LICENSE file in the repository root.
 use std::{
-    env,
+    env, fs,
     io::{self, Write},
     path::PathBuf,
     process::{Command, Stdio},
@@ -797,6 +797,7 @@ fn prepare_vscode_merge_workspace(
     let first_conflicted_file = worktree_root.join(&conflicted_files[0]);
     Ok(PreparedVscodeMergeWorkspace {
         pr_number: entry.number,
+        repo_root: PathBuf::from(repo_root),
         remote_name,
         source_branch: entry.source_branch.clone(),
         target_branch: entry.target_branch.clone(),
@@ -820,6 +821,10 @@ fn build_vscode_merge_workspace_root(pr_number: u64) -> PathBuf {
 fn launch_prepared_vscode_merge_workspace(prepared: &PreparedVscodeMergeWorkspace) -> Result<()> {
     let vscode_executable = resolve_vscode_executable()?;
     let mut command = Command::new(vscode_executable);
+    if launch_vscode_uri(&prepared.open_uri).is_ok() {
+        return Ok(());
+    }
+
     if is_running_inside_vscode_terminal() {
         command
             .arg("--reuse-window")
@@ -853,6 +858,7 @@ fn finalize_prepared_vscode_merge_workspace(
     }
 
     if !merge_in_progress(&prepared.worktree_root)? {
+        cleanup_prepared_vscode_merge_workspace(prepared)?;
         return Ok(PreparedWorkspaceReloadOutcome::ReadyToReload);
     }
 
@@ -875,6 +881,7 @@ fn finalize_prepared_vscode_merge_workspace(
         ],
         cancel,
     )?;
+    cleanup_prepared_vscode_merge_workspace(prepared)?;
 
     Ok(PreparedWorkspaceReloadOutcome::Pushed(format!(
         "Resolved merge was committed and pushed to {}/{}. GitHub may need a moment; press R again if it still shows conflicting.",
@@ -900,6 +907,48 @@ fn ensure_selected_vscode_workspace(
     }
 
     prepare_vscode_merge_workspace(repo_root, entry, cancel).map(Some)
+}
+
+fn launch_vscode_uri(uri: &str) -> Result<()> {
+    let escaped_uri = uri.replace('\'', "''");
+    Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!("Start-Process '{}'", escaped_uri),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to launch VS Code URI")?;
+    Ok(())
+}
+
+fn cleanup_prepared_vscode_merge_workspace(prepared: &PreparedVscodeMergeWorkspace) -> Result<()> {
+    let worktree_root = prepared.worktree_root.to_string_lossy().to_string();
+    let remove_result = run_git_checked_owned_with_cancel(
+        &prepared.repo_root.to_string_lossy(),
+        vec![
+            "worktree".to_string(),
+            "remove".to_string(),
+            "--force".to_string(),
+            worktree_root.clone(),
+        ],
+        None,
+    );
+    if remove_result.is_ok() {
+        return Ok(());
+    }
+
+    if prepared.worktree_root.exists() {
+        fs::remove_dir_all(&prepared.worktree_root).with_context(|| {
+            format!(
+                "failed to remove temporary merge workspace {}",
+                prepared.worktree_root.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn merge_in_progress(repo_root: &std::path::Path) -> Result<bool> {
@@ -1096,6 +1145,7 @@ struct PullRequestEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedVscodeMergeWorkspace {
     pr_number: u64,
+    repo_root: PathBuf,
     remote_name: String,
     source_branch: String,
     target_branch: String,
