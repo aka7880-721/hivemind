@@ -5,9 +5,11 @@
 //
 // For details, see the LICENSE file in the repository root.
 use std::{
+    env,
     io::{self, Write},
-    process::Command,
-    time::Duration,
+    path::PathBuf,
+    process::{Command, Stdio},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -22,13 +24,19 @@ use crossterm::{
 use serde::Deserialize;
 
 use crate::git::{
-    GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
-    ensure_local_branch_published_and_in_sync_with_cancel, github_repository_web_url,
+    GitCancellation, current_branch_with_cancel, default_push_remote_name,
+    ensure_clean_worktree_with_cancel, ensure_local_branch_published_and_in_sync_with_cancel,
+    github_repository_web_url, run_git_checked_owned_with_cancel, split_output_lines,
 };
 
 const PR_LIST_LIMIT: usize = 200;
-const GH_PR_FIELDS: &str = "number,title,baseRefName,createdAt,author,mergeable,mergeStateStatus";
-const ISSUE_LINK_LABEL: &str = "<See Issues>";
+const GH_PR_FIELDS: &str =
+    "number,title,baseRefName,headRefName,createdAt,author,mergeable,mergeStateStatus";
+const GITHUB_LINK_LABEL: &str = "<GitHub>";
+const VSCODE_LINK_LABEL: &str = "<VSCode>";
+const CONFLICT_FIX_PREFIX: &str = "Fix: ";
+const CONFLICT_LINKS_TOTAL_WIDTH: usize =
+    CONFLICT_FIX_PREFIX.len() + GITHUB_LINK_LABEL.len() + 1 + VSCODE_LINK_LABEL.len();
 
 pub(crate) fn run_merge(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
     let current_branch = current_branch_with_cancel(repo_root, cancel.clone())?;
@@ -45,8 +53,7 @@ pub(crate) fn run_merge(repo_root: &str, cancel: Option<GitCancellation>) -> Res
         cancel.clone(),
     )?;
 
-    let entries = fetch_open_pull_requests(repo_root, cancel.clone())?;
-    let selected = prompt_pull_request_selection(&entries, cancel)?;
+    let selected = prompt_pull_request_selection(repo_root, cancel.clone())?;
     merge_pull_request(repo_root, &selected)
 }
 
@@ -184,23 +191,47 @@ fn select_pull_request_by_number(
 }
 
 fn prompt_pull_request_selection(
-    entries: &[PullRequestEntry],
+    repo_root: &str,
     cancel: Option<GitCancellation>,
 ) -> Result<PullRequestEntry> {
+    let mut entries = fetch_open_pull_requests(repo_root, cancel.clone())?;
+    let mut prepared_vscode_workspace = None::<PreparedVscodeMergeWorkspace>;
     let mut selected = 0usize;
     let mut rendered_lines = 0usize;
     let mut message = None::<String>;
     let mut needs_render = true;
-    let raw_mode = MergePickerRawModeGuard::enter()?;
+    let mut raw_mode = Some(MergePickerRawModeGuard::enter()?);
 
     loop {
         if needs_render {
-            render_pull_request_picker(entries, selected, message.as_deref(), &mut rendered_lines)?;
+            match ensure_selected_vscode_workspace(
+                repo_root,
+                &entries[selected],
+                cancel.clone(),
+                prepared_vscode_workspace.take(),
+            ) {
+                Ok(prepared) => {
+                    prepared_vscode_workspace = prepared;
+                }
+                Err(error) => {
+                    prepared_vscode_workspace = None;
+                    if message.is_none() {
+                        message = Some(format!("VS Code link unavailable: {}", error));
+                    }
+                }
+            }
+            render_pull_request_picker(
+                &entries,
+                selected,
+                message.as_deref(),
+                prepared_vscode_workspace.as_ref(),
+                &mut rendered_lines,
+            )?;
             needs_render = false;
         }
 
         if cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
-            drop(raw_mode);
+            drop(raw_mode.take());
             println!();
             bail!("cancelled by user")
         }
@@ -216,28 +247,111 @@ fn prompt_pull_request_selection(
             Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                 match key.code {
                     KeyCode::Esc => {
-                        drop(raw_mode);
+                        drop(raw_mode.take());
                         println!();
                         bail!("cancelled by user")
                     }
                     KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        drop(raw_mode);
+                        drop(raw_mode.take());
                         println!();
                         bail!("cancelled by user")
                     }
                     KeyCode::Up | KeyCode::BackTab => {
                         selected = selected.checked_sub(1).unwrap_or(entries.len() - 1);
+                        prepared_vscode_workspace = None;
                         message = None;
                         needs_render = true;
                     }
                     KeyCode::Down | KeyCode::Tab => {
                         selected = (selected + 1) % entries.len();
+                        prepared_vscode_workspace = None;
                         message = None;
+                        needs_render = true;
+                    }
+                    KeyCode::Char('r' | 'R') => {
+                        let mut reload_note = None::<String>;
+                        if let Some(prepared) = prepared_vscode_workspace.clone() {
+                            match finalize_prepared_vscode_merge_workspace(
+                                &prepared,
+                                cancel.clone(),
+                            ) {
+                                Ok(PreparedWorkspaceReloadOutcome::ConflictsRemaining(note)) => {
+                                    message = Some(note);
+                                    needs_render = true;
+                                    continue;
+                                }
+                                Ok(PreparedWorkspaceReloadOutcome::Pushed(note)) => {
+                                    prepared_vscode_workspace = None;
+                                    reload_note = Some(note);
+                                }
+                                Ok(PreparedWorkspaceReloadOutcome::ReadyToReload) => {}
+                                Err(error) => {
+                                    message = Some(format!("Reload failed: {}", error));
+                                    needs_render = true;
+                                    continue;
+                                }
+                            }
+                        }
+
+                        match fetch_open_pull_requests(repo_root, cancel.clone()) {
+                            Ok(reloaded_entries) => {
+                                entries = reloaded_entries;
+                                prepared_vscode_workspace = None;
+                                selected = selected.min(entries.len().saturating_sub(1));
+                                message = Some(reload_note.unwrap_or_else(|| {
+                                    "Pull request status reloaded.".to_string()
+                                }));
+                            }
+                            Err(error) => {
+                                message = Some(format!("Reload failed: {}", error));
+                            }
+                        }
+                        needs_render = true;
+                    }
+                    KeyCode::Char('v' | 'V') => {
+                        let entry = entries[selected].clone();
+                        if entry.is_mergeable() {
+                            message = Some(format!(
+                                "PR #{} is mergeable now. Press Enter to merge it, or R to reload.",
+                                entry.number
+                            ));
+                            needs_render = true;
+                            continue;
+                        }
+
+                        clear_pull_request_picker(&mut rendered_lines)?;
+                        drop(raw_mode.take());
+                        println!();
+
+                        let launch_result = match prepared_vscode_workspace.take() {
+                            Some(prepared) if prepared.pr_number == entry.number => {
+                                launch_prepared_vscode_merge_workspace(&prepared).map(|_| prepared)
+                            }
+                            _ => prepare_vscode_merge_workspace(repo_root, &entry, cancel.clone())
+                                .and_then(|prepared| {
+                                    launch_prepared_vscode_merge_workspace(&prepared)?;
+                                    Ok(prepared)
+                                }),
+                        };
+
+                        raw_mode = Some(MergePickerRawModeGuard::enter()?);
+                        message = Some(match launch_result {
+                            Ok(prepared) => {
+                                prepared_vscode_workspace = Some(prepared.clone());
+                                format!(
+                                    "Opened VS Code merge workspace for PR #{} at {}. Resolve conflicts there, save, then return here and press R to commit, push, and refresh.",
+                                    entry.number,
+                                    prepared.worktree_root.display()
+                                )
+                            }
+                            Err(error) => format!("VS Code merge workspace failed: {}", error),
+                        });
                         needs_render = true;
                     }
                     KeyCode::Char(character) => {
                         if let Some(index) = digit_to_index(character) {
                             selected = index.min(entries.len().saturating_sub(1));
+                            prepared_vscode_workspace = None;
                             message = None;
                             needs_render = true;
                         }
@@ -246,14 +360,14 @@ fn prompt_pull_request_selection(
                         let entry = entries[selected].clone();
                         if !entry.is_mergeable() {
                             message = Some(format!(
-                                "PR #{} cannot be merged yet. Select a row where Mergeable is True.",
+                                "PR #{} cannot be merged yet. Press V to open a VS Code merge workspace, or R to reload after resolving it.",
                                 entry.number
                             ));
                             needs_render = true;
                             continue;
                         }
 
-                        drop(raw_mode);
+                        drop(raw_mode.take());
                         println!();
                         return Ok(entry);
                     }
@@ -269,6 +383,7 @@ fn render_pull_request_picker(
     entries: &[PullRequestEntry],
     selected: usize,
     message: Option<&str>,
+    prepared_vscode_workspace: Option<&PreparedVscodeMergeWorkspace>,
     rendered_lines: &mut usize,
 ) -> Result<()> {
     let mut stdout = io::stdout();
@@ -289,7 +404,9 @@ fn render_pull_request_picker(
         MoveToColumn(0),
         Print("Choose a pull request to merge:\r\n"),
         MoveToColumn(0),
-        Print("Use Up/Down or Tab to select. Press Enter to merge. Esc exits.\r\n"),
+        Print(
+            "Use Up/Down or Tab to select. Press Enter to merge, R to reload, V to open the VS Code merge tool for the selected conflicting PR. Esc exits.\r\n",
+        ),
         MoveToColumn(0),
         Print(format_table_border(&layout)),
         Print("\r\n"),
@@ -301,8 +418,14 @@ fn render_pull_request_picker(
     .context("failed to render merge picker header")?;
 
     for (index, entry) in entries.iter().enumerate() {
-        render_pull_request_row(&mut stdout, entry, index == selected, &layout)
-            .context("failed to render merge picker row")?;
+        render_pull_request_row(
+            &mut stdout,
+            entry,
+            index == selected,
+            &layout,
+            prepared_vscode_workspace.filter(|prepared| prepared.pr_number == entry.number),
+        )
+        .context("failed to render merge picker row")?;
     }
 
     queue!(
@@ -335,6 +458,7 @@ fn render_pull_request_row(
     entry: &PullRequestEntry,
     selected: bool,
     layout: &PullRequestTableLayout,
+    prepared_vscode_workspace: Option<&PreparedVscodeMergeWorkspace>,
 ) -> Result<()> {
     let row_color = if selected {
         Color::Yellow
@@ -356,7 +480,13 @@ fn render_pull_request_row(
         Print(" | "),
     )
     .context("failed to queue merge picker row prefix")?;
-    render_pull_request_title_cell(stdout, entry, row_color, layout.title_width)?;
+    render_pull_request_title_cell(
+        stdout,
+        entry,
+        row_color,
+        layout.title_width,
+        prepared_vscode_workspace,
+    )?;
     queue!(
         stdout,
         Print(" | "),
@@ -399,6 +529,7 @@ fn render_pull_request_title_cell(
     entry: &PullRequestEntry,
     row_color: Color,
     width: usize,
+    prepared_vscode_workspace: Option<&PreparedVscodeMergeWorkspace>,
 ) -> Result<()> {
     let Some(issue_url) = entry.issue_url.as_deref() else {
         queue!(
@@ -409,7 +540,7 @@ fn render_pull_request_title_cell(
         return Ok(());
     };
 
-    let label_width = ISSUE_LINK_LABEL.chars().count();
+    let label_width = CONFLICT_LINKS_TOTAL_WIDTH;
     if width <= label_width + 2 {
         queue!(
             stdout,
@@ -425,11 +556,21 @@ fn render_pull_request_title_cell(
         .context("failed to render merge picker title prefix")?;
     queue!(
         stdout,
+        SetForegroundColor(Color::DarkGrey),
+        Print(CONFLICT_FIX_PREFIX),
         SetForegroundColor(Color::Magenta),
-        Print(format_terminal_hyperlink(issue_url, ISSUE_LINK_LABEL)),
+        Print(format_terminal_hyperlink(issue_url, GITHUB_LINK_LABEL)),
+        SetForegroundColor(Color::DarkGrey),
+        Print(" "),
+        SetForegroundColor(Color::Cyan),
+        Print(
+            prepared_vscode_workspace
+                .map(|prepared| format_terminal_hyperlink(&prepared.open_uri, VSCODE_LINK_LABEL))
+                .unwrap_or_else(|| VSCODE_LINK_LABEL.to_string())
+        ),
         SetForegroundColor(row_color)
     )
-    .context("failed to render merge picker issue link")?;
+    .context("failed to render merge picker conflict links")?;
     Ok(())
 }
 
@@ -525,7 +666,9 @@ fn merge_pull_request(repo_root: &str, entry: &PullRequestEntry) -> Result<()> {
         if let Some(conflicts_url) = refreshed.issue_url.as_deref() {
             message.push_str("\n\nTo see the issues, please visit:\n\n");
             message.push_str(conflicts_url);
-            message.push('\n');
+            message.push_str(
+                "\n\nThen run cg merge, select this PR, and press V to open a disposable VS Code merge workspace. Press R there afterwards to refresh the status.\n",
+            );
         }
         bail!("{}", message)
     }
@@ -572,6 +715,269 @@ fn build_pull_request_view_args(pr_number: u64) -> Vec<String> {
         "--json".to_string(),
         GH_PR_FIELDS.to_string(),
     ]
+}
+
+fn prepare_vscode_merge_workspace(
+    repo_root: &str,
+    entry: &PullRequestEntry,
+    cancel: Option<GitCancellation>,
+) -> Result<PreparedVscodeMergeWorkspace> {
+    let remote_name = default_push_remote_name(repo_root)?;
+    let source_refspec = format!(
+        "+refs/heads/{}:refs/remotes/{}/{}",
+        entry.source_branch, remote_name, entry.source_branch
+    );
+    let target_refspec = format!(
+        "+refs/heads/{}:refs/remotes/{}/{}",
+        entry.target_branch, remote_name, entry.target_branch
+    );
+    run_git_checked_owned_with_cancel(
+        repo_root,
+        vec![
+            "fetch".to_string(),
+            "--quiet".to_string(),
+            remote_name.clone(),
+            source_refspec,
+            target_refspec,
+        ],
+        cancel.clone(),
+    )?;
+
+    let worktree_root = build_vscode_merge_workspace_root(entry.number);
+    let worktree_root_string = worktree_root.to_string_lossy().to_string();
+    let source_ref = format!("{}/{}", remote_name, entry.source_branch);
+    let target_ref = format!("{}/{}", remote_name, entry.target_branch);
+    run_git_checked_owned_with_cancel(
+        repo_root,
+        vec![
+            "worktree".to_string(),
+            "add".to_string(),
+            "--detach".to_string(),
+            worktree_root_string.clone(),
+            source_ref,
+        ],
+        cancel.clone(),
+    )?;
+
+    let merge_output = Command::new("git")
+        .current_dir(&worktree_root)
+        .args(["merge", "--no-commit", "--no-ff", &target_ref])
+        .output()
+        .context("failed to prepare local merge conflict workspace")?;
+
+    let conflicted_files = list_unmerged_files(&worktree_root_string, cancel)?;
+    if conflicted_files.is_empty() {
+        if merge_output.status.success() {
+            let _ = run_git_checked_owned_with_cancel(
+                &worktree_root_string,
+                vec!["merge".to_string(), "--abort".to_string()],
+                None,
+            );
+            bail!(
+                "PR #{} no longer produces local merge conflicts. Press R to reload the picker.",
+                entry.number
+            )
+        }
+
+        let stderr = String::from_utf8_lossy(&merge_output.stderr)
+            .trim()
+            .to_string();
+        let stdout = String::from_utf8_lossy(&merge_output.stdout)
+            .trim()
+            .to_string();
+        if !stderr.is_empty() {
+            bail!(stderr)
+        }
+        if !stdout.is_empty() {
+            bail!(stdout)
+        }
+        bail!("failed to prepare merge conflict workspace")
+    }
+
+    let first_conflicted_file = worktree_root.join(&conflicted_files[0]);
+    Ok(PreparedVscodeMergeWorkspace {
+        pr_number: entry.number,
+        remote_name,
+        source_branch: entry.source_branch.clone(),
+        target_branch: entry.target_branch.clone(),
+        worktree_root,
+        first_conflicted_file: first_conflicted_file.clone(),
+        open_uri: build_vscode_file_uri(
+            &first_conflicted_file,
+            !is_running_inside_vscode_terminal(),
+        ),
+    })
+}
+
+fn build_vscode_merge_workspace_root(pr_number: u64) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    env::temp_dir().join(format!("comfygit-merge-pr-{}-{}", pr_number, timestamp))
+}
+
+fn launch_prepared_vscode_merge_workspace(prepared: &PreparedVscodeMergeWorkspace) -> Result<()> {
+    let vscode_executable = resolve_vscode_executable()?;
+    let mut command = Command::new(vscode_executable);
+    if is_running_inside_vscode_terminal() {
+        command
+            .arg("--reuse-window")
+            .arg(&prepared.first_conflicted_file);
+    } else {
+        command
+            .arg("-n")
+            .arg(&prepared.worktree_root)
+            .arg(&prepared.first_conflicted_file);
+    }
+
+    command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to launch VS Code")?;
+    Ok(())
+}
+
+fn finalize_prepared_vscode_merge_workspace(
+    prepared: &PreparedVscodeMergeWorkspace,
+    cancel: Option<GitCancellation>,
+) -> Result<PreparedWorkspaceReloadOutcome> {
+    let worktree_root = prepared.worktree_root.to_string_lossy().to_string();
+    let conflicted_files = list_unmerged_files(&worktree_root, cancel.clone())?;
+    if !conflicted_files.is_empty() {
+        return Ok(PreparedWorkspaceReloadOutcome::ConflictsRemaining(format!(
+            "Conflicts still remain in {}. Resolve them in VS Code, save, then press R again.",
+            prepared.worktree_root.display()
+        )));
+    }
+
+    if !merge_in_progress(&prepared.worktree_root)? {
+        return Ok(PreparedWorkspaceReloadOutcome::ReadyToReload);
+    }
+
+    run_git_checked_owned_with_cancel(
+        &worktree_root,
+        vec!["add".to_string(), "-A".to_string()],
+        cancel.clone(),
+    )?;
+    run_git_checked_owned_with_cancel(
+        &worktree_root,
+        vec!["commit".to_string(), "--no-edit".to_string()],
+        cancel.clone(),
+    )?;
+    run_git_checked_owned_with_cancel(
+        &worktree_root,
+        vec![
+            "push".to_string(),
+            prepared.remote_name.clone(),
+            format!("HEAD:refs/heads/{}", prepared.source_branch),
+        ],
+        cancel,
+    )?;
+
+    Ok(PreparedWorkspaceReloadOutcome::Pushed(format!(
+        "Resolved merge was committed and pushed to {}/{}. GitHub may need a moment; press R again if it still shows conflicting.",
+        prepared.remote_name, prepared.source_branch
+    )))
+}
+
+fn ensure_selected_vscode_workspace(
+    repo_root: &str,
+    entry: &PullRequestEntry,
+    cancel: Option<GitCancellation>,
+    existing: Option<PreparedVscodeMergeWorkspace>,
+) -> Result<Option<PreparedVscodeMergeWorkspace>> {
+    if entry.is_mergeable() || entry.issue_url.is_none() {
+        return Ok(None);
+    }
+
+    if let Some(existing) = existing
+        && existing.pr_number == entry.number
+        && existing.first_conflicted_file.exists()
+    {
+        return Ok(Some(existing));
+    }
+
+    prepare_vscode_merge_workspace(repo_root, entry, cancel).map(Some)
+}
+
+fn merge_in_progress(repo_root: &std::path::Path) -> Result<bool> {
+    let status = Command::new("git")
+        .current_dir(repo_root)
+        .args(["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to inspect merge state")?;
+    Ok(status.success())
+}
+
+fn is_running_inside_vscode_terminal() -> bool {
+    env::var("TERM_PROGRAM").is_ok_and(|value| value.eq_ignore_ascii_case("vscode"))
+        || env::var_os("VSCODE_GIT_IPC_HANDLE").is_some()
+}
+
+fn resolve_vscode_executable() -> Result<PathBuf> {
+    let code_command = PathBuf::from("code");
+    if Command::new(&code_command)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+    {
+        return Ok(code_command);
+    }
+
+    let local_app_data = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("could not locate LOCALAPPDATA to find Code.exe"))?;
+    let fallback = local_app_data
+        .join("Programs")
+        .join("Microsoft VS Code")
+        .join("Code.exe");
+    if fallback.is_file() {
+        Ok(fallback)
+    } else {
+        bail!("could not find the VS Code CLI or Code.exe")
+    }
+}
+
+fn build_vscode_file_uri(path: &std::path::Path, open_in_new_window: bool) -> String {
+    let encoded_path = encode_vscode_path(path);
+    if open_in_new_window {
+        format!("vscode://file/{}?windowId=_blank", encoded_path)
+    } else {
+        format!("vscode://file/{}", encoded_path)
+    }
+}
+
+fn encode_vscode_path(path: &std::path::Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let mut encoded = String::with_capacity(normalized.len());
+    for byte in normalized.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b':' => {
+                encoded.push(*byte as char)
+            }
+            _ => encoded.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    encoded
+}
+
+fn list_unmerged_files(repo_root: &str, cancel: Option<GitCancellation>) -> Result<Vec<String>> {
+    let output = run_git_checked_owned_with_cancel(
+        repo_root,
+        vec![
+            "diff".to_string(),
+            "--name-only".to_string(),
+            "--diff-filter=U".to_string(),
+        ],
+        cancel,
+    )?;
+    Ok(split_output_lines(&output))
 }
 
 fn build_merge_commit_subject(pr_number: u64) -> String {
@@ -623,6 +1029,23 @@ fn format_terminal_hyperlink(url: &str, label: &str) -> String {
     format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", url, label)
 }
 
+fn clear_pull_request_picker(rendered_lines: &mut usize) -> Result<()> {
+    if *rendered_lines == 0 {
+        return Ok(());
+    }
+
+    let mut stdout = io::stdout();
+    execute!(
+        stdout,
+        MoveUp(*rendered_lines as u16),
+        MoveToColumn(0),
+        Clear(ClearType::FromCursorDown)
+    )
+    .context("failed to clear merge picker")?;
+    *rendered_lines = 0;
+    Ok(())
+}
+
 fn digit_to_index(character: char) -> Option<usize> {
     character
         .to_digit(10)
@@ -661,12 +1084,30 @@ struct PullRequestEntry {
     number: u64,
     title: String,
     target_branch: String,
+    source_branch: String,
     created_label: String,
     created_at_unix: i64,
     author: String,
     status: String,
     mergeable_state: String,
     issue_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedVscodeMergeWorkspace {
+    pr_number: u64,
+    remote_name: String,
+    source_branch: String,
+    target_branch: String,
+    worktree_root: PathBuf,
+    first_conflicted_file: PathBuf,
+    open_uri: String,
+}
+
+enum PreparedWorkspaceReloadOutcome {
+    ConflictsRemaining(String),
+    Pushed(String),
+    ReadyToReload,
 }
 
 impl PullRequestEntry {
@@ -695,6 +1136,7 @@ impl PullRequestEntry {
             number: pr.number,
             title: pr.title,
             target_branch: pr.base_ref_name,
+            source_branch: pr.head_ref_name,
             created_label: format_created_at_label(&pr.created_at),
             created_at_unix,
             author,
@@ -719,6 +1161,7 @@ struct GhPullRequest {
     number: u64,
     title: String,
     base_ref_name: String,
+    head_ref_name: String,
     created_at: String,
     author: Option<GhPullRequestAuthor>,
     mergeable: String,
@@ -791,7 +1234,7 @@ mod tests {
                 "view",
                 "42",
                 "--json",
-                "number,title,baseRefName,createdAt,author,mergeable,mergeStateStatus",
+                "number,title,baseRefName,headRefName,createdAt,author,mergeable,mergeStateStatus",
             ]
             .into_iter()
             .map(str::to_string)
@@ -806,6 +1249,7 @@ mod tests {
                 number: 41,
                 title: "Older PR".to_string(),
                 target_branch: "main".to_string(),
+                source_branch: "feature/older".to_string(),
                 created_label: "2026-04-24 10:00".to_string(),
                 created_at_unix: 100,
                 author: "alice".to_string(),
@@ -817,6 +1261,7 @@ mod tests {
                 number: 67,
                 title: "Target PR".to_string(),
                 target_branch: "main".to_string(),
+                source_branch: "feature/target".to_string(),
                 created_label: "2026-04-25 10:00".to_string(),
                 created_at_unix: 200,
                 author: "bob".to_string(),
@@ -838,6 +1283,7 @@ mod tests {
             number: 41,
             title: "Older PR".to_string(),
             target_branch: "main".to_string(),
+            source_branch: "feature/older".to_string(),
             created_label: "2026-04-24 10:00".to_string(),
             created_at_unix: 100,
             author: "alice".to_string(),
@@ -859,6 +1305,7 @@ mod tests {
             number: 1,
             title: "PR".to_string(),
             target_branch: "main".to_string(),
+            source_branch: "feature/pr".to_string(),
             created_label: "2026-04-25 17:06".to_string(),
             created_at_unix: 0,
             author: "alice".to_string(),
@@ -890,6 +1337,7 @@ mod tests {
                 number: 1,
                 title: "older".to_string(),
                 target_branch: "main".to_string(),
+                source_branch: "feature/older".to_string(),
                 created_label: "2026-04-24 10:00".to_string(),
                 created_at_unix: 100,
                 author: "alice".to_string(),
@@ -901,6 +1349,7 @@ mod tests {
                 number: 2,
                 title: "newer".to_string(),
                 target_branch: "main".to_string(),
+                source_branch: "feature/newer".to_string(),
                 created_label: "2026-04-25 10:00".to_string(),
                 created_at_unix: 200,
                 author: "bob".to_string(),
@@ -961,6 +1410,7 @@ mod tests {
             number: 50,
             title: "demo".to_string(),
             target_branch: "0.15.x".to_string(),
+            source_branch: "feature/demo".to_string(),
             created_label: "2026-04-25 17:06".to_string(),
             created_at_unix: 1,
             author: "comfy-home".to_string(),
@@ -976,11 +1426,12 @@ mod tests {
     }
 
     #[test]
-    fn render_pull_request_title_cell_reserves_space_for_issue_link() {
+    fn render_pull_request_title_cell_reserves_space_for_conflict_links() {
         let entry = PullRequestEntry {
             number: 12,
             title: "0.4.x (via ComfyGit)".to_string(),
             target_branch: "main".to_string(),
+            source_branch: "0.4.x".to_string(),
             created_label: "2026-04-27 08:01".to_string(),
             created_at_unix: 1,
             author: "comfy-home".to_string(),
@@ -992,7 +1443,7 @@ mod tests {
         };
 
         let title_width = 40usize;
-        let label_width = ISSUE_LINK_LABEL.chars().count();
+        let label_width = CONFLICT_LINKS_TOTAL_WIDTH;
         let title_visible = fit_cell(&entry.title, title_width - label_width - 2);
         let rendered_width = pad_cell(&title_visible, title_width - label_width - 2)
             .chars()
@@ -1004,9 +1455,28 @@ mod tests {
         assert!(
             format_terminal_hyperlink(
                 entry.issue_url.as_deref().unwrap_or_default(),
-                ISSUE_LINK_LABEL
+                GITHUB_LINK_LABEL
             )
-            .contains(ISSUE_LINK_LABEL)
+            .contains(GITHUB_LINK_LABEL)
+        );
+    }
+
+    #[test]
+    fn build_vscode_merge_workspace_root_includes_pr_number() {
+        let root = build_vscode_merge_workspace_root(12);
+        let root = root.to_string_lossy();
+
+        assert!(root.contains("comfygit-merge-pr-12-"));
+    }
+
+    #[test]
+    fn build_vscode_file_uri_encodes_spaces_for_new_window_launches() {
+        let uri =
+            build_vscode_file_uri(std::path::Path::new("C:/tmp/merge space/Cargo.toml"), true);
+
+        assert_eq!(
+            uri,
+            "vscode://file/C:/tmp/merge%20space/Cargo.toml?windowId=_blank"
         );
     }
 }

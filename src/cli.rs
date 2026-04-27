@@ -59,6 +59,8 @@ use crate::{
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/comfy-home/ComfyGit/releases/latest";
+const GITHUB_CARGO_TOML_URL: &str =
+    "https://raw.githubusercontent.com/comfy-home/ComfyGit/main/Cargo.toml";
 
 static CLI_GIT_CANCELLATION_SLOT: OnceLock<Mutex<Option<GitCancellation>>> = OnceLock::new();
 static CLI_CTRL_C_HANDLER_RESULT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
@@ -119,6 +121,35 @@ pub(crate) enum StartupMode {
 
 pub(crate) fn dispatch() -> Result<StartupMode> {
     let args = env::args().skip(1).collect::<Vec<_>>();
+
+    // Skip the version gate for help/version queries so those always work.
+    let is_info_command = args
+        .first()
+        .map(|a| is_help(a) || is_version(a))
+        .unwrap_or(false);
+
+    if !is_info_command
+        && let MinimumVersionStatus::TooOld { minimum, reason } = check_minimum_version()
+    {
+        eprintln!();
+        eprintln!(
+            "  This version of ComfyGit ({}) is no longer supported.",
+            APP_VERSION
+        );
+        eprintln!(
+            "  You need to update the app to a newer version (minimum: {}).",
+            minimum
+        );
+        if let Some(reason) = reason {
+            eprintln!("  Reason: {}", reason);
+        }
+        eprintln!();
+        eprintln!("  Download the latest release from:");
+        eprintln!("  https://github.com/comfy-home/ComfyGit/releases/latest");
+        eprintln!();
+        bail!("version too old; update required");
+    }
+
     dispatch_args(&args)
 }
 
@@ -3012,6 +3043,72 @@ struct GitHubRelease {
     tag_name: String,
 }
 
+enum MinimumVersionStatus {
+    Satisfied,
+    TooOld {
+        minimum: String,
+        reason: Option<String>,
+    },
+}
+
+/// Reads `[package.metadata] minimum_required` from the canonical `Cargo.toml`
+/// on the `main` branch.  Fails open (returns `Satisfied`) on any network or
+/// parse error so that offline users are never blocked.
+fn check_minimum_version() -> MinimumVersionStatus {
+    let client = match Client::builder().timeout(Duration::from_secs(2)).build() {
+        Ok(client) => client,
+        Err(_) => return MinimumVersionStatus::Satisfied,
+    };
+
+    let body = match client
+        .get(GITHUB_CARGO_TOML_URL)
+        .header("User-Agent", format!("cg/{}", APP_VERSION))
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.text())
+    {
+        Ok(body) => body,
+        Err(_) => return MinimumVersionStatus::Satisfied,
+    };
+
+    let toml_value = match toml::from_str::<toml::Value>(&body) {
+        Ok(v) => v,
+        Err(_) => return MinimumVersionStatus::Satisfied,
+    };
+
+    // [package.metadata]
+    // minimum_required = "0.18.0"
+    // minimum_required_reason = "critical security fix"
+    let meta = match toml_value.get("package").and_then(|p| p.get("metadata")) {
+        Some(m) => m,
+        None => return MinimumVersionStatus::Satisfied,
+    };
+
+    let minimum = match meta
+        .get("minimum_required")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(v) => normalize_release_version(v).to_string(),
+        None => return MinimumVersionStatus::Satisfied,
+    };
+
+    let reason = meta
+        .get("minimum_required_reason")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_owned);
+
+    if matches!(
+        compare_release_versions(APP_VERSION, &minimum),
+        Ordering::Less
+    ) {
+        MinimumVersionStatus::TooOld { minimum, reason }
+    } else {
+        MinimumVersionStatus::Satisfied
+    }
+}
+
 fn github_release_status() -> ReleaseStatus {
     let client = match Client::builder().timeout(Duration::from_secs(3)).build() {
         Ok(client) => client,
@@ -3621,6 +3718,42 @@ mod tests {
             compare_release_versions("0.10.0", "0.9.2"),
             Ordering::Greater
         );
+    }
+
+    #[test]
+    fn minimum_version_gate_blocks_older_version() {
+        // Installed: 0.17.0, minimum: 0.18.0 → should trigger gate
+        assert!(matches!(
+            compare_release_versions("0.17.0", "0.18.0"),
+            Ordering::Less
+        ));
+    }
+
+    #[test]
+    fn minimum_version_gate_allows_equal_version() {
+        assert!(matches!(
+            compare_release_versions("0.18.0", "0.18.0"),
+            Ordering::Equal
+        ));
+    }
+
+    #[test]
+    fn minimum_version_gate_allows_newer_version() {
+        assert!(matches!(
+            compare_release_versions("0.19.0", "0.18.0"),
+            Ordering::Greater
+        ));
+    }
+
+    #[test]
+    fn minimum_version_gate_handles_v_prefix_in_minimum() {
+        // minimum_required in versions.json may be "v0.18.0"
+        let normalised = normalize_release_version("v0.18.0");
+        assert_eq!(normalised, "0.18.0");
+        assert!(matches!(
+            compare_release_versions("0.17.5", normalised),
+            Ordering::Less
+        ));
     }
 
     fn create_temp_repo_dir(test_name: &str) -> PathBuf {
