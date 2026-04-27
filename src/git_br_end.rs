@@ -16,8 +16,8 @@ use serde::Deserialize;
 
 use crate::{
     git::{
-        GitCancellation, publish_branch_with_upstream, run_git_checked_with_cancel,
-        switch_to_existing_branch,
+        GitCancellation, github_pull_conflicts_url, publish_branch_with_upstream,
+        run_git_checked_with_cancel, switch_to_existing_branch,
     },
     git_mg::run_merge_for_pull_request,
     git_pr::run_pr_and_capture,
@@ -121,10 +121,13 @@ fn ensure_pull_request_mergeable(repo_root: &str, pr_number: u64) -> Result<()> 
         }
         if !status.is_unknown() {
             bail!(
-                "PR #{} is not mergeable yet (mergeable: {}, status: {})",
-                pr_number,
-                status.mergeable,
-                status.merge_state_status
+                "{}",
+                format_non_mergeable_pull_request_error(
+                    repo_root,
+                    pr_number,
+                    &status.mergeable,
+                    &status.merge_state_status,
+                )
             )
         }
         if attempt_index + 1 == MERGEABILITY_RETRY_DELAYS_SECONDS.len() {
@@ -133,6 +136,27 @@ fn ensure_pull_request_mergeable(repo_root: &str, pr_number: u64) -> Result<()> 
     }
 
     bail!(MERGEABILITY_UNKNOWN_MESSAGE)
+}
+
+fn format_non_mergeable_pull_request_error(
+    repo_root: &str,
+    pr_number: u64,
+    mergeable: &str,
+    status: &str,
+) -> String {
+    let mut message = format!(
+        "PR #{} is not mergeable yet (mergeable: \x1b[31m{}\x1b[0m, status: \x1b[31m{}\x1b[0m)",
+        pr_number, mergeable, status
+    );
+    if let Some(conflicts_url) = github_pull_conflicts_url(repo_root, pr_number) {
+        message.push_str("\n\nTo see the issues, please visit:\n\n");
+        message.push_str(&format!("\x1b[33m{}\x1b[0m", conflicts_url));
+        message.push_str(&format!(
+            "\n\nThen run cg merge, select PR #{}, and press V to open a disposable VS Code merge workspace. Press R there afterwards to refresh the status.\n",
+            pr_number
+        ));
+    }
+    message
 }
 
 fn fetch_pull_request_mergeability(
@@ -263,5 +287,13 @@ mod tests {
             unpublished_branch_name_from_error(&error).as_deref(),
             Some("v0.1.2-dev")
         );
+    }
+
+    #[test]
+    fn format_non_mergeable_pull_request_error_colors_status_values() {
+        let message = format_non_mergeable_pull_request_error("C:/repo", 9, "CONFLICTING", "DIRTY");
+
+        assert!(message.contains("\x1b[31mCONFLICTING\x1b[0m"));
+        assert!(message.contains("\x1b[31mDIRTY\x1b[0m"));
     }
 }

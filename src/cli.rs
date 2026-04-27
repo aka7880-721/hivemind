@@ -52,6 +52,7 @@ use crate::{
     git_br_end::run_branch_done,
     git_mg::{run_merge, run_merge_for_pull_request},
     git_pr::run_pr,
+    git_rrt::{RerootMode, run_reroot},
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
 };
@@ -59,6 +60,8 @@ use crate::{
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/comfy-home/ComfyGit/releases/latest";
+const GITHUB_CARGO_TOML_URL: &str =
+    "https://raw.githubusercontent.com/comfy-home/ComfyGit/main/Cargo.toml";
 
 static CLI_GIT_CANCELLATION_SLOT: OnceLock<Mutex<Option<GitCancellation>>> = OnceLock::new();
 static CLI_CTRL_C_HANDLER_RESULT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
@@ -119,6 +122,35 @@ pub(crate) enum StartupMode {
 
 pub(crate) fn dispatch() -> Result<StartupMode> {
     let args = env::args().skip(1).collect::<Vec<_>>();
+
+    // Skip the version gate for help/version queries so those always work.
+    let is_info_command = args
+        .first()
+        .map(|a| is_help(a) || is_version(a))
+        .unwrap_or(false);
+
+    if !is_info_command
+        && let MinimumVersionStatus::TooOld { minimum, reason } = check_minimum_version()
+    {
+        eprintln!();
+        eprintln!(
+            "  This version of ComfyGit ({}) is no longer supported.",
+            APP_VERSION
+        );
+        eprintln!(
+            "  You need to update the app to a newer version (minimum: {}).",
+            minimum
+        );
+        if let Some(reason) = reason {
+            eprintln!("  Reason: {}", reason);
+        }
+        eprintln!();
+        eprintln!("  Download the latest release from:");
+        eprintln!("  https://github.com/comfy-home/ComfyGit/releases/latest");
+        eprintln!();
+        bail!("version too old; update required");
+    }
+
     dispatch_args(&args)
 }
 
@@ -173,6 +205,34 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             with_cli_git_cancellation(|cancel| run_merge(&repo_root, cancel))?;
             Ok(StartupMode::Handled)
         }
+        [command] if is_reroot_command(command) => {
+            let cwd = env::current_dir().context("failed to read current directory")?;
+            let repo_root = current_git_repo_root(&cwd)?;
+            let custom_main_branch = find_repo_custom_main_branch(&repo_root);
+            with_cli_git_cancellation(|cancel| {
+                run_reroot(
+                    &repo_root,
+                    custom_main_branch.as_deref(),
+                    RerootMode::Merge,
+                    cancel,
+                )
+            })?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_reroot_command(command) && is_reroot_rebase_action(action) => {
+            let cwd = env::current_dir().context("failed to read current directory")?;
+            let repo_root = current_git_repo_root(&cwd)?;
+            let custom_main_branch = find_repo_custom_main_branch(&repo_root);
+            with_cli_git_cancellation(|cancel| {
+                run_reroot(
+                    &repo_root,
+                    custom_main_branch.as_deref(),
+                    RerootMode::Rebase,
+                    cancel,
+                )
+            })?;
+            Ok(StartupMode::Handled)
+        }
         [command, selector] if is_merge_command(command) => {
             let pr_number = parse_merge_pull_request_selector(selector)?;
             let cwd = env::current_dir().context("failed to read current directory")?;
@@ -218,6 +278,18 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command, action, option] if is_bump_command(command) => {
             run_bump(action, Some(option))?;
+            Ok(StartupMode::Handled)
+        }
+        [command] if is_new_command(command) => {
+            crate::git_new::run_new(None, None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_new_command(command) => {
+            crate::git_new::run_new(Some(action), None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, option] if is_new_command(command) => {
+            crate::git_new::run_new(Some(action), Some(option))?;
             Ok(StartupMode::Handled)
         }
         _ => {
@@ -277,6 +349,18 @@ fn is_pr_command(value: &str) -> bool {
 
 fn is_merge_command(value: &str) -> bool {
     matches!(value, "merge" | "mg" | "mrg")
+}
+
+fn is_reroot_command(value: &str) -> bool {
+    matches!(value, "reroot" | "rrt")
+}
+
+fn is_reroot_rebase_action(value: &str) -> bool {
+    matches!(value, "rebase" | "force" | "rbs")
+}
+
+fn is_new_command(value: &str) -> bool {
+    matches!(value, "new")
 }
 
 fn parse_merge_pull_request_selector(value: &str) -> Result<u64> {
@@ -363,12 +447,20 @@ fn print_usage() {
     );
     println!("  cg merge                   Interactively choose and merge an open pull request");
     println!("  cg merge #67               Merge open pull request #67 directly");
+    println!(
+        "  cg reroot                  Merge a selected source branch into the current non-main branch"
+    );
+    println!(
+        "  cg reroot rebase           Rebase the current non-main branch onto a selected source branch"
+    );
     println!("          synonyms:");
     println!("            branch: br | brn | brnch");
     println!("            up: up | ..");
     println!("            main: main | ~");
     println!("            done: done | end | close | merge | mrg | mg");
     println!("            merge: mg | mrg");
+    println!("            reroot: rrt");
+    println!("            rebase: rebase | force | rbs");
     println!(" ");
     println!("  BUMPING COMMANDS:");
     println!(" ");
@@ -572,7 +664,7 @@ fn print_project_version(lookup: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
+pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
     let config = load_config()?;
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
@@ -701,6 +793,16 @@ fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
                 branch_prompt_source.custom_main_branch.as_deref(),
             ) && let Some(selected_version) =
                 semver_release_version_from_branch_name(&selected_branch_name)
+            {
+                next_version = selected_version;
+            } else if scheme == VersionScheme::SemVer
+                && action == BumpAction::Patch
+                && !crate::git::is_mainline_branch_name(
+                    &branch_prompt_source.current_branch,
+                    branch_prompt_source.custom_main_branch.as_deref(),
+                )
+                && let Some(selected_version) =
+                    semver_version_from_dev_branch(&selected_branch_name)
             {
                 next_version = selected_version;
             }
@@ -854,6 +956,23 @@ fn semver_release_line_branch_from_dev_branch(branch_name: &str) -> Option<Strin
         return None;
     }
     Some(format!("{}.{}.x", major, minor))
+}
+
+fn semver_version_from_dev_branch(branch_name: &str) -> Option<String> {
+    let normalized = branch_name.trim().trim_start_matches('v');
+    let normalized = normalized
+        .split_once("--")
+        .map(|(base, _)| base)
+        .unwrap_or(normalized);
+    let release_version = normalized.strip_suffix("-dev")?;
+    let mut parts = release_version.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{}.{}.{}", major, minor, patch))
 }
 
 fn next_available_semver_dev_branch_for_release_line(
@@ -1149,7 +1268,7 @@ pub(crate) fn push_branch_force_with_lease(repo_root: &str) -> Result<()> {
     Ok(())
 }
 
-fn current_git_repo_root(cwd: &Path) -> Result<String> {
+pub(crate) fn current_git_repo_root(cwd: &Path) -> Result<String> {
     let cwd_display = cwd.display().to_string();
     Ok(
         run_git_checked(&cwd_display, &["rev-parse", "--show-toplevel"])
@@ -2693,7 +2812,7 @@ fn find_project_by_lookup<'a>(
     }
 }
 
-fn find_project_for_cwd<'a>(
+pub(crate) fn find_project_for_cwd<'a>(
     projects: &'a [ProjectConfig],
     cwd: &Path,
 ) -> Result<&'a ProjectConfig> {
@@ -2935,7 +3054,7 @@ fn path_depth(path: &Path) -> usize {
     path.components().count()
 }
 
-fn best_effort_canonicalize(path: &Path) -> PathBuf {
+pub(crate) fn best_effort_canonicalize(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
@@ -2994,6 +3113,72 @@ enum ReleaseStatus {
 #[derive(Deserialize)]
 struct GitHubRelease {
     tag_name: String,
+}
+
+enum MinimumVersionStatus {
+    Satisfied,
+    TooOld {
+        minimum: String,
+        reason: Option<String>,
+    },
+}
+
+/// Reads `[package.metadata] minimum_required` from the canonical `Cargo.toml`
+/// on the `main` branch.  Fails open (returns `Satisfied`) on any network or
+/// parse error so that offline users are never blocked.
+fn check_minimum_version() -> MinimumVersionStatus {
+    let client = match Client::builder().timeout(Duration::from_secs(2)).build() {
+        Ok(client) => client,
+        Err(_) => return MinimumVersionStatus::Satisfied,
+    };
+
+    let body = match client
+        .get(GITHUB_CARGO_TOML_URL)
+        .header("User-Agent", format!("cg/{}", APP_VERSION))
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.text())
+    {
+        Ok(body) => body,
+        Err(_) => return MinimumVersionStatus::Satisfied,
+    };
+
+    let toml_value = match toml::from_str::<toml::Value>(&body) {
+        Ok(v) => v,
+        Err(_) => return MinimumVersionStatus::Satisfied,
+    };
+
+    // [package.metadata]
+    // minimum_required = "0.18.0"
+    // minimum_required_reason = "critical security fix"
+    let meta = match toml_value.get("package").and_then(|p| p.get("metadata")) {
+        Some(m) => m,
+        None => return MinimumVersionStatus::Satisfied,
+    };
+
+    let minimum = match meta
+        .get("minimum_required")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(v) => normalize_release_version(v).to_string(),
+        None => return MinimumVersionStatus::Satisfied,
+    };
+
+    let reason = meta
+        .get("minimum_required_reason")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_owned);
+
+    if matches!(
+        compare_release_versions(APP_VERSION, &minimum),
+        Ordering::Less
+    ) {
+        MinimumVersionStatus::TooOld { minimum, reason }
+    } else {
+        MinimumVersionStatus::Satisfied
+    }
 }
 
 fn github_release_status() -> ReleaseStatus {
@@ -3229,6 +3414,18 @@ mod tests {
         assert_eq!(
             semver_release_line_branch_from_dev_branch("v0.4.1-dev--specific"),
             Some("0.4.x".to_string())
+        );
+    }
+
+    #[test]
+    fn semver_version_from_dev_branch_handles_plain_and_specific_names() {
+        assert_eq!(
+            semver_version_from_dev_branch("v0.4.1-dev"),
+            Some("0.4.1".to_string())
+        );
+        assert_eq!(
+            semver_version_from_dev_branch("v0.4.1-dev--specific"),
+            Some("0.4.1".to_string())
         );
     }
 
@@ -3605,6 +3802,42 @@ mod tests {
             compare_release_versions("0.10.0", "0.9.2"),
             Ordering::Greater
         );
+    }
+
+    #[test]
+    fn minimum_version_gate_blocks_older_version() {
+        // Installed: 0.17.0, minimum: 0.18.0 → should trigger gate
+        assert!(matches!(
+            compare_release_versions("0.17.0", "0.18.0"),
+            Ordering::Less
+        ));
+    }
+
+    #[test]
+    fn minimum_version_gate_allows_equal_version() {
+        assert!(matches!(
+            compare_release_versions("0.18.0", "0.18.0"),
+            Ordering::Equal
+        ));
+    }
+
+    #[test]
+    fn minimum_version_gate_allows_newer_version() {
+        assert!(matches!(
+            compare_release_versions("0.19.0", "0.18.0"),
+            Ordering::Greater
+        ));
+    }
+
+    #[test]
+    fn minimum_version_gate_handles_v_prefix_in_minimum() {
+        // minimum_required in versions.json may be "v0.18.0"
+        let normalised = normalize_release_version("v0.18.0");
+        assert_eq!(normalised, "0.18.0");
+        assert!(matches!(
+            compare_release_versions("0.17.5", normalised),
+            Ordering::Less
+        ));
     }
 
     fn create_temp_repo_dir(test_name: &str) -> PathBuf {
