@@ -220,6 +220,18 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             run_bump(action, Some(option))?;
             Ok(StartupMode::Handled)
         }
+        [command] if is_new_command(command) => {
+            crate::git_new::run_new(None, None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_new_command(command) => {
+            crate::git_new::run_new(Some(action), None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, option] if is_new_command(command) => {
+            crate::git_new::run_new(Some(action), Some(option))?;
+            Ok(StartupMode::Handled)
+        }
         _ => {
             print_usage();
             bail!("unknown command")
@@ -277,6 +289,10 @@ fn is_pr_command(value: &str) -> bool {
 
 fn is_merge_command(value: &str) -> bool {
     matches!(value, "merge" | "mg" | "mrg")
+}
+
+fn is_new_command(value: &str) -> bool {
+    matches!(value, "new")
 }
 
 fn parse_merge_pull_request_selector(value: &str) -> Result<u64> {
@@ -572,7 +588,7 @@ fn print_project_version(lookup: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
+pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<()> {
     let config = load_config()?;
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
@@ -1149,7 +1165,7 @@ pub(crate) fn push_branch_force_with_lease(repo_root: &str) -> Result<()> {
     Ok(())
 }
 
-fn current_git_repo_root(cwd: &Path) -> Result<String> {
+pub(crate) fn current_git_repo_root(cwd: &Path) -> Result<String> {
     let cwd_display = cwd.display().to_string();
     Ok(
         run_git_checked(&cwd_display, &["rev-parse", "--show-toplevel"])
@@ -2693,7 +2709,7 @@ fn find_project_by_lookup<'a>(
     }
 }
 
-fn find_project_for_cwd<'a>(
+pub(crate) fn find_project_for_cwd<'a>(
     projects: &'a [ProjectConfig],
     cwd: &Path,
 ) -> Result<&'a ProjectConfig> {
@@ -2935,7 +2951,7 @@ fn path_depth(path: &Path) -> usize {
     path.components().count()
 }
 
-fn best_effort_canonicalize(path: &Path) -> PathBuf {
+pub(crate) fn best_effort_canonicalize(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
