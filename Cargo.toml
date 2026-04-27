@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.17.1"
+version = "0.17.2"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -14,6 +14,8 @@ categories = ["development-tools", "command-line-utilities", "command-line-inter
 
 [package.metadata]
 license-link = "https://github.com/comfy-home/ComfyGit?tab=License-1-ov-file"
+minimum_required = "0.19.0"
+minimum_required_reason = "..."
 
 [[bin]]
 name = "cg"

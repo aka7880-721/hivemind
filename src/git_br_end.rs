@@ -150,7 +150,11 @@ fn format_non_mergeable_pull_request_error(
     );
     if let Some(conflicts_url) = github_pull_conflicts_url(repo_root, pr_number) {
         message.push_str("\n\nTo see the issues, please visit:\n\n");
-        message.push_str(&format!("\x1b[33m{}\x1b[0m\n", conflicts_url));
+        message.push_str(&format!("\x1b[33m{}\x1b[0m", conflicts_url));
+        message.push_str(&format!(
+            "\n\nThen run cg merge, select PR #{}, and press V to open a disposable VS Code merge workspace. Press R there afterwards to refresh the status.\n",
+            pr_number
+        ));
     }
     message
 }
