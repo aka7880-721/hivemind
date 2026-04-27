@@ -17,6 +17,7 @@ mod git_br_end;
 mod git_mg;
 mod git_new;
 mod git_pr;
+mod git_rrt;
 mod git_stt;
 mod mmr;
 #[path = "overview-pg.rs"]
