@@ -117,6 +117,17 @@ pub(crate) fn suggest_branch_name_options(
         );
     }
 
+    if request.scheme == VersionScheme::SemVer && request.action == BumpAction::Patch {
+        return Ok(vec![
+            fixed_branch_name_option(next_available_non_mainline_semver_dev_branch(
+                request.next_version,
+                request.existing_branches,
+                request.today,
+            )?),
+            custom_branch_name_option(),
+        ]);
+    }
+
     Ok(vec![
         fixed_branch_name_option(format!("v{}-dev", request.next_version)),
         custom_branch_name_option(),
@@ -330,6 +341,31 @@ fn next_available_major_line(major: u32, existing_branches: &[String]) -> String
     }
 }
 
+fn next_available_non_mainline_semver_dev_branch(
+    next_version: &str,
+    existing_branches: &[String],
+    today: NaiveDate,
+) -> Result<String> {
+    let mut candidate_version = next_version.to_string();
+    loop {
+        let exact = format!("v{}-dev", candidate_version);
+        let with_suffix = format!("{}--", exact);
+        let exists = existing_branches.iter().any(|branch| {
+            branch.eq_ignore_ascii_case(&exact)
+                || branch
+                    .to_ascii_lowercase()
+                    .starts_with(&with_suffix.to_ascii_lowercase())
+        });
+        if !exists {
+            return Ok(exact);
+        }
+
+        candidate_version = VersionScheme::SemVer
+            .bump(&candidate_version, BumpAction::Patch, today)
+            .map_err(anyhow::Error::msg)?;
+    }
+}
+
 fn sanitize_branch_fragment(value: &str) -> Option<String> {
     let mut sanitized = String::new();
     let mut last_was_separator = true;
@@ -409,6 +445,33 @@ mod tests {
                 .map(|option| option.preview())
                 .collect::<Vec<_>>(),
             vec!["v0.25.4-dev", "custom"]
+        );
+    }
+
+    #[test]
+    fn release_line_suggestions_skip_existing_dev_patch_branches() {
+        let today = NaiveDate::from_ymd_opt(2026, 4, 23).unwrap();
+        let options = suggest_branch_name_options(BranchNameSuggestionRequest {
+            scheme: VersionScheme::SemVer,
+            action: BumpAction::Patch,
+            current_branch: "0.25.x",
+            current_version: "0.25.3",
+            next_version: "0.25.4",
+            custom_main_branch: None,
+            existing_branches: &[
+                "v0.25.4-dev".to_string(),
+                "v0.25.4-dev--specific".to_string(),
+            ],
+            today,
+        })
+        .expect("release line suggestions");
+
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| option.preview())
+                .collect::<Vec<_>>(),
+            vec!["v0.25.5-dev", "custom"]
         );
     }
 
