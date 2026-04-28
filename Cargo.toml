@@ -14,7 +14,7 @@ categories = ["development-tools", "command-line-utilities", "command-line-inter
 
 [package.metadata]
 license-link = "https://github.com/comfy-home/ComfyGit?tab=License-1-ov-file"
-minimum_required = "0.19.0"
+minimum_required = "0.17.0"
 minimum_required_reason = "..."
 
 [[bin]]
