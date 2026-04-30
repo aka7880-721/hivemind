@@ -263,6 +263,7 @@ struct App {
     screen: Screen,
     selected_project: usize,
     dashboard_focus: DashboardPane,
+    clipboard: Option<Clipboard>,
     overview_tab: OverviewTab,
     overview_show_recent_tab: bool,
     project_settings_tab: ProjectSettingsTab,
@@ -358,12 +359,14 @@ impl App {
             prefetch_request_tx,
             background_result_rx,
         ) = spawn_background_worker()?;
+        let clipboard = Clipboard::new().ok();
         Ok(Self {
             config_store,
             config,
             screen: Screen::Dashboard,
             selected_project: 0,
             dashboard_focus: DashboardPane::Projects,
+            clipboard,
             overview_tab: OverviewTab::Overview,
             overview_show_recent_tab: false,
             project_settings_tab: ProjectSettingsTab::General,
@@ -1994,9 +1997,16 @@ impl App {
     }
 
     fn paste_from_clipboard(&mut self) {
-        let Ok(mut clipboard) = Clipboard::new() else {
-            self.status = StatusMessage::warning("Clipboard is not available in this environment.");
-            return;
+        let clipboard = if let Some(ref mut clipboard) = self.clipboard {
+            clipboard
+        } else {
+            self.clipboard = Clipboard::new().ok();
+            if let Some(ref mut clipboard) = self.clipboard {
+                clipboard
+            } else {
+                self.status = StatusMessage::warning("Clipboard is not available in this environment.");
+                return;
+            }
         };
 
         match clipboard.get_text() {
@@ -4571,9 +4581,16 @@ impl App {
     }
 
     fn copy_text_to_clipboard(&mut self, text: &str) {
-        let Ok(mut clipboard) = Clipboard::new() else {
-            self.status = StatusMessage::warning("Clipboard is not available in this environment.");
-            return;
+        let clipboard = if let Some(ref mut clipboard) = self.clipboard {
+            clipboard
+        } else {
+            self.clipboard = Clipboard::new().ok();
+            if let Some(ref mut clipboard) = self.clipboard {
+                clipboard
+            } else {
+                self.status = StatusMessage::warning("Clipboard is not available in this environment.");
+                return;
+            }
         };
 
         if clipboard.set_text(text.to_string()).is_ok() {

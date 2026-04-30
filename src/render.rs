@@ -408,7 +408,7 @@ impl App {
                     .min(self.config.projects.len().saturating_sub(1)),
             ));
             let list = List::new(items)
-                .highlight_style(Style::default().bg(Color::Blue).fg(Color::Black))
+                .highlight_style(Style::default().bg(Color::Cyan).fg(Color::DarkGray))
                 .highlight_symbol("> ");
             frame.render_stateful_widget(list, left_inner, &mut state);
 

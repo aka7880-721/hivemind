@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.17.5"
+version = "0.17.6"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -29,7 +29,7 @@ path = "src/bin/cg-bin.rs"
 
 [dependencies]
 anyhow = "1"
-arboard = "3"
+arboard = { version = "3", features = ["wayland-data-control"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crossterm = "0.29"
 ctrlc = "3"

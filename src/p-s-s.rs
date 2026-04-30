@@ -557,7 +557,8 @@ impl ProjectSettingsRow {
         match self {
             Self::Text(_) => 1,
             Self::Spacer(height) => *height,
-            Self::Checkbox(_) | Self::Path(_) => 3,
+            Self::Checkbox(_) => 2,
+            Self::Path(_) => 3,
         }
     }
 
@@ -776,7 +777,7 @@ fn render_scrollable_rows(
                 frame.render_widget(Paragraph::new(line.clone()), row_area);
             }
             ProjectSettingsRow::Spacer(_) => {}
-            ProjectSettingsRow::Checkbox(field) if row_area.height >= 3 => {
+            ProjectSettingsRow::Checkbox(field) if row_area.height >= 2 => {
                 let focused = *field == app.project_settings_state.focus;
                 render_checkbox_row(app, frame, row_area, *field, project, scope_index, focused);
             }
@@ -836,31 +837,18 @@ fn build_rows(
 fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
     let mut rows = Vec::new();
     if project.integration_mode.requires_repo() {
-        rows.push(ProjectSettingsRow::Checkbox(
-            ProjectSettingsFocus::CustomMainBranchEnabled,
-        ));
         if project.repo_has_custom_main_branch_for_scope(scope_index) {
             rows.push(ProjectSettingsRow::Path(
                 ProjectSettingsFocus::CustomMainBranchName,
             ));
         }
         rows.push(ProjectSettingsRow::Spacer(1));
+        rows.push(ProjectSettingsRow::Checkbox(
+            ProjectSettingsFocus::CustomMainBranchEnabled,
+        ));
     }
     rows.extend([
         ProjectSettingsRow::Path(ProjectSettingsFocus::Alias),
-        ProjectSettingsRow::Spacer(1),
-        ProjectSettingsRow::Text(
-            Line::from(format!(
-                "Selected scope: {}",
-                active_scope_name(project, scope_index)
-            ))
-            .bold(),
-        ),
-        ProjectSettingsRow::Text(Line::from(format!(
-            "Scope type: {}",
-            active_scope_kind(project, scope_index)
-        ))),
-        ProjectSettingsRow::Text(Line::from(format!("Project: {}", project.name))),
         ProjectSettingsRow::Spacer(1),
         ProjectSettingsRow::Checkbox(ProjectSettingsFocus::ChangelogEnabled),
     ]);
@@ -952,6 +940,9 @@ fn render_checkbox_row(
 ) {
     let inset = control_inset(area);
     let enabled = match field {
+        ProjectSettingsFocus::CustomMainBranchEnabled => {
+            project.repo_has_custom_main_branch_for_scope(scope_index)
+        }
         ProjectSettingsFocus::ChangelogEnabled => project.changelog_enabled_for_scope(scope_index),
         ProjectSettingsFocus::ReleaseNowEnabled => {
             project.release_now_for_scope(scope_index).enabled
