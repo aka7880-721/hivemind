@@ -836,6 +836,7 @@ fn build_rows(
 fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
     let mut rows = Vec::new();
     if project.integration_mode.requires_repo() {
+        rows.push(ProjectSettingsRow::Spacer(1));
         rows.push(ProjectSettingsRow::Checkbox(
             ProjectSettingsFocus::CustomMainBranchEnabled,
         ));
@@ -952,6 +953,9 @@ fn render_checkbox_row(
 ) {
     let inset = control_inset(area);
     let enabled = match field {
+        ProjectSettingsFocus::CustomMainBranchEnabled => {
+            project.repo_has_custom_main_branch_for_scope(scope_index)
+        }
         ProjectSettingsFocus::ChangelogEnabled => project.changelog_enabled_for_scope(scope_index),
         ProjectSettingsFocus::ReleaseNowEnabled => {
             project.release_now_for_scope(scope_index).enabled
