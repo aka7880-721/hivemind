@@ -836,16 +836,15 @@ fn build_rows(
 fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
     let mut rows = Vec::new();
     if project.integration_mode.requires_repo() {
-        rows.push(ProjectSettingsRow::Spacer(1));
-        rows.push(ProjectSettingsRow::Checkbox(
-            ProjectSettingsFocus::CustomMainBranchEnabled,
-        ));
         if project.repo_has_custom_main_branch_for_scope(scope_index) {
             rows.push(ProjectSettingsRow::Path(
                 ProjectSettingsFocus::CustomMainBranchName,
             ));
         }
         rows.push(ProjectSettingsRow::Spacer(1));
+        rows.push(ProjectSettingsRow::Checkbox(
+            ProjectSettingsFocus::CustomMainBranchEnabled,
+        ));
     }
     rows.extend([
         ProjectSettingsRow::Path(ProjectSettingsFocus::Alias),
