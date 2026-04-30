@@ -557,7 +557,8 @@ impl ProjectSettingsRow {
         match self {
             Self::Text(_) => 1,
             Self::Spacer(height) => *height,
-            Self::Checkbox(_) | Self::Path(_) => 3,
+            Self::Checkbox(_) => 2,
+            Self::Path(_) => 3,
         }
     }
 
@@ -776,7 +777,7 @@ fn render_scrollable_rows(
                 frame.render_widget(Paragraph::new(line.clone()), row_area);
             }
             ProjectSettingsRow::Spacer(_) => {}
-            ProjectSettingsRow::Checkbox(field) if row_area.height >= 3 => {
+            ProjectSettingsRow::Checkbox(field) if row_area.height >= 2 => {
                 let focused = *field == app.project_settings_state.focus;
                 render_checkbox_row(app, frame, row_area, *field, project, scope_index, focused);
             }
