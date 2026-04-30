@@ -849,19 +849,6 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
     rows.extend([
         ProjectSettingsRow::Path(ProjectSettingsFocus::Alias),
         ProjectSettingsRow::Spacer(1),
-        ProjectSettingsRow::Text(
-            Line::from(format!(
-                "Selected scope: {}",
-                active_scope_name(project, scope_index)
-            ))
-            .bold(),
-        ),
-        ProjectSettingsRow::Text(Line::from(format!(
-            "Scope type: {}",
-            active_scope_kind(project, scope_index)
-        ))),
-        ProjectSettingsRow::Text(Line::from(format!("Project: {}", project.name))),
-        ProjectSettingsRow::Spacer(1),
         ProjectSettingsRow::Checkbox(ProjectSettingsFocus::ChangelogEnabled),
     ]);
     if project.changelog_enabled_for_scope(scope_index) {
