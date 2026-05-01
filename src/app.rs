@@ -2067,15 +2067,6 @@ impl App {
 
     fn handle_hit_action(&mut self, action: HitAction) -> Result<()> {
         match action {
-            HitAction::Switch(screen) => {
-                self.screen = screen;
-                if screen == Screen::Dashboard {
-                    self.dashboard_focus = DashboardPane::Projects;
-                }
-                if screen == Screen::Wizard {
-                    self.wizard = ProjectWizard::default();
-                }
-            }
             HitAction::SelectOverviewTab(tab) => {
                 self.overview_tab = tab;
                 self.dashboard_focus = DashboardPane::Overview;
@@ -4732,7 +4723,6 @@ struct RecentChangeClickTarget {
 
 #[derive(Clone)]
 pub(crate) enum HitAction {
-    Switch(Screen),
     SelectOverviewTab(OverviewTab),
     SelectProjectSettingsTab(ProjectSettingsTab),
     SelectProjectSettingsField(ProjectSettingsFocus),
@@ -8066,14 +8056,6 @@ fn browser_visible_range(total: usize, selected: usize, height: usize) -> (usize
     (start, end)
 }
 
-fn main_screen_from_index(index: usize) -> Screen {
-    match index {
-        1 => Screen::Wizard,
-        2 => Screen::UiSettings,
-        _ => Screen::Dashboard,
-    }
-}
-
 fn header_height_for_viewport(_total_height: u16) -> u16 {
     if _total_height <= 18 {
         2
@@ -8090,12 +8072,12 @@ fn should_use_recent_changes_tab(area_height: u16, max_tile_height: u16) -> bool
     area_height < max_tile_height.saturating_add(1).saturating_add(8)
 }
 
-fn main_tabs_shortcut_spans() -> Vec<Span<'static>> {
-    shortcut_key_label("NUM", " Tabs")
+fn main_screens_shortcut_spans() -> Vec<Span<'static>> {
+    shortcut_key_label("1-3", " Screens")
 }
 
 fn ui_settings_footer_line() -> Line<'static> {
-    let mut spans = main_tabs_shortcut_spans();
+    let mut spans = main_screens_shortcut_spans();
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("T", "oggle Tab Hints"));
     spans.push(Span::raw(" | "));
@@ -8124,35 +8106,6 @@ fn shortcut_key_label(key: &str, rest: &str) -> Vec<Span<'static>> {
     let mut spans = shortcut_token(key);
     spans.push(Span::raw(rest.to_string()));
     spans
-}
-
-impl App {
-    fn main_tab_labels(&self) -> Vec<String> {
-        ["Dashboard", "New Project", "UI Settings"]
-            .into_iter()
-            .enumerate()
-            .map(|(index, label)| {
-                if self.config.ui.show_tab_hints {
-                    let hint = if index == 2 {
-                        "3|S".to_string()
-                    } else {
-                        (index + 1).to_string()
-                    };
-                    format!("{} [{}]", label, hint)
-                } else {
-                    label.to_string()
-                }
-            })
-            .collect()
-    }
-
-    fn current_main_tab_index(&self) -> usize {
-        match self.screen {
-            Screen::Dashboard => 0,
-            Screen::Wizard => 1,
-            Screen::UiSettings => 2,
-        }
-    }
 }
 
 #[cfg(test)]

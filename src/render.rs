@@ -23,19 +23,17 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(header_height),
-                Constraint::Length(3),
                 Constraint::Min(12),
                 Constraint::Length(footer_height),
             ])
             .split(frame.area());
 
         self.render_header(frame, root[0]);
-        self.render_nav(frame, root[1]);
 
         match self.screen {
-            Screen::Dashboard => self.render_dashboard(frame, root[2]),
-            Screen::Wizard => self.render_wizard(frame, root[2]),
-            Screen::UiSettings => self.render_ui_settings(frame, root[2]),
+            Screen::Dashboard => self.render_dashboard(frame, root[1]),
+            Screen::Wizard => self.render_wizard(frame, root[1]),
+            Screen::UiSettings => self.render_ui_settings(frame, root[1]),
         }
 
         if self.bump_dialog.is_some() {
@@ -94,7 +92,7 @@ impl App {
         }
 
         if !self.config.ui.hide_footer {
-            self.render_footer(frame, root[3]);
+            self.render_footer(frame, root[2]);
         }
         self.transient_toaster.set_area(frame.area());
         let transient_area = self.transient_toaster.toast_area();
@@ -239,107 +237,6 @@ impl App {
             ),
             contact_area,
         );
-    }
-
-    fn render_nav(&mut self, frame: &mut Frame, area: Rect) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        let labels = self.main_tab_labels();
-        let widths = labels
-            .iter()
-            .map(|label| (label.chars().count() as u16 + 6).max(14))
-            .collect::<Vec<_>>();
-
-        let active_index = self.current_main_tab_index();
-        let border_rect = Rect {
-            x: area.x,
-            y: area.y + area.height.saturating_sub(1),
-            width: area.width,
-            height: 1,
-        };
-        frame.render_widget(
-            Paragraph::new("─".repeat(area.width as usize))
-                .style(Style::default().fg(Color::DarkGray)),
-            border_rect,
-        );
-
-        let left_rect = Rect {
-            x: area.x,
-            y: area.y,
-            width: widths[0].min(area.width),
-            height: area.height,
-        };
-        self.render_main_nav_tab(frame, left_rect, &labels[0], active_index == 0);
-        self.hit_targets.push(HitTarget::new(
-            left_rect,
-            HitAction::Switch(main_screen_from_index(0)),
-        ));
-
-        let right_total_width = widths.iter().skip(1).copied().sum::<u16>();
-        let mut current_x = area.x + area.width.saturating_sub(right_total_width);
-        for index in 1..labels.len() {
-            let width = widths[index].min(area.x + area.width - current_x);
-            if width == 0 {
-                continue;
-            }
-            let rect = Rect {
-                x: current_x,
-                y: area.y,
-                width,
-                height: area.height,
-            };
-            self.render_main_nav_tab(frame, rect, &labels[index], active_index == index);
-            self.hit_targets.push(HitTarget::new(
-                rect,
-                HitAction::Switch(main_screen_from_index(index)),
-            ));
-            current_x = current_x.saturating_add(widths[index]);
-        }
-    }
-
-    fn render_main_nav_tab(&self, frame: &mut Frame, area: Rect, label: &str, selected: bool) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        let border_style = if selected {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        let label_style = if selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let block = Block::default()
-            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-            .border_style(border_style);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        frame.render_widget(
-            Paragraph::new(label)
-                .alignment(Alignment::Center)
-                .style(label_style),
-            inner,
-        );
-
-        if selected && area.width > 2 {
-            let clear_rect = Rect {
-                x: area.x + 1,
-                y: area.y + area.height.saturating_sub(1),
-                width: area.width.saturating_sub(2),
-                height: 1,
-            };
-            frame.render_widget(
-                Paragraph::new(" ".repeat(clear_rect.width as usize)),
-                clear_rect,
-            );
-        }
     }
 
     pub(crate) fn scope_repo_roots(
@@ -1851,8 +1748,7 @@ impl App {
                 self.config.ui.footer_content.display_name()
             )),
             Line::raw(""),
-            Line::from("When enabled, the main tabs show [1]..[4] hints."),
-            Line::from("T, Enter, or Space toggles tab hints."),
+            Line::from("T, Enter, or Space toggles the tab hints option (stored in config)."),
             Line::from("C, Left, or Right changes footer content alignment."),
             Line::from("H toggles footer visibility."),
         ];
@@ -2986,7 +2882,7 @@ impl App {
     }
 
     fn dashboard_footer_line(&self) -> Line<'static> {
-        let mut spans = main_tabs_shortcut_spans();
+        let mut spans = main_screens_shortcut_spans();
         spans.push(Span::raw(" | "));
         spans.extend(shortcut_key_label("TAB", " Switch Pane"));
         spans.push(Span::raw(" | "));
