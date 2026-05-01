@@ -2,6 +2,57 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.17.6
+2026-05-01
+
+#### What's new:
+
+### Changed in Linux
+
+#### 🐛 Fix(es)
+
+* Fixed clipboard behaviour /tested in Fedora/   _(b96cec5)_
+
+---
+
+### Changed in via ComfyGit
+
+#### 📝 Other
+
+* Merge pull request #69 (via ComfyGit)   _(98b6b2d)_
+
+---
+
+### Changed in ReleaseNOW
+
+#### 🐛 Fix(es)
+
+* fixed ability to pass arguments from within Distro path, eg `--win64`   _(12a6729)_
+
+---
+
+### 🛠️ General:
+
+### 🐛 Fix(es)
+
+* bugfix for custom named `main` checkbox in PSS   _(ef7eb7e)_
+
+* changed font color and highlight in Projects pane for selected project   _(ac51b4f)_
+
+* fixes render bugs in PSS   _(7f51778)_
+
+* removed leftover text from PSS   _(5842f6e)_
+
+* layout changes in PSS   _(0e9a78a)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.17.6   _(12fd42c)_
+
+* add document-features dependency   _(6ec8d0b)_
+
+---
+
 ## Changelog v0.17.5
 2026-04-27
 
@@ -598,11 +649,6 @@ Enhanced with:   _(96b5b80)_
 
 * Merge pull request #29 from comfy-home/v0.11.2   _(af7b774)_
 
-<br>
-
----
-... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
-
 ---
 
 ## Changelog 0.10.11
@@ -644,11 +690,6 @@ Enhanced with:   _(96b5b80)_
 ### 📝 Other
 
 * Merge pull request #27 from comfy-home/v0.10.11+   _(fbc3726)_
-
-<br>
-
----
-... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
 
 ---
 
@@ -741,11 +782,6 @@ Enhanced with:   _(96b5b80)_
 * Merge pull request #26 from comfy-home/0.10.8+   _(49fb8b8)_
 
 * Merge pull request #25 from comfy-home/0.10.10   _(5b51a67)_
-
-<br>
-
----
-... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
 
 ---
 
@@ -872,11 +908,6 @@ Enhanced with:   _(96b5b80)_
 
 * Merge pull request #19 from comfy-home/0.9.2   _(c1bd621)_
 
-<br>
-
----
-... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
-
 ---
 
 ## Changelog v0.9.1
@@ -912,11 +943,6 @@ Enhanced with:   _(96b5b80)_
 * Merge pull request #18 from comfy-home/0.9.1   _(dcf71ee)_
 
 * v0.9.0 has just been released via ComfyGit!   _(48ccf8b)_
-
-<br>
-
----
-... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
 
 ---
 
@@ -984,11 +1010,6 @@ Enhanced with:   _(96b5b80)_
 * Merge pull request #17 from comfy-home/0.9.0   _(f1940d3)_
 
 * Merge branch 'main' into 0.9.0   _(0f7c5ac)_
-
-<br>
-
----
-... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
 
 ---
 
