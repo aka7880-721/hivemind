@@ -4382,7 +4382,7 @@ impl App {
         let target = match key.code {
             KeyCode::Char('1') => Some(Screen::Dashboard),
             KeyCode::Char('2') => Some(Screen::Wizard),
-            KeyCode::Char('3') => Some(Screen::UiSettings),
+            KeyCode::Char('3') | KeyCode::Char('s') | KeyCode::Char('S') => Some(Screen::UiSettings),
             _ => None,
         };
 
@@ -8131,7 +8131,12 @@ impl App {
             .enumerate()
             .map(|(index, label)| {
                 if self.config.ui.show_tab_hints {
-                    format!("{} [{}]", label, index + 1)
+                    let hint = if index == 2 {
+                        "3|S".to_string()
+                    } else {
+                        (index + 1).to_string()
+                    };
+                    format!("{} [{}]", label, hint)
                 } else {
                     label.to_string()
                 }
