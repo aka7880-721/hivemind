@@ -118,12 +118,14 @@ pub(crate) fn suggest_branch_name_options(
     }
 
     if request.scheme == VersionScheme::SemVer && request.action == BumpAction::Patch {
+        let base = next_available_non_mainline_semver_dev_branch(
+            request.next_version,
+            request.existing_branches,
+            request.today,
+        )?;
         return Ok(vec![
-            fixed_branch_name_option(next_available_non_mainline_semver_dev_branch(
-                request.next_version,
-                request.existing_branches,
-                request.today,
-            )?),
+            fixed_branch_name_option(base.clone()),
+            specific_suffix_branch_name_option(base),
             custom_branch_name_option(),
         ]);
     }
@@ -132,6 +134,34 @@ pub(crate) fn suggest_branch_name_options(
         fixed_branch_name_option(format!("v{}-dev", request.next_version)),
         custom_branch_name_option(),
     ])
+}
+
+/// When `branch` is a semver patch dev branch `vMAJOR.MINOR.PATCH-dev`, optionally followed by
+/// `--extra`, returns canonical `vMAJOR.MINOR.PATCH-dev`. Otherwise returns `branch` trimmed.
+pub(crate) fn semver_dev_branch_canonical_label(branch: &str) -> String {
+    let trimmed = branch.trim();
+    if let Some(version) = semver_patch_dev_version_from_v_prefix(trimmed) {
+        format!("v{}-dev", version)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn semver_patch_dev_version_from_v_prefix(branch_name: &str) -> Option<String> {
+    let normalized = branch_name.trim_start_matches('v');
+    let normalized = normalized
+        .split_once("--")
+        .map(|(base, _)| base)
+        .unwrap_or(normalized);
+    let release_version = normalized.strip_suffix("-dev")?;
+    let mut parts = release_version.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{}.{}.{}", major, minor, patch))
 }
 
 pub(crate) fn is_release_line_branch(scheme: VersionScheme, branch_name: &str) -> bool {
@@ -444,7 +474,13 @@ mod tests {
                 .iter()
                 .map(|option| option.preview())
                 .collect::<Vec<_>>(),
-            vec!["v0.25.4-dev", "custom"]
+            vec!["v0.25.4-dev", "v0.25.4-dev--specific", "custom"]
+        );
+        assert_eq!(
+            options[1]
+                .resolve_name(Some("menu-hotfix"))
+                .expect("specific suffix"),
+            "v0.25.4-dev--menu-hotfix"
         );
     }
 
@@ -471,7 +507,7 @@ mod tests {
                 .iter()
                 .map(|option| option.preview())
                 .collect::<Vec<_>>(),
-            vec!["v0.25.5-dev", "custom"]
+            vec!["v0.25.5-dev", "v0.25.5-dev--specific", "custom"]
         );
     }
 
@@ -585,6 +621,22 @@ mod tests {
                 .map(|option| option.preview())
                 .collect::<Vec<_>>(),
             vec!["2.0.x", "2.0.x--specific", "custom"]
+        );
+    }
+
+    #[test]
+    fn semver_dev_branch_canonical_label_strips_specific_suffix() {
+        assert_eq!(
+            semver_dev_branch_canonical_label("v0.18.1-dev--menu-work"),
+            "v0.18.1-dev"
+        );
+        assert_eq!(
+            semver_dev_branch_canonical_label("0.18.1-dev--x"),
+            "v0.18.1-dev"
+        );
+        assert_eq!(
+            semver_dev_branch_canonical_label("feature/menu"),
+            "feature/menu"
         );
     }
 

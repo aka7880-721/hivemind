@@ -86,7 +86,7 @@ use crate::{
         load_scope_activity_summary_with_cancel, run_git, run_git_checked,
         sorted_local_tags_with_cancel, split_output_lines,
     },
-    git_br::BranchNameOption,
+    git_br::{BranchNameOption, semver_dev_branch_canonical_label},
     mmr::{
         load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error,
         record_std_changelog_generated, record_std_changelog_postponed,
@@ -6941,7 +6941,10 @@ fn decide_std_changelog_generation(
 fn normalized_branch_names(branches: &[String]) -> Vec<String> {
     let mut names = branches
         .iter()
-        .map(|branch| branch.trim().trim_start_matches('*').trim().to_string())
+        .map(|branch| {
+            let trimmed = branch.trim().trim_start_matches('*').trim();
+            semver_dev_branch_canonical_label(trimmed)
+        })
         .filter(|branch| !branch.is_empty())
         .collect::<Vec<_>>();
     names.sort();
