@@ -1138,9 +1138,11 @@ async fn run_script_with_live_logs(
     cancel: GitCancellation,
     emit_progress: &mut impl FnMut(Vec<String>),
 ) -> Result<()> {
-    let script_path = resolve_script_path(repo_root, &script.script_path)?;
+    let (path_str, extra_args) = parse_shell_args(&script.script_path);
+    let script_path = resolve_script_path(repo_root, path_str)?;
     let display_path = script_path.display().to_string();
-    let (program, args) = script_command(&script_path)?;
+    let (program, mut args) = script_command(&script_path)?;
+    args.extend(extra_args);
     emit_progress(vec![format!("[{}] Running {}", script.label, display_path)]);
     let repo_root = repo_root.to_string();
     let action = format!("run {} script", script.label);
@@ -1163,6 +1165,78 @@ async fn run_script_with_live_logs(
     .await?;
     emit_progress(vec![format!("[{}] Completed successfully.", script.label)]);
     Ok(())
+}
+
+fn parse_shell_args(input: &str) -> (&str, Vec<String>) {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return ("", Vec::new());
+    }
+
+    // Find end of first token (path), respecting quotes
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut path_end = 0;
+
+    for (i, c) in trimmed.char_indices() {
+        match c {
+            '\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+            }
+            '"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+            }
+            c if c.is_whitespace()
+                && !in_single_quote
+                && !in_double_quote
+                && path_end == 0
+                && i > 0 =>
+            {
+                path_end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if path_end == 0 {
+        path_end = trimmed.len();
+    }
+
+    let path = &trimmed[..path_end].trim();
+    let rest = &trimmed[path_end..].trim_start();
+
+    // Parse remaining arguments
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    for c in rest.chars() {
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !current.is_empty() {
+                    args.push(current.clone());
+                    current.clear();
+                }
+            }
+            c => {
+                current.push(c);
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    (path, args)
 }
 
 fn resolve_script_path(repo_root: &str, script_path: &str) -> Result<PathBuf> {

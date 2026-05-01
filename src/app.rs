@@ -2004,7 +2004,8 @@ impl App {
             if let Some(ref mut clipboard) = self.clipboard {
                 clipboard
             } else {
-                self.status = StatusMessage::warning("Clipboard is not available in this environment.");
+                self.status =
+                    StatusMessage::warning("Clipboard is not available in this environment.");
                 return;
             }
         };
@@ -4588,7 +4589,8 @@ impl App {
             if let Some(ref mut clipboard) = self.clipboard {
                 clipboard
             } else {
-                self.status = StatusMessage::warning("Clipboard is not available in this environment.");
+                self.status =
+                    StatusMessage::warning("Clipboard is not available in this environment.");
                 return;
             }
         };
