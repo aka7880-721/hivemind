@@ -312,6 +312,7 @@ dependencies = [
  "crossterm 0.29.0",
  "ctrlc",
  "directories",
+ "document-features",
  "image",
  "ratatui 0.30.0",
  "ratatui-comfy-toaster",
