@@ -2893,9 +2893,14 @@ impl App {
             match self.screen {
                 Screen::Dashboard => self.dashboard_footer_line(),
                 Screen::UiSettings => ui_settings_footer_line(),
-                Screen::Wizard => Line::from(
-                    "Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F5 read target | F2 save | Esc cancel",
-                ),
+                Screen::Wizard => {
+                    let mut spans: Vec<Span<'static>> = vec![Span::raw(
+                        "Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F5 read target | F2 save | ",
+                    )];
+                    spans.extend(shortcut_key_label("S", "ettings"));
+                    spans.push(Span::raw(" | Esc cancel"));
+                    Line::from(spans)
+                }
             }
         };
         let alignment = match self.config.ui.footer_content {
@@ -3023,6 +3028,8 @@ impl App {
             spans.push(Span::raw(" | "));
         }
         spans.extend(shortcut_key_label("H", "ide Footer"));
+        spans.push(Span::raw(" | "));
+        spans.extend(shortcut_key_label("S", "ettings"));
         spans.push(Span::raw(" | "));
         spans.extend(shortcut_key_label("Q", "uit"));
         Line::from(spans)

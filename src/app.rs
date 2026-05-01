@@ -8105,6 +8105,8 @@ fn ui_settings_footer_line() -> Line<'static> {
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("N", "ew Project"));
     spans.push(Span::raw(" | "));
+    spans.extend(shortcut_key_label("S", "ettings"));
+    spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("Q", "uit"));
     Line::from(spans)
 }
