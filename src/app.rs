@@ -809,7 +809,7 @@ impl App {
 
     fn handle_ui_settings_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Char('d') => {
+            KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('D') => {
                 self.screen = Screen::Dashboard;
                 self.dashboard_focus = DashboardPane::Projects;
             }
@@ -4373,7 +4373,9 @@ impl App {
         let target = match key.code {
             KeyCode::Char('1') => Some(Screen::Dashboard),
             KeyCode::Char('2') => Some(Screen::Wizard),
-            KeyCode::Char('3') | KeyCode::Char('s') | KeyCode::Char('S') => Some(Screen::UiSettings),
+            KeyCode::Char('3') | KeyCode::Char('s') | KeyCode::Char('S') => {
+                Some(Screen::UiSettings)
+            }
             _ => None,
         };
 

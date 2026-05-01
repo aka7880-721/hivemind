@@ -1748,6 +1748,7 @@ impl App {
                 self.config.ui.footer_content.display_name()
             )),
             Line::raw(""),
+            Line::from("D or Esc returns to the dashboard."),
             Line::from("T, Enter, or Space toggles the tab hints option (stored in config)."),
             Line::from("C, Left, or Right changes footer content alignment."),
             Line::from("H toggles footer visibility."),
