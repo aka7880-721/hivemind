@@ -86,7 +86,7 @@ use crate::{
         load_scope_activity_summary_with_cancel, run_git, run_git_checked,
         sorted_local_tags_with_cancel, split_output_lines,
     },
-    git_br::BranchNameOption,
+    git_br::{BranchNameOption, semver_dev_branch_canonical_label},
     mmr::{
         load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error,
         record_std_changelog_generated, record_std_changelog_postponed,
@@ -809,7 +809,7 @@ impl App {
 
     fn handle_ui_settings_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Char('d') => {
+            KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('D') => {
                 self.screen = Screen::Dashboard;
                 self.dashboard_focus = DashboardPane::Projects;
             }
@@ -2067,15 +2067,6 @@ impl App {
 
     fn handle_hit_action(&mut self, action: HitAction) -> Result<()> {
         match action {
-            HitAction::Switch(screen) => {
-                self.screen = screen;
-                if screen == Screen::Dashboard {
-                    self.dashboard_focus = DashboardPane::Projects;
-                }
-                if screen == Screen::Wizard {
-                    self.wizard = ProjectWizard::default();
-                }
-            }
             HitAction::SelectOverviewTab(tab) => {
                 self.overview_tab = tab;
                 self.dashboard_focus = DashboardPane::Overview;
@@ -4382,7 +4373,9 @@ impl App {
         let target = match key.code {
             KeyCode::Char('1') => Some(Screen::Dashboard),
             KeyCode::Char('2') => Some(Screen::Wizard),
-            KeyCode::Char('3') => Some(Screen::UiSettings),
+            KeyCode::Char('3') | KeyCode::Char('s') | KeyCode::Char('S') => {
+                Some(Screen::UiSettings)
+            }
             _ => None,
         };
 
@@ -4732,7 +4725,6 @@ struct RecentChangeClickTarget {
 
 #[derive(Clone)]
 pub(crate) enum HitAction {
-    Switch(Screen),
     SelectOverviewTab(OverviewTab),
     SelectProjectSettingsTab(ProjectSettingsTab),
     SelectProjectSettingsField(ProjectSettingsFocus),
@@ -6941,7 +6933,10 @@ fn decide_std_changelog_generation(
 fn normalized_branch_names(branches: &[String]) -> Vec<String> {
     let mut names = branches
         .iter()
-        .map(|branch| branch.trim().trim_start_matches('*').trim().to_string())
+        .map(|branch| {
+            let trimmed = branch.trim().trim_start_matches('*').trim();
+            semver_dev_branch_canonical_label(trimmed)
+        })
         .filter(|branch| !branch.is_empty())
         .collect::<Vec<_>>();
     names.sort();
@@ -8063,14 +8058,6 @@ fn browser_visible_range(total: usize, selected: usize, height: usize) -> (usize
     (start, end)
 }
 
-fn main_screen_from_index(index: usize) -> Screen {
-    match index {
-        1 => Screen::Wizard,
-        2 => Screen::UiSettings,
-        _ => Screen::Dashboard,
-    }
-}
-
 fn header_height_for_viewport(_total_height: u16) -> u16 {
     if _total_height <= 18 {
         2
@@ -8087,12 +8074,12 @@ fn should_use_recent_changes_tab(area_height: u16, max_tile_height: u16) -> bool
     area_height < max_tile_height.saturating_add(1).saturating_add(8)
 }
 
-fn main_tabs_shortcut_spans() -> Vec<Span<'static>> {
-    shortcut_key_label("NUM", " Tabs")
+fn main_screens_shortcut_spans() -> Vec<Span<'static>> {
+    shortcut_key_label("1-3", " Screens")
 }
 
 fn ui_settings_footer_line() -> Line<'static> {
-    let mut spans = main_tabs_shortcut_spans();
+    let mut spans = main_screens_shortcut_spans();
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("T", "oggle Tab Hints"));
     spans.push(Span::raw(" | "));
@@ -8101,6 +8088,8 @@ fn ui_settings_footer_line() -> Line<'static> {
     spans.extend(shortcut_key_label("H", "ide Footer"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("N", "ew Project"));
+    spans.push(Span::raw(" | "));
+    spans.extend(shortcut_key_label("S", "ettings"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("Q", "uit"));
     Line::from(spans)
@@ -8119,30 +8108,6 @@ fn shortcut_key_label(key: &str, rest: &str) -> Vec<Span<'static>> {
     let mut spans = shortcut_token(key);
     spans.push(Span::raw(rest.to_string()));
     spans
-}
-
-impl App {
-    fn main_tab_labels(&self) -> Vec<String> {
-        ["Dashboard", "New Project", "UI Settings"]
-            .into_iter()
-            .enumerate()
-            .map(|(index, label)| {
-                if self.config.ui.show_tab_hints {
-                    format!("{} [{}]", label, index + 1)
-                } else {
-                    label.to_string()
-                }
-            })
-            .collect()
-    }
-
-    fn current_main_tab_index(&self) -> usize {
-        match self.screen {
-            Screen::Dashboard => 0,
-            Screen::Wizard => 1,
-            Screen::UiSettings => 2,
-        }
-    }
 }
 
 #[cfg(test)]
