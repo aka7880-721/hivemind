@@ -14,8 +14,8 @@ function __comfygit_cli --description 'Resolve ComfyGit executable (PATH, ~/.loc
         printf '%s\n' "$COMFYGIT_EXE"
         return 0
     end
-    if command -sq ComfyGit
-        printf '%s\n' (command -v ComfyGit)
+    if type -q ComfyGit
+        type -p ComfyGit
         return 0
     end
     set -l _local "$HOME/.local/bin/ComfyGit"

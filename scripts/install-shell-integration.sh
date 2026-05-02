@@ -29,6 +29,45 @@ append_once() {
   fi
 }
 
+# POSIX PATH hook so login shells / sh find ~/.local/bin/cg even when rc files are skipped.
+append_path_hook() {
+  profile_path=$1
+  marker="# comfygit-install-shell: PATH"
+  path_line='[ -d "$HOME/.local/bin" ] && case ":${PATH:-}:" in *:"$HOME/.local/bin":*) ;; *) PATH="$HOME/.local/bin${PATH:+:$PATH}"; export PATH ;; esac'
+  parent_dir=$(dirname "$profile_path")
+  if [ ! -d "$parent_dir" ]; then
+    return
+  fi
+  if [ ! -f "$profile_path" ]; then
+    touch "$profile_path"
+  fi
+  if grep -F "$marker" "$profile_path" >/dev/null 2>&1; then
+    return
+  fi
+  {
+    printf '\n%s\n' "$marker"
+    printf '%s\n' "$path_line"
+  } >>"$profile_path"
+}
+
+# Fish does not read ~/.profile; duplicate the conf.d hook in config.fish for stubborn setups.
+install_fish_config_fallback() {
+  fish_config="$config_home/fish/config.fish"
+  marker="# comfygit-install-shell"
+  parent_dir=$(dirname "$fish_config")
+  mkdir -p "$parent_dir"
+  if [ ! -f "$fish_config" ]; then
+    touch "$fish_config"
+  fi
+  if grep -F "$marker" "$fish_config" >/dev/null 2>&1; then
+    return
+  fi
+  {
+    printf '\n%s\n' "$marker"
+    printf '%s\n' "test -f \"$config_home/fish/conf.d/comfygit.fish\"; and source \"$config_home/fish/conf.d/comfygit.fish\""
+  } >>"$fish_config"
+}
+
 copy_launchers() {
   mkdir -p "$bin_dir"
   cp "$shell_asset_dir/cg" "$bin_dir/cg"
@@ -41,16 +80,20 @@ copy_launchers() {
   fi
 }
 
-# pwsh on Linux/macOS: no Windows-only installer ran, so register a cg function in the user profile.
+# pwsh on Linux/macOS: register cg in CurrentUserAllHosts (profile.ps1), which loads before host-specific profiles.
 install_pwsh_user_profile() {
   if [ ! -f "$bin_dir/cg.ps1" ]; then
     return 0
   fi
   pwsh_profile_dir="$config_home/powershell"
   mkdir -p "$pwsh_profile_dir"
-  pwsh_profile="$pwsh_profile_dir/Microsoft.PowerShell_profile.ps1"
   marker="# comfygit-install-shell (cg for pwsh)"
+  pwsh_profile="$pwsh_profile_dir/profile.ps1"
+  ms_profile="$pwsh_profile_dir/Microsoft.PowerShell_profile.ps1"
   if [ -f "$pwsh_profile" ] && grep -F "$marker" "$pwsh_profile" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -f "$ms_profile" ] && grep -F "$marker" "$ms_profile" >/dev/null 2>&1; then
     return 0
   fi
   ps1_path="$bin_dir/cg.ps1"
@@ -72,16 +115,21 @@ install_user_shell_integration() {
   mkdir -p "$fish_conf_d"
   cp "$shell_asset_dir/cg.fish" "$fish_conf_d/comfygit.fish"
 
+  append_path_hook "$HOME/.profile"
+  append_path_hook "$HOME/.zprofile"
   append_once "$HOME/.bashrc" ". \"$target_file\""
   append_once "$HOME/.zshrc" ". \"$target_file\""
+  append_once "$HOME/.zprofile" ". \"$target_file\""
+  install_fish_config_fallback
   install_pwsh_user_profile
 
   printf '%s\n' "Installed ComfyGit shell integration to $target_file"
-  printf '%s\n' "Installed fish integration to $fish_conf_d/comfygit.fish"
+  printf '%s\n' "Installed fish integration to $fish_conf_d/comfygit.fish (and config.fish fallback if needed)"
+  printf '%s\n' "Installed PATH hooks in ~/.profile and ~/.zprofile (login shells / tools that skip .zshrc)"
   printf '%s\n' "Installed the cg launcher wrapper to $bin_dir/cg"
   printf '%s\n' "Installed the comfygit launcher wrapper to $bin_dir/comfygit"
   if [ -f "$bin_dir/cg.ps1" ]; then
-    printf '%s\n' "Installed cg.ps1 for PowerShell and updated $config_home/powershell/Microsoft.PowerShell_profile.ps1 (if needed)."
+    printf '%s\n' "Installed cg.ps1 for PowerShell and updated $config_home/powershell/profile.ps1 (if needed)."
   fi
   printf '%s\n' "Open a new bash, zsh, fish, or pwsh session so 'cg' and 'cg cd <alias>' are available."
 }
