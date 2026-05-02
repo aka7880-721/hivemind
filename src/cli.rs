@@ -456,8 +456,11 @@ fn run_install_shell_integration() -> Result<()> {
 
     println!();
     println!(
-        "Shell integration installed. Ensure {} is on your PATH, then open a new terminal.",
+        "Shell integration installed. Ensure {} is on your PATH (fish: conf.d snippet adds ~/.local/bin for the session), then open a new terminal.",
         local_bin.display()
+    );
+    println!(
+        "bash/zsh: `cg` comes from sourcing ~/.config/comfygit/cg.sh; fish: from conf.d; pwsh: function in ~/.config/powershell/Microsoft.PowerShell_profile.ps1."
     );
     println!("`cg` and `cg cd <alias>` will work like a package install.");
     println!();

@@ -1,5 +1,13 @@
 # ComfyGit shell integration for fish — wrap `cg` so `cg cd <alias>` changes directory.
 
+# fish often does not put ~/.local/bin on PATH (unlike typical bash setups). AppImage
+# `install-shell` places the cg / ComfyGit wrappers there, so prepend it for this session.
+set -l _comfygit_local_bin "$HOME/.local/bin"
+if test -d "$_comfygit_local_bin"
+    contains "$_comfygit_local_bin" $PATH
+    or set -gx PATH "$_comfygit_local_bin" $PATH
+end
+
 function __comfygit_cli --description 'Resolve ComfyGit executable (PATH, ~/.local/bin, package install)'
     if set -q COMFYGIT_EXE
         and test -x "$COMFYGIT_EXE"

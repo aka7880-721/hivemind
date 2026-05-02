@@ -1,5 +1,13 @@
 #!/usr/bin/env sh
 
+# Many distros omit ~/.local/bin from the default PATH; AppImage `install-shell` installs wrappers there.
+if [ -n "${HOME:-}" ] && [ -d "$HOME/.local/bin" ]; then
+  case ":${PATH:-}:" in
+    *:"$HOME/.local/bin":*) ;;
+    *) PATH="$HOME/.local/bin${PATH:+:$PATH}" && export PATH ;;
+  esac
+fi
+
 # Resolve the ComfyGit CLI even when ~/.local/bin is not on PATH (common in fish / minimal zsh).
 comfygit_cli_exe() {
   if [ -n "${COMFYGIT_EXE:-}" ] && [ -x "${COMFYGIT_EXE}" ]; then

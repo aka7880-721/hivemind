@@ -35,6 +35,32 @@ copy_launchers() {
   chmod +x "$bin_dir/cg"
   cp "$shell_asset_dir/cg" "$bin_dir/comfygit"
   chmod +x "$bin_dir/comfygit"
+  if [ -f "$shell_asset_dir/cg.ps1" ]; then
+    cp "$shell_asset_dir/cg.ps1" "$bin_dir/cg.ps1"
+    chmod +x "$bin_dir/cg.ps1"
+  fi
+}
+
+# pwsh on Linux/macOS: no Windows-only installer ran, so register a cg function in the user profile.
+install_pwsh_user_profile() {
+  if [ ! -f "$bin_dir/cg.ps1" ]; then
+    return 0
+  fi
+  pwsh_profile_dir="$config_home/powershell"
+  mkdir -p "$pwsh_profile_dir"
+  pwsh_profile="$pwsh_profile_dir/Microsoft.PowerShell_profile.ps1"
+  marker="# comfygit-install-shell (cg for pwsh)"
+  if [ -f "$pwsh_profile" ] && grep -F "$marker" "$pwsh_profile" >/dev/null 2>&1; then
+    return 0
+  fi
+  ps1_path="$bin_dir/cg.ps1"
+  escaped_path=$(printf '%s' "$ps1_path" | sed "s/'/''/g")
+  {
+    printf '\n%s\n' "$marker"
+    printf '%s\n' "function cg {"
+    printf "%s\n" "  & '$escaped_path' @args"
+    printf '%s\n' "}"
+  } >>"$pwsh_profile"
 }
 
 install_user_shell_integration() {
@@ -48,12 +74,16 @@ install_user_shell_integration() {
 
   append_once "$HOME/.bashrc" ". \"$target_file\""
   append_once "$HOME/.zshrc" ". \"$target_file\""
+  install_pwsh_user_profile
 
   printf '%s\n' "Installed ComfyGit shell integration to $target_file"
   printf '%s\n' "Installed fish integration to $fish_conf_d/comfygit.fish"
   printf '%s\n' "Installed the cg launcher wrapper to $bin_dir/cg"
   printf '%s\n' "Installed the comfygit launcher wrapper to $bin_dir/comfygit"
-  printf '%s\n' "Open a new bash, zsh, or fish session to enable real 'cg cd <alias>' support."
+  if [ -f "$bin_dir/cg.ps1" ]; then
+    printf '%s\n' "Installed cg.ps1 for PowerShell and updated $config_home/powershell/Microsoft.PowerShell_profile.ps1 (if needed)."
+  fi
+  printf '%s\n' "Open a new bash, zsh, fish, or pwsh session so 'cg' and 'cg cd <alias>' are available."
 }
 
 install_global_shell_integration() {
