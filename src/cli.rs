@@ -124,7 +124,8 @@ pub(crate) enum StartupMode {
 }
 
 pub(crate) fn dispatch() -> Result<StartupMode> {
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let mut args: Vec<String> = env::args().skip(1).collect();
+    normalize_cli_args_for_dispatch(&mut args);
 
     // Skip the version gate for help/version queries so those always work.
     let is_info_command = args
@@ -157,6 +158,16 @@ pub(crate) fn dispatch() -> Result<StartupMode> {
     dispatch_args(&args)
 }
 
+/// Strip leading `--` (some wrappers pass it) and treat `install shell` / `setup shell` as one command.
+fn normalize_cli_args_for_dispatch(args: &mut Vec<String>) {
+    while args.first().is_some_and(|a| a == "--") {
+        args.remove(0);
+    }
+    if args.len() == 2 && (args[0] == "install" || args[0] == "setup") && args[1] == "shell" {
+        *args = vec!["install-shell".to_string()];
+    }
+}
+
 fn dispatch_args(args: &[String]) -> Result<StartupMode> {
     match args {
         [] => Ok(StartupMode::LaunchTui),
@@ -166,6 +177,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command] if is_version(command) => {
             print_version_status();
+            Ok(StartupMode::Handled)
+        }
+        [command] if is_install_shell_command(command) => {
+            run_install_shell_integration()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_branch_command(command) => {
@@ -293,10 +308,6 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command, action, option] if is_new_command(command) => {
             crate::git_new::run_new(Some(action), Some(option))?;
-            Ok(StartupMode::Handled)
-        }
-        [command] if is_install_shell_command(command) => {
-            run_install_shell_integration()?;
             Ok(StartupMode::Handled)
         }
         _ => {
@@ -462,7 +473,10 @@ fn run_install_shell_integration() -> Result<()> {
 }
 
 fn is_install_shell_command(value: &str) -> bool {
-    matches!(value, "install-shell" | "setup-shell")
+    matches!(
+        value,
+        "install-shell" | "setup-shell" | "shell-install" | "installshell"
+    )
 }
 
 fn is_help(value: &str) -> bool {
@@ -587,6 +601,9 @@ fn print_usage() {
     );
     println!(
         "  cg install-shell           Install bash/zsh/fish integration (AppImage: also writes ~/.local/bin/ComfyGit)"
+    );
+    println!(
+        "                             Synonyms: setup-shell | install shell | setup shell | installshell"
     );
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
