@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 set -eu
+#
+# AppImage users: run  ./Your.AppImage install-shell  (writes ~/.local/bin/ComfyGit and runs this
+# script). See also `cg help` → install-shell. Alternatively invoke this script with shell + bin paths.
 
 shell_asset_dir=${1:-/usr/local/share/comfygit/shell}
 bin_dir=${2:-}

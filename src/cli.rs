@@ -16,6 +16,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Local;
 use crossterm::{
@@ -292,11 +295,174 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             crate::git_new::run_new(Some(action), Some(option))?;
             Ok(StartupMode::Handled)
         }
+        [command] if is_install_shell_command(command) => {
+            run_install_shell_integration()?;
+            Ok(StartupMode::Handled)
+        }
         _ => {
             print_usage();
             bail!("unknown command")
         }
     }
+}
+
+#[cfg(unix)]
+fn sh_single_quote_for_launcher(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(unix)]
+fn run_install_shell_integration() -> Result<()> {
+    let local_bin = match env::var_os("COMFYGIT_BIN_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let home = env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("HOME is not set; set COMFYGIT_BIN_DIR or export HOME"))?;
+            home.join(".local").join("bin")
+        }
+    };
+
+    fs::create_dir_all(&local_bin)
+        .with_context(|| format!("failed to create {}", local_bin.display()))?;
+
+    let appdir_os = env::var_os("APPDIR").map(PathBuf::from);
+
+    let (shell_dir, script_path, from_appdir) = if let Some(ref ad) = appdir_os {
+        let shell = ad.join("usr/local/share/comfygit/shell");
+        if !shell.is_dir() {
+            bail!(
+                "missing shell assets under APPDIR (expected {})",
+                shell.display()
+            );
+        }
+        let script = ad.join("usr/local/share/comfygit/scripts/install-shell-integration.sh");
+        if !script.is_file() {
+            bail!(
+                "missing install script under APPDIR (expected {})",
+                script.display()
+            );
+        }
+        (shell, script, true)
+    } else if Path::new("/usr/local/share/comfygit/shell").is_dir() {
+        let script =
+            PathBuf::from("/usr/local/share/comfygit/scripts/install-shell-integration.sh");
+        if !script.is_file() {
+            bail!("expected package install script at {}", script.display());
+        }
+        (
+            PathBuf::from("/usr/local/share/comfygit/shell"),
+            script,
+            false,
+        )
+    } else {
+        bail!(
+            "ComfyGit shell assets were not found.\n\
+             \n\
+             AppImage: run this from the app so APPDIR is set, for example:\n\
+               ./comfygit-*-x86_64.AppImage install-shell\n\
+             \n\
+             Or extract the image and run the installer by hand:\n\
+               sh path/to/AppDir/usr/local/share/comfygit/scripts/install-shell-integration.sh \\\n\
+                 path/to/AppDir/usr/local/share/comfygit/shell ~/.local/bin\n\
+             (and put a small script named ComfyGit in ~/.local/bin that execs the AppImage if needed.)"
+        );
+    };
+
+    if from_appdir {
+        let exec_path: PathBuf = if let Ok(ap) = env::var("APPIMAGE") {
+            let p = PathBuf::from(ap);
+            if p.is_file() {
+                p
+            } else {
+                bail!("APPIMAGE is set but is not a file: {}", p.display());
+            }
+        } else {
+            let ad = appdir_os
+                .as_ref()
+                .ok_or_else(|| anyhow!("internal error: APPDIR was expected but is missing"))?;
+            ad.join("AppRun")
+                .canonicalize()
+                .context(
+                    "could not resolve AppRun under APPDIR; use an AppImage file or a full extracted AppDir",
+                )?
+        };
+
+        let exec_str = exec_path.to_str().ok_or_else(|| {
+            anyhow!(
+                "launcher path is not valid UTF-8 (move the AppImage to an ASCII path): {}",
+                exec_path.display()
+            )
+        })?;
+
+        let comfy_wrapped = local_bin.join("ComfyGit");
+        if comfy_wrapped.is_file() {
+            let existing = fs::read_to_string(&comfy_wrapped).unwrap_or_default();
+            if !existing.contains("comfygit-install-launcher") {
+                bail!(
+                    "refusing to overwrite {} (remove it or set COMFYGIT_BIN_DIR to another directory)",
+                    comfy_wrapped.display()
+                );
+            }
+        }
+
+        let body = format!(
+            "#!/usr/bin/env sh\n\
+             # comfygit-install-launcher — re-invokes the AppImage / AppDir (written by `cg install-shell`).\n\
+             set -eu\n\
+             COMFYGIT_LAUNCHER={}\n\
+             exec \"$COMFYGIT_LAUNCHER\" \"$@\"\n",
+            sh_single_quote_for_launcher(exec_str)
+        );
+        fs::write(&comfy_wrapped, body)
+            .with_context(|| format!("failed to write {}", comfy_wrapped.display()))?;
+        let mut perm = fs::metadata(&comfy_wrapped)
+            .with_context(|| format!("stat {}", comfy_wrapped.display()))?
+            .permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&comfy_wrapped, perm)
+            .with_context(|| format!("chmod {}", comfy_wrapped.display()))?;
+    } else if !Path::new("/usr/local/bin/ComfyGit").is_file() {
+        bail!(
+            "expected a package-installed binary at /usr/local/bin/ComfyGit.\n\
+             If ComfyGit is elsewhere, run install-shell-integration.sh with your shell asset dir and bin dir manually."
+        );
+    }
+
+    let status = Command::new("sh")
+        .arg(&script_path)
+        .arg(&shell_dir)
+        .arg(&local_bin)
+        .status()
+        .with_context(|| format!("failed to run {}", script_path.display()))?;
+
+    if !status.success() {
+        bail!(
+            "install-shell-integration.sh exited with status {:?}",
+            status.code()
+        );
+    }
+
+    println!();
+    println!(
+        "Shell integration installed. Ensure {} is on your PATH, then open a new terminal.",
+        local_bin.display()
+    );
+    println!("`cg` and `cg cd <alias>` will work like a package install.");
+    println!();
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_install_shell_integration() -> Result<()> {
+    bail!(
+        "`cg install-shell` is only supported on Unix; on Windows use scripts/install-shell-integration.ps1"
+    );
+}
+
+fn is_install_shell_command(value: &str) -> bool {
+    matches!(value, "install-shell" | "setup-shell")
 }
 
 fn is_help(value: &str) -> bool {
@@ -418,6 +584,9 @@ fn print_usage() {
     println!("  ---------------            --------------------------------------------------");
     println!(
         "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
+    );
+    println!(
+        "  cg install-shell           Install bash/zsh/fish integration (AppImage: also writes ~/.local/bin/ComfyGit)"
     );
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
