@@ -166,6 +166,12 @@ fn normalize_cli_args_for_dispatch(args: &mut Vec<String>) {
     if args.len() == 2 && (args[0] == "install" || args[0] == "setup") && args[1] == "shell" {
         *args = vec!["install-shell".to_string()];
     }
+    if args.len() == 2 && args[0] == "uninstall" && args[1] == "shell" {
+        *args = vec!["uninstall-shell".to_string()];
+    }
+    if args.len() == 2 && args[0] == "remove" && args[1] == "shell" {
+        *args = vec!["uninstall-shell".to_string()];
+    }
 }
 
 fn dispatch_args(args: &[String]) -> Result<StartupMode> {
@@ -181,6 +187,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command] if is_install_shell_command(command) => {
             run_install_shell_integration()?;
+            Ok(StartupMode::Handled)
+        }
+        [command] if is_uninstall_shell_command(command) => {
+            run_uninstall_shell_integration()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_branch_command(command) => {
@@ -468,6 +478,72 @@ fn run_install_shell_integration() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn run_uninstall_shell_integration() -> Result<()> {
+    let local_bin = match env::var_os("COMFYGIT_BIN_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let home = env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("HOME is not set; set COMFYGIT_BIN_DIR or export HOME"))?;
+            home.join(".local").join("bin")
+        }
+    };
+
+    let appdir_os = env::var_os("APPDIR").map(PathBuf::from);
+
+    let script_path = if let Some(ref ad) = appdir_os {
+        let p = ad.join("usr/local/share/comfygit/scripts/uninstall-shell-integration.sh");
+        if !p.is_file() {
+            bail!(
+                "missing uninstall script under APPDIR (expected {}).\n\
+                 Use a ComfyGit build that includes shell scripts, or run:\n\
+                   sh path/to/scripts/uninstall-shell-integration.sh {}",
+                p.display(),
+                local_bin.display()
+            );
+        }
+        p
+    } else if Path::new("/usr/local/share/comfygit/scripts/uninstall-shell-integration.sh")
+        .is_file()
+    {
+        PathBuf::from("/usr/local/share/comfygit/scripts/uninstall-shell-integration.sh")
+    } else {
+        bail!(
+            "ComfyGit uninstall script was not found.\n\
+             \n\
+             AppImage: run from the app so APPDIR is set, for example:\n\
+               ./comfygit-*-x86_64.AppImage uninstall-shell\n\
+             \n\
+             Package install: use the copy under /usr/local/share/comfygit/scripts/, or from the repository:\n\
+               sh scripts/uninstall-shell-integration.sh {}",
+            local_bin.display()
+        );
+    };
+
+    let status = Command::new("sh")
+        .arg(&script_path)
+        .arg(&local_bin)
+        .status()
+        .with_context(|| format!("failed to run {}", script_path.display()))?;
+
+    if !status.success() {
+        bail!(
+            "uninstall-shell-integration.sh exited with status {:?}",
+            status.code()
+        );
+    }
+
+    println!();
+    println!("Shell integration removed from {}.", local_bin.display());
+    println!(
+        "Open a new terminal session (or run `hash -r` in bash) so `cg` / `ComfyGit` resolve to your package binary."
+    );
+    println!();
+
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn run_install_shell_integration() -> Result<()> {
     bail!(
@@ -475,10 +551,24 @@ fn run_install_shell_integration() -> Result<()> {
     );
 }
 
+#[cfg(not(unix))]
+fn run_uninstall_shell_integration() -> Result<()> {
+    bail!(
+        "`cg uninstall-shell` is only supported on Unix; on Windows remove integration manually if installed."
+    );
+}
+
 fn is_install_shell_command(value: &str) -> bool {
     matches!(
         value,
         "install-shell" | "setup-shell" | "shell-install" | "installshell"
+    )
+}
+
+fn is_uninstall_shell_command(value: &str) -> bool {
+    matches!(
+        value,
+        "uninstall-shell" | "remove-shell" | "shell-uninstall" | "uninstallshell"
     )
 }
 
@@ -607,6 +697,12 @@ fn print_usage() {
     );
     println!(
         "                             Synonyms: setup-shell | install shell | setup shell | installshell"
+    );
+    println!(
+        "  cg uninstall-shell         Remove integration installed by install-shell (wrappers, profile hooks)"
+    );
+    println!(
+        "                             Synonyms: remove-shell | uninstall shell | shell-uninstall"
     );
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
