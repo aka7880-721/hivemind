@@ -5958,6 +5958,8 @@ pub(crate) struct ScopeDraft {
     pub(crate) target_key_custom: bool,
     pub(crate) scope_kind: BranchScopeKind,
     pub(crate) repo: Option<RepoConfig>,
+    pub(crate) integration_mode: IntegrationMode,
+    pub(crate) version_scheme: VersionScheme,
     pub(crate) format: TargetFormat,
     pub(crate) last_probe: Option<TargetProbe>,
 }
@@ -5976,6 +5978,8 @@ impl ScopeDraft {
             target_key_custom: false,
             scope_kind: BranchScopeKind::Branch,
             repo: None,
+            integration_mode: IntegrationMode::LocalOnly,
+            version_scheme: VersionScheme::SemVer,
             format: TargetFormat::Auto,
             last_probe: None,
         }
@@ -6012,6 +6016,19 @@ impl ScopeDraft {
             target_key_custom: target_key_is_custom(&target.path, &target.key_path),
             scope_kind: branch.scope_kind,
             repo: branch.repo.clone(),
+            integration_mode: if branch
+                .repo
+                .as_ref()
+                .and_then(|repo| repo.remote_url.as_ref())
+                .is_some()
+            {
+                IntegrationMode::GitHubEnabled
+            } else if branch.repo.is_some() {
+                IntegrationMode::GitLocalOnly
+            } else {
+                IntegrationMode::LocalOnly
+            },
+            version_scheme: branch.version_scheme,
             format: target.format,
             last_probe: None,
         })
@@ -6034,11 +6051,7 @@ impl ScopeDraft {
         }
     }
 
-    pub(crate) fn build_branch(
-        &self,
-        version_scheme: VersionScheme,
-        require_probe: bool,
-    ) -> Result<BranchConfig> {
+    pub(crate) fn build_branch(&self, require_probe: bool) -> Result<BranchConfig> {
         let name = self.name.value.trim();
         if name.is_empty() {
             bail!("scope name cannot be empty");
@@ -6080,7 +6093,7 @@ impl ScopeDraft {
             changelog_enabled: self.changelog_enabled,
             changelog_path: None,
             release_now: crate::config::ReleaseNowSettings::default(),
-            version_scheme,
+            version_scheme: self.version_scheme,
             targets: vec![TargetSpec {
                 label: self.target_label.clone(),
                 path: target_path.to_string(),
@@ -8335,6 +8348,9 @@ mod tests {
             focus: WizardField::RemoteUrl,
             ..ProjectWizard::default()
         };
+        if let Some(scope) = wizard.current_scope_mut() {
+            scope.integration_mode = IntegrationMode::GitHubEnabled;
+        }
 
         let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
 
