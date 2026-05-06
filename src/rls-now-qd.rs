@@ -492,7 +492,7 @@ pub(crate) fn build_quick_downloads_section_html(
             }
             None => sub_disabled_img(&format!("{}/app.svg", LOGO_BASE), "32"),
         };
-        format!("{pkg_s}      {app_s}")
+        format!("{pkg_s}\u{00A0}\u{00A0}\u{00A0}{app_s}")
     };
 
     let mac_cell = format!(
