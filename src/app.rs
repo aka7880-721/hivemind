@@ -264,6 +264,7 @@ struct App {
     selected_project: usize,
     dashboard_focus: DashboardPane,
     clipboard: Option<Clipboard>,
+    fallback_clipboard: Option<String>,
     overview_tab: OverviewTab,
     overview_show_recent_tab: bool,
     project_settings_tab: ProjectSettingsTab,
@@ -367,6 +368,7 @@ impl App {
             selected_project: 0,
             dashboard_focus: DashboardPane::Projects,
             clipboard,
+            fallback_clipboard: None,
             overview_tab: OverviewTab::Overview,
             overview_show_recent_tab: false,
             project_settings_tab: ProjectSettingsTab::General,
@@ -2004,8 +2006,11 @@ impl App {
             if let Some(ref mut clipboard) = self.clipboard {
                 clipboard
             } else {
-                self.status =
-                    StatusMessage::warning("Clipboard is not available in this environment.");
+                if let Some(text) = self.fallback_clipboard.clone() {
+                    self.handle_paste(text);
+                } else {
+                    self.status = StatusMessage::warning("No clipboard content is available.");
+                }
                 return;
             }
         };
@@ -2034,7 +2039,11 @@ impl App {
                 }
             }
             Err(_) => {
-                self.status = StatusMessage::warning("Clipboard paste failed.");
+                if let Some(text) = self.fallback_clipboard.clone() {
+                    self.handle_paste(text);
+                } else {
+                    self.status = StatusMessage::warning("Clipboard paste failed.");
+                }
             }
         }
     }
@@ -4575,6 +4584,7 @@ impl App {
     }
 
     fn copy_text_to_clipboard(&mut self, text: &str) {
+        self.fallback_clipboard = Some(text.to_string());
         let clipboard = if let Some(ref mut clipboard) = self.clipboard {
             clipboard
         } else {
@@ -4582,8 +4592,9 @@ impl App {
             if let Some(ref mut clipboard) = self.clipboard {
                 clipboard
             } else {
-                self.status =
-                    StatusMessage::warning("Clipboard is not available in this environment.");
+                self.status = StatusMessage::info(
+                    "Copied to local clipboard (system clipboard unavailable).",
+                );
                 return;
             }
         };
@@ -4591,7 +4602,8 @@ impl App {
         if clipboard.set_text(text.to_string()).is_ok() {
             self.status = StatusMessage::info("Copied to clipboard.");
         } else {
-            self.status = StatusMessage::warning("Clipboard copy failed.");
+            self.status =
+                StatusMessage::info("Copied to local clipboard (system clipboard failed).");
         }
     }
 
