@@ -2060,6 +2060,16 @@ impl App {
             .split(inner);
 
         let mut header = vec![
+            Line::from(format!(
+                "Elapsed: {}{}",
+                dialog.elapsed_label(),
+                if dialog.is_running() {
+                    " (running)"
+                } else {
+                    ""
+                }
+            ))
+            .style(Style::default().fg(Color::Cyan)),
             Line::from(format!("Project: {}", dialog.project_name)).bold(),
             Line::from(format!("Scope: {}", dialog.scope_label)),
             Line::from(format!("Repo: {}", dialog.repo_root)),
