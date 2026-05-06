@@ -2,6 +2,27 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog v0.19.4
+2026-05-06
+
+#### What's new:
+
+### Changed in QuickDownloads
+
+#### 🐛 Fix(es)
+
+* space fix 2   _(aef6b9c)_
+
+---
+
+### 🛠️ General:
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.19.4   _(2186b11)_
+
+---
+
 ## Changelog v0.19.3
 2026-05-06
 
