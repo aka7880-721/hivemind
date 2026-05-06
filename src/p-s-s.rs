@@ -31,11 +31,20 @@ use crate::{
 pub(crate) enum ProjectSettingsTab {
     General,
     Distro,
+    RlsQd,
 }
 
 impl ProjectSettingsTab {
-    pub(crate) fn step(self, delta: isize) -> Self {
-        let tabs = [Self::General, Self::Distro];
+    fn tab_strip(release_now_enabled: bool) -> &'static [ProjectSettingsTab] {
+        if release_now_enabled {
+            &[Self::General, Self::Distro, Self::RlsQd]
+        } else {
+            &[Self::General, Self::Distro]
+        }
+    }
+
+    pub(crate) fn step(self, delta: isize, release_now_enabled: bool) -> Self {
+        let tabs = Self::tab_strip(release_now_enabled);
         let index = tabs.iter().position(|tab| *tab == self).unwrap_or(0) as isize;
         tabs[(index + delta).rem_euclid(tabs.len() as isize) as usize]
     }
@@ -53,6 +62,9 @@ pub(crate) enum ProjectSettingsFocus {
     ReleaseNowLinuxArm,
     ReleaseNowLinuxAmd,
     ReleaseNowMacOs,
+    QuickDownloadsEnabled,
+    QuickDownloadsPosition,
+    QuickDownloadsFooter,
 }
 
 #[derive(Clone)]
@@ -69,6 +81,8 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) release_now_linux_arm: TextInput,
     pub(crate) release_now_linux_amd: TextInput,
     pub(crate) release_now_macos: TextInput,
+    pub(crate) quick_downloads_position: TextInput,
+    pub(crate) quick_downloads_footer: TextInput,
 }
 
 impl Default for ProjectSettingsState {
@@ -86,6 +100,8 @@ impl Default for ProjectSettingsState {
             release_now_linux_arm: TextInput::with_value(""),
             release_now_linux_amd: TextInput::with_value(""),
             release_now_macos: TextInput::with_value(""),
+            quick_downloads_position: TextInput::with_value(""),
+            quick_downloads_footer: TextInput::with_value(""),
         }
     }
 }
@@ -119,6 +135,11 @@ impl ProjectSettingsState {
             .set_value(release_now.linux_amd_script.clone());
         self.release_now_macos
             .set_value(release_now.macos_script.clone());
+        let qd = &release_now.quick_downloads;
+        self.quick_downloads_position
+            .set_value(qd.position.display_name().to_string());
+        self.quick_downloads_footer
+            .set_value(qd.footer_message.clone());
         self.ensure_focus_visible(tab, project, scope_index);
     }
 
@@ -153,6 +174,18 @@ impl ProjectSettingsState {
                         ProjectSettingsFocus::ReleaseNowLinuxAmd,
                         ProjectSettingsFocus::ReleaseNowMacOs,
                     ]);
+                }
+                fields
+            }
+            ProjectSettingsTab::RlsQd => {
+                let mut fields = vec![ProjectSettingsFocus::QuickDownloadsEnabled];
+                if project
+                    .release_now_for_scope(scope_index)
+                    .quick_downloads
+                    .enabled
+                {
+                    fields.push(ProjectSettingsFocus::QuickDownloadsPosition);
+                    fields.push(ProjectSettingsFocus::QuickDownloadsFooter);
                 }
                 fields
             }
@@ -214,6 +247,7 @@ impl ProjectSettingsState {
                     | ProjectSettingsFocus::ReleaseNowLinuxArm
                     | ProjectSettingsFocus::ReleaseNowLinuxAmd
                     | ProjectSettingsFocus::ReleaseNowMacOs
+                    | ProjectSettingsFocus::QuickDownloadsFooter
             )
     }
 
@@ -226,6 +260,7 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ReleaseNowLinuxArm => Some(&mut self.release_now_linux_arm),
             ProjectSettingsFocus::ReleaseNowLinuxAmd => Some(&mut self.release_now_linux_amd),
             ProjectSettingsFocus::ReleaseNowMacOs => Some(&mut self.release_now_macos),
+            ProjectSettingsFocus::QuickDownloadsFooter => Some(&mut self.quick_downloads_footer),
             _ => None,
         }
     }
@@ -270,6 +305,12 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ReleaseNowMacOs => self
                 .release_now_macos
                 .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::QuickDownloadsPosition => self
+                .quick_downloads_position
+                .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::QuickDownloadsFooter => self
+                .quick_downloads_footer
+                .display_line_with_width(focused, max_width),
             _ => Line::from(String::new()),
         }
     }
@@ -281,6 +322,7 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ReleaseNowLinuxArm => self.release_now_linux_arm.set_value(value),
             ProjectSettingsFocus::ReleaseNowLinuxAmd => self.release_now_linux_amd.set_value(value),
             ProjectSettingsFocus::ReleaseNowMacOs => self.release_now_macos.set_value(value),
+            ProjectSettingsFocus::QuickDownloadsFooter => self.quick_downloads_footer.set_value(value),
             _ => {}
         }
     }
@@ -353,6 +395,9 @@ pub(crate) fn render_project_settings(app: &mut App, frame: &mut Frame, area: Re
         ProjectSettingsTab::Distro => {
             render_distro_settings(app, frame, sections[1], &project, scope_index)
         }
+        ProjectSettingsTab::RlsQd => {
+            render_rls_qd_settings(app, frame, sections[1], &project, scope_index)
+        }
     }
 }
 
@@ -361,6 +406,11 @@ pub(crate) fn sync_project_settings_state(app: &mut App) {
         return;
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    if app.project_settings_tab == ProjectSettingsTab::RlsQd
+        && !project.release_now_for_scope(scope_index).enabled
+    {
+        app.project_settings_tab = ProjectSettingsTab::Distro;
+    }
     app.project_settings_state.sync_from_project(
         app.selected_project,
         app.project_settings_tab,
@@ -374,7 +424,14 @@ pub(crate) fn invalidate_project_settings_state(app: &mut App) {
 }
 
 pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
-    app.project_settings_tab = app.project_settings_tab.step(delta);
+    let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+        return;
+    };
+    let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    let release_now_enabled = project.release_now_for_scope(scope_index).enabled;
+    app.project_settings_tab = app
+        .project_settings_tab
+        .step(delta, release_now_enabled);
     app.project_settings_state.scroll = 0;
     app.project_settings_state.follow_focus = true;
     sync_project_settings_state(app);
@@ -641,11 +698,25 @@ pub(crate) fn apply_browser_selection(
 }
 
 fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
-    let labels = ["General", "Distro"];
-    let active_index = match app.project_settings_tab {
-        ProjectSettingsTab::General => 0,
-        ProjectSettingsTab::Distro => 1,
+    let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+        return;
     };
+    let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    let strip = ProjectSettingsTab::tab_strip(
+        project.release_now_for_scope(scope_index).enabled,
+    );
+    let labels: Vec<&str> = strip
+        .iter()
+        .map(|t| match t {
+            ProjectSettingsTab::General => "General",
+            ProjectSettingsTab::Distro => "Distro",
+            ProjectSettingsTab::RlsQd => "RLS-QD",
+        })
+        .collect();
+    let active_index = strip
+        .iter()
+        .position(|tab| *tab == app.project_settings_tab)
+        .unwrap_or(0);
     let tabs = TabNav::new(&labels, active_index)
         .highlight_style(Style::default().fg(Color::Cyan))
         .border_style(Style::default().fg(Color::DarkGray))
@@ -653,18 +724,28 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         .indicator(None);
     frame.render_widget(tabs, area);
 
+    let constraints: Vec<Constraint> = strip
+        .iter()
+        .map(|tab| {
+            Constraint::Length(match tab {
+                ProjectSettingsTab::General => 16,
+                ProjectSettingsTab::Distro => 16,
+                ProjectSettingsTab::RlsQd => 18,
+            })
+        })
+        .collect();
     let rects = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(16), Constraint::Length(16)])
+        .constraints(constraints)
         .split(area);
-    app.hit_targets.push(HitTarget::new(
-        rects[0],
-        HitAction::SelectProjectSettingsTab(ProjectSettingsTab::General),
-    ));
-    app.hit_targets.push(HitTarget::new(
-        rects[1],
-        HitAction::SelectProjectSettingsTab(ProjectSettingsTab::Distro),
-    ));
+    for (idx, tab) in strip.iter().enumerate() {
+        if let Some(rect) = rects.get(idx) {
+            app.hit_targets.push(HitTarget::new(
+                *rect,
+                HitAction::SelectProjectSettingsTab(*tab),
+            ));
+        }
+    }
 }
 
 fn render_general_settings(
@@ -831,6 +912,7 @@ fn build_rows(
     match tab {
         ProjectSettingsTab::General => build_general_rows(project, scope_index),
         ProjectSettingsTab::Distro => build_distro_rows(project, scope_index),
+        ProjectSettingsTab::RlsQd => build_rls_qd_rows(project, scope_index),
     }
 }
 
@@ -910,6 +992,63 @@ fn build_distro_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Project
     rows
 }
 
+fn render_rls_qd_settings(
+    app: &mut App,
+    frame: &mut Frame,
+    area: Rect,
+    project: &ProjectConfig,
+    scope_index: usize,
+) {
+    render_scrollable_rows(
+        app,
+        frame,
+        area,
+        project,
+        scope_index,
+        &build_rls_qd_rows(project, scope_index),
+    );
+}
+
+fn build_rls_qd_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
+    let mut rows = vec![
+        ProjectSettingsRow::Text(
+            Line::from(format!(
+                "Scope: {}",
+                active_scope_name(project, scope_index)
+            ))
+            .bold(),
+        ),
+        ProjectSettingsRow::Text(Line::from(
+            "Quick-Downloads: HTML table injected into GitHub release notes during ReleaseNOW."
+                .yellow(),
+        )),
+        ProjectSettingsRow::Spacer(1),
+        ProjectSettingsRow::Checkbox(ProjectSettingsFocus::QuickDownloadsEnabled),
+    ];
+    if project
+        .release_now_for_scope(scope_index)
+        .quick_downloads
+        .enabled
+    {
+        rows.push(ProjectSettingsRow::Path(
+            ProjectSettingsFocus::QuickDownloadsPosition,
+        ));
+        rows.push(ProjectSettingsRow::Path(
+            ProjectSettingsFocus::QuickDownloadsFooter,
+        ));
+    }
+    rows.extend([
+        ProjectSettingsRow::Spacer(1),
+        ProjectSettingsRow::Text(Line::from(
+            "Top: table is a prefix before your notes. Bottom: table is an appendix after notes.",
+        )),
+        ProjectSettingsRow::Text(Line::from(
+            "Uses the scope Remote URL (GitHub SSH or HTTPS). Missing artifacts become non-linked cells.",
+        )),
+    ]);
+    rows
+}
+
 fn total_rows_height(rows: &[ProjectSettingsRow]) -> u16 {
     rows.iter().map(ProjectSettingsRow::height).sum()
 }
@@ -947,6 +1086,10 @@ fn render_checkbox_row(
         ProjectSettingsFocus::ReleaseNowEnabled => {
             project.release_now_for_scope(scope_index).enabled
         }
+        ProjectSettingsFocus::QuickDownloadsEnabled => project
+            .release_now_for_scope(scope_index)
+            .quick_downloads
+            .enabled,
         _ => false,
     };
     let checkbox = Checkbox::new(checkbox_label(field), enabled)
@@ -1047,6 +1190,9 @@ fn render_path_row(
     let inset = control_inset(area);
     let side_button = match field {
         ProjectSettingsFocus::Alias | ProjectSettingsFocus::CustomMainBranchName => None,
+        ProjectSettingsFocus::QuickDownloadsPosition | ProjectSettingsFocus::QuickDownloadsFooter => {
+            None
+        }
         _ => Some(FormRowButton::new(
             "Browse",
             HitAction::BrowseProjectSettingsField(field),
@@ -1092,6 +1238,7 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
         }
+        ProjectSettingsFocus::QuickDownloadsEnabled => "Quick-Downloads Enabled",
         _ => "",
     }
 }
@@ -1105,6 +1252,8 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ReleaseNowLinuxArm => "Linux ARM",
         ProjectSettingsFocus::ReleaseNowLinuxAmd => "Linux AMD",
         ProjectSettingsFocus::ReleaseNowMacOs => "MacOS",
+        ProjectSettingsFocus::QuickDownloadsPosition => "Position (Space to toggle)",
+        ProjectSettingsFocus::QuickDownloadsFooter => "Footer",
         _ => "",
     }
 }
@@ -1115,6 +1264,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
         ProjectSettingsFocus::CustomMainBranchEnabled
             | ProjectSettingsFocus::ChangelogEnabled
             | ProjectSettingsFocus::ReleaseNowEnabled
+            | ProjectSettingsFocus::QuickDownloadsEnabled
     )
 }
 
@@ -1161,6 +1311,9 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
         ProjectSettingsFocus::ReleaseNowEnabled => {
             let settings = active_project.release_now_for_scope_mut(scope_index);
             settings.enabled = !settings.enabled;
+            if !settings.enabled && app.project_settings_tab == ProjectSettingsTab::RlsQd {
+                app.project_settings_tab = ProjectSettingsTab::Distro;
+            }
             app.status = super::StatusMessage::success(format!(
                 "Release-NOW capabilities {} for {}.",
                 if settings.enabled {
@@ -1168,6 +1321,34 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
                 } else {
                     "disabled"
                 },
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::QuickDownloadsEnabled => {
+            let qd = &mut active_project
+                .release_now_for_scope_mut(scope_index)
+                .quick_downloads;
+            qd.enabled = !qd.enabled;
+            app.status = super::StatusMessage::success(format!(
+                "Quick-Downloads {} for {}.",
+                if qd.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::QuickDownloadsPosition => {
+            let settings_mut = active_project.release_now_for_scope_mut(scope_index);
+            let next = settings_mut.quick_downloads.position.toggle();
+            settings_mut.quick_downloads.position = next;
+            app.project_settings_state
+                .quick_downloads_position
+                .set_value(next.display_name().to_string());
+            app.status = super::StatusMessage::success(format!(
+                "Quick-Downloads position set to {} for {}.",
+                next.display_name(),
                 scope_name
             ));
         }
@@ -1225,6 +1406,11 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
         .release_now_macos
         .value()
         .to_string();
+    let qd_footer = app
+        .project_settings_state
+        .quick_downloads_footer
+        .value()
+        .to_string();
 
     let active_project = app
         .config
@@ -1250,6 +1436,7 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     release_now.linux_arm_script = linux_arm_script;
     release_now.linux_amd_script = linux_amd_script;
     release_now.macos_script = macos_script;
+    release_now.quick_downloads.footer_message = qd_footer;
     app.config_store.save(&app.config)?;
     Ok(())
 }
