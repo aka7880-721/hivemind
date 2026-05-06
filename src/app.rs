@@ -19,6 +19,8 @@ use std::os::windows::io::AsRawHandle;
 
 use anyhow::{Context, Result, anyhow, bail};
 use arboard::Clipboard;
+#[cfg(target_os = "linux")]
+use arboard::{LinuxClipboardKind, SetExtLinux};
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -4599,7 +4601,25 @@ impl App {
             }
         };
 
-        if clipboard.set_text(text.to_string()).is_ok() {
+        #[cfg(target_os = "linux")]
+        let copied = {
+            let text_owned = text.to_string();
+            let clipboard_ok = clipboard
+                .set()
+                .clipboard(LinuxClipboardKind::Clipboard)
+                .text(text_owned.clone())
+                .is_ok();
+            let primary_ok = clipboard
+                .set()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text(text_owned)
+                .is_ok();
+            clipboard_ok || primary_ok
+        };
+        #[cfg(not(target_os = "linux"))]
+        let copied = clipboard.set_text(text.to_string()).is_ok();
+
+        if copied {
             self.status = StatusMessage::info("Copied to clipboard.");
         } else {
             self.status =
