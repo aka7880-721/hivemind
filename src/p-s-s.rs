@@ -305,9 +305,10 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ReleaseNowMacOs => self
                 .release_now_macos
                 .display_line_with_width(focused, max_width),
-            ProjectSettingsFocus::QuickDownloadsPosition => self
-                .quick_downloads_position
-                .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::QuickDownloadsPosition => Line::from(format!(
+                "< {} >",
+                self.quick_downloads_position.value().trim()
+            )),
             ProjectSettingsFocus::QuickDownloadsFooter => self
                 .quick_downloads_footer
                 .display_line_with_width(focused, max_width),
@@ -541,7 +542,15 @@ pub(crate) fn try_handle_project_settings_key(app: &mut App, key: KeyEvent) -> R
             );
             Ok(true)
         }
-        KeyCode::Enter | KeyCode::Char(' ') => {
+        KeyCode::Left | KeyCode::Right
+            if app.project_settings_state.focus == ProjectSettingsFocus::QuickDownloadsPosition =>
+        {
+            toggle_focused_project_settings_control(app)?;
+            Ok(true)
+        }
+        KeyCode::Enter | KeyCode::Char(' ')
+            if app.project_settings_state.focus != ProjectSettingsFocus::QuickDownloadsPosition =>
+        {
             toggle_focused_project_settings_control(app)?;
             Ok(true)
         }
@@ -1251,7 +1260,7 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ReleaseNowLinuxArm => "Linux ARM",
         ProjectSettingsFocus::ReleaseNowLinuxAmd => "Linux AMD",
         ProjectSettingsFocus::ReleaseNowMacOs => "MacOS",
-        ProjectSettingsFocus::QuickDownloadsPosition => "Position (Space to toggle)",
+        ProjectSettingsFocus::QuickDownloadsPosition => "Position (←/→)",
         ProjectSettingsFocus::QuickDownloadsFooter => "Footer",
         _ => "",
     }
