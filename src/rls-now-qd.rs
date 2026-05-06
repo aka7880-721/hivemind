@@ -313,9 +313,22 @@ fn sub_linked_img(href: &str, img_src: &str, height: &str, title: &str) -> Strin
 }
 
 fn sub_disabled_img(img_src: &str, height: &str) -> String {
+    let missing_src = if img_src.ends_with("/zip.svg") {
+        format!("{}/no-zip.svg", LOGO_BASE)
+    } else if img_src.ends_with("/tar.svg") {
+        format!("{}/no-tar.svg", LOGO_BASE)
+    } else if img_src.ends_with("/pkg.svg") {
+        format!("{}/no-pkg.svg", LOGO_BASE)
+    } else if img_src.ends_with("/msi1.svg") {
+        format!("{}/no-msi1.svg", LOGO_BASE)
+    } else if img_src.ends_with("/app.svg") {
+        format!("{}/no-app.svg", LOGO_BASE)
+    } else {
+        img_src.to_string()
+    };
     format!(
         r#"<sub><img src="{}" height="{}" title="{}"/></sub>"#,
-        img_src,
+        missing_src,
         height,
         esc_attr(NOT_AVAILABLE_TITLE)
     )
@@ -343,11 +356,7 @@ fn sup_link_or_grey(
             let url = github_release_download_url(owner, repo, tag, f);
             sup_link(&url, label, title)
         }
-        None => format!(
-            r#"<sup><span title="{}">{}</span></sup>"#,
-            esc_attr(NOT_AVAILABLE_TITLE),
-            esc_attr(label)
-        ),
+        None => format!(r#"<sup><sub>{}</sub></sup>"#, esc_attr(label)),
     }
 }
 
@@ -385,7 +394,9 @@ pub(crate) fn build_quick_downloads_section_html(
     };
 
     let linux_cell = format!(
-        r#"<img src="https://upload.wikimedia.org/wikipedia/commons/7/73/App-image-logo.svg" height="31" title="AppImage"/>  <img src="https://cdn.brandfetch.io/idJz03xsbD/theme/dark/logo.svg?c=1bxid64Mup7aczewSAYMX" height="30" title="AppImage may be executed on any Linux, but it's mainly used in: Arch / Manjaro / EndeavourOS / NixOS / Gentoo / etc..."/>    <sup>➠</sup>   {} <sup>/</sup> {}<br>     <sub><img src="https://fedoraproject.org/w/uploads/2/2d/Logo_fedoralogo.png" height="30" title="RPM installer for Fedora/RHEL/SUSE family"/></sub>       <sup>➠</sup>   {} <sup>/</sup> {}<br>          <sub><img src="{}/ubuntu.svg" height="32" title="Ubuntu DEB installer"/></sub>   <img src="{}/debian.svg" height="27" title="Debian DEB installer"/>          <sup>➠</sup>   {} <sup>/</sup> {}<br>               <sub><img src="{}/tar.svg" height="30" title="Archived Portable (gz.tar)"/></sub>            <sup>➠</sup>   {} <sup>/</sup> {}"#,
+        r#"<img src="{}/logo-app-image.svg" height="31" title="AppImage"/>  <img src="{}/logo-arch-linux.svg" height="30" title="AppImage may be executed on any Linux, but it's mainly used in: Arch / Manjaro / EndeavourOS / NixOS / Gentoo / etc..."/>    <sup>➠</sup>   {} <sup>/</sup> {}<br>     <sub><img src="{}/logo-fedora.png" height="30" title="RPM installer for Fedora/RHEL/SUSE family"/></sub>       <sup>➠</sup>   {} <sup>/</sup> {}<br>          <sub><img src="{}/ubuntu.svg" height="32" title="Ubuntu DEB installer"/></sub>   <img src="{}/debian.svg" height="27" title="Debian DEB installer"/>          <sup>➠</sup>   {} <sup>/</sup> {}<br>               <sub><img src="{}/tar.svg" height="30" title="Archived Portable (gz.tar)"/></sub>            <sup>➠</sup>   {} <sup>/</sup> {}"#,
+        LOGO_BASE,
+        LOGO_BASE,
         sup_link_or_grey(
             owner,
             repo,
@@ -418,6 +429,7 @@ pub(crate) fn build_quick_downloads_section_html(
             "aarch64",
             "aarch64 → ARM"
         ),
+        LOGO_BASE,
         LOGO_BASE,
         LOGO_BASE,
         sup_link_or_grey(
@@ -496,16 +508,19 @@ pub(crate) fn build_quick_downloads_section_html(
     format!(
         r#"<div align="center">
 
-|⟱  Q U I C K - D O W N L O A D S        A V A I L A B L E        H E R E  ⟱|
+|⟱  Q U I C K - D O W N L O A D S         A V A I L A B L E         H E R E  ⟱|
 |-|
 
-|   <sub><img src="https://cdn.brandfetch.io/idO_D7E2El/theme/dark/logo.svg?c=1bxid64Mup7aczewSAYMX&t=1756706346242" height="24" title="Should work also below Win11. Please open Issue if you have any problems."/></sub>   |✪|<sub><img src="https://www.svgrepo.com/show/448236/linux.svg" height="30" /></sub> <sup>Linux Distributions</sup>|✪|<sub><img src="https://www.svgrepo.com/show/303125/apple-logo.svg" height="24" /></sub> <sub><sup>macOS</sup></sub>|
+|   <sub><img src="{}/logo-win.svg" height="24" title="Should work also below Win11. Please open Issue if you have any problems."/></sub>   |✪|<sub><img src="{}/logo-linux.svg" height="30" /></sub> <sup>Linux Distributions</sup>|✪|<sub><img src="{}/logo-apple.svg" height="24" /></sub> <sub><sup>macOS</sup></sub>|
 |:-:|:-:|-|:-:|:-:|
 |{win_cell}|‧<br>✦<br>‧<br>✦<br>‧<br>✦<br>‧|{linux_cell}|‧<br>✦<br>‧<br>✦<br>‧<br>✦<br>‧|{mac_cell}|
 
 <sub><sup>{} </sub></sup>
 
 </div>"#,
+        LOGO_BASE,
+        LOGO_BASE,
+        LOGO_BASE,
         esc_attr(footer_esc)
     )
 }
