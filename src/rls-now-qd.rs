@@ -413,6 +413,7 @@ pub(crate) fn build_quick_downloads_section_html(
             "aarch64",
             "aarch64 → ARM"
         ),
+        LOGO_BASE,
         sup_link_or_grey(
             owner,
             repo,
@@ -429,7 +430,6 @@ pub(crate) fn build_quick_downloads_section_html(
             "aarch64",
             "aarch64 → ARM"
         ),
-        LOGO_BASE,
         LOGO_BASE,
         LOGO_BASE,
         sup_link_or_grey(
