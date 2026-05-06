@@ -259,6 +259,37 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn copy_text_via_linux_clipboard_cli(text: &str) -> bool {
+    try_clipboard_stdin_command("wl-copy", &[], text)
+        || try_clipboard_stdin_command("xclip", &["-selection", "clipboard"], text)
+        || try_clipboard_stdin_command("xsel", &["--clipboard", "--input"], text)
+}
+
+#[cfg(target_os = "linux")]
+fn try_clipboard_stdin_command(program: &str, args: &[&str], text: &str) -> bool {
+    use std::io::Write;
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => return false,
+    };
+    if stdin.write_all(text.as_bytes()).is_err() {
+        return false;
+    }
+    drop(stdin);
+    matches!(child.wait(), Ok(status) if status.success())
+}
+
 struct App {
     config_store: ConfigStore,
     config: AppConfig,
@@ -4587,43 +4618,44 @@ impl App {
 
     fn copy_text_to_clipboard(&mut self, text: &str) {
         self.fallback_clipboard = Some(text.to_string());
-        let clipboard = if let Some(ref mut clipboard) = self.clipboard {
-            clipboard
-        } else {
+
+        if self.clipboard.is_none() {
             self.clipboard = Clipboard::new().ok();
-            if let Some(ref mut clipboard) = self.clipboard {
-                clipboard
-            } else {
-                self.status = StatusMessage::info(
-                    "Copied to local clipboard (system clipboard unavailable).",
-                );
-                return;
+        }
+
+        let mut copied = false;
+        if let Some(ref mut clipboard) = self.clipboard {
+            #[cfg(target_os = "linux")]
+            {
+                let text_owned = text.to_string();
+                let clipboard_ok = clipboard
+                    .set()
+                    .clipboard(LinuxClipboardKind::Clipboard)
+                    .text(text_owned.clone())
+                    .is_ok();
+                let primary_ok = clipboard
+                    .set()
+                    .clipboard(LinuxClipboardKind::Primary)
+                    .text(text_owned)
+                    .is_ok();
+                copied = clipboard_ok || primary_ok;
             }
-        };
+            #[cfg(not(target_os = "linux"))]
+            {
+                copied = clipboard.set_text(text.to_string()).is_ok();
+            }
+        }
 
         #[cfg(target_os = "linux")]
-        let copied = {
-            let text_owned = text.to_string();
-            let clipboard_ok = clipboard
-                .set()
-                .clipboard(LinuxClipboardKind::Clipboard)
-                .text(text_owned.clone())
-                .is_ok();
-            let primary_ok = clipboard
-                .set()
-                .clipboard(LinuxClipboardKind::Primary)
-                .text(text_owned)
-                .is_ok();
-            clipboard_ok || primary_ok
-        };
-        #[cfg(not(target_os = "linux"))]
-        let copied = clipboard.set_text(text.to_string()).is_ok();
+        if !copied {
+            copied = copy_text_via_linux_clipboard_cli(text);
+        }
 
         if copied {
             self.status = StatusMessage::info("Copied to clipboard.");
         } else {
             self.status =
-                StatusMessage::info("Copied to local clipboard (system clipboard failed).");
+                StatusMessage::info("Copied in-app only (could not reach the desktop clipboard).");
         }
     }
 
