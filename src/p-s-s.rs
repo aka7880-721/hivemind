@@ -322,7 +322,9 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ReleaseNowLinuxArm => self.release_now_linux_arm.set_value(value),
             ProjectSettingsFocus::ReleaseNowLinuxAmd => self.release_now_linux_amd.set_value(value),
             ProjectSettingsFocus::ReleaseNowMacOs => self.release_now_macos.set_value(value),
-            ProjectSettingsFocus::QuickDownloadsFooter => self.quick_downloads_footer.set_value(value),
+            ProjectSettingsFocus::QuickDownloadsFooter => {
+                self.quick_downloads_footer.set_value(value)
+            }
             _ => {}
         }
     }
@@ -429,9 +431,7 @@ pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
     let release_now_enabled = project.release_now_for_scope(scope_index).enabled;
-    app.project_settings_tab = app
-        .project_settings_tab
-        .step(delta, release_now_enabled);
+    app.project_settings_tab = app.project_settings_tab.step(delta, release_now_enabled);
     app.project_settings_state.scroll = 0;
     app.project_settings_state.follow_focus = true;
     sync_project_settings_state(app);
@@ -702,9 +702,7 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
-    let strip = ProjectSettingsTab::tab_strip(
-        project.release_now_for_scope(scope_index).enabled,
-    );
+    let strip = ProjectSettingsTab::tab_strip(project.release_now_for_scope(scope_index).enabled);
     let labels: Vec<&str> = strip
         .iter()
         .map(|t| match t {
@@ -1086,10 +1084,12 @@ fn render_checkbox_row(
         ProjectSettingsFocus::ReleaseNowEnabled => {
             project.release_now_for_scope(scope_index).enabled
         }
-        ProjectSettingsFocus::QuickDownloadsEnabled => project
-            .release_now_for_scope(scope_index)
-            .quick_downloads
-            .enabled,
+        ProjectSettingsFocus::QuickDownloadsEnabled => {
+            project
+                .release_now_for_scope(scope_index)
+                .quick_downloads
+                .enabled
+        }
         _ => false,
     };
     let checkbox = Checkbox::new(checkbox_label(field), enabled)
@@ -1190,9 +1190,8 @@ fn render_path_row(
     let inset = control_inset(area);
     let side_button = match field {
         ProjectSettingsFocus::Alias | ProjectSettingsFocus::CustomMainBranchName => None,
-        ProjectSettingsFocus::QuickDownloadsPosition | ProjectSettingsFocus::QuickDownloadsFooter => {
-            None
-        }
+        ProjectSettingsFocus::QuickDownloadsPosition
+        | ProjectSettingsFocus::QuickDownloadsFooter => None,
         _ => Some(FormRowButton::new(
             "Browse",
             HitAction::BrowseProjectSettingsField(field),
@@ -1331,11 +1330,7 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
             qd.enabled = !qd.enabled;
             app.status = super::StatusMessage::success(format!(
                 "Quick-Downloads {} for {}.",
-                if qd.enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                },
+                if qd.enabled { "enabled" } else { "disabled" },
                 scope_name
             ));
         }

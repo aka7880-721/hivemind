@@ -204,10 +204,8 @@ pub(crate) fn assign_artifacts_to_slots(artifact_paths: &[String]) -> QuickDownl
             if slots.mac_m_pkg.is_none() {
                 slots.mac_m_pkg = Some(n.clone());
             }
-        } else if is_amd64ish(n) || lower(n).contains("intel") {
-            if slots.mac_intel_pkg.is_none() {
-                slots.mac_intel_pkg = Some(n.clone());
-            }
+        } else if (is_amd64ish(n) || lower(n).contains("intel")) && slots.mac_intel_pkg.is_none() {
+            slots.mac_intel_pkg = Some(n.clone());
         }
     }
     for n in &pkgs {
@@ -249,10 +247,8 @@ pub(crate) fn assign_artifacts_to_slots(artifact_paths: &[String]) -> QuickDownl
             if slots.mac_m_app_zip.is_none() {
                 slots.mac_m_app_zip = Some(n.clone());
             }
-        } else if is_intelish(n) {
-            if slots.mac_intel_app_zip.is_none() {
-                slots.mac_intel_app_zip = Some(n.clone());
-            }
+        } else if is_intelish(n) && slots.mac_intel_app_zip.is_none() {
+            slots.mac_intel_app_zip = Some(n.clone());
         }
     }
     for n in &app_zips {
@@ -381,26 +377,82 @@ pub(crate) fn build_quick_downloads_section_html(
                 "Portable Archive",
             )
         });
-        let msi_s = msi.unwrap_or_else(|| {
-            sub_disabled_img(&format!("{}/msi1.svg", LOGO_BASE), "32")
-        });
-        let zip_s = zip.unwrap_or_else(|| sub_disabled_img(&format!("{}/zip.svg", LOGO_BASE), "32"));
+        let msi_s =
+            msi.unwrap_or_else(|| sub_disabled_img(&format!("{}/msi1.svg", LOGO_BASE), "32"));
+        let zip_s =
+            zip.unwrap_or_else(|| sub_disabled_img(&format!("{}/zip.svg", LOGO_BASE), "32"));
         format!("{msi_s}<br><br>{zip_s}")
     };
 
     let linux_cell = format!(
         r#"<img src="https://upload.wikimedia.org/wikipedia/commons/7/73/App-image-logo.svg" height="31" title="AppImage"/>  <img src="https://cdn.brandfetch.io/idJz03xsbD/theme/dark/logo.svg?c=1bxid64Mup7aczewSAYMX" height="30" title="AppImage may be executed on any Linux, but it's mainly used in: Arch / Manjaro / EndeavourOS / NixOS / Gentoo / etc..."/>    <sup>➠</sup>   {} <sup>/</sup> {}<br>     <sub><img src="https://fedoraproject.org/w/uploads/2/2d/Logo_fedoralogo.png" height="30" title="RPM installer for Fedora/RHEL/SUSE family"/></sub>       <sup>➠</sup>   {} <sup>/</sup> {}<br>          <sub><img src="{}/ubuntu.svg" height="32" title="Ubuntu DEB installer"/></sub>   <img src="{}/debian.svg" height="27" title="Debian DEB installer"/>          <sup>➠</sup>   {} <sup>/</sup> {}<br>               <sub><img src="{}/tar.svg" height="30" title="Archived Portable (gz.tar)"/></sub>            <sup>➠</sup>   {} <sup>/</sup> {}"#,
-        sup_link_or_grey(owner, repo, tag, slots.appimage_x86_64.as_ref(), "x86_64", "x86_64 → AMD/Intel"),
-        sup_link_or_grey(owner, repo, tag, slots.appimage_aarch64.as_ref(), "aarch64", "aarch64 → ARM"),
-        sup_link_or_grey(owner, repo, tag, slots.rpm_x86_64.as_ref(), "x86_64", "x86_64 → AMD/Intel CPU"),
-        sup_link_or_grey(owner, repo, tag, slots.rpm_aarch64.as_ref(), "aarch64", "aarch64 → ARM"),
+        sup_link_or_grey(
+            owner,
+            repo,
+            tag,
+            slots.appimage_x86_64.as_ref(),
+            "x86_64",
+            "x86_64 → AMD/Intel"
+        ),
+        sup_link_or_grey(
+            owner,
+            repo,
+            tag,
+            slots.appimage_aarch64.as_ref(),
+            "aarch64",
+            "aarch64 → ARM"
+        ),
+        sup_link_or_grey(
+            owner,
+            repo,
+            tag,
+            slots.rpm_x86_64.as_ref(),
+            "x86_64",
+            "x86_64 → AMD/Intel CPU"
+        ),
+        sup_link_or_grey(
+            owner,
+            repo,
+            tag,
+            slots.rpm_aarch64.as_ref(),
+            "aarch64",
+            "aarch64 → ARM"
+        ),
         LOGO_BASE,
         LOGO_BASE,
-        sup_link_or_grey(owner, repo, tag, slots.deb_amd64.as_ref(), "amd64", "amd64 → AMD/Intel CPU"),
-        sup_link_or_grey(owner, repo, tag, slots.deb_arm64.as_ref(), "arm64", "arm64 = ARM CPU, e.g. Raspberry Pi"),
+        sup_link_or_grey(
+            owner,
+            repo,
+            tag,
+            slots.deb_amd64.as_ref(),
+            "amd64",
+            "amd64 → AMD/Intel CPU"
+        ),
+        sup_link_or_grey(
+            owner,
+            repo,
+            tag,
+            slots.deb_arm64.as_ref(),
+            "arm64",
+            "arm64 = ARM CPU, e.g. Raspberry Pi"
+        ),
         LOGO_BASE,
-        sup_link_or_grey(owner, repo, tag, slots.tar_amd64.as_ref(), "amd64", "amd64 → AMD/Intel CPU"),
-        sup_link_or_grey(owner, repo, tag, slots.tar_arm64.as_ref(), "arm64", "arm64 = ARM CPU, e.g. Raspberry Pi"),
+        sup_link_or_grey(
+            owner,
+            repo,
+            tag,
+            slots.tar_amd64.as_ref(),
+            "amd64",
+            "amd64 → AMD/Intel CPU"
+        ),
+        sup_link_or_grey(
+            owner,
+            repo,
+            tag,
+            slots.tar_arm64.as_ref(),
+            "arm64",
+            "arm64 = ARM CPU, e.g. Raspberry Pi"
+        ),
     );
 
     let mac_pkg_app = |pkg: Option<&String>, app: Option<&String>| {
@@ -433,7 +485,10 @@ pub(crate) fn build_quick_downloads_section_html(
 
     let mac_cell = format!(
         r#"<span title="Extra details shown on hover">INTEL-era</span><sup><sub>   (2020-)</sub></sup><br>{}<br><br><span title="Extra details shown on hover">M-era</span><sup><sub>   (2020+)</sub></sup><br>{}"#,
-        mac_pkg_app(slots.mac_intel_pkg.as_ref(), slots.mac_intel_app_zip.as_ref()),
+        mac_pkg_app(
+            slots.mac_intel_pkg.as_ref(),
+            slots.mac_intel_app_zip.as_ref()
+        ),
         mac_pkg_app(slots.mac_m_pkg.as_ref(), slots.mac_m_app_zip.as_ref())
     );
 
@@ -490,13 +545,8 @@ pub(crate) fn finalize_release_notes_with_quick_downloads(
     };
 
     let slots = assign_artifacts_to_slots(artifact_files);
-    let html = build_quick_downloads_section_html(
-        &owner,
-        &repo,
-        tag,
-        &slots,
-        qd.footer_message.trim(),
-    );
+    let html =
+        build_quick_downloads_section_html(&owner, &repo, tag, &slots, qd.footer_message.trim());
 
     let merged = match qd.position {
         QuickDownloadsPosition::Top => match user_trim {

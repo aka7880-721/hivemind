@@ -708,7 +708,10 @@ pub(super) fn validate_release_now(
         options,
         warning_message,
         release_notes_markdown,
-        quick_downloads: project.release_now_for_scope(scope_index).quick_downloads.clone(),
+        quick_downloads: project
+            .release_now_for_scope(scope_index)
+            .quick_downloads
+            .clone(),
     })
 }
 

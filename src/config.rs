@@ -468,7 +468,8 @@ impl QuickDownloadsPosition {
     }
 }
 
-pub const DEFAULT_QUICK_DOWNLOADS_FOOTER: &str = "* If you can't see desired file here, make sure to check at the bottom of this page too";
+pub const DEFAULT_QUICK_DOWNLOADS_FOOTER: &str =
+    "* If you can't see desired file here, make sure to check at the bottom of this page too";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
