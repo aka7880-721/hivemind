@@ -115,10 +115,11 @@ impl ProjectWizard {
                 WizardField::MoveScopeDown,
             ]);
         }
-        if self.integration_mode.requires_repo() {
+        let integration_mode = self.selected_integration_mode();
+        if integration_mode.requires_repo() {
             fields.push(WizardField::RepoRoot);
         }
-        if self.integration_mode.requires_remote() {
+        if integration_mode.requires_remote() {
             fields.push(WizardField::RemoteUrl);
         }
         fields.push(WizardField::TileAutoRotation);
@@ -224,9 +225,10 @@ impl ProjectWizard {
                 .unwrap_or_else(|| {
                     Line::from(format!("< {} >", BranchScopeKind::Branch.display_name()))
                 }),
-            WizardField::VersionScheme => {
-                Line::from(format!("< {} >", self.version_scheme.display_name()))
-            }
+            WizardField::VersionScheme => Line::from(format!(
+                "< {} >",
+                self.selected_version_scheme().display_name()
+            )),
             WizardField::UnifiedVersioning => {
                 if self.project_type == ProjectType::Branched {
                     Line::from(format!(
@@ -237,9 +239,10 @@ impl ProjectWizard {
                     Line::from("Always yes for all-in-one projects")
                 }
             }
-            WizardField::IntegrationMode => {
-                Line::from(format!("< {} >", self.integration_mode.display_name()))
-            }
+            WizardField::IntegrationMode => Line::from(format!(
+                "< {} >",
+                self.selected_integration_mode().display_name()
+            )),
             WizardField::TargetPath => {
                 if self.project_type == ProjectType::Branched {
                     self.current_scope()
@@ -314,22 +317,33 @@ impl ProjectWizard {
             }
             WizardField::TargetKey => self.rotate_target_key_preset(delta),
             WizardField::VersionScheme => {
-                self.version_scheme = if delta >= 0 {
-                    self.version_scheme.next()
+                if self.project_type == ProjectType::Branched {
+                    if let Some(scope) = self.current_scope_mut() {
+                        scope.version_scheme = if delta >= 0 {
+                            scope.version_scheme.next()
+                        } else {
+                            scope.version_scheme.previous()
+                        };
+                    }
                 } else {
-                    self.version_scheme.previous()
-                };
+                    self.version_scheme = if delta >= 0 {
+                        self.version_scheme.next()
+                    } else {
+                        self.version_scheme.previous()
+                    };
+                }
                 self.clear_validation_results();
             }
             WizardField::UnifiedVersioning if self.project_type == ProjectType::Branched => {
                 self.unified_versioning = !self.unified_versioning;
             }
             WizardField::IntegrationMode => {
-                self.integration_mode = if delta >= 0 {
-                    self.integration_mode.next()
+                let next_mode = if delta >= 0 {
+                    self.selected_integration_mode().next()
                 } else {
-                    self.integration_mode.previous()
+                    self.selected_integration_mode().previous()
                 };
+                self.set_selected_integration_mode(next_mode);
             }
             WizardField::TileAutoRotation => {
                 self.tile_auto_rotation = !self.tile_auto_rotation;
@@ -429,6 +443,9 @@ impl ProjectWizard {
         if self.focus == WizardField::TargetPath {
             self.sync_target_key_preset_with_path();
             self.prefill_repo_root_from_target_path();
+        }
+        if matches!(self.focus, WizardField::RepoRoot | WizardField::RemoteUrl) {
+            self.persist_scope_repo_inputs();
         }
     }
 
@@ -584,7 +601,23 @@ impl ProjectWizard {
             bail!("project name is required");
         }
 
-        let repo = if self.integration_mode.requires_repo() {
+        let effective_integration_mode = if self.project_type == ProjectType::Branched {
+            self.scopes
+                .iter()
+                .map(|scope| scope.integration_mode)
+                .max_by_key(|mode| match mode {
+                    IntegrationMode::LocalOnly => 0,
+                    IntegrationMode::GitLocalOnly => 1,
+                    IntegrationMode::GitHubEnabled => 2,
+                })
+                .unwrap_or(IntegrationMode::LocalOnly)
+        } else {
+            self.integration_mode
+        };
+
+        let repo = if self.project_type == ProjectType::Branched {
+            None
+        } else if effective_integration_mode.requires_repo() {
             let root = self.repo_root.value.trim();
             if root.is_empty() {
                 bail!("repo root is required for git-backed projects");
@@ -592,7 +625,7 @@ impl ProjectWizard {
             if !Path::new(root).is_dir() {
                 bail!("repo root does not exist: {}", root);
             }
-            let remote = if self.integration_mode.requires_remote() {
+            let remote = if effective_integration_mode.requires_remote() {
                 let value = self.remote_url.value.trim();
                 if value.is_empty() {
                     bail!("remote URL is required for GitHub-enabled projects");
@@ -637,7 +670,7 @@ impl ProjectWizard {
                 name: self.name.value.trim().to_string(),
                 alias: String::new(),
                 project_type: ProjectType::AllInOne,
-                integration_mode: self.integration_mode,
+                integration_mode: effective_integration_mode,
                 unified_versioning: true,
                 version_scheme: self.version_scheme,
                 changelog: self.build_changelog_settings(false),
@@ -652,9 +685,9 @@ impl ProjectWizard {
                 name: self.name.value.trim().to_string(),
                 alias: String::new(),
                 project_type: ProjectType::Branched,
-                integration_mode: self.integration_mode,
+                integration_mode: effective_integration_mode,
                 unified_versioning: self.unified_versioning,
-                version_scheme: self.version_scheme,
+                version_scheme: self.selected_version_scheme(),
                 changelog: self.build_changelog_settings(false),
                 release_now: ReleaseNowSettings::default(),
                 tile_info: self.build_tile_info_settings()?,
@@ -717,9 +750,11 @@ impl ProjectWizard {
         if self.scopes.is_empty() {
             return;
         }
+        self.persist_scope_repo_inputs();
         let len = self.scopes.len() as i32;
         let next = (self.selected_scope as i32 + delta).rem_euclid(len) as usize;
         self.selected_scope = next;
+        self.sync_repo_inputs_from_scope();
     }
 
     fn next_scope_name(&self) -> String {
@@ -738,8 +773,13 @@ impl ProjectWizard {
     }
 
     pub(crate) fn add_scope(&mut self) {
-        self.scopes.push(ScopeDraft::new(self.next_scope_name()));
+        self.persist_scope_repo_inputs();
+        let mut scope = ScopeDraft::new(self.next_scope_name());
+        scope.version_scheme = self.selected_version_scheme();
+        scope.integration_mode = self.selected_integration_mode();
+        self.scopes.push(scope);
         self.selected_scope = self.scopes.len().saturating_sub(1);
+        self.sync_repo_inputs_from_scope();
         self.focus = WizardField::ScopeName;
     }
 
@@ -747,8 +787,10 @@ impl ProjectWizard {
         if self.scopes.len() <= 1 {
             bail!("branched projects need at least one scope");
         }
+        self.persist_scope_repo_inputs();
         self.scopes.remove(self.selected_scope);
         self.selected_scope = self.selected_scope.min(self.scopes.len().saturating_sub(1));
+        self.sync_repo_inputs_from_scope();
         self.focus = WizardField::ScopeSelection;
         Ok(())
     }
@@ -757,12 +799,14 @@ impl ProjectWizard {
         if self.scopes.len() < 2 {
             return;
         }
+        self.persist_scope_repo_inputs();
         let len = self.scopes.len() as isize;
         let next = (self.selected_scope as isize + delta).clamp(0, len - 1) as usize;
         if next != self.selected_scope {
             self.scopes.swap(self.selected_scope, next);
             self.selected_scope = next;
         }
+        self.sync_repo_inputs_from_scope();
     }
 
     fn clear_validation_results(&mut self) {
@@ -785,6 +829,8 @@ impl ProjectWizard {
             .as_ref()
             .and_then(|probe| probe.format)
             .unwrap_or(TargetFormat::Auto);
+        let default_version_scheme = self.version_scheme;
+        let default_integration_mode = self.integration_mode;
         if let Some(scope) = self.current_scope_mut() {
             if scope.target_path.value.trim().is_empty() && !target_path.is_empty() {
                 scope.target_path.set_value(target_path);
@@ -794,7 +840,10 @@ impl ProjectWizard {
                 scope.target_key.set_value(target_key);
                 scope.target_key_custom = target_key_custom;
             }
+            scope.version_scheme = default_version_scheme;
+            scope.integration_mode = default_integration_mode;
         }
+        self.sync_repo_inputs_from_scope();
     }
 
     fn copy_selected_scope_to_primary_target(&mut self) {
@@ -822,7 +871,7 @@ impl ProjectWizard {
         let mut names = HashSet::new();
         let mut branches = Vec::with_capacity(self.scopes.len());
         for scope in &self.scopes {
-            let branch = scope.build_branch(self.version_scheme, require_probe)?;
+            let branch = scope.build_branch(require_probe)?;
             let key = branch.name.trim().to_ascii_lowercase();
             if !names.insert(key) {
                 bail!("scope names must be unique");
@@ -830,6 +879,85 @@ impl ProjectWizard {
             branches.push(branch);
         }
         Ok(branches)
+    }
+
+    fn selected_version_scheme(&self) -> VersionScheme {
+        if self.project_type == ProjectType::Branched {
+            self.current_scope()
+                .map(|scope| scope.version_scheme)
+                .unwrap_or(self.version_scheme)
+        } else {
+            self.version_scheme
+        }
+    }
+
+    fn selected_integration_mode(&self) -> IntegrationMode {
+        if self.project_type == ProjectType::Branched {
+            self.current_scope()
+                .map(|scope| scope.integration_mode)
+                .unwrap_or(self.integration_mode)
+        } else {
+            self.integration_mode
+        }
+    }
+
+    fn set_selected_integration_mode(&mut self, mode: IntegrationMode) {
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                scope.integration_mode = mode;
+            }
+        } else {
+            self.integration_mode = mode;
+        }
+        self.persist_scope_repo_inputs();
+        self.sync_repo_inputs_from_scope();
+    }
+
+    fn persist_scope_repo_inputs(&mut self) {
+        if self.project_type != ProjectType::Branched {
+            return;
+        }
+        let root = self.repo_root.value.trim().to_string();
+        let remote = self.remote_url.value.trim().to_string();
+        if let Some(scope) = self.current_scope_mut() {
+            scope.repo = match scope.integration_mode {
+                IntegrationMode::LocalOnly => None,
+                IntegrationMode::GitLocalOnly => Some(RepoConfig {
+                    local_root: root,
+                    remote_url: None,
+                    ..RepoConfig::default()
+                }),
+                IntegrationMode::GitHubEnabled => Some(RepoConfig {
+                    local_root: root,
+                    remote_url: if remote.is_empty() {
+                        None
+                    } else {
+                        Some(remote)
+                    },
+                    ..RepoConfig::default()
+                }),
+            };
+        }
+    }
+
+    fn sync_repo_inputs_from_scope(&mut self) {
+        if self.project_type != ProjectType::Branched {
+            return;
+        }
+        if let Some(scope) = self.current_scope() {
+            let repo_root = scope
+                .repo
+                .as_ref()
+                .map(|r| r.local_root.clone())
+                .unwrap_or_default();
+            let remote_url = scope
+                .repo
+                .as_ref()
+                .and_then(|r| r.remote_url.clone())
+                .unwrap_or_default();
+            self.repo_root.set_value(repo_root);
+            self.remote_url.set_value(remote_url);
+        }
     }
 }
 
