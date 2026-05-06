@@ -2052,25 +2052,30 @@ impl App {
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(6),
+                Constraint::Length(5),
                 Constraint::Length(3),
                 Constraint::Min(10),
                 Constraint::Length(BUTTON_ROW_HEIGHT),
             ])
             .split(inner);
 
+        let elapsed_note = format!(
+            "  Elapsed: {}{}",
+            dialog.elapsed_label(),
+            if dialog.is_running() {
+                " (running)"
+            } else {
+                ""
+            }
+        );
         let mut header = vec![
-            Line::from(format!(
-                "Elapsed: {}{}",
-                dialog.elapsed_label(),
-                if dialog.is_running() {
-                    " (running)"
-                } else {
-                    ""
-                }
-            ))
-            .style(Style::default().fg(Color::Cyan)),
-            Line::from(format!("Project: {}", dialog.project_name)).bold(),
+            Line::from(vec![
+                Span::styled(
+                    format!("Project: {}", dialog.project_name),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(elapsed_note, Style::default().fg(Color::Cyan)),
+            ]),
             Line::from(format!("Scope: {}", dialog.scope_label)),
             Line::from(format!("Repo: {}", dialog.repo_root)),
             Line::from(format!("Tag: {}", dialog.tag_name))
