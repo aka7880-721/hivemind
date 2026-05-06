@@ -16,6 +16,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Local;
 use crossterm::{
@@ -121,7 +124,8 @@ pub(crate) enum StartupMode {
 }
 
 pub(crate) fn dispatch() -> Result<StartupMode> {
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let mut args: Vec<String> = env::args().skip(1).collect();
+    normalize_cli_args_for_dispatch(&mut args);
 
     // Skip the version gate for help/version queries so those always work.
     let is_info_command = args
@@ -154,6 +158,22 @@ pub(crate) fn dispatch() -> Result<StartupMode> {
     dispatch_args(&args)
 }
 
+/// Strip leading `--` (some wrappers pass it) and treat `install shell` / `setup shell` as one command.
+fn normalize_cli_args_for_dispatch(args: &mut Vec<String>) {
+    while args.first().is_some_and(|a| a == "--") {
+        args.remove(0);
+    }
+    if args.len() == 2 && (args[0] == "install" || args[0] == "setup") && args[1] == "shell" {
+        *args = vec!["install-shell".to_string()];
+    }
+    if args.len() == 2 && args[0] == "uninstall" && args[1] == "shell" {
+        *args = vec!["uninstall-shell".to_string()];
+    }
+    if args.len() == 2 && args[0] == "remove" && args[1] == "shell" {
+        *args = vec!["uninstall-shell".to_string()];
+    }
+}
+
 fn dispatch_args(args: &[String]) -> Result<StartupMode> {
     match args {
         [] => Ok(StartupMode::LaunchTui),
@@ -163,6 +183,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command] if is_version(command) => {
             print_version_status();
+            Ok(StartupMode::Handled)
+        }
+        [command] if is_install_shell_command(command) => {
+            run_install_shell_integration()?;
+            Ok(StartupMode::Handled)
+        }
+        [command] if is_uninstall_shell_command(command) => {
+            run_uninstall_shell_integration()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_branch_command(command) => {
@@ -299,6 +327,251 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
     }
 }
 
+#[cfg(unix)]
+fn sh_single_quote_for_launcher(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(unix)]
+fn run_install_shell_integration() -> Result<()> {
+    let local_bin = match env::var_os("COMFYGIT_BIN_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let home = env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("HOME is not set; set COMFYGIT_BIN_DIR or export HOME"))?;
+            home.join(".local").join("bin")
+        }
+    };
+
+    fs::create_dir_all(&local_bin)
+        .with_context(|| format!("failed to create {}", local_bin.display()))?;
+
+    let appdir_os = env::var_os("APPDIR").map(PathBuf::from);
+
+    let (shell_dir, script_path, from_appdir) = if let Some(ref ad) = appdir_os {
+        let shell = ad.join("usr/local/share/comfygit/shell");
+        if !shell.is_dir() {
+            bail!(
+                "missing shell assets under APPDIR (expected {})",
+                shell.display()
+            );
+        }
+        let script = ad.join("usr/local/share/comfygit/scripts/install-shell-integration.sh");
+        if !script.is_file() {
+            bail!(
+                "missing install script under APPDIR (expected {})",
+                script.display()
+            );
+        }
+        (shell, script, true)
+    } else if Path::new("/usr/local/share/comfygit/shell").is_dir() {
+        let script =
+            PathBuf::from("/usr/local/share/comfygit/scripts/install-shell-integration.sh");
+        if !script.is_file() {
+            bail!("expected package install script at {}", script.display());
+        }
+        (
+            PathBuf::from("/usr/local/share/comfygit/shell"),
+            script,
+            false,
+        )
+    } else {
+        bail!(
+            "ComfyGit shell assets were not found.\n\
+             \n\
+             AppImage: run this from the app so APPDIR is set, for example:\n\
+               ./comfygit-*-x86_64.AppImage install-shell\n\
+             \n\
+             Or extract the image and run the installer by hand:\n\
+               sh path/to/AppDir/usr/local/share/comfygit/scripts/install-shell-integration.sh \\\n\
+                 path/to/AppDir/usr/local/share/comfygit/shell ~/.local/bin\n\
+             (and put a small script named ComfyGit in ~/.local/bin that execs the AppImage if needed.)"
+        );
+    };
+
+    if from_appdir {
+        let exec_path: PathBuf = if let Ok(ap) = env::var("APPIMAGE") {
+            let p = PathBuf::from(ap);
+            if p.is_file() {
+                p
+            } else {
+                bail!("APPIMAGE is set but is not a file: {}", p.display());
+            }
+        } else {
+            let ad = appdir_os
+                .as_ref()
+                .ok_or_else(|| anyhow!("internal error: APPDIR was expected but is missing"))?;
+            ad.join("AppRun")
+                .canonicalize()
+                .context(
+                    "could not resolve AppRun under APPDIR; use an AppImage file or a full extracted AppDir",
+                )?
+        };
+
+        let exec_str = exec_path.to_str().ok_or_else(|| {
+            anyhow!(
+                "launcher path is not valid UTF-8 (move the AppImage to an ASCII path): {}",
+                exec_path.display()
+            )
+        })?;
+
+        let comfy_wrapped = local_bin.join("ComfyGit");
+        if comfy_wrapped.is_file() {
+            let existing = fs::read_to_string(&comfy_wrapped).unwrap_or_default();
+            if !existing.contains("comfygit-install-launcher") {
+                bail!(
+                    "refusing to overwrite {} (remove it or set COMFYGIT_BIN_DIR to another directory)",
+                    comfy_wrapped.display()
+                );
+            }
+        }
+
+        let body = format!(
+            "#!/usr/bin/env sh\n\
+             # comfygit-install-launcher — re-invokes the AppImage / AppDir (written by `cg install-shell`).\n\
+             set -eu\n\
+             COMFYGIT_LAUNCHER={}\n\
+             exec \"$COMFYGIT_LAUNCHER\" \"$@\"\n",
+            sh_single_quote_for_launcher(exec_str)
+        );
+        fs::write(&comfy_wrapped, body)
+            .with_context(|| format!("failed to write {}", comfy_wrapped.display()))?;
+        let mut perm = fs::metadata(&comfy_wrapped)
+            .with_context(|| format!("stat {}", comfy_wrapped.display()))?
+            .permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&comfy_wrapped, perm)
+            .with_context(|| format!("chmod {}", comfy_wrapped.display()))?;
+    } else if !Path::new("/usr/local/bin/ComfyGit").is_file() {
+        bail!(
+            "expected a package-installed binary at /usr/local/bin/ComfyGit.\n\
+             If ComfyGit is elsewhere, run install-shell-integration.sh with your shell asset dir and bin dir manually."
+        );
+    }
+
+    let status = Command::new("sh")
+        .arg(&script_path)
+        .arg(&shell_dir)
+        .arg(&local_bin)
+        .status()
+        .with_context(|| format!("failed to run {}", script_path.display()))?;
+
+    if !status.success() {
+        bail!(
+            "install-shell-integration.sh exited with status {:?}",
+            status.code()
+        );
+    }
+
+    println!();
+    println!(
+        "Shell integration installed. Ensure {} is on your PATH, then open a new terminal.",
+        local_bin.display()
+    );
+    println!(
+        "bash/zsh: ~/.config/comfygit/cg.sh plus ~/.profile / ~/.zprofile hooks; fish: conf.d + config.fish; pwsh: ~/.config/powershell/profile.ps1."
+    );
+    println!("`cg` and `cg cd <alias>` will work like a package install.");
+    println!();
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn run_uninstall_shell_integration() -> Result<()> {
+    let local_bin = match env::var_os("COMFYGIT_BIN_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let home = env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("HOME is not set; set COMFYGIT_BIN_DIR or export HOME"))?;
+            home.join(".local").join("bin")
+        }
+    };
+
+    let appdir_os = env::var_os("APPDIR").map(PathBuf::from);
+
+    let script_path = if let Some(ref ad) = appdir_os {
+        let p = ad.join("usr/local/share/comfygit/scripts/uninstall-shell-integration.sh");
+        if !p.is_file() {
+            bail!(
+                "missing uninstall script under APPDIR (expected {}).\n\
+                 Use a ComfyGit build that includes shell scripts, or run:\n\
+                   sh path/to/scripts/uninstall-shell-integration.sh {}",
+                p.display(),
+                local_bin.display()
+            );
+        }
+        p
+    } else if Path::new("/usr/local/share/comfygit/scripts/uninstall-shell-integration.sh")
+        .is_file()
+    {
+        PathBuf::from("/usr/local/share/comfygit/scripts/uninstall-shell-integration.sh")
+    } else {
+        bail!(
+            "ComfyGit uninstall script was not found.\n\
+             \n\
+             AppImage: run from the app so APPDIR is set, for example:\n\
+               ./comfygit-*-x86_64.AppImage uninstall-shell\n\
+             \n\
+             Package install: use the copy under /usr/local/share/comfygit/scripts/, or from the repository:\n\
+               sh scripts/uninstall-shell-integration.sh {}",
+            local_bin.display()
+        );
+    };
+
+    let status = Command::new("sh")
+        .arg(&script_path)
+        .arg(&local_bin)
+        .status()
+        .with_context(|| format!("failed to run {}", script_path.display()))?;
+
+    if !status.success() {
+        bail!(
+            "uninstall-shell-integration.sh exited with status {:?}",
+            status.code()
+        );
+    }
+
+    println!();
+    println!("Shell integration removed from {}.", local_bin.display());
+    println!(
+        "Open a new terminal session (or run `hash -r` in bash) so `cg` / `ComfyGit` resolve to your package binary."
+    );
+    println!();
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_install_shell_integration() -> Result<()> {
+    bail!(
+        "`cg install-shell` is only supported on Unix; on Windows use scripts/install-shell-integration.ps1"
+    );
+}
+
+#[cfg(not(unix))]
+fn run_uninstall_shell_integration() -> Result<()> {
+    bail!(
+        "`cg uninstall-shell` is only supported on Unix; on Windows remove integration manually if installed."
+    );
+}
+
+fn is_install_shell_command(value: &str) -> bool {
+    matches!(
+        value,
+        "install-shell" | "setup-shell" | "shell-install" | "installshell"
+    )
+}
+
+fn is_uninstall_shell_command(value: &str) -> bool {
+    matches!(
+        value,
+        "uninstall-shell" | "remove-shell" | "shell-uninstall" | "uninstallshell"
+    )
+}
+
 fn is_help(value: &str) -> bool {
     matches!(value, "help" | "-h" | "--help")
 }
@@ -418,6 +691,18 @@ fn print_usage() {
     println!("  ---------------            --------------------------------------------------");
     println!(
         "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
+    );
+    println!(
+        "  cg install-shell           Install bash/zsh/fish integration (AppImage: also writes ~/.local/bin/ComfyGit)"
+    );
+    println!(
+        "                             Synonyms: setup-shell | install shell | setup shell | installshell"
+    );
+    println!(
+        "  cg uninstall-shell         Remove integration installed by install-shell (wrappers, profile hooks)"
+    );
+    println!(
+        "                             Synonyms: remove-shell | uninstall shell | shell-uninstall"
     );
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");

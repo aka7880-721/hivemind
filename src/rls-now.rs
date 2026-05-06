@@ -105,7 +105,14 @@ use tokio::{
     task::spawn_blocking,
 };
 
-use crate::{config::ReleaseNowSettings, git::GitScopeContext, git_stt::recent_merge_check};
+use crate::{
+    config::{ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
+    git::GitScopeContext,
+    git_stt::recent_merge_check,
+};
+
+#[path = "rls-now-qd.rs"]
+mod rls_now_qd;
 
 const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const DEFAULT_RELEASE_NOTES: &str =
@@ -146,6 +153,7 @@ pub(super) struct ReleaseNowDialog {
     pub(super) summary_is_error: bool,
     pub(super) artifact_files: Vec<String>,
     pub(super) log_lines: Vec<String>,
+    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
 }
 
 impl ReleaseNowDialog {
@@ -184,6 +192,7 @@ impl ReleaseNowDialog {
             summary_is_error: false,
             artifact_files: Vec::new(),
             log_lines: Vec::new(),
+            quick_downloads: validation.quick_downloads,
         }
     }
 
@@ -624,6 +633,7 @@ pub(super) struct ReleaseNowValidation {
     pub(super) options: Vec<ReleaseNowRunOption>,
     pub(super) warning_message: Option<String>,
     pub(super) release_notes_markdown: String,
+    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
 }
 
 #[derive(Clone)]
@@ -651,6 +661,7 @@ pub(super) struct ReleaseNowExecutionRequest {
     pub(super) scripts: Vec<ReleaseNowScript>,
     pub(super) artifact_dirs: Vec<String>,
     pub(super) release_notes_markdown: Option<String>,
+    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
 }
 
 #[derive(Clone)]
@@ -697,6 +708,10 @@ pub(super) fn validate_release_now(
         options,
         warning_message,
         release_notes_markdown,
+        quick_downloads: project
+            .release_now_for_scope(scope_index)
+            .quick_downloads
+            .clone(),
     })
 }
 
@@ -715,6 +730,7 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
             .attach_changelog
             .then(|| dialog.release_notes_markdown.trim().to_string())
             .filter(|notes| !notes.is_empty()),
+        quick_downloads: dialog.quick_downloads.clone(),
     }
 }
 
@@ -808,12 +824,26 @@ pub(super) async fn execute_release_now_async(
         release_notes.extend(std_outcome.summary_notes);
     }
 
+    // QD HTML is built from the same artifact list attached to this release (see rls_now_qd).
+    let mut qd_warnings = Vec::new();
+    let release_notes_for_github = rls_now_qd::finalize_release_notes_with_quick_downloads(
+        request.release_notes_markdown.clone(),
+        request.scope.remote_spec.as_deref(),
+        &request.tag_name,
+        &artifact_files,
+        &request.quick_downloads,
+        &mut qd_warnings,
+    );
+    for warning in qd_warnings {
+        emit_progress(vec![format!("Warning: {}", warning)]);
+    }
+
     create_or_update_github_release(
         &request.repo_root,
         &request.tag_name,
         request.scope.remote_spec.as_deref(),
         &request.release_title,
-        request.release_notes_markdown.as_deref(),
+        release_notes_for_github.as_deref(),
         &artifact_files,
         cancel.clone(),
         &mut emit_progress,
@@ -1941,6 +1971,7 @@ mod tests {
             linux_arm_script: String::new(),
             linux_amd_script: "scripts/releaseNOW-linux_amd64.ps1".to_string(),
             macos_script: String::new(),
+            ..Default::default()
         };
 
         let options = collect_release_now_options(&settings).expect("options should build");

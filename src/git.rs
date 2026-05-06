@@ -200,7 +200,7 @@ pub(crate) fn github_pull_conflicts_url(repo_root: &str, pr_number: u64) -> Opti
     Some(format!("{}/pull/{}/conflicts", repository_url, pr_number))
 }
 
-fn github_repository_web_url_from_remote_url(remote_url: &str) -> Option<String> {
+pub(crate) fn github_owner_repo_from_remote_url(remote_url: &str) -> Option<(String, String)> {
     let remote_url = remote_url.trim();
     let path = remote_url
         .strip_prefix("git@github.com:")
@@ -215,6 +215,11 @@ fn github_repository_web_url_from_remote_url(remote_url: &str) -> Option<String>
         return None;
     }
 
+    Some((owner.to_string(), repo.to_string()))
+}
+
+fn github_repository_web_url_from_remote_url(remote_url: &str) -> Option<String> {
+    let (owner, repo) = github_owner_repo_from_remote_url(remote_url)?;
     Some(format!("https://github.com/{}/{}", owner, repo))
 }
 
@@ -1434,6 +1439,22 @@ mod tests {
     fn github_repository_web_url_parser_rejects_non_github_remotes() {
         assert!(
             github_repository_web_url_from_remote_url("https://example.com/org/repo.git").is_none()
+        );
+    }
+
+    #[test]
+    fn github_owner_repo_from_remote_url_parses_ssh_https_and_ssh_scheme() {
+        assert_eq!(
+            github_owner_repo_from_remote_url("git@github.com:comfy-home/ComfyGit.git"),
+            Some(("comfy-home".to_string(), "ComfyGit".to_string()))
+        );
+        assert_eq!(
+            github_owner_repo_from_remote_url("https://github.com/foo/bar.git"),
+            Some(("foo".to_string(), "bar".to_string()))
+        );
+        assert_eq!(
+            github_owner_repo_from_remote_url("ssh://git@github.com/org/repo.git"),
+            Some(("org".to_string(), "repo".to_string()))
         );
     }
 }
