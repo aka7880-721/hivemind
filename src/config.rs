@@ -444,6 +444,50 @@ impl ChangelogSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QuickDownloadsPosition {
+    Top,
+    #[default]
+    Bottom,
+}
+
+impl QuickDownloadsPosition {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            QuickDownloadsPosition::Top => "Top",
+            QuickDownloadsPosition::Bottom => "Bottom",
+        }
+    }
+
+    pub fn toggle(self) -> Self {
+        match self {
+            QuickDownloadsPosition::Top => QuickDownloadsPosition::Bottom,
+            QuickDownloadsPosition::Bottom => QuickDownloadsPosition::Top,
+        }
+    }
+}
+
+pub const DEFAULT_QUICK_DOWNLOADS_FOOTER: &str = "* If you can't see desired file here, make sure to check at the bottom of this page too";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReleaseNowQuickDownloadsSettings {
+    pub enabled: bool,
+    pub position: QuickDownloadsPosition,
+    pub footer_message: String,
+}
+
+impl Default for ReleaseNowQuickDownloadsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            position: QuickDownloadsPosition::default(),
+            footer_message: DEFAULT_QUICK_DOWNLOADS_FOOTER.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ReleaseNowSettings {
@@ -452,6 +496,7 @@ pub struct ReleaseNowSettings {
     pub linux_arm_script: String,
     pub linux_amd_script: String,
     pub macos_script: String,
+    pub quick_downloads: ReleaseNowQuickDownloadsSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
