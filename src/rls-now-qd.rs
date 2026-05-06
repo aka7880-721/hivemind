@@ -394,7 +394,7 @@ pub(crate) fn build_quick_downloads_section_html(
     };
 
     let linux_cell = format!(
-        r#"<img src="{}/logo-app-image.svg" height="31" title="AppImage"/>  <img src="{}/logo-arch-linux.svg" height="30" title="AppImage may be executed on any Linux, but it's mainly used in: Arch / Manjaro / EndeavourOS / NixOS / Gentoo / etc..."/>    <sup>➠</sup>   {} <sup>/</sup> {}<br>     <sub><img src="{}/logo-fedora.png" height="30" title="RPM installer for Fedora/RHEL/SUSE family"/></sub>       <sup>➠</sup>   {} <sup>/</sup> {}<br>          <sub><img src="{}/ubuntu.svg" height="32" title="Ubuntu DEB installer"/></sub>   <img src="{}/debian.svg" height="27" title="Debian DEB installer"/>          <sup>➠</sup>   {} <sup>/</sup> {}<br>               <sub><img src="{}/tar.svg" height="30" title="Archived Portable (gz.tar)"/></sub>            <sup>➠</sup>   {} <sup>/</sup> {}"#,
+        r#"<img src="{}/logo-app-image.svg" height="31" title="AppImage"/>  <img src="{}/logo-arch-linux.svg" height="30" title="AppImage may be executed on any Linux, but it's mainly used in: Arch / Manjaro / EndeavourOS / NixOS / Gentoo / etc..."/> <sup>➠</sup>   {} <sup>/</sup> {}<br>     <sub><img src="{}/logo-fedora.png" height="30" title="RPM installer for Fedora/RHEL/SUSE family"/></sub>     <sup>➠</sup>   {} <sup>/</sup> {}<br>          <sub><img src="{}/ubuntu.svg" height="32" title="Ubuntu DEB installer"/></sub>   <img src="{}/debian.svg" height="27" title="Debian DEB installer"/>        <sup>➠</sup>   {} <sup>/</sup> {}<br>               <sub><img src="{}/tar.svg" height="30" title="Archived Portable (gz.tar)"/></sub>             <sup>➠</sup>   {} <sup>/</sup> {}"#,
         LOGO_BASE,
         LOGO_BASE,
         sup_link_or_grey(
