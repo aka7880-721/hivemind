@@ -1342,6 +1342,8 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
             "This repo has a custom named main branch."
         }
         ProjectSettingsFocus::ChangelogEnabled => "Changelog Generation",
+        ProjectSettingsFocus::ChangelogHidePrMessages => "Hide PR messages",
+        ProjectSettingsFocus::ChangelogHideBumpMessages => "Hide bump messages",
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
         }
