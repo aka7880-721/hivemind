@@ -1,0 +1,6 @@
+[build]
+# Ensure build dependencies are available during cross-compilation
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-unknown-linux-gnu]
+# Explicitly allow build scripts to access dependencies
