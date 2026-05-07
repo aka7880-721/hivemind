@@ -6124,6 +6124,8 @@ impl ScopeDraft {
             repo: self.repo.clone(),
             changelog_enabled: self.changelog_enabled,
             changelog_path: None,
+            changelog_hide_pr_messages: false,
+            changelog_hide_bump_messages: false,
             release_now: crate::config::ReleaseNowSettings::default(),
             version_scheme: self.version_scheme,
             targets: vec![TargetSpec {
@@ -7054,12 +7056,14 @@ fn build_release_notes_markdown(
             tag_name.to_string(),
             &release_range.lines,
             Some(&last_public_release),
+            false,
+            false,
         )
         .markdown);
     }
 
     let recent_range = load_recent_change_range_with_cancel(scope, None)?;
-    Ok(rls_changelog_gen(tag_name.to_string(), &recent_range.lines, None).markdown)
+    Ok(rls_changelog_gen(tag_name.to_string(), &recent_range.lines, None, false, false).markdown)
 }
 
 fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
@@ -8688,6 +8692,8 @@ mod tests {
                     repo: None,
                     changelog_enabled: false,
                     changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
@@ -8699,6 +8705,8 @@ mod tests {
                     repo: None,
                     changelog_enabled: false,
                     changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
