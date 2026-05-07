@@ -255,19 +255,19 @@ impl ChangelogDocument {
     }
 
     pub(crate) fn render_markdown(&self) -> RenderedChangelog {
+        let date_str = self.date.format("%Y-%m-%d").to_string();
         let header = match self.previous_public_release.as_ref() {
             Some(previous_public) => format!(
-                "## Changelog {} <sub><sup>← {} (Previous Public Version)</sup></sub>",
-                self.current_tag, previous_public
+                "## Changelog `{}` <sub><sup>← `{}` (Previous Public Version)</sup></sub> <sup><div align=\"end\">🗓️ {}</div></sup>",
+                self.current_tag, previous_public, date_str
             ),
-            None => format!("## Changelog {}", self.current_tag),
+            None => format!(
+                "## Changelog `{}` <sup><div align=\"end\">🗓️ {}</div></sup>",
+                self.current_tag, date_str
+            ),
         };
 
-        let mut lines = vec![
-            header,
-            self.date.format("%Y-%m-%d").to_string(),
-            String::new(),
-        ];
+        let mut lines = vec![header, String::new()];
 
         if !self.context_lines.is_empty() {
             lines.extend(self.context_lines.iter().cloned());
@@ -278,9 +278,6 @@ impl ChangelogDocument {
             lines.push(release_message.clone());
             lines.push(String::new());
         }
-
-        lines.push("#### What's new:".to_string());
-        lines.push(String::new());
 
         let visible_commits = self
             .commits
@@ -307,7 +304,7 @@ impl ChangelogDocument {
         if (rendered_dotted_new_specific || rendered_new_specific || rendered_specific)
             && has_general_improvements(&non_breaking)
         {
-            lines.push("### 🛠️ General:".to_string());
+            lines.push("## 💬 General Improvements & Fixes:".to_string());
             lines.push(String::new());
         }
 
@@ -1174,7 +1171,7 @@ fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) 
     }
 
     for specific_name in specific_names {
-        lines.push(format!("### Changed in {}", specific_name));
+        lines.push(format!("### 💫 _Changed in:_ **{}**", specific_name));
         lines.push(String::new());
         let section_commits: Vec<&ParsedCommit> = commits
             .iter()
@@ -1608,11 +1605,12 @@ mod tests {
         .with_release_message("Heads-up: this release updates the public dashboard.")
         .render_markdown();
 
-        assert!(changelog.markdown.contains("## Changelog v0.4.0"));
+        assert!(changelog.markdown.contains("## Changelog `v0.4.0`"));
+        assert!(changelog.markdown.contains("🗓️ 2026-04-12"));
         assert!(changelog.markdown.contains("## 💥⚠️ BREAKING CHANGE ⚠️💥"));
         assert!(changelog.markdown.contains("### ✨ New in UI:"));
         assert!(changelog.markdown.contains("#### 🧩 Features"));
-        assert!(changelog.markdown.contains("### Changed in APP"));
+        assert!(changelog.markdown.contains("### 💫 _Changed in:_ **APP**"));
         assert!(changelog.markdown.contains("#### 💎 Enhancement"));
         assert!(changelog.markdown.contains("### ℹ️ Documentation"));
         assert!(
@@ -1636,21 +1634,20 @@ mod tests {
         );
 
         assert!(changelog.markdown.contains(
-            "## Changelog v0.7.3 <sub><sup>← v0.7.1 (Previous Public Version)</sup></sub>"
+            "## Changelog `v0.7.3` <sub><sup>← `v0.7.1` (Previous Public Version)</sup></sub>"
         ));
-        assert!(changelog.markdown.contains("2026-"));
+        assert!(changelog.markdown.contains("🗓️ 2026-"));
     }
 
     #[test]
     fn ensure_previous_public_release_header_updates_plain_archived_release_header() {
-        let markdown = ["## Changelog v0.11.2", "2026-04-22", "", "#### What's new:"].join("\n");
+        let markdown = ["## Changelog v0.11.2", "2026-04-22", ""].join("\n");
 
         let updated = ensure_previous_public_release_header(&markdown, "v0.11.2", Some("v0.10.11"));
 
         assert!(updated.contains(
             "## Changelog v0.11.2 <sub><sup>← v0.10.11 (Previous Public Version)</sup></sub>"
         ));
-        assert!(updated.contains("#### What's new:"));
     }
 
     #[test]
@@ -1709,11 +1706,11 @@ mod tests {
 
         let specific_index = changelog
             .markdown
-            .find("### Changed in Tiles")
+            .find("### 💫 _Changed in:_ **Tiles**")
             .expect("specific section should render");
         let separator_index = changelog
             .markdown
-            .find("\n---\n\n### 🛠️ General:")
+            .find("\n---\n\n## 💬 General Improvements & Fixes:")
             .expect("separator and general improvements header should render");
         let general_fix_index = changelog
             .markdown
@@ -1744,10 +1741,6 @@ mod tests {
             .markdown
             .find("Heads-up: this release updates the public dashboard.")
             .expect("release notes should render");
-        let changes_index = changelog
-            .markdown
-            .find("#### What's new:")
-            .expect("changes heading should render");
         let breaking_index = changelog
             .markdown
             .find("## 💥⚠️ BREAKING CHANGE ⚠️💥")
@@ -1762,15 +1755,14 @@ mod tests {
             .expect("new specific section should render");
         let specific_index = changelog
             .markdown
-            .find("### Changed in Git")
+            .find("### 💫 _Changed in:_ **Git**")
             .expect("specific section should render");
         let general_index = changelog
             .markdown
             .rfind("### 🐛 Fix(es)")
             .expect("general category section should render");
 
-        assert!(release_notes_index < changes_index);
-        assert!(changes_index < breaking_index);
+        assert!(release_notes_index < breaking_index);
         assert!(breaking_index < dotted_new_index);
         assert!(dotted_new_index < new_index);
         assert!(new_index < specific_index);
