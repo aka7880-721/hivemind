@@ -214,6 +214,8 @@ pub(crate) struct ChangelogDocument {
     previous_public_release: Option<String>,
     context_lines: Vec<String>,
     release_message: Option<String>,
+    hide_pr_messages: bool,
+    hide_bump_messages: bool,
     commits: Vec<ParsedCommit>,
 }
 
@@ -225,6 +227,8 @@ impl ChangelogDocument {
             previous_public_release: None,
             context_lines: Vec::new(),
             release_message: None,
+            hide_pr_messages: false,
+            hide_bump_messages: false,
             commits,
         }
     }
@@ -241,6 +245,22 @@ impl ChangelogDocument {
             self.release_message = Some(message.trim().to_string());
         }
         self
+    }
+
+    pub(crate) fn with_hide_filters(mut self, hide_pr: bool, hide_bump: bool) -> Self {
+        self.hide_pr_messages = hide_pr;
+        self.hide_bump_messages = hide_bump;
+        self
+    }
+
+    fn should_include_commit(&self, commit: &ParsedCommit) -> bool {
+        if self.hide_pr_messages && commit.raw_subject.contains("Merge pull request") {
+            return false;
+        }
+        if self.hide_bump_messages && commit.raw_subject.contains("CG app version bump") {
+            return false;
+        }
+        true
     }
 
     pub(crate) fn with_previous_public_release(
@@ -283,6 +303,7 @@ impl ChangelogDocument {
             .commits
             .iter()
             .filter(|commit| !commit.is_ignored)
+            .filter(|commit| self.should_include_commit(commit))
             .collect::<Vec<_>>();
 
         render_breaking_section(&mut lines, &visible_commits);
@@ -341,8 +362,11 @@ pub(crate) fn rls_changelog_gen(
     current_tag: impl Into<String>,
     lines: &[String],
     last_public: Option<&str>,
+    hide_pr_messages: bool,
+    hide_bump_messages: bool,
 ) -> RenderedChangelog {
-    let mut document = build_document_from_git_log(current_tag, lines);
+    let mut document = build_document_from_git_log(current_tag, lines)
+        .with_hide_filters(hide_pr_messages, hide_bump_messages);
     if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
         document = document.with_previous_public_release(last_public);
     }
@@ -1631,6 +1655,8 @@ mod tests {
             "v0.7.3",
             &["abc1234 fix: tighten ReleaseNOW history selection".to_string()],
             Some("v0.7.1"),
+            false,
+            false,
         );
 
         assert!(changelog.markdown.contains(
