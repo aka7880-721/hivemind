@@ -304,7 +304,7 @@ impl ChangelogDocument {
         if (rendered_dotted_new_specific || rendered_new_specific || rendered_specific)
             && has_general_improvements(&non_breaking)
         {
-            lines.push("### 🛠️ General:".to_string());
+            lines.push("### 💬 General Improvements & Fixes:".to_string());
             lines.push(String::new());
         }
 
@@ -1710,7 +1710,7 @@ mod tests {
             .expect("specific section should render");
         let separator_index = changelog
             .markdown
-            .find("\n---\n\n### 🛠️ General:")
+            .find("\n---\n\n### 💬 General Improvements & Fixes:")
             .expect("separator and general improvements header should render");
         let general_fix_index = changelog
             .markdown
