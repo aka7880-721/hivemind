@@ -507,7 +507,7 @@ mod tests {
         let formatted = format_tile_info_row("🚧", "tag..→HEAD", "8c ahead", 28);
 
         assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
-        assert!(formatted.contains("🚧→ tag..→HEAD: 8c ahead"));
+        assert!(formatted.contains("🚧 → tag..→HEAD: 8c ahead"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
     }
