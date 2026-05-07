@@ -113,7 +113,7 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             "·",
-            format_tile_info_row("🚧", &tile.dev_display, &tile.dev_output, right_width)
+            format_tile_dev_info_row("🚧", &tile.dev_display, &tile.dev_output, right_width)
         ),
         format!(
             "║{:^5}│{}║",
@@ -197,7 +197,7 @@ fn render_calver_tile(
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_tile_info_row("🚧", &tile.dev_display, &tile.dev_output, detail_width),
+            format_tile_dev_info_row("🚧", &tile.dev_display, &tile.dev_output, detail_width),
             "rls",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -378,6 +378,10 @@ fn format_tile_info_row(icon: &str, label: &str, value: &str, total_width: usize
     center_to_width(&format!("{icon} → {label}: {value}"), total_width)
 }
 
+fn format_tile_dev_info_row(icon: &str, label: &str, value: &str, total_width: usize) -> String {
+    center_to_width(&format!("{icon} last {label}: {value}"), total_width)
+}
+
 fn format_tile_tag_row(icon: &str, value: &str, total_width: usize) -> String {
     center_to_width(&format!("{icon}..HEAD: {value}"), total_width)
 }
@@ -510,6 +514,14 @@ mod tests {
         assert!(formatted.contains("🚧 → tag..→HEAD: 8c ahead"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
+    }
+
+    #[test]
+    fn format_tile_dev_row_starts_with_last_prefix() {
+        let formatted = format_tile_dev_info_row("🚧", "tag..→HEAD", "8c ahead", 28);
+
+        assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
+        assert!(formatted.contains("🚧 last tag..→HEAD: 8c ahead"));
     }
 
     #[test]
