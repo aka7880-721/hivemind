@@ -919,7 +919,7 @@ fn build_release_tile_display(
 ) -> (String, String) {
     match mode % RELEASE_TILE_DISPLAY_COUNT {
         0 => (
-            "v".to_string(),
+            "version".to_string(),
             activity
                 .and_then(|summary| summary.last_rls_version.clone())
                 .or_else(|| placeholder.map(|data| data.release_version_output.to_string()))
@@ -1908,6 +1908,13 @@ mod tests {
             placeholder.commits_since_tag_label,
             PLACEHOLDER_COMMITS_AHEAD
         );
+    }
+
+    #[test]
+    fn release_tile_display_uses_version_label_for_current_version() {
+        let (display, _) = build_release_tile_display(None, None, 0);
+
+        assert_eq!(display, "version");
     }
 
     #[test]

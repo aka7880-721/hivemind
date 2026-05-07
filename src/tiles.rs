@@ -375,7 +375,7 @@ fn border_bottom_semver(right_width: usize) -> String {
 }
 
 fn format_tile_info_row(icon: &str, label: &str, value: &str, total_width: usize) -> String {
-    center_to_width(&format!("{icon} → {label}: {value}"), total_width)
+    center_to_width(&format!("{icon} {label}: {value}"), total_width)
 }
 
 fn format_tile_dev_info_row(icon: &str, label: &str, value: &str, total_width: usize) -> String {
