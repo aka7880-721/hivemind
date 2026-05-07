@@ -108,12 +108,12 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             parts[0],
-            format_tile_tag_row("🏷 ", &tile.commits_since_tag_label, right_width)
+            format_tile_tag_row("🏷️", &tile.commits_since_tag_label, right_width)
         ),
         format!(
             "║{:^5}│{}║",
             "·",
-            format_tile_info_row("🏗 ", &tile.dev_display, &tile.dev_output, right_width)
+            format_tile_info_row("🚧", &tile.dev_display, &tile.dev_output, right_width)
         ),
         format!(
             "║{:^5}│{}║",
@@ -191,13 +191,13 @@ fn render_calver_tile(
         format!("║{}║", dot_fill(content_width)),
         format!(
             "║{}│{:^action_width$}║",
-            format_tile_tag_row("🏷 ", &tile.commits_since_tag_label, detail_width),
+            format_tile_tag_row("🏷️", &tile.commits_since_tag_label, detail_width),
             "bump",
             action_width = CALVER_ACTION_WIDTH
         ),
         format!(
             "║{}│{:^action_width$}║",
-            format_tile_info_row("🏗 ", &tile.dev_display, &tile.dev_output, detail_width),
+            format_tile_info_row("🚧", &tile.dev_display, &tile.dev_output, detail_width),
             "rls",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -504,20 +504,20 @@ mod tests {
 
     #[test]
     fn format_tile_info_row_centers_unicode_prefix_without_overflow() {
-        let formatted = format_tile_info_row("🏗", "tag..→HEAD", "8c ahd", 28);
+        let formatted = format_tile_info_row("🚧", "tag..→HEAD", "8c ahead", 28);
 
         assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
-        assert!(formatted.contains("🏗 → tag..→HEAD: 8c ahd"));
+        assert!(formatted.contains("🚧→ tag..→HEAD: 8c ahead"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
     }
 
     #[test]
     fn format_tile_tag_row_centers_unicode_prefix_without_overflow() {
-        let formatted = format_tile_tag_row("🏷", "11c ahd", 22);
+        let formatted = format_tile_tag_row("🏷️️", "11c ahead", 22);
 
         assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 22);
-        assert!(formatted.contains("🏷..HEAD: 11c ahd"));
+        assert!(formatted.contains("🏷️️..HEAD: 11c ahead"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
     }
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn styled_row_keeps_dev_icon_grapheme_intact() {
         let line = styled_row(
-            "║🏗 → bump: 5h ago       ║",
+            "║🚧→ bump: 5h ago       ║",
             Style::default(),
             Style::default(),
         );
@@ -535,7 +535,7 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<Vec<_>>();
 
-        assert!(rendered.contains(&"🏗"));
+        assert!(rendered.contains(&"🚧"));
         assert!(rendered.contains(&"→"));
     }
 

@@ -19,6 +19,8 @@ use std::os::windows::io::AsRawHandle;
 
 use anyhow::{Context, Result, anyhow, bail};
 use arboard::Clipboard;
+#[cfg(target_os = "linux")]
+use arboard::{LinuxClipboardKind, SetExtLinux};
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -255,6 +257,37 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn copy_text_via_linux_clipboard_cli(text: &str) -> bool {
+    try_clipboard_stdin_command("wl-copy", &[], text)
+        || try_clipboard_stdin_command("xclip", &["-selection", "clipboard"], text)
+        || try_clipboard_stdin_command("xsel", &["--clipboard", "--input"], text)
+}
+
+#[cfg(target_os = "linux")]
+fn try_clipboard_stdin_command(program: &str, args: &[&str], text: &str) -> bool {
+    use std::io::Write;
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => return false,
+    };
+    if stdin.write_all(text.as_bytes()).is_err() {
+        return false;
+    }
+    drop(stdin);
+    matches!(child.wait(), Ok(status) if status.success())
 }
 
 struct App {
@@ -4585,25 +4618,44 @@ impl App {
 
     fn copy_text_to_clipboard(&mut self, text: &str) {
         self.fallback_clipboard = Some(text.to_string());
-        let clipboard = if let Some(ref mut clipboard) = self.clipboard {
-            clipboard
-        } else {
-            self.clipboard = Clipboard::new().ok();
-            if let Some(ref mut clipboard) = self.clipboard {
-                clipboard
-            } else {
-                self.status = StatusMessage::info(
-                    "Copied to local clipboard (system clipboard unavailable).",
-                );
-                return;
-            }
-        };
 
-        if clipboard.set_text(text.to_string()).is_ok() {
+        if self.clipboard.is_none() {
+            self.clipboard = Clipboard::new().ok();
+        }
+
+        let mut copied = false;
+        if let Some(ref mut clipboard) = self.clipboard {
+            #[cfg(target_os = "linux")]
+            {
+                let text_owned = text.to_string();
+                let clipboard_ok = clipboard
+                    .set()
+                    .clipboard(LinuxClipboardKind::Clipboard)
+                    .text(text_owned.clone())
+                    .is_ok();
+                let primary_ok = clipboard
+                    .set()
+                    .clipboard(LinuxClipboardKind::Primary)
+                    .text(text_owned)
+                    .is_ok();
+                copied = clipboard_ok || primary_ok;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                copied = clipboard.set_text(text.to_string()).is_ok();
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        if !copied {
+            copied = copy_text_via_linux_clipboard_cli(text);
+        }
+
+        if copied {
             self.status = StatusMessage::info("Copied to clipboard.");
         } else {
             self.status =
-                StatusMessage::info("Copied to local clipboard (system clipboard failed).");
+                StatusMessage::info("Copied in-app only (could not reach the desktop clipboard).");
         }
     }
 
@@ -5938,6 +5990,8 @@ pub(crate) struct ScopeDraft {
     pub(crate) target_key_custom: bool,
     pub(crate) scope_kind: BranchScopeKind,
     pub(crate) repo: Option<RepoConfig>,
+    pub(crate) integration_mode: IntegrationMode,
+    pub(crate) version_scheme: VersionScheme,
     pub(crate) format: TargetFormat,
     pub(crate) last_probe: Option<TargetProbe>,
 }
@@ -5956,6 +6010,8 @@ impl ScopeDraft {
             target_key_custom: false,
             scope_kind: BranchScopeKind::Branch,
             repo: None,
+            integration_mode: IntegrationMode::LocalOnly,
+            version_scheme: VersionScheme::SemVer,
             format: TargetFormat::Auto,
             last_probe: None,
         }
@@ -5992,6 +6048,19 @@ impl ScopeDraft {
             target_key_custom: target_key_is_custom(&target.path, &target.key_path),
             scope_kind: branch.scope_kind,
             repo: branch.repo.clone(),
+            integration_mode: if branch
+                .repo
+                .as_ref()
+                .and_then(|repo| repo.remote_url.as_ref())
+                .is_some()
+            {
+                IntegrationMode::GitHubEnabled
+            } else if branch.repo.is_some() {
+                IntegrationMode::GitLocalOnly
+            } else {
+                IntegrationMode::LocalOnly
+            },
+            version_scheme: branch.version_scheme,
             format: target.format,
             last_probe: None,
         })
@@ -6014,11 +6083,7 @@ impl ScopeDraft {
         }
     }
 
-    pub(crate) fn build_branch(
-        &self,
-        version_scheme: VersionScheme,
-        require_probe: bool,
-    ) -> Result<BranchConfig> {
+    pub(crate) fn build_branch(&self, require_probe: bool) -> Result<BranchConfig> {
         let name = self.name.value.trim();
         if name.is_empty() {
             bail!("scope name cannot be empty");
@@ -6060,7 +6125,7 @@ impl ScopeDraft {
             changelog_enabled: self.changelog_enabled,
             changelog_path: None,
             release_now: crate::config::ReleaseNowSettings::default(),
-            version_scheme,
+            version_scheme: self.version_scheme,
             targets: vec![TargetSpec {
                 label: self.target_label.clone(),
                 path: target_path.to_string(),
@@ -8315,6 +8380,9 @@ mod tests {
             focus: WizardField::RemoteUrl,
             ..ProjectWizard::default()
         };
+        if let Some(scope) = wizard.current_scope_mut() {
+            scope.integration_mode = IntegrationMode::GitHubEnabled;
+        }
 
         let (visible_fields, row_height, show_above, show_below) = wizard.refresh_body_window(6);
 

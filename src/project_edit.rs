@@ -72,16 +72,30 @@ impl ProjectEditDialog {
             vec![ScopeDraft::from_target("core", primary_target)]
         };
 
-        let repo_root = project
-            .repo
-            .as_ref()
-            .map(|repo| repo.local_root.clone())
-            .unwrap_or_default();
-        let remote_url = project
-            .repo
-            .as_ref()
-            .and_then(|repo| repo.remote_url.clone())
-            .unwrap_or_default();
+        let (repo_root, remote_url) = if project.project_type == ProjectType::Branched {
+            let first_repo = scopes.first().and_then(|scope| scope.repo.as_ref());
+            (
+                first_repo
+                    .map(|repo| repo.local_root.clone())
+                    .unwrap_or_default(),
+                first_repo
+                    .and_then(|repo| repo.remote_url.clone())
+                    .unwrap_or_default(),
+            )
+        } else {
+            (
+                project
+                    .repo
+                    .as_ref()
+                    .map(|repo| repo.local_root.clone())
+                    .unwrap_or_default(),
+                project
+                    .repo
+                    .as_ref()
+                    .and_then(|repo| repo.remote_url.clone())
+                    .unwrap_or_default(),
+            )
+        };
 
         Ok(Self {
             project_index,
@@ -181,10 +195,11 @@ impl ProjectEditDialog {
                 ProjectEditFocus::MoveScopeDown,
             ]);
         }
-        if self.integration_mode.requires_repo() {
+        let integration_mode = self.selected_integration_mode();
+        if integration_mode.requires_repo() {
             fields.push(ProjectEditFocus::RepoRoot);
         }
-        if self.integration_mode.requires_remote() {
+        if integration_mode.requires_remote() {
             fields.push(ProjectEditFocus::RemoteUrl);
         }
         fields.push(ProjectEditFocus::TileAutoRotation);
@@ -283,9 +298,10 @@ impl ProjectEditDialog {
                 .unwrap_or_else(|| {
                     Line::from(format!("< {} >", BranchScopeKind::Branch.display_name()))
                 }),
-            ProjectEditFocus::VersionScheme => {
-                Line::from(format!("< {} >", self.version_scheme.display_name()))
-            }
+            ProjectEditFocus::VersionScheme => Line::from(format!(
+                "< {} >",
+                self.selected_version_scheme().display_name()
+            )),
             ProjectEditFocus::UnifiedVersioning => {
                 if self.project_type == ProjectType::Branched {
                     Line::from(format!(
@@ -296,9 +312,10 @@ impl ProjectEditDialog {
                     Line::from("Always yes for all-in-one projects")
                 }
             }
-            ProjectEditFocus::IntegrationMode => {
-                Line::from(format!("< {} >", self.integration_mode.display_name()))
-            }
+            ProjectEditFocus::IntegrationMode => Line::from(format!(
+                "< {} >",
+                self.selected_integration_mode().display_name()
+            )),
             ProjectEditFocus::TargetPath => {
                 if self.project_type == ProjectType::Branched {
                     self.current_scope()
@@ -377,21 +394,32 @@ impl ProjectEditDialog {
             }
             ProjectEditFocus::TargetKey => self.rotate_target_key_preset(delta),
             ProjectEditFocus::VersionScheme => {
-                self.version_scheme = if delta >= 0 {
-                    self.version_scheme.next()
+                if self.project_type == ProjectType::Branched {
+                    if let Some(scope) = self.current_scope_mut() {
+                        scope.version_scheme = if delta >= 0 {
+                            scope.version_scheme.next()
+                        } else {
+                            scope.version_scheme.previous()
+                        };
+                    }
                 } else {
-                    self.version_scheme.previous()
-                };
+                    self.version_scheme = if delta >= 0 {
+                        self.version_scheme.next()
+                    } else {
+                        self.version_scheme.previous()
+                    };
+                }
             }
             ProjectEditFocus::UnifiedVersioning if self.project_type == ProjectType::Branched => {
                 self.unified_versioning = !self.unified_versioning;
             }
             ProjectEditFocus::IntegrationMode => {
-                self.integration_mode = if delta >= 0 {
-                    self.integration_mode.next()
+                let next_mode = if delta >= 0 {
+                    self.selected_integration_mode().next()
                 } else {
-                    self.integration_mode.previous()
+                    self.selected_integration_mode().previous()
                 };
+                self.set_selected_integration_mode(next_mode);
             }
             ProjectEditFocus::TileAutoRotation => {
                 self.tile_auto_rotation = !self.tile_auto_rotation;
@@ -438,6 +466,12 @@ impl ProjectEditDialog {
                 self.sync_target_key_preset_with_path();
                 self.prefill_repo_root_from_target_path();
             }
+            if matches!(
+                self.focus,
+                ProjectEditFocus::RepoRoot | ProjectEditFocus::RemoteUrl
+            ) {
+                self.persist_scope_repo_inputs();
+            }
         }
     }
 
@@ -446,6 +480,12 @@ impl ProjectEditDialog {
             input.insert_str(text);
             if self.focus == ProjectEditFocus::TargetPath {
                 self.prefill_repo_root_from_target_path();
+            }
+            if matches!(
+                self.focus,
+                ProjectEditFocus::RepoRoot | ProjectEditFocus::RemoteUrl
+            ) {
+                self.persist_scope_repo_inputs();
             }
             return true;
         }
@@ -647,10 +687,23 @@ impl ProjectEditDialog {
 
         project.name = project_name.to_string();
         project.project_type = self.project_type;
-        project.integration_mode = self.integration_mode;
+        let effective_integration_mode = if self.project_type == ProjectType::Branched {
+            self.scopes
+                .iter()
+                .map(|scope| scope.integration_mode)
+                .max_by_key(|mode| match mode {
+                    IntegrationMode::LocalOnly => 0,
+                    IntegrationMode::GitLocalOnly => 1,
+                    IntegrationMode::GitHubEnabled => 2,
+                })
+                .unwrap_or(IntegrationMode::LocalOnly)
+        } else {
+            self.integration_mode
+        };
+        project.integration_mode = effective_integration_mode;
         project.unified_versioning =
             self.project_type == ProjectType::AllInOne || self.unified_versioning;
-        project.version_scheme = self.version_scheme;
+        project.version_scheme = self.selected_version_scheme();
         let remembered_dev_mode = project.tile_info.remembered_dev_mode;
         let remembered_rls_mode = project.tile_info.remembered_rls_mode;
         project.tile_info = TileInfoSettings {
@@ -703,7 +756,9 @@ impl ProjectEditDialog {
             project.changelog.enabled = first_branch.changelog_enabled;
         }
 
-        if self.integration_mode.requires_repo() {
+        if self.project_type == ProjectType::Branched {
+            project.repo = None;
+        } else if effective_integration_mode.requires_repo() {
             let repo_root = self.repo_root.value.trim();
             if repo_root.is_empty() {
                 bail!("repo root cannot be empty");
@@ -712,7 +767,7 @@ impl ProjectEditDialog {
                 bail!("repo root does not exist: {}", repo_root);
             }
 
-            let remote_url = if self.integration_mode.requires_remote() {
+            let remote_url = if effective_integration_mode.requires_remote() {
                 let remote_url = self.remote_url.value.trim();
                 if remote_url.is_empty() {
                     bail!("remote URL cannot be empty");
@@ -787,9 +842,11 @@ impl ProjectEditDialog {
         if self.scopes.is_empty() {
             return;
         }
+        self.persist_scope_repo_inputs();
         let len = self.scopes.len() as i32;
         let next = (self.selected_scope as i32 + delta).rem_euclid(len) as usize;
         self.selected_scope = next;
+        self.sync_repo_inputs_from_scope();
     }
 
     fn next_scope_name(&self) -> String {
@@ -808,9 +865,13 @@ impl ProjectEditDialog {
     }
 
     pub(crate) fn add_scope(&mut self) {
-        let scope = ScopeDraft::new(self.next_scope_name());
+        self.persist_scope_repo_inputs();
+        let mut scope = ScopeDraft::new(self.next_scope_name());
+        scope.version_scheme = self.selected_version_scheme();
+        scope.integration_mode = self.selected_integration_mode();
         self.scopes.push(scope);
         self.selected_scope = self.scopes.len().saturating_sub(1);
+        self.sync_repo_inputs_from_scope();
         self.focus = ProjectEditFocus::ScopeName;
     }
 
@@ -818,8 +879,10 @@ impl ProjectEditDialog {
         if self.scopes.len() <= 1 {
             bail!("branched projects need at least one scope");
         }
+        self.persist_scope_repo_inputs();
         self.scopes.remove(self.selected_scope);
         self.selected_scope = self.selected_scope.min(self.scopes.len().saturating_sub(1));
+        self.sync_repo_inputs_from_scope();
         self.focus = ProjectEditFocus::ScopeSelection;
         Ok(())
     }
@@ -828,12 +891,14 @@ impl ProjectEditDialog {
         if self.scopes.len() < 2 {
             return;
         }
+        self.persist_scope_repo_inputs();
         let len = self.scopes.len() as isize;
         let next = (self.selected_scope as isize + delta).clamp(0, len - 1) as usize;
         if next != self.selected_scope {
             self.scopes.swap(self.selected_scope, next);
             self.selected_scope = next;
         }
+        self.sync_repo_inputs_from_scope();
     }
 
     fn seed_scope_from_primary_target(&mut self) {
@@ -844,6 +909,8 @@ impl ProjectEditDialog {
         let target_path = self.target_path.value.trim().to_string();
         let target_key = self.target_key.value.trim().to_string();
         let target_key_custom = self.target_key_custom;
+        let default_version_scheme = self.version_scheme;
+        let default_integration_mode = self.integration_mode;
         if let Some(scope) = self.current_scope_mut() {
             if scope.target_path.value.trim().is_empty() && !target_path.is_empty() {
                 scope.target_path.set_value(target_path);
@@ -852,7 +919,10 @@ impl ProjectEditDialog {
                 scope.target_key.set_value(target_key);
                 scope.target_key_custom = target_key_custom;
             }
+            scope.version_scheme = default_version_scheme;
+            scope.integration_mode = default_integration_mode;
         }
+        self.sync_repo_inputs_from_scope();
     }
 
     fn copy_selected_scope_to_primary_target(&mut self) {
@@ -878,7 +948,7 @@ impl ProjectEditDialog {
         let mut names = HashSet::new();
         let mut branches = Vec::with_capacity(self.scopes.len());
         for scope in &self.scopes {
-            let branch = scope.build_branch(self.version_scheme, require_probe)?;
+            let branch = scope.build_branch(require_probe)?;
             let key = branch.name.trim().to_ascii_lowercase();
             if !names.insert(key) {
                 bail!("scope names must be unique");
@@ -886,6 +956,85 @@ impl ProjectEditDialog {
             branches.push(branch);
         }
         Ok(branches)
+    }
+
+    fn selected_version_scheme(&self) -> VersionScheme {
+        if self.project_type == ProjectType::Branched {
+            self.current_scope()
+                .map(|scope| scope.version_scheme)
+                .unwrap_or(self.version_scheme)
+        } else {
+            self.version_scheme
+        }
+    }
+
+    fn selected_integration_mode(&self) -> IntegrationMode {
+        if self.project_type == ProjectType::Branched {
+            self.current_scope()
+                .map(|scope| scope.integration_mode)
+                .unwrap_or(self.integration_mode)
+        } else {
+            self.integration_mode
+        }
+    }
+
+    fn set_selected_integration_mode(&mut self, mode: IntegrationMode) {
+        if self.project_type == ProjectType::Branched {
+            if let Some(scope) = self.current_scope_mut() {
+                scope.integration_mode = mode;
+            }
+        } else {
+            self.integration_mode = mode;
+        }
+        self.persist_scope_repo_inputs();
+        self.sync_repo_inputs_from_scope();
+    }
+
+    fn persist_scope_repo_inputs(&mut self) {
+        if self.project_type != ProjectType::Branched {
+            return;
+        }
+        let root = self.repo_root.value.trim().to_string();
+        let remote = self.remote_url.value.trim().to_string();
+        if let Some(scope) = self.current_scope_mut() {
+            scope.repo = match scope.integration_mode {
+                IntegrationMode::LocalOnly => None,
+                IntegrationMode::GitLocalOnly => Some(RepoConfig {
+                    local_root: root,
+                    remote_url: None,
+                    ..RepoConfig::default()
+                }),
+                IntegrationMode::GitHubEnabled => Some(RepoConfig {
+                    local_root: root,
+                    remote_url: if remote.is_empty() {
+                        None
+                    } else {
+                        Some(remote)
+                    },
+                    ..RepoConfig::default()
+                }),
+            };
+        }
+    }
+
+    fn sync_repo_inputs_from_scope(&mut self) {
+        if self.project_type != ProjectType::Branched {
+            return;
+        }
+        if let Some(scope) = self.current_scope() {
+            let repo_root = scope
+                .repo
+                .as_ref()
+                .map(|r| r.local_root.clone())
+                .unwrap_or_default();
+            let remote_url = scope
+                .repo
+                .as_ref()
+                .and_then(|r| r.remote_url.clone())
+                .unwrap_or_default();
+            self.repo_root.set_value(repo_root);
+            self.remote_url.set_value(remote_url);
+        }
     }
 }
 

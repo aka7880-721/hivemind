@@ -154,6 +154,9 @@ pub(super) struct ReleaseNowDialog {
     pub(super) artifact_files: Vec<String>,
     pub(super) log_lines: Vec<String>,
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(super) started_at: Option<Instant>,
+    /// Elapsed time frozen when the run stops (success, failure, or cancel).
+    pub(super) frozen_elapsed: Option<Duration>,
 }
 
 impl ReleaseNowDialog {
@@ -193,6 +196,8 @@ impl ReleaseNowDialog {
             artifact_files: Vec::new(),
             log_lines: Vec::new(),
             quick_downloads: validation.quick_downloads,
+            started_at: None,
+            frozen_elapsed: None,
         }
     }
 
@@ -263,6 +268,8 @@ impl ReleaseNowDialog {
 
     pub(super) fn begin_running(&mut self) {
         self.running = true;
+        self.started_at = Some(Instant::now());
+        self.frozen_elapsed = None;
         self.mode = ReleaseNowMode::Configure;
         self.auto_follow = true;
         self.cancel_requested = false;
@@ -306,6 +313,7 @@ impl ReleaseNowDialog {
     }
 
     pub(super) fn apply_outcome(&mut self, outcome: ReleaseNowExecutionOutcome) {
+        self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
         self.auto_follow = false;
         self.cancel_requested = false;
@@ -320,6 +328,7 @@ impl ReleaseNowDialog {
     }
 
     pub(super) fn apply_cancelled(&mut self, message: String) {
+        self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
         self.auto_follow = false;
         self.cancel_requested = false;
@@ -334,6 +343,7 @@ impl ReleaseNowDialog {
 
     pub(super) fn apply_failure(&mut self, error_message: String) {
         let formatted_error = format_user_facing_error(&error_message);
+        self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
         self.auto_follow = false;
         self.cancel_requested = false;
@@ -350,6 +360,26 @@ impl ReleaseNowDialog {
         self.log_lines
             .push(format!("[ReleaseNOW][summary] {}", formatted_error));
         self.scroll = 0;
+    }
+
+    pub(super) fn elapsed_label(&self) -> String {
+        let elapsed = if let Some(frozen) = self.frozen_elapsed {
+            frozen
+        } else if self.running {
+            self.started_at
+                .map(|started| started.elapsed())
+                .unwrap_or_default()
+        } else {
+            Duration::ZERO
+        };
+        let hours = elapsed.as_secs() / 3600;
+        let minutes = (elapsed.as_secs() % 3600) / 60;
+        let seconds = elapsed.as_secs() % 60;
+        if hours > 0 {
+            format!("{hours:02}:{minutes:02}:{seconds:02}")
+        } else {
+            format!("{minutes:02}:{seconds:02}")
+        }
     }
 
     fn scroll_to_tail(&mut self) {

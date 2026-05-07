@@ -1913,7 +1913,7 @@ mod tests {
     #[test]
     fn release_tile_display_uses_rlsd_label_even_when_data_is_loaded() {
         let activity = RepoActivitySummary {
-            commits_since_tag_label: "1c ahd".to_string(),
+            commits_since_tag_label: "1c ahead".to_string(),
             last_bump_time: None,
             last_tag_name: Some("v1.2.3".to_string()),
             last_tag_time: None,
