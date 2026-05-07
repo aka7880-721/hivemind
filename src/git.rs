@@ -437,6 +437,8 @@ pub(crate) struct GitScopeContext {
     pub(crate) main_branch_name: Option<String>,
     pub(crate) suggested_tag_name: String,
     pub(crate) path_filters: Vec<String>,
+    pub(crate) hide_pr_messages: bool,
+    pub(crate) hide_bump_messages: bool,
 }
 
 impl GitScopeContext {
@@ -570,6 +572,8 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                 .map(str::to_string),
             suggested_tag_name: suggested_tag_name(project),
             path_filters: project_scope_target_paths(project),
+            hide_pr_messages: project.changelog_hide_pr_messages_for_scope(0),
+            hide_bump_messages: project.changelog_hide_bump_messages_for_scope(0),
         }]);
     }
 
@@ -595,6 +599,8 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                 .map(str::to_string),
             suggested_tag_name: suggested_tag_name(project),
             path_filters: project_scope_target_paths(project),
+            hide_pr_messages: project.changelog_hide_pr_messages_for_scope(0),
+            hide_bump_messages: project.changelog_hide_bump_messages_for_scope(0),
         }]);
     }
 
@@ -619,6 +625,8 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                     .map(str::to_string),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
                 path_filters: collect_target_paths(&branch.targets),
+                hide_pr_messages: project.changelog_hide_pr_messages_for_scope(index),
+                hide_bump_messages: project.changelog_hide_bump_messages_for_scope(index),
             })
         })
         .collect()
@@ -652,6 +660,8 @@ pub(crate) fn collect_all_branch_git_scope_contexts(
                     .map(str::to_string),
                 suggested_tag_name: suggested_tag_name_for_scope(project, Some(index)),
                 path_filters: collect_target_paths(&branch.targets),
+                hide_pr_messages: project.changelog_hide_pr_messages_for_scope(index),
+                hide_bump_messages: project.changelog_hide_bump_messages_for_scope(index),
             })
         })
         .collect()
@@ -1216,6 +1226,8 @@ mod tests {
             main_branch_name: None,
             suggested_tag_name: "core-v1.2.3".to_string(),
             path_filters: vec!["C:/repo/core".to_string(), "core\\nested".to_string()],
+            hide_pr_messages: false,
+            hide_bump_messages: false,
         };
 
         assert_eq!(scope.git_pathspecs(), vec!["core", "core/nested"]);
