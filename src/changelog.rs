@@ -1174,7 +1174,7 @@ fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) 
     }
 
     for specific_name in specific_names {
-        lines.push(format!("### Changed in {}", specific_name));
+        lines.push(format!("### 💫 _Changed in:_ **{}**", specific_name));
         lines.push(String::new());
         let section_commits: Vec<&ParsedCommit> = commits
             .iter()
@@ -1613,7 +1613,7 @@ mod tests {
         assert!(changelog.markdown.contains("## 💥⚠️ BREAKING CHANGE ⚠️💥"));
         assert!(changelog.markdown.contains("### ✨ New in UI:"));
         assert!(changelog.markdown.contains("#### 🧩 Features"));
-        assert!(changelog.markdown.contains("### Changed in APP"));
+        assert!(changelog.markdown.contains("### 💫 _Changed in:_ **APP**"));
         assert!(changelog.markdown.contains("#### 💎 Enhancement"));
         assert!(changelog.markdown.contains("### ℹ️ Documentation"));
         assert!(
@@ -1710,7 +1710,7 @@ mod tests {
 
         let specific_index = changelog
             .markdown
-            .find("### Changed in Tiles")
+            .find("### 💫 _Changed in:_ **Tiles**")
             .expect("specific section should render");
         let separator_index = changelog
             .markdown
@@ -1763,7 +1763,7 @@ mod tests {
             .expect("new specific section should render");
         let specific_index = changelog
             .markdown
-            .find("### Changed in Git")
+            .find("### 💫 _Changed in:_ **Git**")
             .expect("specific section should render");
         let general_index = changelog
             .markdown
