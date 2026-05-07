@@ -336,6 +336,10 @@ impl ChangelogDocument {
         if lines.last().is_some_and(|line| !line.is_empty()) {
             lines.push(String::new());
         }
+        // Remove trailing --- separator before footer to avoid display issues
+        if lines.last().is_some_and(|line| line == "---") {
+            lines.pop();
+        }
         lines.push(FOOTER.to_string());
 
         RenderedChangelog::new(lines.join("\n"))
@@ -1644,6 +1648,13 @@ mod tests {
             changelog
                 .markdown
                 .contains("Heads-up: this release updates the public dashboard.")
+        );
+        // Debug: print the markdown to see what's being generated
+        eprintln!("DEBUG MARKDOWN:\n{}", changelog.markdown);
+        assert!(
+            changelog.markdown.contains("made with [ComfyGit]"),
+            "Footer should contain 'made with [ComfyGit]', but got:\n{}",
+            changelog.markdown
         );
         assert!(
             changelog
