@@ -1084,6 +1084,8 @@ mod tests {
                     }),
                     changelog_enabled: false,
                     changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1100,6 +1102,8 @@ mod tests {
                     repo: None,
                     changelog_enabled: false,
                     changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1155,6 +1159,8 @@ mod tests {
                     }),
                     changelog_enabled: false,
                     changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1175,6 +1181,8 @@ mod tests {
                     }),
                     changelog_enabled: false,
                     changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1233,6 +1241,8 @@ mod tests {
                 repo: None,
                 changelog_enabled: false,
                 changelog_path: None,
+                changelog_hide_pr_messages: false,
+                changelog_hide_bump_messages: false,
                 release_now: crate::config::ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: vec![TargetSpec {
