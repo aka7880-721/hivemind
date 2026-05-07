@@ -279,9 +279,6 @@ impl ChangelogDocument {
             lines.push(String::new());
         }
 
-        lines.push("#### What's new:".to_string());
-        lines.push(String::new());
-
         let visible_commits = self
             .commits
             .iter()
@@ -1644,14 +1641,13 @@ mod tests {
 
     #[test]
     fn ensure_previous_public_release_header_updates_plain_archived_release_header() {
-        let markdown = ["## Changelog v0.11.2", "2026-04-22", "", "#### What's new:"].join("\n");
+        let markdown = ["## Changelog v0.11.2", "2026-04-22", ""].join("\n");
 
         let updated = ensure_previous_public_release_header(&markdown, "v0.11.2", Some("v0.10.11"));
 
         assert!(updated.contains(
             "## Changelog v0.11.2 <sub><sup>← v0.10.11 (Previous Public Version)</sup></sub>"
         ));
-        assert!(updated.contains("#### What's new:"));
     }
 
     #[test]
@@ -1745,10 +1741,6 @@ mod tests {
             .markdown
             .find("Heads-up: this release updates the public dashboard.")
             .expect("release notes should render");
-        let changes_index = changelog
-            .markdown
-            .find("#### What's new:")
-            .expect("changes heading should render");
         let breaking_index = changelog
             .markdown
             .find("## 💥⚠️ BREAKING CHANGE ⚠️💥")
@@ -1770,8 +1762,7 @@ mod tests {
             .rfind("### 🐛 Fix(es)")
             .expect("general category section should render");
 
-        assert!(release_notes_index < changes_index);
-        assert!(changes_index < breaking_index);
+        assert!(release_notes_index < breaking_index);
         assert!(breaking_index < dotted_new_index);
         assert!(dotted_new_index < new_index);
         assert!(new_index < specific_index);
