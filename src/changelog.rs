@@ -847,6 +847,12 @@ fn parse_prefix_parts(prefix: &str) -> (Option<Category>, Option<String>) {
         return (None, None);
     }
 
+    // PR merge messages like "Merge pull request #N (via ComfyGit)" should not
+    // extract "via ComfyGit" as the specific/scope
+    if trimmed.contains("Merge pull request") && trimmed.contains("(via ComfyGit)") {
+        return (None, None);
+    }
+
     if let Some((category_part, specific_part)) = trimmed.split_once('→') {
         return (
             Category::from_alias(category_part),
