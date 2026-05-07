@@ -255,19 +255,19 @@ impl ChangelogDocument {
     }
 
     pub(crate) fn render_markdown(&self) -> RenderedChangelog {
+        let date_str = self.date.format("%Y-%m-%d").to_string();
         let header = match self.previous_public_release.as_ref() {
             Some(previous_public) => format!(
-                "## Changelog {} <sub><sup>← {} (Previous Public Version)</sup></sub>",
-                self.current_tag, previous_public
+                "## Changelog `{}` <sub><sup>← `{}` (Previous Public Version)</sup></sub> <sup><div align=\"end\">🗓️ {}</div></sup>",
+                self.current_tag, previous_public, date_str
             ),
-            None => format!("## Changelog {}", self.current_tag),
+            None => format!(
+                "## Changelog `{}` <sup><div align=\"end\">🗓️ {}</div></sup>",
+                self.current_tag, date_str
+            ),
         };
 
-        let mut lines = vec![
-            header,
-            self.date.format("%Y-%m-%d").to_string(),
-            String::new(),
-        ];
+        let mut lines = vec![header, String::new()];
 
         if !self.context_lines.is_empty() {
             lines.extend(self.context_lines.iter().cloned());
@@ -1608,7 +1608,8 @@ mod tests {
         .with_release_message("Heads-up: this release updates the public dashboard.")
         .render_markdown();
 
-        assert!(changelog.markdown.contains("## Changelog v0.4.0"));
+        assert!(changelog.markdown.contains("## Changelog `v0.4.0`"));
+        assert!(changelog.markdown.contains("🗓️ 2026-04-12"));
         assert!(changelog.markdown.contains("## 💥⚠️ BREAKING CHANGE ⚠️💥"));
         assert!(changelog.markdown.contains("### ✨ New in UI:"));
         assert!(changelog.markdown.contains("#### 🧩 Features"));
@@ -1636,9 +1637,9 @@ mod tests {
         );
 
         assert!(changelog.markdown.contains(
-            "## Changelog v0.7.3 <sub><sup>← v0.7.1 (Previous Public Version)</sup></sub>"
+            "## Changelog `v0.7.3` <sub><sup>← `v0.7.1` (Previous Public Version)</sup></sub>"
         ));
-        assert!(changelog.markdown.contains("2026-"));
+        assert!(changelog.markdown.contains("🗓️ 2026-"));
     }
 
     #[test]
