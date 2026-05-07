@@ -158,7 +158,9 @@ impl ParsedCommit {
         }
 
         let (prefix, message) = split_prefix_and_message(remainder);
-        let (category, specific, specific_heading) = parse_prefix(prefix);
+        // Check if there's a ): pattern in the raw_subject - this indicates valid (Specific) scope
+        let has_colon_after_paren = raw_subject.contains("):");
+        let (category, specific, specific_heading) = parse_prefix(prefix, has_colon_after_paren);
         let message_items = parse_message_items(message);
 
         Self {
@@ -825,31 +827,25 @@ fn split_prefix_and_message(input: &str) -> (&str, &str) {
     (input.trim(), input.trim())
 }
 
-fn parse_prefix(prefix: &str) -> (Option<Category>, Option<String>, Option<&'static str>) {
+fn parse_prefix(prefix: &str, has_colon_after_paren: bool) -> (Option<Category>, Option<String>, Option<&'static str>) {
     let trimmed = prefix.trim();
     if trimmed.is_empty() {
         return (None, None, None);
     }
 
     if let Some(dotted) = trimmed.strip_prefix('.') {
-        let (category, specific) = parse_prefix_parts(dotted);
+        let (category, specific) = parse_prefix_parts(dotted, has_colon_after_paren);
         let specific_heading = category.and_then(singular_specific_heading);
         return (category, specific, specific_heading);
     }
 
-    let (category, specific) = parse_prefix_parts(trimmed);
+    let (category, specific) = parse_prefix_parts(trimmed, has_colon_after_paren);
     (category, specific, None)
 }
 
-fn parse_prefix_parts(prefix: &str) -> (Option<Category>, Option<String>) {
+fn parse_prefix_parts(prefix: &str, has_colon_after_paren: bool) -> (Option<Category>, Option<String>) {
     let trimmed = prefix.trim();
     if trimmed.is_empty() {
-        return (None, None);
-    }
-
-    // PR merge messages like "Merge pull request #N (via ComfyGit)" should not
-    // extract "via ComfyGit" as the specific/scope
-    if trimmed.contains("Merge pull request") && trimmed.contains("(via ComfyGit)") {
         return (None, None);
     }
 
@@ -860,19 +856,19 @@ fn parse_prefix_parts(prefix: &str) -> (Option<Category>, Option<String>) {
         );
     }
 
-    if trimmed.starts_with('(') && trimmed.ends_with(')') {
-        return (None, normalize_specific(&trimmed[1..trimmed.len() - 1]));
-    }
+    if has_colon_after_paren {
+        if trimmed.starts_with('(') && trimmed.ends_with(')') {
+            return (None, normalize_specific(&trimmed[1..trimmed.len() - 1]));
+        }
 
-    if let Some(open_index) = trimmed.find('(')
-        && trimmed.ends_with(')')
-    {
-        let category_part = &trimmed[..open_index];
-        let specific_part = &trimmed[open_index + 1..trimmed.len() - 1];
-        return (
-            Category::from_alias(category_part),
-            normalize_specific(specific_part),
-        );
+        if let Some((category_part, specific_part)) = trimmed.split_once('(') {
+            if specific_part.ends_with(')') {
+                return (
+                    Category::from_alias(category_part),
+                    normalize_specific(&specific_part[..specific_part.len() - 1]),
+                );
+            }
+        }
     }
 
     (Category::from_alias(trimmed), None)
@@ -982,7 +978,8 @@ fn looks_like_prefixed_clause(segment: &str) -> bool {
         return false;
     }
 
-    let (category, specific, specific_heading) = parse_prefix(remainder);
+    // Since we split at ':', we know there's a colon after the prefix
+    let (category, specific, specific_heading) = parse_prefix(remainder, true);
     category.is_some() || specific.is_some() || specific_heading.is_some()
 }
 
