@@ -57,6 +57,8 @@ pub(crate) enum ProjectSettingsFocus {
     Alias,
     ChangelogEnabled,
     ChangelogPath,
+    ChangelogHidePrMessages,
+    ChangelogHideBumpMessages,
     ReleaseNowEnabled,
     ReleaseNowWindows,
     ReleaseNowLinuxArm,
@@ -77,6 +79,8 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) custom_main_branch_name: TextInput,
     pub(crate) alias: TextInput,
     pub(crate) changelog_path: TextInput,
+    pub(crate) changelog_hide_pr_messages: bool,
+    pub(crate) changelog_hide_bump_messages: bool,
     pub(crate) release_now_windows: TextInput,
     pub(crate) release_now_linux_arm: TextInput,
     pub(crate) release_now_linux_amd: TextInput,
@@ -96,6 +100,8 @@ impl Default for ProjectSettingsState {
             custom_main_branch_name: TextInput::with_value(""),
             alias: TextInput::with_value(""),
             changelog_path: TextInput::with_value(DEFAULT_CHANGELOG_PATH),
+            changelog_hide_pr_messages: false,
+            changelog_hide_bump_messages: false,
             release_now_windows: TextInput::with_value(""),
             release_now_linux_arm: TextInput::with_value(""),
             release_now_linux_amd: TextInput::with_value(""),
@@ -127,6 +133,10 @@ impl ProjectSettingsState {
         self.alias.set_value(project.alias.clone());
         self.changelog_path
             .set_value(project.changelog_path_for_scope(scope_index).to_string());
+        self.changelog_hide_pr_messages =
+            project.changelog_hide_pr_messages_for_scope(scope_index);
+        self.changelog_hide_bump_messages =
+            project.changelog_hide_bump_messages_for_scope(scope_index);
         self.release_now_windows
             .set_value(release_now.windows_script.clone());
         self.release_now_linux_arm
@@ -162,6 +172,8 @@ impl ProjectSettingsState {
                 fields.push(ProjectSettingsFocus::ChangelogEnabled);
                 if project.changelog_enabled_for_scope(scope_index) {
                     fields.push(ProjectSettingsFocus::ChangelogPath);
+                    fields.push(ProjectSettingsFocus::ChangelogHidePrMessages);
+                    fields.push(ProjectSettingsFocus::ChangelogHideBumpMessages);
                 }
                 fields
             }
@@ -615,6 +627,7 @@ enum ProjectSettingsRow {
     Text(Line<'static>),
     Spacer(u16),
     Checkbox(ProjectSettingsFocus),
+    DualCheckbox(ProjectSettingsFocus, ProjectSettingsFocus),
     Path(ProjectSettingsFocus),
 }
 
@@ -624,6 +637,7 @@ impl ProjectSettingsRow {
             Self::Text(_) => 1,
             Self::Spacer(height) => *height,
             Self::Checkbox(_) => 2,
+            Self::DualCheckbox(_, _) => 2,
             Self::Path(_) => 3,
         }
     }
@@ -631,6 +645,7 @@ impl ProjectSettingsRow {
     fn focus(&self) -> Option<ProjectSettingsFocus> {
         match self {
             Self::Checkbox(field) | Self::Path(field) => Some(*field),
+            Self::DualCheckbox(left, _) => Some(*left),
             _ => None,
         }
     }
@@ -869,6 +884,9 @@ fn render_scrollable_rows(
                 let focused = *field == app.project_settings_state.focus;
                 render_checkbox_row(app, frame, row_area, *field, project, scope_index, focused);
             }
+            ProjectSettingsRow::DualCheckbox(left, right) if row_area.height >= 2 => {
+                render_dual_checkbox_row(app, frame, row_area, *left, *right, project, scope_index);
+            }
             ProjectSettingsRow::Path(field) if row_area.height >= 3 => {
                 let focused = *field == app.project_settings_state.focus;
                 render_path_row(app, frame, row_area, *field, focused);
@@ -945,9 +963,14 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
         rows.push(ProjectSettingsRow::Path(
             ProjectSettingsFocus::ChangelogPath,
         ));
+        rows.push(ProjectSettingsRow::Spacer(1));
+        rows.push(ProjectSettingsRow::DualCheckbox(
+            ProjectSettingsFocus::ChangelogHidePrMessages,
+            ProjectSettingsFocus::ChangelogHideBumpMessages,
+        ));
+        rows.push(ProjectSettingsRow::Spacer(1));
     }
     rows.extend([
-		ProjectSettingsRow::Spacer(1),
 		ProjectSettingsRow::Text(Line::from("This toggle now lives at the scope level.".yellow())),
 		ProjectSettingsRow::Text(Line::from(if project.project_type == ProjectType::Branched {
 			"Use the focused overview tile or click another tile to switch scopes."
@@ -1122,6 +1145,82 @@ fn render_checkbox_row(
     ));
 }
 
+fn render_dual_checkbox_row(
+    app: &mut App,
+    frame: &mut Frame,
+    area: Rect,
+    left_field: ProjectSettingsFocus,
+    right_field: ProjectSettingsFocus,
+    _project: &ProjectConfig,
+    _scope_index: usize,
+) {
+    let inset = control_inset(area);
+    // Split the area into two equal parts with space between them
+    let halves = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inset);
+
+    // Get state for each checkbox from the app state
+    let left_enabled = match left_field {
+        ProjectSettingsFocus::ChangelogHidePrMessages => {
+            app.project_settings_state.changelog_hide_pr_messages
+        }
+        _ => false,
+    };
+    let right_enabled = match right_field {
+        ProjectSettingsFocus::ChangelogHideBumpMessages => {
+            app.project_settings_state.changelog_hide_bump_messages
+        }
+        _ => false,
+    };
+
+    let left_focused = left_field == app.project_settings_state.focus;
+    let right_focused = right_field == app.project_settings_state.focus;
+
+    // Render left checkbox
+    let left_checkbox = Checkbox::new(checkbox_label(left_field), left_enabled)
+        .checked_symbol("✅ ")
+        .unchecked_symbol("❌ ")
+        .style(if left_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::White)
+        })
+        .checkbox_style(Style::default().fg(if left_enabled { Color::Green } else { Color::Red }))
+        .label_style(if left_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::White)
+        });
+    frame.render_widget(left_checkbox, halves[0]);
+    app.hit_targets.push(HitTarget::new(
+        halves[0],
+        HitAction::SelectProjectSettingsField(left_field),
+    ));
+
+    // Render right checkbox
+    let right_checkbox = Checkbox::new(checkbox_label(right_field), right_enabled)
+        .checked_symbol("✅ ")
+        .unchecked_symbol("❌ ")
+        .style(if right_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::White)
+        })
+        .checkbox_style(Style::default().fg(if right_enabled { Color::Green } else { Color::Red }))
+        .label_style(if right_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::White)
+        });
+    frame.render_widget(right_checkbox, halves[1]);
+    app.hit_targets.push(HitTarget::new(
+        halves[1],
+        HitAction::SelectProjectSettingsField(right_field),
+    ));
+}
+
 fn render_path_form_row(
     frame: &mut Frame,
     area: Rect,
@@ -1256,6 +1355,8 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::CustomMainBranchName => "Custom main branch",
         ProjectSettingsFocus::Alias => "Alias",
         ProjectSettingsFocus::ChangelogPath => "Changelog path",
+        ProjectSettingsFocus::ChangelogHidePrMessages => "Hide PR messages",
+        ProjectSettingsFocus::ChangelogHideBumpMessages => "Hide bump messages",
         ProjectSettingsFocus::ReleaseNowWindows => "Windows",
         ProjectSettingsFocus::ReleaseNowLinuxArm => "Linux ARM",
         ProjectSettingsFocus::ReleaseNowLinuxAmd => "Linux AMD",
@@ -1271,6 +1372,8 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
         field,
         ProjectSettingsFocus::CustomMainBranchEnabled
             | ProjectSettingsFocus::ChangelogEnabled
+            | ProjectSettingsFocus::ChangelogHidePrMessages
+            | ProjectSettingsFocus::ChangelogHideBumpMessages
             | ProjectSettingsFocus::ReleaseNowEnabled
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
@@ -1353,6 +1456,26 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
             app.status = super::StatusMessage::success(format!(
                 "Quick-Downloads position set to {} for {}.",
                 next.display_name(),
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::ChangelogHidePrMessages => {
+            let next = !app.project_settings_state.changelog_hide_pr_messages;
+            app.project_settings_state.changelog_hide_pr_messages = next;
+            active_project.set_changelog_hide_pr_messages_for_scope(scope_index, next);
+            app.status = super::StatusMessage::success(format!(
+                "PR messages {} for {}.",
+                if next { "hidden" } else { "shown" },
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::ChangelogHideBumpMessages => {
+            let next = !app.project_settings_state.changelog_hide_bump_messages;
+            app.project_settings_state.changelog_hide_bump_messages = next;
+            active_project.set_changelog_hide_bump_messages_for_scope(scope_index, next);
+            app.status = super::StatusMessage::success(format!(
+                "Bump messages {} for {}.",
+                if next { "hidden" } else { "shown" },
                 scope_name
             ));
         }
