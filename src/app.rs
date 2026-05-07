@@ -7056,14 +7056,21 @@ fn build_release_notes_markdown(
             tag_name.to_string(),
             &release_range.lines,
             Some(&last_public_release),
-            false,
-            false,
+            scope.hide_pr_messages,
+            scope.hide_bump_messages,
         )
         .markdown);
     }
 
     let recent_range = load_recent_change_range_with_cancel(scope, None)?;
-    Ok(rls_changelog_gen(tag_name.to_string(), &recent_range.lines, None, false, false).markdown)
+    Ok(rls_changelog_gen(
+        tag_name.to_string(),
+        &recent_range.lines,
+        None,
+        scope.hide_pr_messages,
+        scope.hide_bump_messages,
+    )
+    .markdown)
 }
 
 fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
