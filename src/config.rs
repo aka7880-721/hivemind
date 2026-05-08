@@ -280,6 +280,62 @@ impl ProjectConfig {
         }
     }
 
+    pub fn changelog_hide_pr_messages_for_scope(&self, scope_index: usize) -> bool {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.hide_pr_messages,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .map(|branch| branch.changelog_hide_pr_messages)
+                .or_else(|| self.branches.first().map(|branch| branch.changelog_hide_pr_messages))
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn set_changelog_hide_pr_messages_for_scope(&mut self, scope_index: usize, hide: bool) {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.hide_pr_messages = hide,
+            ProjectType::Branched => {
+                if let Some(branch) = self.branches.get_mut(scope_index) {
+                    branch.changelog_hide_pr_messages = hide;
+                }
+                self.changelog.hide_pr_messages = self
+                    .branches
+                    .first()
+                    .map(|branch| branch.changelog_hide_pr_messages)
+                    .unwrap_or(false);
+            }
+        }
+    }
+
+    pub fn changelog_hide_bump_messages_for_scope(&self, scope_index: usize) -> bool {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.hide_bump_messages,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .map(|branch| branch.changelog_hide_bump_messages)
+                .or_else(|| self.branches.first().map(|branch| branch.changelog_hide_bump_messages))
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn set_changelog_hide_bump_messages_for_scope(&mut self, scope_index: usize, hide: bool) {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.hide_bump_messages = hide,
+            ProjectType::Branched => {
+                if let Some(branch) = self.branches.get_mut(scope_index) {
+                    branch.changelog_hide_bump_messages = hide;
+                }
+                self.changelog.hide_bump_messages = self
+                    .branches
+                    .first()
+                    .map(|branch| branch.changelog_hide_bump_messages)
+                    .unwrap_or(false);
+            }
+        }
+    }
+
     pub fn release_now_for_scope(&self, scope_index: usize) -> &ReleaseNowSettings {
         match self.project_type {
             ProjectType::AllInOne => &self.release_now,
@@ -422,6 +478,8 @@ impl ProjectConfig {
 pub struct ChangelogSettings {
     pub enabled: bool,
     pub file_path: String,
+    pub hide_pr_messages: bool,
+    pub hide_bump_messages: bool,
 }
 
 impl Default for ChangelogSettings {
@@ -429,6 +487,8 @@ impl Default for ChangelogSettings {
         Self {
             enabled: false,
             file_path: DEFAULT_CHANGELOG_PATH.to_string(),
+            hide_pr_messages: false,
+            hide_bump_messages: false,
         }
     }
 }
@@ -642,6 +702,10 @@ pub struct BranchConfig {
     #[serde(default)]
     pub changelog_path: Option<String>,
     #[serde(default)]
+    pub changelog_hide_pr_messages: bool,
+    #[serde(default)]
+    pub changelog_hide_bump_messages: bool,
+    #[serde(default)]
     pub release_now: ReleaseNowSettings,
     pub version_scheme: VersionScheme,
     #[serde(default)]
@@ -828,6 +892,8 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
                 repo: None,
                 changelog_enabled: project.changelog.enabled,
                 changelog_path: Some(project.changelog.effective_path().to_string()),
+                changelog_hide_pr_messages: project.changelog.hide_pr_messages,
+                changelog_hide_bump_messages: project.changelog.hide_bump_messages,
                 release_now: project.release_now.clone(),
                 version_scheme: project.version_scheme,
                 targets,
@@ -870,6 +936,8 @@ mod tests {
             repo: None,
             changelog_enabled: false,
             changelog_path: None,
+            changelog_hide_pr_messages: false,
+            changelog_hide_bump_messages: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
             targets: Vec::new(),
@@ -1019,6 +1087,8 @@ format = "json"
                 repo: None,
                 changelog_enabled: false,
                 changelog_path: None,
+                changelog_hide_pr_messages: false,
+                changelog_hide_bump_messages: false,
                 release_now: ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: Vec::new(),
@@ -1040,6 +1110,8 @@ format = "json"
                     repo: None,
                     changelog_enabled: false,
                     changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
                     release_now: ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::CalVerYearMonthMicro,
                     targets: Vec::new(),
@@ -1057,6 +1129,8 @@ format = "json"
         let settings = ChangelogSettings {
             enabled: true,
             file_path: "   ".to_string(),
+            hide_pr_messages: false,
+            hide_bump_messages: false,
         };
 
         assert_eq!(settings.effective_path(), DEFAULT_CHANGELOG_PATH);
