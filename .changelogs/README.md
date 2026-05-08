@@ -2,6 +2,143 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog `v0.21.4` <sup><div align="end">🗓️ 2026-05-08</div></sup>
+
+### 💫 _Changed in:_ **RLS Changelog**
+
+#### 💎 Enhancements
+
+* Tightening (Specific) detection   _(ed36e7f)_
+
+#### ♻️ Refactor
+
+* Date display reorganization   _(217b97b)_
+
+* New format for (Specific) grouper, `### 💫 _Changed in:_ **{subject}**`   _(476b6cf)_
+
+* Removal of `What's new:` line   _(2cc48b5)_
+
+* General header change   _(865fe1d)_
+
+* General header change →h2   _(40c05de)_
+
+* Exclude "via ComfyGit" from scope extraction in PR merge messages   _(95a9b08)_
+
+* Integrate hide options for PR and bump messages into GitScopeContext and related functions   _(be5afe2)_
+
+---
+
+### 💫 _Changed in:_ **Hiding of PR & bump messages in RLS changelog**
+
+#### 🧩 Features
+
+* Add options to hide PR and bump messages in changelog generation   _(d5b759f)_
+
+* Implement filters to hide PR and version bump messages in changelog generation   _(9687a02)_
+
+* Add default settings to hide PR and bump messages   _(4495aad)_
+
+* Add methods to manage visibility of PR and bump messages for specific scopes   _(d86c720)_
+
+* Set default values to hide PR and bump messages in changelog configuration   _(9d4db2f)_
+
+* Add default configuration options to hide PR and bump messages   _(420eb40)_
+
+* Implement dual checkbox for hiding PR and bump messages in project settings   _(3c4cf8e)_
+
+* Set default values for hiding PR and bump messages in project edit and test configurations   _(b18d2da)_
+
+* Update default settings to include visibility options for PR and bump messages   _(c7e8491)_
+
+* Add labels for new options to hide PR and bump messages in project settings   _(86b3ab8)_
+
+---
+
+### 💫 _Changed in:_ **RLS Changelog Preview**
+
+#### ♻️ Refactor
+
+* Use scope settings for hiding PR and bump messages in changelog generation   _(9669cda)_
+
+* Enhance document generation to respect hide options for PR and bump messages   _(ffa1b39)_
+
+---
+
+## 💬 General Improvements & Fixes:
+
+### 🐛 Fix(es)
+
+* footer tests   _(03731c2)_
+
+* Update footer formatting and enhance prefixed clause detection with new tests   _(7defdd9)_
+
+* Simplify conditional logic for category and specific part extraction   _(d89685d)_
+
+* Refactor conditional structure for improved readability in prefix parsing   _(7228a83)_
+
+* Update error message to include command options for clarity   _(984d5a8)_
+
+* code clean-up   _(4392629)_
+
+* simplify conditional logic in prefix parsing   _(69ea469)_
+
+* improve readability of conditional logic in prefix parsing   _(1b153f4)_
+
+* fixed scroll anchor at the bottom of "Release Notes Preview" and "ReleaseNOW log"   _(d3c9350)_
+
+* fixed inability to use `SPACE` in "Rename Commit" modal   _(3fcc598)_
+
+* Bugfix for added CLICK event support within "Rename Commit" modal where it assumed non-custom layout width   _(78e5970)_
+
+* Bugfix for added CLICK event support within "Rename Commit" modal - fixed event catching timing issues   _(dde47ec)_
+
+* fixes no visual representation of the selected text in Rename Commit modal   _(7cc9a39)_
+
+* Simplify method calls for improved readability in key event handling   _(0cd422c)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.21.0   _(6f6e6de)_
+
+* CG app version bump to v0.21.1   _(054d700)_
+
+* CG app version bump to v0.21.2   _(3d79712)_
+
+* CG app version bump to v0.21.4   _(6d5702d)_
+
+* code clean-up   _(ab34dd5)_
+
+* CG app version bump to v0.21.3   _(0b26c16)_
+
+### 💎 Enhancements
+
+* Added `Source` and `Target` info also to the bottom within `cg br end` CLI output   _(a500064)_
+
+Added HOME/END Key Support. Works in:   _(87eab65)_
+* Release Notes Preview
+* ReleaseNOW log (running & completed)
+* Changelog Preview
+
+* Added CLICK event support within "Rename Commit" modal   _(b6e0807)_
+
+* Implemented copy and paste functionality in text input, including support for CTRL+C and right-click context menu actions in "Rename Commit"   _(9f962a7)_
+
+### 📝 Other
+
+* Merge pull request #79 (via ComfyGit)   _(87e7d55)_
+
+* Merge pull request #80 (via ComfyGit)   _(a6b0116)_
+
+* Merge pull request #81 (via ComfyGit)   _(ceb33e9)_
+
+* Merge pull request #82 (via ComfyGit)   _(cb9984e)_
+
+* Merge remote-tracking branch 'origin/main' into HEAD   _(f5ce24b)_
+
+* Merge pull request #83 (via ComfyGit)   _(67ae8be)_
+
+---
+
 ## Changelog v0.20.2
 2026-05-07
 
@@ -87,6 +224,8 @@ Newest archived changelogs first. When multiple archived files represent the sam
 
 * update format in RLS row within tiles, remove arrow and improve readability   _(edebb1b)_
 
+<br>
+
 ---
 
 ## Changelog v0.19.5
@@ -118,6 +257,8 @@ Newest archived changelogs first. When multiple archived files represent the sam
 
 * CG app version bump to v0.19.5   _(7ded7ce)_
 
+<br>
+
 ---
 
 ## Changelog v0.19.4
@@ -138,6 +279,8 @@ Newest archived changelogs first. When multiple archived files represent the sam
 ### 🔧 Maintenance
 
 * CG app version bump to v0.19.4   _(2186b11)_
+
+<br>
 
 ---
 
@@ -316,6 +459,8 @@ several additions and bugfixes:   _(1e469f4)_
 
 * Merge branch 'main' into v0.19.2-dev--bugfixes   _(926e58d)_
 
+<br>
+
 ---
 
 ## Changelog v0.19.2
@@ -485,6 +630,8 @@ several additions and bugfixes:   _(1e469f4)_
 
 * Merge branch 'main' into v0.19.2-dev--bugfixes   _(926e58d)_
 
+<br>
+
 ---
 
 ## Changelog v0.17.6
@@ -535,6 +682,8 @@ several additions and bugfixes:   _(1e469f4)_
 * CG app version bump to v0.17.6   _(12fd42c)_
 
 * add document-features dependency   _(6ec8d0b)_
+
+<br>
 
 ---
 
@@ -615,6 +764,8 @@ New improvements:   _(1784274)_
 * CG app version bump to v0.17.4   _(21410bd)_
 
 * CG app version bump to v0.17.5   _(02b9440)_
+
+<br>
 
 ---
 
@@ -783,6 +934,8 @@ New improvements:   _(1784274)_
 
 * Merge pull request #52 from comfy-home/0.15.x   _(b6de02b)_
 
+<br>
+
 ---
 
 ## Changelog v0.14.2
@@ -857,6 +1010,8 @@ added third button to CLI, so there are:   _(9a82a24)_
 * Merge pull request #46 from comfy-home/v0.14.2-dev   _(b83f09c)_
 
 * Merge pull request #47 from comfy-home/0.14.x   _(bcafaba)_
+
+<br>
 
 ---
 
@@ -958,6 +1113,8 @@ attempted fix for #40:   _(90a9e2a)_
 * Merge pull request #42 from comfy-home/v0.13.2-dev   _(70e5887)_
 
 * Merge pull request #43 from comfy-home/0.13.x   _(436586f)_
+
+<br>
 
 ---
 
@@ -1092,6 +1249,8 @@ Enhanced with:   _(96b5b80)_
 
 * CLI help modifications   _(b09e1ec)_
 
+<br>
+
 ---
 
 ## Changelog v0.11.3
@@ -1102,6 +1261,8 @@ Enhanced with:   _(96b5b80)_
 ### 🔧 Maintenance
 
 * CG app version bump to v0.11.3   _(85c5c41)_
+
+<br>
 
 ---
 
@@ -1133,6 +1294,8 @@ Enhanced with:   _(96b5b80)_
 * Merge pull request #30 from comfy-home/v0.11.x   _(83861cb)_
 
 * Merge pull request #29 from comfy-home/v0.11.2   _(af7b774)_
+
+<br>
 
 ---
 
@@ -1175,6 +1338,8 @@ Enhanced with:   _(96b5b80)_
 ### 📝 Other
 
 * Merge pull request #27 from comfy-home/v0.10.11+   _(fbc3726)_
+
+<br>
 
 ---
 
@@ -1267,6 +1432,8 @@ Enhanced with:   _(96b5b80)_
 * Merge pull request #26 from comfy-home/0.10.8+   _(49fb8b8)_
 
 * Merge pull request #25 from comfy-home/0.10.10   _(5b51a67)_
+
+<br>
 
 ---
 
@@ -1393,6 +1560,8 @@ Enhanced with:   _(96b5b80)_
 
 * Merge pull request #19 from comfy-home/0.9.2   _(c1bd621)_
 
+<br>
+
 ---
 
 ## Changelog v0.9.1
@@ -1428,6 +1597,8 @@ Enhanced with:   _(96b5b80)_
 * Merge pull request #18 from comfy-home/0.9.1   _(dcf71ee)_
 
 * v0.9.0 has just been released via ComfyGit!   _(48ccf8b)_
+
+<br>
 
 ---
 
@@ -1495,6 +1666,8 @@ Enhanced with:   _(96b5b80)_
 * Merge pull request #17 from comfy-home/0.9.0   _(f1940d3)_
 
 * Merge branch 'main' into 0.9.0   _(0f7c5ac)_
+
+<br>
 
 ---
 
@@ -2123,7 +2296,7 @@ Tet
 ---
 ... ✨ made with [CVB](https://github.com/comfy-home/perk-ComfyVersionBumper)
 
-<br>
+
 
 ---
 ... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)
