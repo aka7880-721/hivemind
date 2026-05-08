@@ -3012,18 +3012,36 @@ impl App {
     }
 
     fn set_text_input_cursor_from_mouse(&mut self, rect: Rect, column: u16) {
+        let is_commit_rename = self.commit_rename_dialog.is_some();
         if let Some(input) = self.active_text_input_mut() {
-            let click_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
-            let field_width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
+            let (click_offset, field_width) = if is_commit_rename {
+                // Commit rename has borders but no label in the rect
+                let border_offset = column.saturating_sub(rect.x + 1) as usize;
+                let width = rect.width.saturating_sub(2) as usize;
+                (border_offset, width)
+            } else {
+                let label_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
+                let width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
+                (label_offset, width)
+            };
             let cursor = input.cursor_position_at_click(click_offset, field_width, true);
             input.begin_selection_at(cursor);
         }
     }
 
     fn update_text_input_drag_selection(&mut self, rect: Rect, column: u16) {
+        let is_commit_rename = self.commit_rename_dialog.is_some();
         if let Some(input) = self.active_text_input_mut() {
-            let click_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
-            let field_width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
+            let (click_offset, field_width) = if is_commit_rename {
+                // Commit rename has borders but no label in the rect
+                let border_offset = column.saturating_sub(rect.x + 1) as usize;
+                let width = rect.width.saturating_sub(2) as usize;
+                (border_offset, width)
+            } else {
+                let label_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
+                let width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
+                (label_offset, width)
+            };
             let cursor = input.cursor_position_at_click(click_offset, field_width, true);
             input.set_cursor_position(cursor);
         }
