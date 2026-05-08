@@ -263,7 +263,10 @@ impl ReleaseNowDialog {
             self.scroll_to_tail();
             self.auto_follow = false;
         }
-        self.scroll = self.scroll.saturating_add_signed(delta);
+        self.scroll = self
+            .scroll
+            .saturating_add_signed(delta)
+            .min(self.max_scroll_offset());
     }
 
     pub(super) fn begin_running(&mut self) {
@@ -382,8 +385,12 @@ impl ReleaseNowDialog {
         }
     }
 
-    fn scroll_to_tail(&mut self) {
+    pub(super) fn scroll_to_tail(&mut self) {
         self.scroll = self.tail_scroll_offset();
+    }
+
+    pub(super) fn scroll_to_start(&mut self) {
+        self.scroll = 0;
     }
 
     pub(super) fn scroll_offset(&self) -> u16 {
