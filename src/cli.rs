@@ -66,6 +66,10 @@ const GITHUB_LATEST_RELEASE_URL: &str =
 const GITHUB_CARGO_TOML_URL: &str =
     "https://raw.githubusercontent.com/comfy-home/ComfyGit/main/Cargo.toml";
 
+const ANSI_CYAN: &str = "\x1b[36m";
+const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_RESET: &str = "\x1b[0m";
+
 static CLI_GIT_CANCELLATION_SLOT: OnceLock<Mutex<Option<GitCancellation>>> = OnceLock::new();
 static CLI_CTRL_C_HANDLER_RESULT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
@@ -1016,19 +1020,31 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                 &affected_indexes,
             )?;
             if !non_main_repo_states.is_empty() {
-                println!("Just to check: Are you aware you are currently on a NON-MAIN branch?");
+                println!(
+                    "{}Just to check: Are you aware you are currently on a NON-MAIN branch?{}",
+                    ANSI_CYAN, ANSI_RESET
+                );
                 println!("You are here:");
                 for state in &non_main_repo_states {
                     let repo_name = Path::new(&state.repo_root)
                         .file_name()
                         .and_then(|name| name.to_str())
                         .unwrap_or(&state.repo_root);
-                    println!("  {} -> {}", repo_name, state.current_branch);
+                    println!(
+                        "  {}{}{} -> {}{}{}",
+                        ANSI_YELLOW,
+                        repo_name,
+                        ANSI_RESET,
+                        ANSI_YELLOW,
+                        state.current_branch,
+                        ANSI_RESET
+                    );
                 }
 
-                if !prompt_confirm_default_yes(
-                    "Press ENTER or Y to ignore and continue; N to cancel: ",
-                )? {
+                if !prompt_confirm_default_yes(&format!(
+                    "Press {}ENTER{} or {}Y{} to ignore and continue; {}N{} to cancel: ",
+                    ANSI_YELLOW, ANSI_RESET, ANSI_YELLOW, ANSI_RESET, ANSI_YELLOW, ANSI_RESET
+                ))? {
                     bail!("Cancelled by user");
                 }
             }

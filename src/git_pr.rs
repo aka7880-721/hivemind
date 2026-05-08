@@ -62,7 +62,7 @@ pub(crate) fn run_pr_and_capture(
         bail!("cannot create a PR from a detached HEAD");
     }
 
-    let target_branch = if force_main {
+    let mut target_branch = if force_main {
         resolve_main_branch_name(repo_root, custom_main_branch)?
     } else {
         resolve_parent_branch_name_with_cancel(
@@ -101,13 +101,31 @@ pub(crate) fn run_pr_and_capture(
 
     let title = format!("{} (via ComfyGit)", current_branch);
     let body = build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?;
-    let body = preview_pr(
+    let mut body = preview_pr(
         &target_branch,
         &current_branch,
         &title,
         &body,
         cancel.clone(),
     )?;
+
+    // Check if user wants to change target branch
+    if body.starts_with("CHANGE_TARGET:") {
+        let current_target = body.strip_prefix("CHANGE_TARGET:").unwrap();
+        let new_target = prompt_target_branch_change(
+            repo_root,
+            &current_branch,
+            current_target,
+            cancel.clone(),
+        )?;
+
+        // Re-run the preview with the new target
+        body = build_pr_body(repo_root, &new_target, &current_branch, cancel.clone())?;
+        body = preview_pr(&new_target, &current_branch, &title, &body, cancel.clone())?;
+
+        // Update target branch for the rest of the function
+        target_branch = new_target;
+    }
     let body_path = write_temp_changelog_markdown(repo_root, &body)?;
     let args = build_pr_create_args(&target_pr_branch, &current_pr_branch, &title, &body_path);
     let create_output = create_pr(repo_root, &args)?;
@@ -170,6 +188,10 @@ fn preview_pr(
                     EditorExit::Terminate => bail!("cancelled by user"),
                 }
             }
+            PreviewAction::ChangeTarget => {
+                drop(raw_mode);
+                return Ok(format!("CHANGE_TARGET:{}", target_branch));
+            }
             PreviewAction::Cancel => bail!("cancelled by user"),
         }
     }
@@ -190,6 +212,7 @@ fn wait_for_preview_action(cancel: Option<GitCancellation>, seconds: u64) -> Res
             match classify_preview_key(key) {
                 Some(PreviewAction::Create) => return Ok(PreviewAction::Create),
                 Some(PreviewAction::Edit) => return Ok(PreviewAction::Edit),
+                Some(PreviewAction::ChangeTarget) => return Ok(PreviewAction::ChangeTarget),
                 Some(PreviewAction::Cancel) => bail!("cancelled by user"),
                 None => {}
             }
@@ -203,6 +226,7 @@ fn wait_for_preview_action(cancel: Option<GitCancellation>, seconds: u64) -> Res
 enum PreviewAction {
     Create,
     Edit,
+    ChangeTarget,
     Cancel,
 }
 
@@ -215,6 +239,9 @@ fn classify_preview_key(key: KeyEvent) -> Option<PreviewAction> {
         KeyCode::Enter => Some(PreviewAction::Create),
         KeyCode::Char('e' | 'E') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(PreviewAction::Edit)
+        }
+        KeyCode::Char('x' | 'X') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(PreviewAction::ChangeTarget)
         }
         KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(PreviewAction::Cancel)
@@ -286,7 +313,7 @@ fn render_preview_screen(
             target_branch
         )),
         Print(format!(
-            "{}Preview ends in {} seconds. Press Enter to create now, E to edit, or Ctrl+C to abort.{}\r\n",
+            "{}Preview ends in {} seconds. Press Enter to create PR now, E to edit, X to change the Target, or Ctrl+C to abort.{}\r\n",
             ANSI_YELLOW, PR_PREVIEW_SECONDS, ANSI_RESET
         ))
     )
@@ -1177,6 +1204,274 @@ fn local_branch_names_merged_into_with_cancel(
 fn normalize_lookup(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
+
+fn prompt_target_branch_change(
+    repo_root: &str,
+    current_branch: &str,
+    current_target: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    // Load initial 5 branches
+    let mut branches = Vec::new();
+    let mut page = 0;
+    load_target_branches(
+        repo_root,
+        &mut branches,
+        page,
+        current_branch,
+        cancel.clone(),
+    )?;
+
+    if branches.is_empty() {
+        bail!("No other branches available for target selection");
+    }
+
+    let mut selected = 0;
+
+    loop {
+        let raw_mode = TerminalRawModeGuard::enter()?;
+
+        loop {
+            render_target_branch_selection_ui(&branches, selected, current_branch, current_target)?;
+
+            let Event::Key(key) =
+                event::read().context("failed to read target branch selection input")?
+            else {
+                continue;
+            };
+
+            if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                continue;
+            }
+
+            match key.code {
+                KeyCode::Up if selected > 0 => {
+                    selected = selected.saturating_sub(1);
+                }
+                KeyCode::Down if selected < branches.len().saturating_sub(1) => {
+                    selected += 1;
+                }
+                KeyCode::Enter => {
+                    drop(raw_mode);
+                    let selected_target = &branches[selected];
+
+                    // Show confirmation dialog
+                    if confirm_target_selection(current_branch, selected_target)? {
+                        return Ok(selected_target.clone());
+                    } else {
+                        // User cancelled, break to outer loop to restart selection
+                        break;
+                    }
+                }
+                KeyCode::Char(' ') => {
+                    page += 1;
+                    let start_index = branches.len();
+                    load_target_branches(
+                        repo_root,
+                        &mut branches,
+                        page,
+                        current_branch,
+                        cancel.clone(),
+                    )?;
+
+                    if branches.len() == start_index {
+                        // No new branches loaded, reset page counter
+                        page -= 1;
+                    } else {
+                        // Move selection to the first newly loaded branch
+                        selected = start_index;
+                    }
+                }
+                KeyCode::Esc => {
+                    drop(raw_mode);
+                    bail!("Cancelled by user");
+                }
+                KeyCode::Char('c')
+                    if key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    drop(raw_mode);
+                    bail!("Cancelled by user");
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn load_target_branches(
+    repo_root: &str,
+    branches: &mut Vec<String>,
+    page: usize,
+    current_branch: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let start_line = page * 5 + 1;
+
+    let output =
+        run_git_checked_with_cancel(repo_root, &["branch", "--sort=-committerdate"], cancel)?;
+
+    let lines: Vec<&str> = output.lines().collect();
+
+    for line in lines.iter().skip(start_line - 1).take(5) {
+        // Remove the "* " or "  " prefix and clean up the branch name
+        let branch_name = line
+            .trim_start_matches("* ")
+            .trim_start_matches("  ")
+            .trim();
+        if !branch_name.is_empty() && branch_name != current_branch {
+            branches.push(branch_name.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn render_target_branch_selection_ui(
+    branches: &[String],
+    selected: usize,
+    current_branch: &str,
+    current_target: &str,
+) -> Result<()> {
+    let mut stdout = io::stdout();
+
+    execute!(stdout, Clear(ClearType::All))
+        .context("failed to clear screen for target branch selection")?;
+
+    queue!(
+        stdout,
+        MoveToColumn(0),
+        Print("\r\n"),
+        Print(format!(
+            "{}Select new target branch for merging {}{}{}\r\n\r\n",
+            ANSI_CYAN, current_branch, ANSI_RESET, ""
+        )),
+        Print(format!(
+            "Current target: {}{}{}\r\n\r\n",
+            ANSI_YELLOW, current_target, ANSI_RESET
+        )),
+        Print("Available targets:\r\n\r\n")
+    )
+    .context("failed to queue target selection header")?;
+
+    for (i, branch) in branches.iter().enumerate() {
+        let display_line = if i == selected {
+            format!("{}> {}{}{}", ANSI_YELLOW, branch, ANSI_RESET, "")
+        } else {
+            format!("  {}", branch)
+        };
+
+        queue!(stdout, MoveToColumn(0), Print(display_line), Print("\r\n"))
+            .context("failed to queue target branch option")?;
+    }
+
+    queue!(
+        stdout,
+        Print("\r\n"),
+        Print("Use ↑/↓ to navigate, Enter to select, SPACE for more, Esc or Ctrl+C to cancel\r\n")
+    )
+    .context("failed to queue target selection footer")?;
+
+    stdout
+        .flush()
+        .context("failed to flush target branch selection")?;
+    Ok(())
+}
+
+fn confirm_target_selection(current_branch: &str, new_target: &str) -> Result<bool> {
+    let mut selected = 0; // 0 = Yes, 1 = No
+
+    let raw_mode = TerminalRawModeGuard::enter()?;
+
+    loop {
+        render_target_confirmation_dialog(current_branch, new_target, selected)?;
+
+        let Event::Key(key) = event::read().context("failed to read target confirmation input")?
+        else {
+            continue;
+        };
+
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Up if selected > 0 => {
+                selected = selected.saturating_sub(1);
+            }
+            KeyCode::Down if selected < 1 => {
+                selected += 1;
+            }
+            KeyCode::Enter => {
+                drop(raw_mode);
+                return Ok(selected == 0);
+            }
+            KeyCode::Esc => {
+                drop(raw_mode);
+                return Ok(false);
+            }
+            KeyCode::Char('c')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                drop(raw_mode);
+                return Ok(false);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn render_target_confirmation_dialog(
+    current_branch: &str,
+    new_target: &str,
+    selected: usize,
+) -> Result<()> {
+    let mut stdout = io::stdout();
+
+    execute!(stdout, Clear(ClearType::All))
+        .context("failed to clear screen for target confirmation")?;
+
+    queue!(
+        stdout,
+        MoveToColumn(0),
+        Print("\r\n"),
+        Print(format!(
+            "You selected {}{}{}.\r\n\r\n",
+            ANSI_YELLOW, new_target, ANSI_RESET
+        )),
+        Print(format!(
+            "It means {}{}{} will be merged into {}{}{}.\r\n\r\n",
+            ANSI_YELLOW, current_branch, ANSI_RESET, ANSI_YELLOW, new_target, ANSI_RESET
+        )),
+        Print(format!(
+            "{}Shall we continue?{}\r\n\r\n",
+            ANSI_CYAN, ANSI_RESET
+        ))
+    )
+    .context("failed to queue target confirmation header")?;
+
+    let options = ["Yes.", "No, cancel."];
+
+    for (i, option) in options.iter().enumerate() {
+        let display_line = if i == selected {
+            format!("{}> {}{}{}", ANSI_YELLOW, option, ANSI_RESET, "")
+        } else {
+            format!("  {}", option)
+        };
+
+        queue!(stdout, MoveToColumn(0), Print(display_line), Print("\r\n"))
+            .context("failed to queue target confirmation option")?;
+    }
+
+    stdout
+        .flush()
+        .context("failed to flush target confirmation")?;
+    Ok(())
+}
+
+const ANSI_CYAN: &str = "\x1b[36m";
 
 #[cfg(test)]
 mod tests {
