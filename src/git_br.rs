@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit License
 //
 // For details, see the LICENSE file in the repository root.
 
