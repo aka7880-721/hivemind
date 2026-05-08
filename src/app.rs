@@ -1629,17 +1629,32 @@ impl App {
         if self.commit_rename_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
-                        && let Err(error) = self.handle_hit_action(action)
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
                     {
-                        self.status = StatusMessage::error(error.to_string());
+                        let maybe_click_target = self.text_input_click_target(&action);
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                        if maybe_click_target.is_some() {
+                            self.set_text_input_cursor_from_mouse(rect, mouse.column);
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
+                        && let Some(last_target) = self.last_text_input_click_target
+                        && last_target.same_field_action(&action)
+                    {
+                        self.update_text_input_drag_selection(rect, mouse.column);
                     }
                     return;
                 }
                 MouseEventKind::ScrollUp
                 | MouseEventKind::ScrollDown
                 | MouseEventKind::Down(MouseButton::Right)
-                | MouseEventKind::Drag(MouseButton::Left)
                 | MouseEventKind::Up(MouseButton::Left) => return,
                 _ => return,
             }
