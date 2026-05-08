@@ -1355,6 +1355,18 @@ impl App {
             return Ok(());
         }
 
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+        {
+            let selected_text = self
+                .active_text_input_mut()
+                .and_then(|input| input.selected_text().map(str::to_string));
+            if let Some(text) = selected_text {
+                self.copy_text_to_clipboard(&text);
+                return Ok(());
+            }
+        }
+
         match key.code {
             KeyCode::Esc => {
                 self.commit_rename_dialog = None;
@@ -1633,11 +1645,37 @@ impl App {
                         self.resolve_hit_target(mouse.column, mouse.row, false)
                     {
                         let maybe_click_target = self.text_input_click_target(&action);
+                        let mut select_all = false;
+                        if let Some(target) = maybe_click_target {
+                            let now = Instant::now();
+                            if self.last_text_input_click_target == Some(target)
+                                && self
+                                    .last_text_input_click_at
+                                    .map(|previous| {
+                                        now.duration_since(previous)
+                                            <= Duration::from_millis(400)
+                                    })
+                                    .unwrap_or(false)
+                            {
+                                select_all = true;
+                            }
+                            self.last_text_input_click_target = Some(target);
+                            self.last_text_input_click_at = Some(now);
+                        } else {
+                            self.last_text_input_click_target = None;
+                            self.last_text_input_click_at = None;
+                        }
                         if let Err(error) = self.handle_hit_action(action) {
                             self.status = StatusMessage::error(error.to_string());
                         }
                         if maybe_click_target.is_some() {
-                            self.set_text_input_cursor_from_mouse(rect, mouse.column);
+                            if select_all {
+                                if let Some(input) = self.active_text_input_mut() {
+                                    input.select_all();
+                                }
+                            } else {
+                                self.set_text_input_cursor_from_mouse(rect, mouse.column);
+                            }
                         }
                     }
                     return;
@@ -1652,9 +1690,30 @@ impl App {
                     }
                     return;
                 }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    let selected_text = self
+                        .active_text_input_mut()
+                        .and_then(|input| input.selected_text().map(str::to_string));
+                    if let Some(selection) = selected_text {
+                        self.copy_text_to_clipboard(&selection);
+                        return;
+                    }
+                    let action = self.resolve_hit_action(mouse.column, mouse.row, true);
+                    if action.is_none() && self.active_text_input_mut().is_some() {
+                        self.paste_from_clipboard();
+                        return;
+                    }
+                    if let Some(action) = action {
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    } else {
+                        self.paste_from_clipboard();
+                    }
+                    return;
+                }
                 MouseEventKind::ScrollUp
                 | MouseEventKind::ScrollDown
-                | MouseEventKind::Down(MouseButton::Right)
                 | MouseEventKind::Up(MouseButton::Left) => return,
                 _ => return,
             }
@@ -2049,6 +2108,12 @@ impl App {
             return;
         }
 
+        if let Some(dialog) = &mut self.commit_rename_dialog {
+            dialog.message_input.insert_str(&text);
+            self.status = StatusMessage::info("Pasted into the commit message.");
+            return;
+        }
+
         let sanitized = sanitize_pasted_text(&text);
         if self.insert_text(&sanitized) {
             self.status = StatusMessage::info("Pasted into the active field.");
@@ -2125,6 +2190,11 @@ impl App {
         }
 
         if self.screen == Screen::Wizard && self.wizard.insert_text(text) {
+            return true;
+        }
+
+        if let Some(dialog) = &mut self.commit_rename_dialog {
+            dialog.message_input.insert_str(text);
             return true;
         }
 
