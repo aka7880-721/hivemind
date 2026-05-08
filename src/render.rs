@@ -1507,7 +1507,7 @@ impl App {
             .title(" value ")
             .border_style(Style::default().fg(Color::Cyan));
         frame.render_widget(
-            Paragraph::new(dialog.message_input.display_value(true))
+            Paragraph::new(dialog.message_input.display_line(true))
                 .block(input_block)
                 .style(Style::default().fg(Color::White)),
             input_row[1],
