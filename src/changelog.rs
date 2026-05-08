@@ -12,8 +12,7 @@ use std::{
 use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 
-const FOOTER: &str =
-    "\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
+const FOOTER: &str = "\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
 const TEMP_CHANGELOG_FILE: &str = "changelog_temp.md";
 const HISTORY_DIR_NAME: &str = ".changelogs";
 const HISTORY_SUMMARY_FILE: &str = "README.md";
@@ -831,7 +830,10 @@ fn split_prefix_and_message(input: &str) -> (&str, &str) {
     (input.trim(), input.trim())
 }
 
-fn parse_prefix(prefix: &str, has_colon_after_paren: bool) -> (Option<Category>, Option<String>, Option<&'static str>) {
+fn parse_prefix(
+    prefix: &str,
+    has_colon_after_paren: bool,
+) -> (Option<Category>, Option<String>, Option<&'static str>) {
     let trimmed = prefix.trim();
     if trimmed.is_empty() {
         return (None, None, None);
@@ -847,7 +849,10 @@ fn parse_prefix(prefix: &str, has_colon_after_paren: bool) -> (Option<Category>,
     (category, specific, None)
 }
 
-fn parse_prefix_parts(prefix: &str, has_colon_after_paren: bool) -> (Option<Category>, Option<String>) {
+fn parse_prefix_parts(
+    prefix: &str,
+    has_colon_after_paren: bool,
+) -> (Option<Category>, Option<String>) {
     let trimmed = prefix.trim();
     if trimmed.is_empty() {
         return (None, None);

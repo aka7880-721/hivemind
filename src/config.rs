@@ -287,7 +287,11 @@ impl ProjectConfig {
                 .branches
                 .get(scope_index)
                 .map(|branch| branch.changelog_hide_pr_messages)
-                .or_else(|| self.branches.first().map(|branch| branch.changelog_hide_pr_messages))
+                .or_else(|| {
+                    self.branches
+                        .first()
+                        .map(|branch| branch.changelog_hide_pr_messages)
+                })
                 .unwrap_or(false),
         }
     }
@@ -315,7 +319,11 @@ impl ProjectConfig {
                 .branches
                 .get(scope_index)
                 .map(|branch| branch.changelog_hide_bump_messages)
-                .or_else(|| self.branches.first().map(|branch| branch.changelog_hide_bump_messages))
+                .or_else(|| {
+                    self.branches
+                        .first()
+                        .map(|branch| branch.changelog_hide_bump_messages)
+                })
                 .unwrap_or(false),
         }
     }
