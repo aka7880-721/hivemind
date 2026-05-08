@@ -50,7 +50,7 @@ use crate::{
     },
     git_br::{
         BranchNameOption, fixed_branch_name_option_with_value, is_release_line_branch,
-        suggest_branch_name_options,
+        run_branch_cd, suggest_branch_name_options,
     },
     git_br_end::run_branch_done,
     git_mg::{run_merge, run_merge_for_pull_request},
@@ -207,6 +207,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command, action] if is_branch_command(command) && is_branch_done_action(action) => {
             run_branch_done_command()?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_branch_command(command) && is_branch_cd_action(action) => {
+            run_branch_cd_command()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_pr_command(command) => {
@@ -616,6 +620,10 @@ fn is_branch_done_action(value: &str) -> bool {
     matches!(value, "done" | "end" | "close" | "merge" | "mrg" | "mg")
 }
 
+fn is_branch_cd_action(value: &str) -> bool {
+    matches!(value, "cd")
+}
+
 fn is_pr_command(value: &str) -> bool {
     matches!(value, "pr")
 }
@@ -724,6 +732,7 @@ fn print_usage() {
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
     println!("  cg branch done             Create PR, merge it, switch to target, and sync");
+    println!("  cg branch cd               Interactively choose and switch to a recent branch");
     println!(
         "  cg pr                      Generate a pull request title/body for the current branch"
     );
@@ -865,6 +874,13 @@ fn run_branch_done_command() -> Result<()> {
             context.main_branch_name.as_deref(),
             cancel,
         )
+    })
+}
+
+fn run_branch_cd_command() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    with_cli_git_cancellation(|cancel| {
+        run_branch_cd(&context.repo_root, cancel)
     })
 }
 
@@ -3821,6 +3837,13 @@ mod tests {
         assert!(is_branch_done_action("mrg"));
         assert!(is_branch_done_action("mg"));
         assert!(!is_branch_done_action("finish"));
+    }
+
+    #[test]
+    fn is_branch_cd_action_accepts_requested_synonyms() {
+        assert!(is_branch_cd_action("cd"));
+        assert!(!is_branch_cd_action("change"));
+        assert!(!is_branch_cd_action("switch"));
     }
 
     #[test]
