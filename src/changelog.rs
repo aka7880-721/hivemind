@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 
 const FOOTER: &str =
-    "<br>\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
+    "\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
 const TEMP_CHANGELOG_FILE: &str = "changelog_temp.md";
 const HISTORY_DIR_NAME: &str = ".changelogs";
 const HISTORY_SUMMARY_FILE: &str = "README.md";
@@ -953,13 +953,14 @@ fn split_subject_clauses(subject: &str) -> Vec<String> {
     clauses
 }
 
-fn looks_like_prefixed_clause(segment: &str) -> bool {
+pub(crate) fn looks_like_prefixed_clause(segment: &str) -> bool {
     let trimmed = segment.trim_start();
     let Some((prefix, _)) = trimmed.split_once(':') else {
         return false;
     };
-    let prefix = prefix.trim();
-    if prefix.is_empty() {
+
+    // Check if the original clause has a colon (indicating it's a prefixed clause)
+    if !segment.contains(':') {
         return false;
     }
 
@@ -1346,6 +1347,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn looks_like_prefixed_clause_recognizes_prefixed_commits() {
+        assert!(looks_like_prefixed_clause("feat: add feature"));
+        assert!(looks_like_prefixed_clause("fix(scope): fix bug"));
+        assert!(looks_like_prefixed_clause("feat → Specific: add feature"));
+        assert!(!looks_like_prefixed_clause("just a regular commit"));
+        assert!(!looks_like_prefixed_clause("Merge pull request #123"));
+    }
 
     #[test]
     fn parses_alias_and_specific_group_with_arrow() {
