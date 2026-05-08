@@ -2306,6 +2306,7 @@ impl App {
                 self.commit_rename_dialog = None;
                 self.status = StatusMessage::info("Commit rename cancelled.");
             }
+            HitAction::CommitRenameMessageField => {}
             HitAction::OpenTagDialog => return self.open_tag_dialog(),
             HitAction::OpenTagAnnotation => return self.open_tag_annotation_dialog(),
             HitAction::CycleTagScope(delta) => self.rotate_tag_scope(delta),
@@ -2913,6 +2914,7 @@ impl App {
                         HitAction::ToggleCommitRenameForcePush
                             | HitAction::SaveCommitRename
                             | HitAction::CancelCommitRename
+                            | HitAction::CommitRenameMessageField
                     )
                 {
                     return None;
@@ -2974,6 +2976,7 @@ impl App {
             HitAction::SelectProjectSettingsField(field) => {
                 TextInputClickTarget::ProjectSettings(*field)
             }
+            HitAction::CommitRenameMessageField => TextInputClickTarget::CommitRenameMessage,
             _ => return None,
         })
     }
@@ -2999,6 +3002,10 @@ impl App {
 
         if self.screen == Screen::Dashboard && self.overview_tab == OverviewTab::ProjectSettings {
             return self.project_settings_state.active_input_mut();
+        }
+
+        if let Some(dialog) = &mut self.commit_rename_dialog {
+            return Some(&mut dialog.message_input);
         }
 
         None
@@ -4797,6 +4804,7 @@ enum TextInputClickTarget {
     Wizard(WizardField),
     ProjectEdit(ProjectEditFocus),
     ProjectSettings(ProjectSettingsFocus),
+    CommitRenameMessage,
 }
 
 impl TextInputClickTarget {
@@ -4808,6 +4816,9 @@ impl TextInputClickTarget {
                 &TextInputClickTarget::ProjectSettings(a),
                 &HitAction::SelectProjectSettingsField(b),
             ) => a == b,
+            (&TextInputClickTarget::CommitRenameMessage, &HitAction::CommitRenameMessageField) => {
+                true
+            }
             _ => false,
         }
     }
@@ -4888,6 +4899,7 @@ pub(crate) enum HitAction {
     ToggleCommitRenameForcePush,
     SaveCommitRename,
     CancelCommitRename,
+    CommitRenameMessageField,
     OpenTagDialog,
     OpenTagAnnotation,
     CycleTagScope(isize),
