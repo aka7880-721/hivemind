@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 
 const FOOTER: &str =
-    "<br>\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
+    "\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
 const TEMP_CHANGELOG_FILE: &str = "changelog_temp.md";
 const HISTORY_DIR_NAME: &str = ".changelogs";
 const HISTORY_SUMMARY_FILE: &str = "README.md";
@@ -158,7 +158,9 @@ impl ParsedCommit {
         }
 
         let (prefix, message) = split_prefix_and_message(remainder);
-        let (category, specific, specific_heading) = parse_prefix(prefix);
+        // Check if there's a ): pattern in the raw_subject - this indicates valid (Specific) scope
+        let has_colon_after_paren = raw_subject.contains("):");
+        let (category, specific, specific_heading) = parse_prefix(prefix, has_colon_after_paren);
         let message_items = parse_message_items(message);
 
         Self {
@@ -214,6 +216,8 @@ pub(crate) struct ChangelogDocument {
     previous_public_release: Option<String>,
     context_lines: Vec<String>,
     release_message: Option<String>,
+    hide_pr_messages: bool,
+    hide_bump_messages: bool,
     commits: Vec<ParsedCommit>,
 }
 
@@ -225,6 +229,8 @@ impl ChangelogDocument {
             previous_public_release: None,
             context_lines: Vec::new(),
             release_message: None,
+            hide_pr_messages: false,
+            hide_bump_messages: false,
             commits,
         }
     }
@@ -241,6 +247,22 @@ impl ChangelogDocument {
             self.release_message = Some(message.trim().to_string());
         }
         self
+    }
+
+    pub(crate) fn with_hide_filters(mut self, hide_pr: bool, hide_bump: bool) -> Self {
+        self.hide_pr_messages = hide_pr;
+        self.hide_bump_messages = hide_bump;
+        self
+    }
+
+    fn should_include_commit(&self, commit: &ParsedCommit) -> bool {
+        if self.hide_pr_messages && commit.raw_subject.contains("Merge pull request") {
+            return false;
+        }
+        if self.hide_bump_messages && commit.raw_subject.contains("CG app version bump") {
+            return false;
+        }
+        true
     }
 
     pub(crate) fn with_previous_public_release(
@@ -283,6 +305,7 @@ impl ChangelogDocument {
             .commits
             .iter()
             .filter(|commit| !commit.is_ignored)
+            .filter(|commit| self.should_include_commit(commit))
             .collect::<Vec<_>>();
 
         render_breaking_section(&mut lines, &visible_commits);
@@ -313,6 +336,10 @@ impl ChangelogDocument {
         if lines.last().is_some_and(|line| !line.is_empty()) {
             lines.push(String::new());
         }
+        // Remove trailing --- separator before footer to avoid display issues
+        if lines.last().is_some_and(|line| line == "---") {
+            lines.pop();
+        }
         lines.push(FOOTER.to_string());
 
         RenderedChangelog::new(lines.join("\n"))
@@ -341,8 +368,11 @@ pub(crate) fn rls_changelog_gen(
     current_tag: impl Into<String>,
     lines: &[String],
     last_public: Option<&str>,
+    hide_pr_messages: bool,
+    hide_bump_messages: bool,
 ) -> RenderedChangelog {
-    let mut document = build_document_from_git_log(current_tag, lines);
+    let mut document = build_document_from_git_log(current_tag, lines)
+        .with_hide_filters(hide_pr_messages, hide_bump_messages);
     if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
         document = document.with_previous_public_release(last_public);
     }
@@ -801,23 +831,23 @@ fn split_prefix_and_message(input: &str) -> (&str, &str) {
     (input.trim(), input.trim())
 }
 
-fn parse_prefix(prefix: &str) -> (Option<Category>, Option<String>, Option<&'static str>) {
+fn parse_prefix(prefix: &str, has_colon_after_paren: bool) -> (Option<Category>, Option<String>, Option<&'static str>) {
     let trimmed = prefix.trim();
     if trimmed.is_empty() {
         return (None, None, None);
     }
 
     if let Some(dotted) = trimmed.strip_prefix('.') {
-        let (category, specific) = parse_prefix_parts(dotted);
+        let (category, specific) = parse_prefix_parts(dotted, has_colon_after_paren);
         let specific_heading = category.and_then(singular_specific_heading);
         return (category, specific, specific_heading);
     }
 
-    let (category, specific) = parse_prefix_parts(trimmed);
+    let (category, specific) = parse_prefix_parts(trimmed, has_colon_after_paren);
     (category, specific, None)
 }
 
-fn parse_prefix_parts(prefix: &str) -> (Option<Category>, Option<String>) {
+fn parse_prefix_parts(prefix: &str, has_colon_after_paren: bool) -> (Option<Category>, Option<String>) {
     let trimmed = prefix.trim();
     if trimmed.is_empty() {
         return (None, None);
@@ -830,19 +860,19 @@ fn parse_prefix_parts(prefix: &str) -> (Option<Category>, Option<String>) {
         );
     }
 
-    if trimmed.starts_with('(') && trimmed.ends_with(')') {
-        return (None, normalize_specific(&trimmed[1..trimmed.len() - 1]));
-    }
+    if has_colon_after_paren {
+        if trimmed.starts_with('(') && trimmed.ends_with(')') {
+            return (None, normalize_specific(&trimmed[1..trimmed.len() - 1]));
+        }
 
-    if let Some(open_index) = trimmed.find('(')
-        && trimmed.ends_with(')')
-    {
-        let category_part = &trimmed[..open_index];
-        let specific_part = &trimmed[open_index + 1..trimmed.len() - 1];
-        return (
-            Category::from_alias(category_part),
-            normalize_specific(specific_part),
-        );
+        if let Some((category_part, specific_part)) = trimmed.split_once('(') {
+            if specific_part.ends_with(')') {
+                return (
+                    Category::from_alias(category_part),
+                    normalize_specific(&specific_part[..specific_part.len() - 1]),
+                );
+            }
+        }
     }
 
     (Category::from_alias(trimmed), None)
@@ -923,13 +953,14 @@ fn split_subject_clauses(subject: &str) -> Vec<String> {
     clauses
 }
 
-fn looks_like_prefixed_clause(segment: &str) -> bool {
+pub(crate) fn looks_like_prefixed_clause(segment: &str) -> bool {
     let trimmed = segment.trim_start();
     let Some((prefix, _)) = trimmed.split_once(':') else {
         return false;
     };
-    let prefix = prefix.trim();
-    if prefix.is_empty() {
+
+    // Check if the original clause has a colon (indicating it's a prefixed clause)
+    if !segment.contains(':') {
         return false;
     }
 
@@ -952,7 +983,8 @@ fn looks_like_prefixed_clause(segment: &str) -> bool {
         return false;
     }
 
-    let (category, specific, specific_heading) = parse_prefix(remainder);
+    // Since we split at ':', we know there's a colon after the prefix
+    let (category, specific, specific_heading) = parse_prefix(remainder, true);
     category.is_some() || specific.is_some() || specific_heading.is_some()
 }
 
@@ -1317,6 +1349,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn looks_like_prefixed_clause_recognizes_prefixed_commits() {
+        assert!(looks_like_prefixed_clause("feat: add feature"));
+        assert!(looks_like_prefixed_clause("fix(scope): fix bug"));
+        assert!(looks_like_prefixed_clause("feat → Specific: add feature"));
+        assert!(!looks_like_prefixed_clause("just a regular commit"));
+        assert!(!looks_like_prefixed_clause("Merge pull request #123"));
+    }
+
+    #[test]
     fn parses_alias_and_specific_group_with_arrow() {
         let parsed = ParsedCommit::parse("feat → Phase 1: add parsing pipeline", "abc1234");
 
@@ -1618,6 +1659,13 @@ mod tests {
                 .markdown
                 .contains("Heads-up: this release updates the public dashboard.")
         );
+        // Debug: print the markdown to see what's being generated
+        eprintln!("DEBUG MARKDOWN:\n{}", changelog.markdown);
+        assert!(
+            changelog.markdown.contains("made with [ComfyGit]"),
+            "Footer should contain 'made with [ComfyGit]', but got:\n{}",
+            changelog.markdown
+        );
         assert!(
             changelog
                 .markdown
@@ -1631,6 +1679,8 @@ mod tests {
             "v0.7.3",
             &["abc1234 fix: tighten ReleaseNOW history selection".to_string()],
             Some("v0.7.1"),
+            false,
+            false,
         );
 
         assert!(changelog.markdown.contains(

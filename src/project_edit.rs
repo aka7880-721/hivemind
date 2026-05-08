@@ -800,6 +800,8 @@ impl ProjectEditDialog {
             } else {
                 self.changelog_path.value.trim().to_string()
             },
+            hide_pr_messages: false,
+            hide_bump_messages: false,
         }
     }
 
@@ -1150,6 +1152,8 @@ mod tests {
                 changelog: ChangelogSettings {
                     enabled: true,
                     file_path: "CHANGELOG.md".to_string(),
+                    hide_pr_messages: false,
+                    hide_bump_messages: false,
                 },
             },
         )
@@ -1185,6 +1189,8 @@ mod tests {
                     repo: None,
                     changelog_enabled: true,
                     changelog_path: Some("CHANGELOG.md".to_string()),
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1202,6 +1208,8 @@ mod tests {
                 changelog: ChangelogSettings {
                     enabled: true,
                     file_path: "CHANGELOG.md".to_string(),
+                    hide_pr_messages: false,
+                    hide_bump_messages: false,
                 },
             },
         )

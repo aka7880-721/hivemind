@@ -708,6 +708,8 @@ impl ProjectWizard {
             } else {
                 self.changelog_path.value.trim().to_string()
             },
+            hide_pr_messages: false,
+            hide_bump_messages: false,
         }
     }
 
