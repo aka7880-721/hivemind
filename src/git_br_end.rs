@@ -60,6 +60,22 @@ pub(crate) fn run_branch_done(
                     continue;
                 }
 
+                // Check for "ahead" errors (branch is ahead of remote)
+                if let Some(ahead_branch) = is_ahead_error(&error) {
+                    if !prompt_publish_target_branch(&ahead_branch)? {
+                        bail!("Cancelled by user")
+                    }
+
+                    let _ = publish_branch_with_upstream(
+                        repo_root,
+                        &ahead_branch,
+                        None,
+                        cancel.clone(),
+                    )?;
+                    // Try again after pushing
+                    continue;
+                }
+
                 // Check for unpublished branch error
                 let Some(unpublished_branch) = unpublished_branch_name_from_error(&error) else {
                     return Err(error);
@@ -112,6 +128,29 @@ fn unpublished_branch_name_from_error(error: &anyhow::Error) -> Option<String> {
 fn is_uncommitted_changes_error(error: &anyhow::Error) -> bool {
     let message = error.to_string();
     message.contains("the git working tree has uncommitted changes")
+}
+
+fn is_ahead_error(error: &anyhow::Error) -> Option<String> {
+    let message = error.to_string();
+
+    // Look for pattern: "current branch 'branch-name' is ahead of 'origin/branch-name' by X commit(s)"
+    for branch_prefix in ["current branch '", "target branch '"] {
+        let ahead_pattern = format!("{} is ahead of '", branch_prefix);
+        if let Some(start) = message.find(&ahead_pattern) {
+            let start = start + branch_prefix.len();
+            if let Some(end) = message[start..].find("' is ahead of '") {
+                let branch_name = &message[start..start + end];
+
+                // Extract the remote branch name
+                let remote_start = start + end + "' is ahead of '".len();
+                if let Some(_remote_end) = message[remote_start..].find("'") {
+                    return Some(branch_name.to_string());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -176,13 +215,26 @@ fn handle_uncommitted_changes(repo_root: &str, cancel: Option<GitCancellation>) 
 
     match action {
         UncommittedChangesAction::Commit => {
-            // Add all changes and commit with a default message
+            // Add all changes and ask for commit message
             run_git_checked_with_cancel(repo_root, &["add", "."], cancel.clone())?;
-            run_git_checked_with_cancel(
-                repo_root,
-                &["commit", "-m", "Auto-commit before branch merge"],
-                cancel,
-            )?;
+
+            // Ask for commit message
+            print!("Enter commit message: ");
+            io::stdout()
+                .flush()
+                .context("failed to flush commit message prompt")?;
+
+            let mut commit_message = String::new();
+            io::stdin()
+                .read_line(&mut commit_message)
+                .context("failed to read commit message")?;
+
+            let commit_message = commit_message.trim();
+            if commit_message.is_empty() {
+                bail!("Commit message cannot be empty");
+            }
+
+            run_git_checked_with_cancel(repo_root, &["commit", "-m", commit_message], cancel)?;
         }
         UncommittedChangesAction::Stash => {
             // Stash changes with a default message
