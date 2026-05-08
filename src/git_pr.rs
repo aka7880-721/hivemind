@@ -277,6 +277,15 @@ fn render_preview_screen(
         MoveToColumn(0),
         Print("\r\n"),
         Print(format!(
+            "{}Source branch:{} {} ----> {}Target branch:{} {}\r\n\r\n",
+            ANSI_YELLOW,
+            ANSI_RESET,
+            current_branch,
+            ANSI_YELLOW,
+            ANSI_RESET,
+            target_branch
+        )),
+        Print(format!(
             "{}Preview ends in {} seconds. Press Enter to create now, E to edit, or Ctrl+C to abort.{}\r\n",
             ANSI_YELLOW, PR_PREVIEW_SECONDS, ANSI_RESET
         ))

@@ -81,7 +81,7 @@ pub(crate) fn ensure_local_branch_published_and_in_sync_with_cancel(
     match (ahead_count, behind_count) {
         (0, 0) => Ok(upstream_ref),
         (ahead, 0) => bail!(
-            "{} '{}' is ahead of '{}' by {} commit(s); push before running {}",
+            "{} '{}' is ahead of '{}' by {} commit(s); push before running `{}` or `cg br end`",
             branch_role,
             branch_name,
             upstream_ref,
