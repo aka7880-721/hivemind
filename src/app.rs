@@ -3384,8 +3384,9 @@ impl App {
             if delta.is_negative() {
                 dialog.scroll = dialog.scroll.saturating_sub(delta.unsigned_abs());
             } else {
-                dialog.scroll = dialog.scroll.saturating_add(delta as u16).min(max_scroll);
+                dialog.scroll = dialog.scroll.saturating_add(delta as u16);
             }
+            dialog.scroll = dialog.scroll.min(max_scroll);
         }
     }
 
