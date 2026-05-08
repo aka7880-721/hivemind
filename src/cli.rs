@@ -879,9 +879,7 @@ fn run_branch_done_command() -> Result<()> {
 
 fn run_branch_cd_command() -> Result<()> {
     let context = load_active_branch_cli_context()?;
-    with_cli_git_cancellation(|cancel| {
-        run_branch_cd(&context.repo_root, cancel)
-    })
+    with_cli_git_cancellation(|cancel| run_branch_cd(&context.repo_root, cancel))
 }
 
 struct ActiveBranchCliContext {

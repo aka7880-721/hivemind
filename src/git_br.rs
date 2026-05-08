@@ -5,11 +5,10 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use std::{
-    io::{self, Write},
-};
+use std::io::{self, Write};
 
 use anyhow::{Context, Result, bail};
+use chrono::{Datelike, NaiveDate};
 use crossterm::{
     cursor::{MoveTo, MoveToColumn},
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -17,10 +16,12 @@ use crossterm::{
     style::Print,
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
 };
-use chrono::{Datelike, NaiveDate};
 
 use crate::{
-    git::{GitCancellation, is_mainline_branch_name, run_git_checked_with_cancel, switch_to_existing_branch},
+    git::{
+        GitCancellation, is_mainline_branch_name, run_git_checked_with_cancel,
+        switch_to_existing_branch,
+    },
     versioning::{BumpAction, VersionScheme},
 };
 
@@ -676,32 +677,33 @@ pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) ->
     let mut branches = Vec::new();
     let mut page = 0;
     let mut selected = 0;
-    
+
     // Load initial 5 branches
     load_branches(repo_root, &mut branches, page, cancel.clone())?;
-    
+
     if branches.is_empty() {
         println!("No branches found in this repository.");
         return Ok(());
     }
-    
+
     let raw_mode = TerminalRawModeGuard::enter()?;
-    
+
     loop {
         if cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
             bail!("cancelled by user");
         }
-        
+
         render_branch_selection_ui(&branches, selected)?;
-        
-        let Event::Key(key) = event::read().context("failed to read branch selection input")? else {
+
+        let Event::Key(key) = event::read().context("failed to read branch selection input")?
+        else {
             continue;
         };
-        
+
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             continue;
         }
-        
+
         match key.code {
             KeyCode::Up => {
                 if selected > 0 {
@@ -717,12 +719,9 @@ pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) ->
                 drop(raw_mode);
                 let selected_branch = &branches[selected];
                 switch_to_existing_branch(repo_root, selected_branch)?;
-                
+
                 println!();
-                println!(
-                    "switched to branch: \x1b[33m{}\x1b[0m",
-                    selected_branch
-                );
+                println!("switched to branch: \x1b[33m{}\x1b[0m", selected_branch);
                 println!();
                 return Ok(());
             }
@@ -730,7 +729,7 @@ pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) ->
                 page += 1;
                 let start_index = branches.len();
                 load_branches(repo_root, &mut branches, page, cancel.clone())?;
-                
+
                 if branches.len() == start_index {
                     // No new branches loaded, reset page counter
                     page -= 1;
@@ -765,33 +764,33 @@ fn load_branches(
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
     let start_line = page * 5 + 1;
-    
-    let output = run_git_checked_with_cancel(
-        repo_root,
-        &["branch", "--sort=-committerdate"],
-        cancel,
-    )?;
-    
+
+    let output =
+        run_git_checked_with_cancel(repo_root, &["branch", "--sort=-committerdate"], cancel)?;
+
     let lines: Vec<&str> = output.lines().collect();
-    
+
     for line in lines.iter().skip(start_line - 1).take(5) {
         // Remove the "* " or "  " prefix and clean up the branch name
-        let branch_name = line.trim_start_matches("* ").trim_start_matches("  ").trim();
+        let branch_name = line
+            .trim_start_matches("* ")
+            .trim_start_matches("  ")
+            .trim();
         if !branch_name.is_empty() {
             branches.push(branch_name.to_string());
         }
     }
-    
+
     Ok(())
 }
 
 fn render_branch_selection_ui(branches: &[String], selected: usize) -> Result<()> {
     let mut stdout = io::stdout();
     let (terminal_width, _) = size().context("failed to read terminal size")?;
-    
+
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))
         .context("failed to render branch selection UI")?;
-    
+
     // Header
     queue!(
         stdout,
@@ -803,7 +802,7 @@ fn render_branch_selection_ui(branches: &[String], selected: usize) -> Result<()
         Print("What branch would you like to cd into?\r\n\r\n")
     )
     .context("failed to queue branch selection header")?;
-    
+
     // Branch list
     for (i, branch) in branches.iter().enumerate() {
         let prefix = if i == selected {
@@ -811,13 +810,15 @@ fn render_branch_selection_ui(branches: &[String], selected: usize) -> Result<()
         } else {
             format!("  {}.{}", i + 1, branch)
         };
-        
+
         let truncated = truncate_for_terminal(&prefix, terminal_width as usize);
         queue!(stdout, MoveToColumn(0), Print(truncated), Print("\r\n"))
             .context("failed to queue branch selection item")?;
     }
-    
-    stdout.flush().context("failed to flush branch selection UI")?;
+
+    stdout
+        .flush()
+        .context("failed to flush branch selection UI")?;
     Ok(())
 }
 
