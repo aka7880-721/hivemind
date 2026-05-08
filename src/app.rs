@@ -761,9 +761,7 @@ impl App {
 
         if running {
             match key.code {
-                KeyCode::Char('f') | KeyCode::Char('F') => {
-                    self.toggle_release_now_auto_follow()
-                }
+                KeyCode::Char('f') | KeyCode::Char('F') => self.toggle_release_now_auto_follow(),
                 KeyCode::Char('x') | KeyCode::Char('X') => self.request_cancel_release_now(),
                 KeyCode::Up => self.scroll_release_now(-1),
                 KeyCode::Down => self.scroll_release_now(1),
@@ -1652,8 +1650,7 @@ impl App {
                                 && self
                                     .last_text_input_click_at
                                     .map(|previous| {
-                                        now.duration_since(previous)
-                                            <= Duration::from_millis(400)
+                                        now.duration_since(previous) <= Duration::from_millis(400)
                                     })
                                     .unwrap_or(false)
                             {
