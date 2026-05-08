@@ -1211,19 +1211,16 @@ fn prompt_target_branch_change(
     current_target: &str,
     cancel: Option<GitCancellation>,
 ) -> Result<String> {
-    // Get all available branches
+    // Load initial 5 branches
     let mut branches = Vec::new();
-    let output = run_git_checked_with_cancel(
+    let mut page = 0;
+    load_target_branches(
         repo_root,
-        &["branch", "--format=%(refname:short)"],
+        &mut branches,
+        page,
+        current_branch,
         cancel.clone(),
     )?;
-    for line in split_output_lines(&output) {
-        let branch = line.trim();
-        if !branch.is_empty() && branch != current_branch {
-            branches.push(branch.to_string());
-        }
-    }
 
     if branches.is_empty() {
         bail!("No other branches available for target selection");
@@ -1266,6 +1263,25 @@ fn prompt_target_branch_change(
                         break;
                     }
                 }
+                KeyCode::Char(' ') => {
+                    page += 1;
+                    let start_index = branches.len();
+                    load_target_branches(
+                        repo_root,
+                        &mut branches,
+                        page,
+                        current_branch,
+                        cancel.clone(),
+                    )?;
+
+                    if branches.len() == start_index {
+                        // No new branches loaded, reset page counter
+                        page -= 1;
+                    } else {
+                        // Move selection to the first newly loaded branch
+                        selected = start_index;
+                    }
+                }
                 KeyCode::Esc => {
                     drop(raw_mode);
                     bail!("Cancelled by user");
@@ -1282,6 +1298,33 @@ fn prompt_target_branch_change(
             }
         }
     }
+}
+
+fn load_target_branches(
+    repo_root: &str,
+    branches: &mut Vec<String>,
+    page: usize,
+    current_branch: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let start_line = page * 5 + 1;
+
+    let output =
+        run_git_checked_with_cancel(repo_root, &["branch", "--sort=-committerdate"], cancel)?;
+
+    let lines: Vec<&str> = output.lines().collect();
+
+    for line in lines.iter().skip(start_line - 1).take(5) {
+        // Remove the "* " or "  " prefix and clean up the branch name
+        let branch_name = line
+            .trim_start_matches("* ")
+            .trim_start_matches("  ")
+            .trim();
+        if !branch_name.is_empty() && branch_name != current_branch {
+            branches.push(branch_name.to_string());
+        }
+    }
+    Ok(())
 }
 
 fn render_target_branch_selection_ui(
@@ -1325,7 +1368,7 @@ fn render_target_branch_selection_ui(
     queue!(
         stdout,
         Print("\r\n"),
-        Print("Use ↑/↓ to navigate, Enter to select, Esc or Ctrl+C to cancel\r\n")
+        Print("Use ↑/↓ to navigate, Enter to select, SPACE for more, Esc or Ctrl+C to cancel\r\n")
     )
     .context("failed to queue target selection footer")?;
 
