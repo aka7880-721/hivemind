@@ -1361,14 +1361,15 @@ impl App {
                 self.status = StatusMessage::info("Commit rename cancelled.");
             }
             KeyCode::Enter | KeyCode::F(2) => return self.apply_commit_rename(),
-            KeyCode::Tab | KeyCode::Char(' ')
+            KeyCode::Tab => {
                 if self
                     .commit_rename_dialog
                     .as_ref()
                     .map(|dialog| dialog.plan.touches_pushed_history)
-                    .unwrap_or(false) =>
-            {
-                self.toggle_commit_rename_force_push();
+                    .unwrap_or(false)
+                {
+                    self.toggle_commit_rename_force_push();
+                }
             }
             _ => {
                 if let Some(dialog) = &mut self.commit_rename_dialog {
