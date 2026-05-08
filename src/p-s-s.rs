@@ -133,8 +133,7 @@ impl ProjectSettingsState {
         self.alias.set_value(project.alias.clone());
         self.changelog_path
             .set_value(project.changelog_path_for_scope(scope_index).to_string());
-        self.changelog_hide_pr_messages =
-            project.changelog_hide_pr_messages_for_scope(scope_index);
+        self.changelog_hide_pr_messages = project.changelog_hide_pr_messages_for_scope(scope_index);
         self.changelog_hide_bump_messages =
             project.changelog_hide_bump_messages_for_scope(scope_index);
         self.release_now_windows
@@ -1187,7 +1186,11 @@ fn render_dual_checkbox_row(
         } else {
             Style::default().fg(Color::White)
         })
-        .checkbox_style(Style::default().fg(if left_enabled { Color::Green } else { Color::Red }))
+        .checkbox_style(Style::default().fg(if left_enabled {
+            Color::Green
+        } else {
+            Color::Red
+        }))
         .label_style(if left_focused {
             Style::default().fg(Color::Cyan)
         } else {
@@ -1208,7 +1211,11 @@ fn render_dual_checkbox_row(
         } else {
             Style::default().fg(Color::White)
         })
-        .checkbox_style(Style::default().fg(if right_enabled { Color::Green } else { Color::Red }))
+        .checkbox_style(Style::default().fg(if right_enabled {
+            Color::Green
+        } else {
+            Color::Red
+        }))
         .label_style(if right_focused {
             Style::default().fg(Color::Cyan)
         } else {
