@@ -135,17 +135,11 @@ fn is_ahead_error(error: &anyhow::Error) -> Option<String> {
 
     // Look for pattern: "current branch 'branch-name' is ahead of 'origin/branch-name' by X commit(s)"
     for branch_prefix in ["current branch '", "target branch '"] {
-        let ahead_pattern = format!("{} is ahead of '", branch_prefix);
-        if let Some(start) = message.find(&ahead_pattern) {
+        if let Some(start) = message.find(branch_prefix) {
             let start = start + branch_prefix.len();
             if let Some(end) = message[start..].find("' is ahead of '") {
                 let branch_name = &message[start..start + end];
-
-                // Extract the remote branch name
-                let remote_start = start + end + "' is ahead of '".len();
-                if let Some(_remote_end) = message[remote_start..].find("'") {
-                    return Some(branch_name.to_string());
-                }
+                return Some(branch_name.to_string());
             }
         }
     }
