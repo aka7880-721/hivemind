@@ -761,7 +761,7 @@ impl App {
 
         if running {
             match key.code {
-                KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::End => {
+                KeyCode::Char('f') | KeyCode::Char('F') => {
                     self.toggle_release_now_auto_follow()
                 }
                 KeyCode::Char('x') | KeyCode::Char('X') => self.request_cancel_release_now(),
@@ -769,6 +769,8 @@ impl App {
                 KeyCode::Down => self.scroll_release_now(1),
                 KeyCode::PageUp => self.scroll_release_now(-6),
                 KeyCode::PageDown => self.scroll_release_now(6),
+                KeyCode::Home => self.scroll_release_now_to_start(),
+                KeyCode::End => self.scroll_release_now_to_end(),
                 KeyCode::Esc => {
                     self.status = StatusMessage::warning(
                         "ReleaseNOW is still running. Wait for it to finish before closing the dialog.",
@@ -786,6 +788,8 @@ impl App {
                 KeyCode::Down => self.scroll_release_now(1),
                 KeyCode::PageUp => self.scroll_release_now(-6),
                 KeyCode::PageDown => self.scroll_release_now(6),
+                KeyCode::Home => self.scroll_release_now_to_start(),
+                KeyCode::End => self.scroll_release_now_to_end(),
                 _ => {}
             }
             return Ok(());
@@ -814,6 +818,8 @@ impl App {
             KeyCode::Down => self.scroll_release_now(1),
             KeyCode::PageUp => self.scroll_release_now(-6),
             KeyCode::PageDown => self.scroll_release_now(6),
+            KeyCode::Home => self.scroll_release_now_to_start(),
+            KeyCode::End => self.scroll_release_now_to_end(),
             _ => {}
         }
         Ok(())
@@ -1220,6 +1226,8 @@ impl App {
             }
             KeyCode::PageUp => self.scroll_changelog_preview(-8),
             KeyCode::PageDown => self.scroll_changelog_preview(8),
+            KeyCode::Home => self.scroll_changelog_preview_to_start(),
+            KeyCode::End => self.scroll_changelog_preview_to_end(),
             _ => {
                 if let Some(dialog) = &mut self.changelog_preview_dialog {
                     if dialog.workflow.is_none() {
@@ -2486,6 +2494,18 @@ impl App {
         }
     }
 
+    fn scroll_release_now_to_start(&mut self) {
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.scroll_to_start();
+        }
+    }
+
+    fn scroll_release_now_to_end(&mut self) {
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.scroll_to_tail();
+        }
+    }
+
     fn begin_release_now_log_selection(&mut self, mouse_row: u16) -> bool {
         let Some(viewport) = self.release_now_log_viewport else {
             return false;
@@ -3387,6 +3407,22 @@ impl App {
                 dialog.scroll = dialog.scroll.saturating_add(delta as u16);
             }
             dialog.scroll = dialog.scroll.min(max_scroll);
+        }
+    }
+
+    fn scroll_changelog_preview_to_start(&mut self) {
+        if let Some(dialog) = &mut self.changelog_preview_dialog {
+            dialog.scroll = 0;
+        }
+    }
+
+    fn scroll_changelog_preview_to_end(&mut self) {
+        if let Some(dialog) = &mut self.changelog_preview_dialog {
+            let max_scroll = dialog
+                .preview_line_count()
+                .saturating_sub(1)
+                .min(u16::MAX as usize) as u16;
+            dialog.scroll = max_scroll;
         }
     }
 
