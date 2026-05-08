@@ -706,15 +706,12 @@ pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) ->
 
         match key.code {
             KeyCode::Up => {
-                if selected > 0 {
-                    selected -= 1;
-                }
+                selected = selected.saturating_sub(1);
             }
-            KeyCode::Down => {
-                if selected < branches.len().saturating_sub(1) {
+            KeyCode::Down
+                if selected < branches.len().saturating_sub(1) => {
                     selected += 1;
                 }
-            }
             KeyCode::Enter => {
                 drop(raw_mode);
                 let selected_branch = &branches[selected];
