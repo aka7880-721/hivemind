@@ -870,14 +870,13 @@ fn parse_prefix_parts(
             return (None, normalize_specific(&trimmed[1..trimmed.len() - 1]));
         }
 
-        if let Some((category_part, specific_part)) = trimmed.split_once('(') {
-            if specific_part.ends_with(')') {
+        if let Some((category_part, specific_part)) = trimmed.split_once('(')
+            && specific_part.ends_with(')') {
                 return (
                     Category::from_alias(category_part),
                     normalize_specific(&specific_part[..specific_part.len() - 1]),
                 );
             }
-        }
     }
 
     (Category::from_alias(trimmed), None)
