@@ -1279,19 +1279,27 @@ where
 }
 
 fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit) {
+    let has_specific = commit.specific.is_some();
     for item in &commit.message_items {
         match item {
             MessageItem::Text(text) => {
-                lines.push(format!("* {}   _({})_", text, commit.short_hash));
+                lines.push(format!("* {}   _({})_", text, commit.short_hash));
             }
             MessageItem::NestedList {
                 intro,
                 items,
                 summary,
             } => {
-                lines.push(format!("{}   _({})_", intro, commit.short_hash));
-                for item in items {
-                    lines.push(format!("{}* {}", "  ".repeat(item.level - 1), item.text));
+                if has_specific {
+                    lines.push(format!("{}   _({})_", intro, commit.short_hash));
+                    for item in items {
+                        lines.push(format!("{}* {}", "  ".repeat(item.level - 1), item.text));
+                    }
+                } else {
+                    lines.push(format!("* {}   _({})_", intro, commit.short_hash));
+                    for item in items {
+                        lines.push(format!("  {}* {}", "  ".repeat(item.level - 1), item.text));
+                    }
                 }
                 if let Some(summary) = summary {
                     lines.push(String::new());
@@ -1568,7 +1576,7 @@ mod tests {
 
         assert!(changelog.markdown.contains("### ✨ New in DEMO message:"));
         assert!(changelog.markdown.contains("#### 💎 Enhancements"));
-        assert!(changelog.markdown.contains("Improvements:   _(b38b72e)_"));
+        assert!(changelog.markdown.contains("Improvements:   _(b38b72e)_"));
         assert!(changelog.markdown.contains("\n* This is major element"));
         assert!(
             changelog
@@ -1588,6 +1596,36 @@ mod tests {
                 .markdown
                 .contains("\n\n<sup>💡 >> This is end message to sum it up</sup>\n")
         );
+    }
+
+    #[test]
+    fn nested_list_without_specific_gets_bullet_prefix() {
+        let changelog = ChangelogDocument::new(
+            "v0.22.1",
+            vec![ParsedCommit::parse(
+                "enh: Added HOME/END Key Support. Works in: *Release Notes Preview *ReleaseNOW log (running & completed) *Changelog Preview",
+                "87eab65",
+            )],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 8).unwrap())
+        .render_markdown();
+
+        assert!(
+            changelog
+                .markdown
+                .contains("* Added HOME/END Key Support. Works in:   _(87eab65)_"),
+            "nested list intro without (Specific) must have bullet prefix"
+        );
+        assert!(
+            changelog.markdown.contains("\n  * Release Notes Preview"),
+            "nested list sub-items must be indented under the bullet"
+        );
+        assert!(
+            changelog
+                .markdown
+                .contains("\n  * ReleaseNOW log (running & completed)"),
+        );
+        assert!(changelog.markdown.contains("\n  * Changelog Preview"),);
     }
 
     #[test]
