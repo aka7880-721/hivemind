@@ -226,6 +226,7 @@ pub(crate) struct ChangelogDocument {
     hide_pr_messages: bool,
     hide_bump_messages: bool,
     mini_commit_hashes: bool,
+    wrap_detailed_if_top_picks: bool,
     commits: Vec<ParsedCommit>,
 }
 
@@ -240,6 +241,7 @@ impl ChangelogDocument {
             hide_pr_messages: false,
             hide_bump_messages: false,
             mini_commit_hashes: false,
+            wrap_detailed_if_top_picks: false,
             commits,
         }
     }
@@ -266,6 +268,12 @@ impl ChangelogDocument {
 
     pub(crate) fn with_mini_commit_hashes(mut self, mini: bool) -> Self {
         self.mini_commit_hashes = mini;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_wrap_detailed_if_top_picks(mut self, wrap: bool) -> Self {
+        self.wrap_detailed_if_top_picks = wrap;
         self
     }
 
@@ -326,7 +334,9 @@ impl ChangelogDocument {
 
         // Extract and render Top Picks section (priority 825)
         let top_picks = crate::changelog_tp::extract_top_picks(&visible_commits);
-        if !top_picks.is_empty() {
+        let has_top_picks = !top_picks.is_empty();
+
+        if has_top_picks {
             let mut sorted_picks = top_picks;
             crate::changelog_tp::sort_top_picks(&mut sorted_picks);
             let top_picks_lines = crate::changelog_tp::render_top_picks_section(&sorted_picks);
@@ -346,6 +356,15 @@ impl ChangelogDocument {
             .filter(|commit| !commit.is_breaking)
             .collect::<Vec<_>>();
 
+        // Check if we should wrap detailed changelog
+        let should_wrap = self.wrap_detailed_if_top_picks && has_top_picks;
+
+        if should_wrap {
+            lines.push(String::new());
+            lines.push("<details closed><summary closed><span>👉   C l i c k   <b>H E R E</b>  t o  <b>s h o w / h i d e</b>  a l l  n e r d y  d e t a i l s  👈</span></summary>".to_string());
+            lines.push(String::new());
+        }
+
         let rendered_dotted_new_specific =
             render_new_specific_sections(&mut lines, &non_breaking, true, self.mini_commit_hashes);
         render_new_plain_section(&mut lines, &non_breaking, true, self.mini_commit_hashes);
@@ -364,6 +383,11 @@ impl ChangelogDocument {
         }
 
         render_plain_category_sections(&mut lines, &non_breaking, self.mini_commit_hashes);
+
+        if should_wrap {
+            lines.push(String::new());
+            lines.push("</details>".to_string());
+        }
 
         if lines.last().is_some_and(|line| !line.is_empty()) {
             lines.push(String::new());
