@@ -217,6 +217,7 @@ pub(crate) struct ChangelogDocument {
     release_message: Option<String>,
     hide_pr_messages: bool,
     hide_bump_messages: bool,
+    mini_commit_hashes: bool,
     commits: Vec<ParsedCommit>,
 }
 
@@ -230,6 +231,7 @@ impl ChangelogDocument {
             release_message: None,
             hide_pr_messages: false,
             hide_bump_messages: false,
+            mini_commit_hashes: false,
             commits,
         }
     }
@@ -251,6 +253,11 @@ impl ChangelogDocument {
     pub(crate) fn with_hide_filters(mut self, hide_pr: bool, hide_bump: bool) -> Self {
         self.hide_pr_messages = hide_pr;
         self.hide_bump_messages = hide_bump;
+        self
+    }
+
+    pub(crate) fn with_mini_commit_hashes(mut self, mini: bool) -> Self {
+        self.mini_commit_hashes = mini;
         self
     }
 
@@ -307,7 +314,7 @@ impl ChangelogDocument {
             .filter(|commit| self.should_include_commit(commit))
             .collect::<Vec<_>>();
 
-        render_breaking_section(&mut lines, &visible_commits);
+        render_breaking_section(&mut lines, &visible_commits, self.mini_commit_hashes);
 
         let non_breaking = visible_commits
             .iter()
@@ -316,13 +323,15 @@ impl ChangelogDocument {
             .collect::<Vec<_>>();
 
         let rendered_dotted_new_specific =
-            render_new_specific_sections(&mut lines, &non_breaking, true);
-        render_new_plain_section(&mut lines, &non_breaking, true);
+            render_new_specific_sections(&mut lines, &non_breaking, true, self.mini_commit_hashes);
+        render_new_plain_section(&mut lines, &non_breaking, true, self.mini_commit_hashes);
 
-        let rendered_new_specific = render_new_specific_sections(&mut lines, &non_breaking, false);
-        render_new_plain_section(&mut lines, &non_breaking, false);
+        let rendered_new_specific =
+            render_new_specific_sections(&mut lines, &non_breaking, false, self.mini_commit_hashes);
+        render_new_plain_section(&mut lines, &non_breaking, false, self.mini_commit_hashes);
 
-        let rendered_specific = render_specific_sections(&mut lines, &non_breaking);
+        let rendered_specific =
+            render_specific_sections(&mut lines, &non_breaking, self.mini_commit_hashes);
         if (rendered_dotted_new_specific || rendered_new_specific || rendered_specific)
             && has_general_improvements(&non_breaking)
         {
@@ -330,7 +339,7 @@ impl ChangelogDocument {
             lines.push(String::new());
         }
 
-        render_plain_category_sections(&mut lines, &non_breaking);
+        render_plain_category_sections(&mut lines, &non_breaking, self.mini_commit_hashes);
 
         if lines.last().is_some_and(|line| !line.is_empty()) {
             lines.push(String::new());
@@ -369,9 +378,11 @@ pub(crate) fn rls_changelog_gen(
     last_public: Option<&str>,
     hide_pr_messages: bool,
     hide_bump_messages: bool,
+    mini_commit_hashes: bool,
 ) -> RenderedChangelog {
     let mut document = build_document_from_git_log(current_tag, lines)
-        .with_hide_filters(hide_pr_messages, hide_bump_messages);
+        .with_hide_filters(hide_pr_messages, hide_bump_messages)
+        .with_mini_commit_hashes(mini_commit_hashes);
     if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
         document = document.with_previous_public_release(last_public);
     }
@@ -1085,7 +1096,7 @@ fn nested_list_marker_len(marker: NestedListMarker) -> usize {
     }
 }
 
-fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
+fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit], mini: bool) {
     let breaking = commits
         .iter()
         .copied()
@@ -1107,7 +1118,7 @@ fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
             .copied()
             .filter(|commit| commit.specific.as_deref() == Some(specific_name.as_str()))
             .collect::<Vec<_>>();
-        render_category_subsections(lines, &group_commits, 4);
+        render_category_subsections(lines, &group_commits, 4, mini);
     }
 
     let unspecific: Vec<&ParsedCommit> = breaking
@@ -1115,13 +1126,14 @@ fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
         .copied()
         .filter(|commit| commit.specific.is_none())
         .collect::<Vec<_>>();
-    render_category_subsections(lines, &unspecific, 3);
+    render_category_subsections(lines, &unspecific, 3, mini);
 }
 
 fn render_new_specific_sections(
     lines: &mut Vec<String>,
     commits: &[&ParsedCommit],
     dotted_only: bool,
+    mini: bool,
 ) -> bool {
     let specific_keys = ordered_new_specific_keys(
         &commits
@@ -1154,7 +1166,7 @@ fn render_new_specific_sections(
                 })
                 .collect::<Vec<_>>();
             for commit in section_commits.iter().rev().copied() {
-                render_commit_bullets(lines, commit);
+                render_commit_bullets(lines, commit, mini);
             }
             end_specific_section(lines);
         } else {
@@ -1170,7 +1182,7 @@ fn render_new_specific_sections(
                         && commit.specific_heading == specific_heading
                 })
                 .collect::<Vec<_>>();
-            render_category_subsections(lines, &section_commits, 4);
+            render_category_subsections(lines, &section_commits, 4, mini);
             end_specific_section(lines);
         }
     }
@@ -1178,7 +1190,12 @@ fn render_new_specific_sections(
     true
 }
 
-fn render_new_plain_section(lines: &mut Vec<String>, commits: &[&ParsedCommit], dotted_only: bool) {
+fn render_new_plain_section(
+    lines: &mut Vec<String>,
+    commits: &[&ParsedCommit],
+    dotted_only: bool,
+    mini: bool,
+) {
     let new_commits: Vec<&ParsedCommit> = commits
         .iter()
         .copied()
@@ -1192,10 +1209,14 @@ fn render_new_plain_section(lines: &mut Vec<String>, commits: &[&ParsedCommit], 
 
     lines.push("### ✨ New:".to_string());
     lines.push(String::new());
-    render_category_subsections(lines, &new_commits, 4);
+    render_category_subsections(lines, &new_commits, 4, mini);
 }
 
-fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) -> bool {
+fn render_specific_sections(
+    lines: &mut Vec<String>,
+    commits: &[&ParsedCommit],
+    mini: bool,
+) -> bool {
     let specific_names = ordered_specific_names(
         &commits
             .iter()
@@ -1217,7 +1238,7 @@ fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) 
                 !commit.is_new && commit.specific.as_deref() == Some(specific_name.as_str())
             })
             .collect::<Vec<_>>();
-        render_category_subsections(lines, &section_commits, 4);
+        render_category_subsections(lines, &section_commits, 4, mini);
         end_specific_section(lines);
     }
 
@@ -1236,7 +1257,7 @@ fn end_specific_section(lines: &mut Vec<String>) {
     lines.push(String::new());
 }
 
-fn render_plain_category_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
+fn render_plain_category_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit], mini: bool) {
     let plain_commits: Vec<&ParsedCommit> = commits
         .iter()
         .copied()
@@ -1251,13 +1272,17 @@ fn render_plain_category_sections(lines: &mut Vec<String>, commits: &[&ParsedCom
             .rev()
             .filter(|commit| commit.effective_category() == category)
         {
-            render_commit_bullets(lines, commit);
+            render_commit_bullets(lines, commit, mini);
         }
     }
 }
 
-fn render_category_subsections<T>(lines: &mut Vec<String>, commits: &[T], heading_level: usize)
-where
+fn render_category_subsections<T>(
+    lines: &mut Vec<String>,
+    commits: &[T],
+    heading_level: usize,
+    mini: bool,
+) where
     T: std::borrow::Borrow<ParsedCommit>,
 {
     for category in ordered_categories(commits) {
@@ -1273,17 +1298,22 @@ where
             .map(std::borrow::Borrow::borrow)
             .filter(|commit| commit.effective_category() == category)
         {
-            render_commit_bullets(lines, commit);
+            render_commit_bullets(lines, commit, mini);
         }
     }
 }
 
-fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit) {
+fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit, mini: bool) {
+    let hash_suffix = if mini {
+        format!(" <sub><sup><sup>_{}_</sup></sup></sub>", commit.short_hash)
+    } else {
+        format!("   _({})_", commit.short_hash)
+    };
     let has_specific = commit.specific.is_some();
     for item in &commit.message_items {
         match item {
             MessageItem::Text(text) => {
-                lines.push(format!("* {}   _({})_", text, commit.short_hash));
+                lines.push(format!("* {}{}", text, hash_suffix));
             }
             MessageItem::NestedList {
                 intro,
@@ -1291,12 +1321,12 @@ fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit) {
                 summary,
             } => {
                 if has_specific {
-                    lines.push(format!("{}   _({})_", intro, commit.short_hash));
+                    lines.push(format!("{}{}", intro, hash_suffix));
                     for item in items {
                         lines.push(format!("{}* {}", "  ".repeat(item.level - 1), item.text));
                     }
                 } else {
-                    lines.push(format!("* {}   _({})_", intro, commit.short_hash));
+                    lines.push(format!("* {}{}", intro, hash_suffix));
                     for item in items {
                         lines.push(format!("  {}* {}", "  ".repeat(item.level - 1), item.text));
                     }
@@ -1722,6 +1752,7 @@ mod tests {
             "v0.7.3",
             &["abc1234 fix: tighten ReleaseNOW history selection".to_string()],
             Some("v0.7.1"),
+            false,
             false,
             false,
         );
