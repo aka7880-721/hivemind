@@ -710,6 +710,7 @@ impl ProjectWizard {
             },
             hide_pr_messages: false,
             hide_bump_messages: false,
+            mini_commit_hashes: false,
         }
     }
 

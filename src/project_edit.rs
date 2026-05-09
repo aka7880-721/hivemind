@@ -802,6 +802,7 @@ impl ProjectEditDialog {
             },
             hide_pr_messages: false,
             hide_bump_messages: false,
+            mini_commit_hashes: false,
         }
     }
 
@@ -1154,6 +1155,7 @@ mod tests {
                     file_path: "CHANGELOG.md".to_string(),
                     hide_pr_messages: false,
                     hide_bump_messages: false,
+                    mini_commit_hashes: false,
                 },
             },
         )
@@ -1191,6 +1193,7 @@ mod tests {
                     changelog_path: Some("CHANGELOG.md".to_string()),
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1210,6 +1213,7 @@ mod tests {
                     file_path: "CHANGELOG.md".to_string(),
                     hide_pr_messages: false,
                     hide_bump_messages: false,
+                    mini_commit_hashes: false,
                 },
             },
         )
