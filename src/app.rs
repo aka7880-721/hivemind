@@ -6277,6 +6277,7 @@ impl ScopeDraft {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
             release_now: crate::config::ReleaseNowSettings::default(),
             version_scheme: self.version_scheme,
             targets: vec![TargetSpec {
@@ -8855,6 +8856,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
@@ -8869,6 +8871,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
