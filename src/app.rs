@@ -6276,6 +6276,7 @@ impl ScopeDraft {
             changelog_path: None,
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
+            changelog_mini_commit_hashes: false,
             release_now: crate::config::ReleaseNowSettings::default(),
             version_scheme: self.version_scheme,
             targets: vec![TargetSpec {
@@ -7208,6 +7209,7 @@ fn build_release_notes_markdown(
             Some(&last_public_release),
             scope.hide_pr_messages,
             scope.hide_bump_messages,
+            scope.mini_commit_hashes,
         )
         .markdown);
     }
@@ -7219,6 +7221,7 @@ fn build_release_notes_markdown(
         None,
         scope.hide_pr_messages,
         scope.hide_bump_messages,
+        scope.mini_commit_hashes,
     )
     .markdown)
 }
@@ -8851,6 +8854,7 @@ mod tests {
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
@@ -8864,6 +8868,7 @@ mod tests {
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
