@@ -1382,8 +1382,10 @@ impl App {
                 }
             }
             _ => {
-                if let Some(dialog) = &mut self.commit_rename_dialog {
-                    dialog.message_input.handle_key(key);
+                if let Some(dialog) = &mut self.commit_rename_dialog
+                    && let Some(input) = convert_to_textarea_input(key)
+                {
+                    dialog.message_editor.input(input);
                 }
             }
         }
@@ -2106,7 +2108,10 @@ impl App {
         }
 
         if let Some(dialog) = &mut self.commit_rename_dialog {
-            dialog.message_input.insert_str(&text);
+            for line in text.lines() {
+                dialog.message_editor.insert_str(line);
+                dialog.message_editor.insert_newline();
+            }
             self.status = StatusMessage::info("Pasted into the commit message.");
             return;
         }
@@ -2191,7 +2196,10 @@ impl App {
         }
 
         if let Some(dialog) = &mut self.commit_rename_dialog {
-            dialog.message_input.insert_str(text);
+            for line in text.lines() {
+                dialog.message_editor.insert_str(line);
+                dialog.message_editor.insert_newline();
+            }
             return true;
         }
 
@@ -3086,10 +3094,7 @@ impl App {
             return self.project_settings_state.active_input_mut();
         }
 
-        if let Some(dialog) = &mut self.commit_rename_dialog {
-            return Some(&mut dialog.message_input);
-        }
-
+        // Commit rename and tag annotation use TuiTextArea directly, not through active_text_input_mut
         None
     }
 
@@ -4665,7 +4670,8 @@ impl App {
             return Ok(());
         };
 
-        let outcome = match rename_commit_with_subject(&dialog.plan, &dialog.message_input.value) {
+        let new_message = dialog.message_editor.lines().join("\n");
+        let outcome = match rename_commit_with_subject(&dialog.plan, &new_message) {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.commit_rename_dialog = Some(dialog);
@@ -7718,18 +7724,24 @@ impl TagAnnotationDialog {
 struct CommitRenameDialog {
     view: RecentChangeView,
     plan: CommitRenamePlan,
-    message_input: TextInput,
+    message_editor: TuiTextArea<'static>,
     push_after_rename: bool,
 }
 
 impl CommitRenameDialog {
     fn new(view: RecentChangeView, plan: CommitRenamePlan) -> Self {
-        let mut message_input = TextInput::with_value(plan.current_subject.clone());
-        message_input.select_all();
+        let mut message_editor = if plan.current_subject.trim().is_empty() {
+            TuiTextArea::default()
+        } else {
+            TuiTextArea::from(plan.current_subject.lines())
+        };
+        message_editor.set_placeholder_text("Edit commit message (supports Markdown)");
+        message_editor.set_tab_length(2);
+        message_editor.set_max_histories(100);
         Self {
             view,
             plan,
-            message_input,
+            message_editor,
             push_after_rename: false,
         }
     }

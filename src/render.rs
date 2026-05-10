@@ -1476,10 +1476,10 @@ impl App {
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5),
-                Constraint::Length(3),
-                Constraint::Min(5),
-                Constraint::Length(BUTTON_ROW_HEIGHT),
+                Constraint::Length(5),                 // Header
+                Constraint::Min(10),                   // Message editor (textarea)
+                Constraint::Length(6),                 // Help text
+                Constraint::Length(BUTTON_ROW_HEIGHT), // Buttons
             ])
             .split(inner);
 
@@ -1497,23 +1497,16 @@ impl App {
             sections[0],
         );
 
-        let input_row = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(20), Constraint::Min(10)])
-            .split(sections[1]);
-        frame.render_widget(Paragraph::new("New message"), input_row[0]);
-        let input_block = Block::default()
-            .borders(Borders::ALL)
-            .title(" value ")
-            .border_style(Style::default().fg(Color::Cyan));
-        frame.render_widget(
-            Paragraph::new(dialog.message_input.display_line(true))
-                .block(input_block)
-                .style(Style::default().fg(Color::White)),
-            input_row[1],
+        // Render multi-line message editor with markdown support
+        self.render_textarea_editor(
+            frame,
+            sections[1],
+            " New Message (Markdown supported) ",
+            "Enter commit message (supports Markdown formatting)",
+            &dialog.message_editor,
         );
         self.hit_targets.push(HitTarget::new(
-            input_row[1],
+            sections[1],
             HitAction::CommitRenameMessageField,
         ));
 
