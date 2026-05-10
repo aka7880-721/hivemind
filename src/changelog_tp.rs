@@ -161,8 +161,10 @@ fn extract_bullets(items: &[crate::changelog::MessageItem]) -> Vec<TopPickBullet
     for item in items {
         if let crate::changelog::MessageItem::NestedList { items, .. } = item {
             for entry in items {
+                // parse_top_pick_message uses ** → 2, *** → 3 (same marker levels as feat nested lists).
+                // First bullets must render as column-0 list items under the h4 (not indented).
                 bullets.push(TopPickBullet {
-                    level: entry.level.saturating_sub(1), // convert 1->0, 2->1, 3->2
+                    level: entry.level.saturating_sub(2),
                     text: entry.text.clone(),
                 });
             }
@@ -209,7 +211,6 @@ pub(crate) fn render_top_picks_section(picks: &[TopPick]) -> Vec<String> {
             "#### **{}. &nbsp;&nbsp;&nbsp;{}**",
             number, pick.header
         ));
-        lines.push(String::new());
 
         // Group bullets by level for hierarchical rendering
         render_bullets_hierarchical(&mut lines, &pick.bullets);
@@ -236,14 +237,10 @@ fn render_bullets_hierarchical(lines: &mut Vec<String>, bullets: &[TopPickBullet
     while i < bullets.len() {
         let bullet = &bullets[i];
 
-        if bullet.level == 0 {
-            // Top-level bullet
-            lines.push(format!("- {}", bullet.text));
-        } else {
-            // Nested bullet
-            let indent = "    ".repeat(bullet.level);
-            lines.push(format!("{}- {}", indent, bullet.text));
-        }
+        // Level 0 = ** (first bullet level) -> no indent (just "- ")
+        // Level 1 = *** (nested) -> 4 spaces indent ("    - ")
+        let indent = if bullet.level == 0 { "" } else { "    " };
+        lines.push(format!("{}- {}", indent, bullet.text));
 
         i += 1;
     }
@@ -315,11 +312,11 @@ mod tests {
             intro: "Header:".to_string(),
             items: vec![
                 NestedListEntry {
-                    level: 1,
+                    level: 2,
                     text: "Level 1 item".to_string(),
                 },
                 NestedListEntry {
-                    level: 2,
+                    level: 3,
                     text: "Level 2 item".to_string(),
                 },
             ],
@@ -426,5 +423,32 @@ mod tests {
         assert!(output.contains("First improvement"));
         assert!(output.contains("- Contains this"));
         assert!(output.contains("🎉 Enjoy!"));
+    }
+
+    /// First `**` bullets must not be indented; no blank line between h4 and list (valid CommonMark).
+    #[test]
+    fn top_picks_h4_immediately_followed_by_top_level_list() {
+        let picks = vec![TopPick {
+            priority: Some(1),
+            header: "This is first huge improvement".to_string(),
+            bullets: vec![TopPickBullet {
+                level: 0,
+                text: "Contains this".to_string(),
+            }],
+            commit_hash: "abc".to_string(),
+            is_reference: false,
+        }];
+        let lines = render_top_picks_section(&picks);
+        let h4 = lines
+            .iter()
+            .position(|l| l.starts_with("#### **1."))
+            .expect("numbered top pick heading");
+        assert!(
+            h4 + 1 < lines.len()
+                && lines[h4 + 1] == "- Contains this"
+                && !lines[h4 + 1].starts_with(' '),
+            "expected `- Contains this` directly after h4, got: {:?}",
+            lines.get(h4..(h4 + 3).min(lines.len()))
+        );
     }
 }
