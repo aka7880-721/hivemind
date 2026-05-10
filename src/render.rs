@@ -1511,10 +1511,36 @@ impl App {
         ));
 
         let mut body = vec![
-            Line::from(
-                "Enter saves | Esc cancels | Ctrl+P toggles force-push | Ctrl+A selects all",
-            ),
-            Line::from("Arrows navigate | Click to position cursor | Double-click selects all"),
+            Line::from(vec![
+                Span::styled("Enter", Style::default().fg(Color::Yellow)),
+                Span::raw(" saves | "),
+                Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                Span::raw(" cancels | "),
+                Span::styled("Ctrl+P", Style::default().fg(Color::Yellow)),
+                Span::raw(" toggles force-push | "),
+                Span::styled("Ctrl+A", Style::default().fg(Color::Yellow)),
+                Span::raw(" selects all"),
+            ]),
+            Line::from(vec![
+                Span::styled("Arrows", Style::default().fg(Color::Yellow)),
+                Span::raw(" navigate | "),
+                Span::styled("Click", Style::default().fg(Color::Yellow)),
+                Span::raw(" to position cursor | "),
+                Span::styled("Double-click", Style::default().fg(Color::Yellow)),
+                Span::raw(" selects all"),
+            ]),
+            Line::from(vec![
+                Span::styled("Ctrl+K", Style::default().fg(Color::Yellow)),
+                Span::raw(" Delete from cursor to end | "),
+                Span::styled("Ctrl+U", Style::default().fg(Color::Yellow)),
+                Span::raw(" Delete from cursor to start"),
+            ]),
+            Line::from(vec![
+                Span::styled("Ctrl+W", Style::default().fg(Color::Yellow)),
+                Span::raw(" Delete previous word | "),
+                Span::styled("Alt+F/Alt+B", Style::default().fg(Color::Yellow)),
+                Span::raw(" Move by word forward/backward"),
+            ]),
         ];
         if dialog.plan.touches_pushed_history {
             body.push(

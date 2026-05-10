@@ -1393,6 +1393,20 @@ impl App {
                     self.toggle_commit_rename_force_push();
                 }
             }
+            KeyCode::Up => {
+                if let Some(dialog) = &mut self.commit_rename_dialog {
+                    dialog
+                        .message_editor
+                        .move_cursor(tui_textarea::CursorMove::Up);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(dialog) = &mut self.commit_rename_dialog {
+                    dialog
+                        .message_editor
+                        .move_cursor(tui_textarea::CursorMove::Down);
+                }
+            }
             _ => {
                 if let Some(dialog) = &mut self.commit_rename_dialog
                     && let Some(input) = convert_to_textarea_input(key)
