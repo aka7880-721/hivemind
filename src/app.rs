@@ -1360,12 +1360,17 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
         {
+            self.status = StatusMessage::info("Ctrl+C pressed".to_string());
             // Try textarea first (commit rename dialog)
             if let Some(dialog) = &mut self.commit_rename_dialog {
+                let was_selecting = dialog.message_editor.is_selecting();
+                self.status = StatusMessage::info(format!("Ctrl+C: selecting={}", was_selecting));
                 dialog.message_editor.copy();
                 let text: String = dialog.message_editor.yank_text();
+                self.status = StatusMessage::info(format!("Ctrl+C: yank text len={}", text.len()));
                 if !text.is_empty() {
                     self.copy_text_to_clipboard(&text);
+                    self.status = StatusMessage::info("Ctrl+C: copied to clipboard".to_string());
                     return Ok(());
                 }
             }
@@ -1383,6 +1388,7 @@ impl App {
             && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
             && let Some(dialog) = &mut self.commit_rename_dialog
         {
+            self.status = StatusMessage::info("Ctrl+X pressed".to_string());
             dialog.message_editor.cut();
             let text: String = dialog.message_editor.yank_text();
             if !text.is_empty() {
@@ -1953,6 +1959,11 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                self.status = StatusMessage::info(format!(
+                    "Mouse click at ({}, {})",
+                    mouse.column, mouse.row
+                ));
+
                 if self.overview_bump_workflow_dialog.is_none()
                     && self.screen == Screen::Dashboard
                     && self.overview_tab == OverviewTab::Overview
@@ -1982,6 +1993,10 @@ impl App {
                 if let Some((action, rect)) =
                     self.resolve_hit_target(mouse.column, mouse.row, false)
                 {
+                    let is_commit_rename = matches!(action, HitAction::CommitRenameMessageField);
+                    if is_commit_rename {
+                        self.status = StatusMessage::info("Hit commit rename field".to_string());
+                    }
                     let maybe_click_target = self.text_input_click_target(&action);
                     let maybe_recent_change_target = self.recent_change_click_target(&action);
                     let mut select_all = false;
@@ -2236,13 +2251,16 @@ impl App {
     }
 
     fn paste_from_clipboard(&mut self) {
+        self.status = StatusMessage::info("Paste triggered".to_string());
         let clipboard = if let Some(ref mut clipboard) = self.clipboard {
             clipboard
         } else {
+            self.status = StatusMessage::info("Creating new clipboard".to_string());
             self.clipboard = Clipboard::new().ok();
             if let Some(ref mut clipboard) = self.clipboard {
                 clipboard
             } else {
+                self.status = StatusMessage::warning("Clipboard creation failed".to_string());
                 if let Some(text) = self.fallback_clipboard.clone() {
                     self.handle_paste(text);
                 } else {
@@ -2252,8 +2270,11 @@ impl App {
             }
         };
 
+        self.status = StatusMessage::info("Getting clipboard text...".to_string());
         match clipboard.get_text() {
             Ok(text) => {
+                self.status =
+                    StatusMessage::info(format!("Got clipboard text: {} chars", text.len()));
                 if let Some(dialog) = &mut self.tag_annotation_dialog {
                     dialog.editor.insert_str(text);
                     self.status = StatusMessage::info("Pasted into the tag annotation.");
