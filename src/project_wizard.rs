@@ -711,6 +711,7 @@ impl ProjectWizard {
             hide_pr_messages: false,
             hide_bump_messages: false,
             mini_commit_hashes: false,
+            wrap_detailed_changelog_if_top_picks: false,
         }
     }
 
