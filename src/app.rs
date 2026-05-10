@@ -1759,13 +1759,13 @@ impl App {
                             let start_row = cursor_row
                                 .saturating_sub(visible_height / 2)
                                 .min(lines.len().saturating_sub(visible_height));
-                            let clicked_row =
-                                mouse.row.saturating_sub(inner.y) as usize + start_row;
+                            let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                            let clicked_row = relative_row + start_row;
                             let clicked_col =
                                 mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
                             self.status = StatusMessage::info(format!(
-                                "Textarea cursor: row={} col={} (start={} number_w={})",
-                                clicked_row, clicked_col, start_row, number_width
+                                "TA: mouse.y={}, inner.y={}, rel_row={}, start_row={}, final_row={}",
+                                mouse.row, inner.y, relative_row, start_row, clicked_row
                             ));
                             dialog
                                 .message_editor
