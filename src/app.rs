@@ -1764,15 +1764,26 @@ impl App {
                             let clicked_col =
                                 mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
                             self.status = StatusMessage::info(format!(
-                                "TA: mouse.y={}, inner.y={}, rel_row={}, start_row={}, final_row={}",
-                                mouse.row, inner.y, relative_row, start_row, clicked_row
+                                "TA: mouse.y={}, inner.y={}, rel_row={}, start_row={}, final_row={}, col={}",
+                                mouse.row,
+                                inner.y,
+                                relative_row,
+                                start_row,
+                                clicked_row,
+                                clicked_col
                             ));
+                            let (prev_row, prev_col) = dialog.message_editor.cursor();
                             dialog
                                 .message_editor
                                 .move_cursor(tui_textarea::CursorMove::Jump(
                                     clicked_row as u16,
                                     clicked_col as u16,
                                 ));
+                            let (new_row, new_col) = dialog.message_editor.cursor();
+                            self.status = StatusMessage::info(format!(
+                                "TA move: prev=({}, {}) -> new=({}, {})",
+                                prev_row, prev_col, new_row, new_col
+                            ));
                         }
                     }
                     return;
