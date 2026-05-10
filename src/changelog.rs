@@ -109,6 +109,9 @@ pub(crate) struct ParsedCommit {
     pub(crate) is_dotted_new: bool,
     pub(crate) is_breaking: bool,
     pub(crate) is_ignored: bool,
+    pub(crate) is_top_pick_config: bool,
+    pub(crate) is_top_pick_reference: bool,
+    pub(crate) top_pick_priority: Option<u8>,
     pub(crate) message_items: Vec<MessageItem>,
 }
 
@@ -159,8 +162,10 @@ impl ParsedCommit {
         let (prefix, message) = split_prefix_and_message(remainder);
         // Check if there's a ): pattern in the raw_subject - this indicates valid (Specific) scope
         let has_colon_after_paren = raw_subject.contains("):");
-        let (category, specific, specific_heading) = parse_prefix(prefix, has_colon_after_paren);
-        let message_items = parse_message_items(message);
+        let (category, specific, specific_heading, is_top_pick_config, top_pick_priority) =
+            parse_prefix_with_top_picks(prefix, has_colon_after_paren);
+        let (is_top_pick_reference, message_items) =
+            parse_message_items_with_top_picks(message, category, top_pick_priority);
 
         Self {
             raw_subject,
@@ -172,6 +177,9 @@ impl ParsedCommit {
             is_dotted_new,
             is_breaking,
             is_ignored,
+            is_top_pick_config,
+            is_top_pick_reference,
+            top_pick_priority,
             message_items,
         }
     }
@@ -193,8 +201,8 @@ pub(crate) enum MessageItem {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NestedListEntry {
-    level: usize,
-    text: String,
+    pub(crate) level: usize,
+    pub(crate) text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +225,8 @@ pub(crate) struct ChangelogDocument {
     release_message: Option<String>,
     hide_pr_messages: bool,
     hide_bump_messages: bool,
+    mini_commit_hashes: bool,
+    wrap_detailed_if_top_picks: bool,
     commits: Vec<ParsedCommit>,
 }
 
@@ -230,6 +240,8 @@ impl ChangelogDocument {
             release_message: None,
             hide_pr_messages: false,
             hide_bump_messages: false,
+            mini_commit_hashes: false,
+            wrap_detailed_if_top_picks: false,
             commits,
         }
     }
@@ -251,6 +263,17 @@ impl ChangelogDocument {
     pub(crate) fn with_hide_filters(mut self, hide_pr: bool, hide_bump: bool) -> Self {
         self.hide_pr_messages = hide_pr;
         self.hide_bump_messages = hide_bump;
+        self
+    }
+
+    pub(crate) fn with_mini_commit_hashes(mut self, mini: bool) -> Self {
+        self.mini_commit_hashes = mini;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_wrap_detailed_if_top_picks(mut self, wrap: bool) -> Self {
+        self.wrap_detailed_if_top_picks = wrap;
         self
     }
 
@@ -307,22 +330,51 @@ impl ChangelogDocument {
             .filter(|commit| self.should_include_commit(commit))
             .collect::<Vec<_>>();
 
-        render_breaking_section(&mut lines, &visible_commits);
+        render_breaking_section(&mut lines, &visible_commits, self.mini_commit_hashes);
 
-        let non_breaking = visible_commits
+        // Extract and render Top Picks section (priority 825)
+        let top_picks = crate::changelog_tp::extract_top_picks(&visible_commits);
+        let has_top_picks = !top_picks.is_empty();
+
+        if has_top_picks {
+            let mut sorted_picks = top_picks;
+            crate::changelog_tp::sort_top_picks(&mut sorted_picks);
+            let top_picks_lines = crate::changelog_tp::render_top_picks_section(&sorted_picks);
+            lines.extend(top_picks_lines);
+        }
+
+        // Filter out top pick only commits from standard changelog
+        let non_top_pick_commits: Vec<&ParsedCommit> = visible_commits
+            .iter()
+            .copied()
+            .filter(|commit| !crate::changelog_tp::is_top_pick_only_commit(commit))
+            .collect();
+
+        let non_breaking = non_top_pick_commits
             .iter()
             .copied()
             .filter(|commit| !commit.is_breaking)
             .collect::<Vec<_>>();
 
+        // Check if we should wrap detailed changelog
+        let should_wrap = self.wrap_detailed_if_top_picks && has_top_picks;
+
+        if should_wrap {
+            lines.push(String::new());
+            lines.push("<details closed><summary closed><span>👉   C l i c k   <b>H E R E</b>  t o  <b>s h o w / h i d e</b>  a l l  n e r d y  d e t a i l s  👈</span></summary>".to_string());
+            lines.push(String::new());
+        }
+
         let rendered_dotted_new_specific =
-            render_new_specific_sections(&mut lines, &non_breaking, true);
-        render_new_plain_section(&mut lines, &non_breaking, true);
+            render_new_specific_sections(&mut lines, &non_breaking, true, self.mini_commit_hashes);
+        render_new_plain_section(&mut lines, &non_breaking, true, self.mini_commit_hashes);
 
-        let rendered_new_specific = render_new_specific_sections(&mut lines, &non_breaking, false);
-        render_new_plain_section(&mut lines, &non_breaking, false);
+        let rendered_new_specific =
+            render_new_specific_sections(&mut lines, &non_breaking, false, self.mini_commit_hashes);
+        render_new_plain_section(&mut lines, &non_breaking, false, self.mini_commit_hashes);
 
-        let rendered_specific = render_specific_sections(&mut lines, &non_breaking);
+        let rendered_specific =
+            render_specific_sections(&mut lines, &non_breaking, self.mini_commit_hashes);
         if (rendered_dotted_new_specific || rendered_new_specific || rendered_specific)
             && has_general_improvements(&non_breaking)
         {
@@ -330,7 +382,12 @@ impl ChangelogDocument {
             lines.push(String::new());
         }
 
-        render_plain_category_sections(&mut lines, &non_breaking);
+        render_plain_category_sections(&mut lines, &non_breaking, self.mini_commit_hashes);
+
+        if should_wrap {
+            lines.push(String::new());
+            lines.push("</details>".to_string());
+        }
 
         if lines.last().is_some_and(|line| !line.is_empty()) {
             lines.push(String::new());
@@ -369,9 +426,11 @@ pub(crate) fn rls_changelog_gen(
     last_public: Option<&str>,
     hide_pr_messages: bool,
     hide_bump_messages: bool,
+    mini_commit_hashes: bool,
 ) -> RenderedChangelog {
     let mut document = build_document_from_git_log(current_tag, lines)
-        .with_hide_filters(hide_pr_messages, hide_bump_messages);
+        .with_hide_filters(hide_pr_messages, hide_bump_messages)
+        .with_mini_commit_hashes(mini_commit_hashes);
     if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
         document = document.with_previous_public_release(last_public);
     }
@@ -900,13 +959,62 @@ fn normalize_specific(value: &str) -> Option<String> {
     }
 }
 
-fn parse_message_items(message: &str) -> Vec<MessageItem> {
-    let trimmed = message.trim();
+/// Extended prefix parser that handles Top Picks (top/top{priority}) prefixes
+fn parse_prefix_with_top_picks(
+    prefix: &str,
+    has_colon_after_paren: bool,
+) -> (
+    Option<Category>,
+    Option<String>,
+    Option<&'static str>,
+    bool,
+    Option<u8>,
+) {
+    use crate::changelog_tp::is_top_pick_config_prefix;
+
+    let trimmed = prefix.trim();
     if trimmed.is_empty() {
-        return vec![MessageItem::Text("No details provided".to_string())];
+        return (None, None, None, false, None);
     }
 
-    trimmed
+    // Check if this is a Top Pick config prefix (top or top{priority})
+    if let Some(priority) = is_top_pick_config_prefix(trimmed) {
+        let top_priority = if priority == 0 { None } else { Some(priority) };
+        return (None, None, None, true, top_priority);
+    }
+
+    // Handle dotted prefix (@.)
+    if let Some(dotted) = trimmed.strip_prefix('.') {
+        let (category, specific) = parse_prefix_parts(dotted, has_colon_after_paren);
+        let specific_heading = category.and_then(singular_specific_heading);
+        return (category, specific, specific_heading, false, None);
+    }
+
+    // Handle regular prefix
+    let (category, specific) = parse_prefix_parts(trimmed, has_colon_after_paren);
+    (category, specific, None, false, None)
+}
+
+/// Parse message items with Top Pick support
+/// Returns (is_top_pick_reference, message_items)
+fn parse_message_items_with_top_picks(
+    message: &str,
+    category: Option<Category>,
+    top_pick_priority: Option<u8>,
+) -> (bool, Vec<MessageItem>) {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return (
+            false,
+            vec![MessageItem::Text("No details provided".to_string())],
+        );
+    }
+
+    // If this is a top pick config, the entire message uses * formatting
+    // We need to handle it specially
+    let is_top_pick = top_pick_priority.is_some() || category.is_none();
+
+    let items: Vec<MessageItem> = trimmed
         .split(';')
         .filter_map(|segment| {
             let segment = segment.trim();
@@ -914,6 +1022,12 @@ fn parse_message_items(message: &str) -> Vec<MessageItem> {
                 return None;
             }
 
+            // For top picks, parse the special * formatting
+            if is_top_pick && let Some(item) = parse_top_pick_message(segment) {
+                return Some(item);
+            }
+
+            // Standard nested list parsing
             if let Some((intro, items, summary)) = parse_nested_list(segment) {
                 return Some(MessageItem::NestedList {
                     intro,
@@ -924,7 +1038,103 @@ fn parse_message_items(message: &str) -> Vec<MessageItem> {
 
             Some(MessageItem::Text(segment.to_string()))
         })
-        .collect()
+        .collect();
+
+    // Check if any segment references an existing top pick priority
+    let is_reference = !is_top_pick && detect_top_pick_reference(trimmed);
+
+    (is_reference, items)
+}
+
+/// Parse a top pick message segment that uses * formatting
+fn parse_top_pick_message(segment: &str) -> Option<MessageItem> {
+    // Handle format: *Header **Bullet ***Sub-bullet
+    // or: **Bullet ***Sub-bullet (for references)
+
+    let trimmed = segment.trim();
+
+    // Check if it contains our special markers
+    if !trimmed.contains('*') {
+        return Some(MessageItem::Text(trimmed.to_string()));
+    }
+
+    // Parse the hierarchical structure
+    let (header_text, remaining) = if let Some(pos) = trimmed.find("**") {
+        (
+            trimmed[..pos].trim().trim_start_matches('*').trim(),
+            &trimmed[pos..],
+        )
+    } else {
+        (trimmed.trim().trim_start_matches('*').trim(), "")
+    };
+
+    let mut items = Vec::new();
+    let mut cursor = remaining;
+
+    while !cursor.is_empty() {
+        if cursor.starts_with("***") {
+            // Level 3 (deepest)
+            let content = cursor[3..].trim();
+            let next_pos = content.find("**").unwrap_or(content.len());
+            let text = content[..next_pos].trim();
+            if !text.is_empty() {
+                items.push(NestedListEntry {
+                    level: 3,
+                    text: text.to_string(),
+                });
+            }
+            cursor = if next_pos < content.len() {
+                &content[next_pos..]
+            } else {
+                ""
+            };
+        } else if cursor.starts_with("**") {
+            // Level 2
+            let content = cursor[2..].trim();
+            // Look for either next *** or next ** at same level
+            let next_stars = content.find("***");
+            // Find next ** but skip position 0 (that would be the current marker)
+            let next_double = content[1..].find("**").map(|p| p + 1);
+            let next_pos = match (next_stars, next_double) {
+                (Some(a), Some(b)) => a.min(b),
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                (None, None) => content.len(),
+            };
+            let text = content[..next_pos].trim();
+            if !text.is_empty() {
+                items.push(NestedListEntry {
+                    level: 2,
+                    text: text.to_string(),
+                });
+            }
+            cursor = if next_pos < content.len() {
+                &content[next_pos..]
+            } else {
+                ""
+            };
+        } else {
+            break;
+        }
+    }
+
+    if items.is_empty() && header_text.is_empty() {
+        return Some(MessageItem::Text(trimmed.to_string()));
+    }
+
+    Some(MessageItem::NestedList {
+        intro: header_text.to_string(),
+        items,
+        summary: None,
+    })
+}
+
+/// Detect if a top pick message is a reference (adds bullets to existing top pick).
+/// A reference starts with `**` or `***` (has bullets but no `*` header).
+fn detect_top_pick_reference(segment: &str) -> bool {
+    let trimmed = segment.trim();
+    // If it contains ** or *** markers but no * header prefix, it's a reference
+    trimmed.starts_with("**") && !trimmed.starts_with("* ") && !trimmed.starts_with("*\t")
 }
 
 fn split_subject_clauses(subject: &str) -> Vec<String> {
@@ -986,6 +1196,11 @@ pub(crate) fn looks_like_prefixed_clause(segment: &str) -> bool {
     let remainder = remainder.trim();
     if remainder.is_empty() {
         return false;
+    }
+
+    // Check for top pick prefixes (top or top{priority})
+    if crate::changelog_tp::is_top_pick_config_prefix(remainder).is_some() {
+        return true;
     }
 
     // Since we split at ':', we know there's a colon after the prefix
@@ -1085,7 +1300,7 @@ fn nested_list_marker_len(marker: NestedListMarker) -> usize {
     }
 }
 
-fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
+fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit], mini: bool) {
     let breaking = commits
         .iter()
         .copied()
@@ -1107,7 +1322,7 @@ fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
             .copied()
             .filter(|commit| commit.specific.as_deref() == Some(specific_name.as_str()))
             .collect::<Vec<_>>();
-        render_category_subsections(lines, &group_commits, 4);
+        render_category_subsections(lines, &group_commits, 4, mini);
     }
 
     let unspecific: Vec<&ParsedCommit> = breaking
@@ -1115,13 +1330,14 @@ fn render_breaking_section(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
         .copied()
         .filter(|commit| commit.specific.is_none())
         .collect::<Vec<_>>();
-    render_category_subsections(lines, &unspecific, 3);
+    render_category_subsections(lines, &unspecific, 3, mini);
 }
 
 fn render_new_specific_sections(
     lines: &mut Vec<String>,
     commits: &[&ParsedCommit],
     dotted_only: bool,
+    mini: bool,
 ) -> bool {
     let specific_keys = ordered_new_specific_keys(
         &commits
@@ -1154,7 +1370,7 @@ fn render_new_specific_sections(
                 })
                 .collect::<Vec<_>>();
             for commit in section_commits.iter().rev().copied() {
-                render_commit_bullets(lines, commit);
+                render_commit_bullets(lines, commit, mini);
             }
             end_specific_section(lines);
         } else {
@@ -1170,7 +1386,7 @@ fn render_new_specific_sections(
                         && commit.specific_heading == specific_heading
                 })
                 .collect::<Vec<_>>();
-            render_category_subsections(lines, &section_commits, 4);
+            render_category_subsections(lines, &section_commits, 4, mini);
             end_specific_section(lines);
         }
     }
@@ -1178,7 +1394,12 @@ fn render_new_specific_sections(
     true
 }
 
-fn render_new_plain_section(lines: &mut Vec<String>, commits: &[&ParsedCommit], dotted_only: bool) {
+fn render_new_plain_section(
+    lines: &mut Vec<String>,
+    commits: &[&ParsedCommit],
+    dotted_only: bool,
+    mini: bool,
+) {
     let new_commits: Vec<&ParsedCommit> = commits
         .iter()
         .copied()
@@ -1192,10 +1413,14 @@ fn render_new_plain_section(lines: &mut Vec<String>, commits: &[&ParsedCommit], 
 
     lines.push("### ✨ New:".to_string());
     lines.push(String::new());
-    render_category_subsections(lines, &new_commits, 4);
+    render_category_subsections(lines, &new_commits, 4, mini);
 }
 
-fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) -> bool {
+fn render_specific_sections(
+    lines: &mut Vec<String>,
+    commits: &[&ParsedCommit],
+    mini: bool,
+) -> bool {
     let specific_names = ordered_specific_names(
         &commits
             .iter()
@@ -1217,7 +1442,7 @@ fn render_specific_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) 
                 !commit.is_new && commit.specific.as_deref() == Some(specific_name.as_str())
             })
             .collect::<Vec<_>>();
-        render_category_subsections(lines, &section_commits, 4);
+        render_category_subsections(lines, &section_commits, 4, mini);
         end_specific_section(lines);
     }
 
@@ -1236,7 +1461,7 @@ fn end_specific_section(lines: &mut Vec<String>) {
     lines.push(String::new());
 }
 
-fn render_plain_category_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit]) {
+fn render_plain_category_sections(lines: &mut Vec<String>, commits: &[&ParsedCommit], mini: bool) {
     let plain_commits: Vec<&ParsedCommit> = commits
         .iter()
         .copied()
@@ -1251,13 +1476,17 @@ fn render_plain_category_sections(lines: &mut Vec<String>, commits: &[&ParsedCom
             .rev()
             .filter(|commit| commit.effective_category() == category)
         {
-            render_commit_bullets(lines, commit);
+            render_commit_bullets(lines, commit, mini);
         }
     }
 }
 
-fn render_category_subsections<T>(lines: &mut Vec<String>, commits: &[T], heading_level: usize)
-where
+fn render_category_subsections<T>(
+    lines: &mut Vec<String>,
+    commits: &[T],
+    heading_level: usize,
+    mini: bool,
+) where
     T: std::borrow::Borrow<ParsedCommit>,
 {
     for category in ordered_categories(commits) {
@@ -1273,25 +1502,38 @@ where
             .map(std::borrow::Borrow::borrow)
             .filter(|commit| commit.effective_category() == category)
         {
-            render_commit_bullets(lines, commit);
+            render_commit_bullets(lines, commit, mini);
         }
     }
 }
 
-fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit) {
+fn render_commit_bullets(lines: &mut Vec<String>, commit: &ParsedCommit, mini: bool) {
+    let hash_suffix = if mini {
+        format!(" <sub><sup><sup>_{}_</sup></sup></sub>", commit.short_hash)
+    } else {
+        format!("   _({})_", commit.short_hash)
+    };
+    let has_specific = commit.specific.is_some();
     for item in &commit.message_items {
         match item {
             MessageItem::Text(text) => {
-                lines.push(format!("* {}   _({})_", text, commit.short_hash));
+                lines.push(format!("* {}{}", text, hash_suffix));
             }
             MessageItem::NestedList {
                 intro,
                 items,
                 summary,
             } => {
-                lines.push(format!("{}   _({})_", intro, commit.short_hash));
-                for item in items {
-                    lines.push(format!("{}* {}", "  ".repeat(item.level - 1), item.text));
+                if has_specific {
+                    lines.push(format!("{}{}", intro, hash_suffix));
+                    for item in items {
+                        lines.push(format!("{}* {}", "  ".repeat(item.level - 1), item.text));
+                    }
+                } else {
+                    lines.push(format!("* {}{}", intro, hash_suffix));
+                    for item in items {
+                        lines.push(format!("  {}* {}", "  ".repeat(item.level - 1), item.text));
+                    }
                 }
                 if let Some(summary) = summary {
                     lines.push(String::new());
@@ -1568,7 +1810,7 @@ mod tests {
 
         assert!(changelog.markdown.contains("### ✨ New in DEMO message:"));
         assert!(changelog.markdown.contains("#### 💎 Enhancements"));
-        assert!(changelog.markdown.contains("Improvements:   _(b38b72e)_"));
+        assert!(changelog.markdown.contains("Improvements:   _(b38b72e)_"));
         assert!(changelog.markdown.contains("\n* This is major element"));
         assert!(
             changelog
@@ -1588,6 +1830,36 @@ mod tests {
                 .markdown
                 .contains("\n\n<sup>💡 >> This is end message to sum it up</sup>\n")
         );
+    }
+
+    #[test]
+    fn nested_list_without_specific_gets_bullet_prefix() {
+        let changelog = ChangelogDocument::new(
+            "v0.22.1",
+            vec![ParsedCommit::parse(
+                "enh: Added HOME/END Key Support. Works in: *Release Notes Preview *ReleaseNOW log (running & completed) *Changelog Preview",
+                "87eab65",
+            )],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 8).unwrap())
+        .render_markdown();
+
+        assert!(
+            changelog
+                .markdown
+                .contains("* Added HOME/END Key Support. Works in:   _(87eab65)_"),
+            "nested list intro without (Specific) must have bullet prefix"
+        );
+        assert!(
+            changelog.markdown.contains("\n  * Release Notes Preview"),
+            "nested list sub-items must be indented under the bullet"
+        );
+        assert!(
+            changelog
+                .markdown
+                .contains("\n  * ReleaseNOW log (running & completed)"),
+        );
+        assert!(changelog.markdown.contains("\n  * Changelog Preview"),);
     }
 
     #[test]
@@ -1684,6 +1956,7 @@ mod tests {
             "v0.7.3",
             &["abc1234 fix: tighten ReleaseNOW history selection".to_string()],
             Some("v0.7.1"),
+            false,
             false,
             false,
         );
@@ -1973,5 +2246,140 @@ mod tests {
         assert_eq!(current.timestamp, "20260415-111111-002");
         assert_eq!(legacy.label, "core-v1-2-3");
         assert_eq!(current.label, "core-v1-2-3");
+    }
+
+    #[test]
+    fn parses_top_pick_config_prefix() {
+        let parsed = ParsedCommit::parse("top5: *This is the third big improvement", "abc1234");
+
+        assert!(parsed.is_top_pick_config);
+        assert_eq!(parsed.top_pick_priority, Some(5));
+        assert!(!parsed.is_top_pick_reference);
+    }
+
+    #[test]
+    fn parses_top_pick_without_priority() {
+        let parsed = ParsedCommit::parse("top: *This is a top pick", "abc1234");
+
+        assert!(parsed.is_top_pick_config);
+        assert_eq!(parsed.top_pick_priority, None);
+        assert!(!parsed.is_top_pick_reference);
+    }
+
+    #[test]
+    fn top_pick_commits_excluded_from_standard_changelog() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![
+                ParsedCommit::parse("feat: regular feature", "a1b2c3d"),
+                ParsedCommit::parse("top5: *Top pick entry", "b2c3d4e"),
+                ParsedCommit::parse("fix: regular fix", "c3d4e5f"),
+            ],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        .render_markdown();
+
+        // Top pick section should be present
+        assert!(changelog.markdown.contains("This Release's Top Picks"));
+        assert!(changelog.markdown.contains("Top pick entry"));
+
+        // Regular commits should still appear
+        assert!(changelog.markdown.contains("regular feature"));
+        assert!(changelog.markdown.contains("regular fix"));
+
+        // Top pick config message should NOT appear in standard sections
+        assert!(!changelog.markdown.contains("top5:"));
+    }
+
+    #[test]
+    fn renders_top_picks_section_with_multiple_entries() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![
+                ParsedCommit::parse("top1: *First big improvement", "a1b2c3d"),
+                ParsedCommit::parse("top5: *Third big improvement", "b2c3d4e"),
+                ParsedCommit::parse("top3: *Second big improvement", "c3d4e5f"),
+            ],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        .render_markdown();
+
+        // Should have header
+        assert!(changelog.markdown.contains("This Release's Top Picks"));
+
+        // Should have all three entries in priority order
+        let first_pos = changelog.markdown.find("First big improvement").unwrap();
+        let second_pos = changelog.markdown.find("Second big improvement").unwrap();
+        let third_pos = changelog.markdown.find("Third big improvement").unwrap();
+
+        assert!(first_pos < second_pos);
+        assert!(second_pos < third_pos);
+    }
+
+    #[test]
+    fn top_picks_with_nested_bullets() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![ParsedCommit::parse(
+                "top1: *This is first huge improvement **Contains this ***Which is useful",
+                "a1b2c3d",
+            )],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        .render_markdown();
+
+        assert!(
+            changelog
+                .markdown
+                .contains("This is first huge improvement")
+        );
+        assert!(changelog.markdown.contains("Contains this"));
+        assert!(changelog.markdown.contains("Which is useful"));
+    }
+
+    #[test]
+    fn top_picks_section_appears_after_breaking() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![
+                ParsedCommit::parse("!breaking: remove old api", "a1b2c3d"),
+                ParsedCommit::parse("top1: *Important improvement", "b2c3d4e"),
+                ParsedCommit::parse("@feat: new feature", "c3d4e5f"),
+            ],
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        .render_markdown();
+
+        let breaking_pos = changelog.markdown.find("BREAKING CHANGE").unwrap();
+        let top_picks_pos = changelog.markdown.find("Top Picks").unwrap();
+        // @feat creates a "New:" section
+        let new_pos = changelog.markdown.find("New:").unwrap();
+
+        // Order: Breaking -> Top Picks -> New
+        assert!(breaking_pos < top_picks_pos);
+        assert!(top_picks_pos < new_pos);
+    }
+
+    #[test]
+    fn top_pick_commits_with_standard_clauses() {
+        // Test: fix: macOS fixes; top3: **Sorts this on macOS ***Failed autostart
+        let parsed = ParsedCommit::parse_many(
+            "fix: macOS fixes; top3: **Sorts this on macOS ***Failed autostart",
+            "abc1234",
+        );
+
+        // Should create two commits
+        assert_eq!(parsed.len(), 2);
+
+        // First should be the fix
+        assert_eq!(parsed[0].category, Some(Category::Fixes));
+        assert_eq!(
+            parsed[0].message_items[0],
+            MessageItem::Text("macOS fixes".to_string())
+        );
+
+        // Second should be the top pick config
+        assert!(parsed[1].is_top_pick_config);
+        assert_eq!(parsed[1].top_pick_priority, Some(3));
     }
 }

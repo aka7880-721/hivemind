@@ -296,6 +296,74 @@ impl ProjectConfig {
         }
     }
 
+    pub fn changelog_mini_commit_hashes_for_scope(&self, scope_index: usize) -> bool {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.mini_commit_hashes,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .map(|branch| branch.changelog_mini_commit_hashes)
+                .or_else(|| {
+                    self.branches
+                        .first()
+                        .map(|branch| branch.changelog_mini_commit_hashes)
+                })
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn set_changelog_mini_commit_hashes_for_scope(&mut self, scope_index: usize, mini: bool) {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.mini_commit_hashes = mini,
+            ProjectType::Branched => {
+                if let Some(branch) = self.branches.get_mut(scope_index) {
+                    branch.changelog_mini_commit_hashes = mini;
+                }
+                self.changelog.mini_commit_hashes = self
+                    .branches
+                    .first()
+                    .map(|branch| branch.changelog_mini_commit_hashes)
+                    .unwrap_or(false);
+            }
+        }
+    }
+
+    pub fn changelog_wrap_detailed_if_top_picks_for_scope(&self, scope_index: usize) -> bool {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.wrap_detailed_changelog_if_top_picks,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .map(|branch| branch.changelog_wrap_detailed_if_top_picks)
+                .or_else(|| {
+                    self.branches
+                        .first()
+                        .map(|branch| branch.changelog_wrap_detailed_if_top_picks)
+                })
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn set_changelog_wrap_detailed_if_top_picks_for_scope(
+        &mut self,
+        scope_index: usize,
+        wrap: bool,
+    ) {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.wrap_detailed_changelog_if_top_picks = wrap,
+            ProjectType::Branched => {
+                if let Some(branch) = self.branches.get_mut(scope_index) {
+                    branch.changelog_wrap_detailed_if_top_picks = wrap;
+                }
+                self.changelog.wrap_detailed_changelog_if_top_picks = self
+                    .branches
+                    .first()
+                    .map(|branch| branch.changelog_wrap_detailed_if_top_picks)
+                    .unwrap_or(false);
+            }
+        }
+    }
+
     pub fn set_changelog_hide_pr_messages_for_scope(&mut self, scope_index: usize, hide: bool) {
         match self.project_type {
             ProjectType::AllInOne => self.changelog.hide_pr_messages = hide,
@@ -488,6 +556,8 @@ pub struct ChangelogSettings {
     pub file_path: String,
     pub hide_pr_messages: bool,
     pub hide_bump_messages: bool,
+    pub mini_commit_hashes: bool,
+    pub wrap_detailed_changelog_if_top_picks: bool,
 }
 
 impl Default for ChangelogSettings {
@@ -497,6 +567,8 @@ impl Default for ChangelogSettings {
             file_path: DEFAULT_CHANGELOG_PATH.to_string(),
             hide_pr_messages: false,
             hide_bump_messages: false,
+            mini_commit_hashes: false,
+            wrap_detailed_changelog_if_top_picks: false,
         }
     }
 }
@@ -714,6 +786,10 @@ pub struct BranchConfig {
     #[serde(default)]
     pub changelog_hide_bump_messages: bool,
     #[serde(default)]
+    pub changelog_mini_commit_hashes: bool,
+    #[serde(default)]
+    pub changelog_wrap_detailed_if_top_picks: bool,
+    #[serde(default)]
     pub release_now: ReleaseNowSettings,
     pub version_scheme: VersionScheme,
     #[serde(default)]
@@ -902,6 +978,10 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
                 changelog_path: Some(project.changelog.effective_path().to_string()),
                 changelog_hide_pr_messages: project.changelog.hide_pr_messages,
                 changelog_hide_bump_messages: project.changelog.hide_bump_messages,
+                changelog_mini_commit_hashes: project.changelog.mini_commit_hashes,
+                changelog_wrap_detailed_if_top_picks: project
+                    .changelog
+                    .wrap_detailed_changelog_if_top_picks,
                 release_now: project.release_now.clone(),
                 version_scheme: project.version_scheme,
                 targets,
@@ -946,6 +1026,8 @@ mod tests {
             changelog_path: None,
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
+            changelog_mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
             targets: Vec::new(),
@@ -1097,6 +1179,8 @@ format = "json"
                 changelog_path: None,
                 changelog_hide_pr_messages: false,
                 changelog_hide_bump_messages: false,
+                changelog_mini_commit_hashes: false,
+                changelog_wrap_detailed_if_top_picks: false,
                 release_now: ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: Vec::new(),
@@ -1120,6 +1204,8 @@ format = "json"
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::CalVerYearMonthMicro,
                     targets: Vec::new(),
@@ -1139,6 +1225,8 @@ format = "json"
             file_path: "   ".to_string(),
             hide_pr_messages: false,
             hide_bump_messages: false,
+            mini_commit_hashes: false,
+            wrap_detailed_changelog_if_top_picks: false,
         };
 
         assert_eq!(settings.effective_path(), DEFAULT_CHANGELOG_PATH);

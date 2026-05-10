@@ -50,7 +50,7 @@ use crate::{
     },
     git_br::{
         BranchNameOption, fixed_branch_name_option_with_value, is_release_line_branch,
-        suggest_branch_name_options,
+        run_branch_cd, suggest_branch_name_options,
     },
     git_br_end::run_branch_done,
     git_mg::{run_merge, run_merge_for_pull_request},
@@ -65,6 +65,10 @@ const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/comfy-home/ComfyGit/releases/latest";
 const GITHUB_CARGO_TOML_URL: &str =
     "https://raw.githubusercontent.com/comfy-home/ComfyGit/main/Cargo.toml";
+
+const ANSI_CYAN: &str = "\x1b[36m";
+const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_RESET: &str = "\x1b[0m";
 
 static CLI_GIT_CANCELLATION_SLOT: OnceLock<Mutex<Option<GitCancellation>>> = OnceLock::new();
 static CLI_CTRL_C_HANDLER_RESULT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
@@ -209,6 +213,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             run_branch_done_command()?;
             Ok(StartupMode::Handled)
         }
+        [command, action] if is_branch_command(command) && is_branch_cd_action(action) => {
+            run_branch_cd_command()?;
+            Ok(StartupMode::Handled)
+        }
         [command] if is_pr_command(command) => {
             let cwd = env::current_dir().context("failed to read current directory")?;
             let repo_root = current_git_repo_root(&cwd)?;
@@ -318,6 +326,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command, action, option] if is_new_command(command) => {
             crate::git_new::run_new(Some(action), Some(option))?;
+            Ok(StartupMode::Handled)
+        }
+        [command] if is_toppicks_command(command) => {
+            run_toppicks()?;
             Ok(StartupMode::Handled)
         }
         _ => {
@@ -616,6 +628,10 @@ fn is_branch_done_action(value: &str) -> bool {
     matches!(value, "done" | "end" | "close" | "merge" | "mrg" | "mg")
 }
 
+fn is_branch_cd_action(value: &str) -> bool {
+    matches!(value, "cd")
+}
+
 fn is_pr_command(value: &str) -> bool {
     matches!(value, "pr")
 }
@@ -634,6 +650,10 @@ fn is_reroot_rebase_action(value: &str) -> bool {
 
 fn is_new_command(value: &str) -> bool {
     matches!(value, "new")
+}
+
+fn is_toppicks_command(value: &str) -> bool {
+    matches!(value, "toppicks" | "tp" | "topp")
 }
 
 fn parse_merge_pull_request_selector(value: &str) -> Result<u64> {
@@ -724,6 +744,7 @@ fn print_usage() {
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
     println!("  cg branch done             Create PR, merge it, switch to target, and sync");
+    println!("  cg branch cd               Interactively choose and switch to a recent branch");
     println!(
         "  cg pr                      Generate a pull request title/body for the current branch"
     );
@@ -868,6 +889,11 @@ fn run_branch_done_command() -> Result<()> {
     })
 }
 
+fn run_branch_cd_command() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    with_cli_git_cancellation(|cancel| run_branch_cd(&context.repo_root, cancel))
+}
+
 struct ActiveBranchCliContext {
     repo_root: String,
     main_branch_name: Option<String>,
@@ -1002,19 +1028,31 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                 &affected_indexes,
             )?;
             if !non_main_repo_states.is_empty() {
-                println!("Just to check: Are you aware you are currently on a NON-MAIN branch?");
+                println!(
+                    "{}Just to check: Are you aware you are currently on a NON-MAIN branch?{}",
+                    ANSI_CYAN, ANSI_RESET
+                );
                 println!("You are here:");
                 for state in &non_main_repo_states {
                     let repo_name = Path::new(&state.repo_root)
                         .file_name()
                         .and_then(|name| name.to_str())
                         .unwrap_or(&state.repo_root);
-                    println!("  {} -> {}", repo_name, state.current_branch);
+                    println!(
+                        "  {}{}{} -> {}{}{}",
+                        ANSI_YELLOW,
+                        repo_name,
+                        ANSI_RESET,
+                        ANSI_YELLOW,
+                        state.current_branch,
+                        ANSI_RESET
+                    );
                 }
 
-                if !prompt_confirm_default_yes(
-                    "Press ENTER or Y to ignore and continue; N to cancel: ",
-                )? {
+                if !prompt_confirm_default_yes(&format!(
+                    "Press {}ENTER{} or {}Y{} to ignore and continue; {}N{} to cancel: ",
+                    ANSI_YELLOW, ANSI_RESET, ANSI_YELLOW, ANSI_RESET, ANSI_YELLOW, ANSI_RESET
+                ))? {
                     bail!("Cancelled by user");
                 }
             }
@@ -3532,6 +3570,109 @@ impl ProjectRootBase for ProjectConfig {
     }
 }
 
+fn run_toppicks() -> Result<()> {
+    use crate::changelog::ParsedCommit;
+    use crate::changelog_tp::{extract_top_picks, render_top_picks_section, sort_top_picks};
+    use crate::git::run_git;
+
+    println!("Collecting commits...");
+
+    // Get git log output (limit to last 75 commits for performance)
+    let output = run_git(
+        "",
+        &[
+            "--no-pager",
+            "log",
+            "-n",
+            "75",
+            "--pretty=format:%H %s%n%b---COMMIT_END---",
+            "--no-merges",
+            "HEAD",
+        ],
+    )?;
+
+    let log_output = &output.stdout;
+
+    // Parse commits from log output (git log returns newest first, reverse to get chronological order)
+    let mut parsed_commits: Vec<ParsedCommit> = Vec::new();
+    let commit_blocks: Vec<&str> = log_output.split("---COMMIT_END---").collect();
+    for commit_block in commit_blocks.iter().rev() {
+        let block = commit_block.trim();
+        if block.is_empty() {
+            continue;
+        }
+
+        // First line is hash and subject, rest is body
+        let lines: Vec<&str> = block.lines().collect();
+        if lines.is_empty() {
+            continue;
+        }
+
+        // Parse first line for hash and subject
+        let first_line = lines[0];
+        if let Some((hash, subject)) = first_line.split_once(' ') {
+            let body = if lines.len() > 1 {
+                lines[1..].join("\n")
+            } else {
+                String::new()
+            };
+
+            // Parse the commit - hash and message (subject + body)
+            let full_message = if body.is_empty() {
+                subject.to_string()
+            } else {
+                format!("{}\n{}", subject, body)
+            };
+
+            // Use parse_many to handle potential multiple entries
+            let commits = ParsedCommit::parse_many(&full_message, hash.to_string());
+            parsed_commits.extend(commits);
+        }
+    }
+
+    if parsed_commits.is_empty() {
+        println!("No commits found.");
+        return Ok(());
+    }
+
+    // Extract top picks
+    let refs: Vec<&ParsedCommit> = parsed_commits.iter().collect();
+    let mut picks = extract_top_picks(&refs);
+
+    if picks.is_empty() {
+        println!("No Top Picks found in current commits.");
+        println!();
+        println!("To add a Top Pick, use '*' prefix in commit message body:");
+        println!("  feat: your commit subject");
+        println!("  * Your top pick header");
+        println!("  ** Bullet point 1");
+        println!("  ** Bullet point 2");
+        return Ok(());
+    }
+
+    // Sort by priority
+    sort_top_picks(&mut picks);
+
+    // Render and display
+    println!("\n=== Top Picks ===\n");
+    let lines = render_top_picks_section(&picks);
+    for line in lines {
+        println!("{}", line);
+    }
+
+    // Show priority summary
+    println!("\n--- Priority Summary ---");
+    for pick in &picks {
+        let priority_str = pick
+            .priority
+            .map(|p| format!("P{}", p))
+            .unwrap_or_else(|| "Unprioritized".to_string());
+        println!("  [{}] {}", priority_str, pick.header);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3824,6 +3965,13 @@ mod tests {
     }
 
     #[test]
+    fn is_branch_cd_action_accepts_requested_synonyms() {
+        assert!(is_branch_cd_action("cd"));
+        assert!(!is_branch_cd_action("change"));
+        assert!(!is_branch_cd_action("switch"));
+    }
+
+    #[test]
     fn is_merge_command_accepts_requested_synonyms() {
         assert!(is_merge_command("merge"));
         assert!(is_merge_command("mg"));
@@ -4056,6 +4204,8 @@ mod tests {
             changelog_path: None,
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
+            changelog_mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
             targets: vec![TargetSpec {
@@ -4551,6 +4701,8 @@ mod tests {
             changelog_path: None,
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
+            changelog_mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
             targets: vec![TargetSpec {

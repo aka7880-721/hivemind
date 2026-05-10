@@ -366,6 +366,8 @@ struct App {
     last_text_input_click_at: Option<Instant>,
     last_recent_change_click_target: Option<RecentChangeClickTarget>,
     last_recent_change_click_at: Option<Instant>,
+    commit_rename_textarea_click_at: Option<Instant>,
+    commit_rename_textarea_rect: Option<Rect>,
     status: StatusMessage,
     last_status_toast_id: u64,
     transient_toaster: ToastEngine<()>,
@@ -470,6 +472,8 @@ impl App {
             last_text_input_click_at: None,
             last_recent_change_click_target: None,
             last_recent_change_click_at: None,
+            commit_rename_textarea_click_at: None,
+            commit_rename_textarea_rect: None,
             last_status_toast_id: status.id,
             transient_toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
@@ -1356,6 +1360,21 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
         {
+            self.status = StatusMessage::info("Ctrl+C pressed".to_string());
+            // Try textarea first (commit rename dialog)
+            if let Some(dialog) = &mut self.commit_rename_dialog {
+                let was_selecting = dialog.message_editor.is_selecting();
+                self.status = StatusMessage::info(format!("Ctrl+C: selecting={}", was_selecting));
+                dialog.message_editor.copy();
+                let text: String = dialog.message_editor.yank_text();
+                self.status = StatusMessage::info(format!("Ctrl+C: yank text len={}", text.len()));
+                if !text.is_empty() {
+                    self.copy_text_to_clipboard(&text);
+                    self.status = StatusMessage::info("Ctrl+C: copied to clipboard".to_string());
+                    return Ok(());
+                }
+            }
+            // Fall back to regular text input
             let selected_text = self
                 .active_text_input_mut()
                 .and_then(|input| input.selected_text().map(str::to_string));
@@ -1365,12 +1384,43 @@ impl App {
             }
         }
 
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+            && let Some(dialog) = &mut self.commit_rename_dialog
+        {
+            self.status = StatusMessage::info("Ctrl+X pressed".to_string());
+            dialog.message_editor.cut();
+            let text: String = dialog.message_editor.yank_text();
+            if !text.is_empty() {
+                self.copy_text_to_clipboard(&text);
+                return Ok(());
+            }
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('a') | KeyCode::Char('A'))
+            && let Some(dialog) = &mut self.commit_rename_dialog
+        {
+            dialog.message_editor.select_all();
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Esc => {
                 self.commit_rename_dialog = None;
                 self.status = StatusMessage::info("Commit rename cancelled.");
             }
-            KeyCode::Enter | KeyCode::F(2) => return self.apply_commit_rename(),
+            KeyCode::Enter => {
+                if key.modifiers.contains(KeyModifiers::ALT) {
+                    // Alt+Enter inserts a newline
+                    if let Some(dialog) = &mut self.commit_rename_dialog {
+                        dialog.message_editor.insert_newline();
+                    }
+                } else {
+                    return self.apply_commit_rename();
+                }
+            }
+            KeyCode::F(2) => return self.apply_commit_rename(),
             KeyCode::Tab => {
                 if self
                     .commit_rename_dialog
@@ -1381,9 +1431,25 @@ impl App {
                     self.toggle_commit_rename_force_push();
                 }
             }
-            _ => {
+            KeyCode::Up => {
                 if let Some(dialog) = &mut self.commit_rename_dialog {
-                    dialog.message_input.handle_key(key);
+                    dialog
+                        .message_editor
+                        .move_cursor(tui_textarea::CursorMove::Up);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(dialog) = &mut self.commit_rename_dialog {
+                    dialog
+                        .message_editor
+                        .move_cursor(tui_textarea::CursorMove::Down);
+                }
+            }
+            _ => {
+                if let Some(dialog) = &mut self.commit_rename_dialog
+                    && let Some(input) = convert_to_textarea_input(key)
+                {
+                    dialog.message_editor.input(input);
                 }
             }
         }
@@ -1662,6 +1728,8 @@ impl App {
                             self.last_text_input_click_target = None;
                             self.last_text_input_click_at = None;
                         }
+                        let is_commit_rename_field =
+                            matches!(action, HitAction::CommitRenameMessageField);
                         if let Err(error) = self.handle_hit_action(action) {
                             self.status = StatusMessage::error(error.to_string());
                         }
@@ -1674,16 +1742,115 @@ impl App {
                                 self.set_text_input_cursor_from_mouse(rect, mouse.column);
                             }
                         }
+                        // Handle textarea cursor positioning for commit rename dialog
+                        if is_commit_rename_field
+                            && let Some(dialog) = &mut self.commit_rename_dialog
+                        {
+                            let inner = Rect {
+                                x: rect.x + 1,
+                                y: rect.y + 1,
+                                width: rect.width.saturating_sub(2),
+                                height: rect.height.saturating_sub(2),
+                            };
+                            let lines = dialog.message_editor.lines();
+                            let (cursor_row, _) = dialog.message_editor.cursor();
+                            let visible_height = inner.height.max(1) as usize;
+                            let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
+                            let number_width = end_row.to_string().len().max(2) as u16;
+                            let start_row = cursor_row
+                                .saturating_sub(visible_height / 2)
+                                .min(lines.len().saturating_sub(visible_height));
+                            let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                            let clicked_col =
+                                mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
+                            // For wrapped text: calculate column offset based on visual row
+                            // Approximate chars per line from content width
+                            let content_width =
+                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                            let target_col = clicked_col + (relative_row * content_width);
+                            let target_row =
+                                (start_row + relative_row).min(lines.len().saturating_sub(1));
+                            // Check for double-click (word selection)
+                            let now = Instant::now();
+                            let is_double_click = self
+                                .commit_rename_textarea_click_at
+                                .map(|prev| now.duration_since(prev) <= Duration::from_millis(400))
+                                .unwrap_or(false);
+                            // Always position cursor first
+                            dialog.message_editor.cancel_selection();
+                            dialog
+                                .message_editor
+                                .move_cursor(tui_textarea::CursorMove::Jump(
+                                    target_row as u16,
+                                    target_col as u16,
+                                ));
+                            if is_double_click {
+                                // Double-click: select word at cursor position
+                                // Move to word start, then select to word end
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::WordBack);
+                                dialog.message_editor.start_selection();
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::WordForward);
+                                // WordForward goes to start of next word, so go back one char
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::Back);
+                            }
+                            self.commit_rename_textarea_click_at = Some(now);
+                            self.commit_rename_textarea_rect = Some(rect);
+                        }
                     }
                     return;
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
                     if let Some((action, rect)) =
                         self.resolve_hit_target(mouse.column, mouse.row, false)
-                        && let Some(last_target) = self.last_text_input_click_target
-                        && last_target.same_field_action(&action)
                     {
-                        self.update_text_input_drag_selection(rect, mouse.column);
+                        if matches!(action, HitAction::CommitRenameMessageField) {
+                            // Handle drag selection for textarea
+                            if let Some(dialog) = &mut self.commit_rename_dialog {
+                                let inner = Rect {
+                                    x: rect.x + 1,
+                                    y: rect.y + 1,
+                                    width: rect.width.saturating_sub(2),
+                                    height: rect.height.saturating_sub(2),
+                                };
+                                let lines = dialog.message_editor.lines();
+                                let (cursor_row, _) = dialog.message_editor.cursor();
+                                let visible_height = inner.height.max(1) as usize;
+                                let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
+                                let number_width = end_row.to_string().len().max(2) as u16;
+                                let start_row = cursor_row
+                                    .saturating_sub(visible_height / 2)
+                                    .min(lines.len().saturating_sub(visible_height));
+                                let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                                let clicked_col =
+                                    mouse.column.saturating_sub(inner.x + number_width + 1)
+                                        as usize;
+                                let content_width =
+                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                                let target_col = clicked_col + (relative_row * content_width);
+                                let target_row =
+                                    (start_row + relative_row).min(lines.len().saturating_sub(1));
+                                // Ensure selection is active and extend to new position
+                                if !dialog.message_editor.is_selecting() {
+                                    dialog.message_editor.start_selection();
+                                }
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::Jump(
+                                        target_row as u16,
+                                        target_col as u16,
+                                    ));
+                            }
+                        } else if let Some(last_target) = self.last_text_input_click_target
+                            && last_target.same_field_action(&action)
+                        {
+                            self.update_text_input_drag_selection(rect, mouse.column);
+                        }
                     }
                     return;
                 }
@@ -1974,6 +2141,71 @@ impl App {
                         self.last_recent_change_click_at = None;
                     }
 
+                    // Handle commit rename textarea double-click for select all
+                    if matches!(action, HitAction::CommitRenameMessageField) {
+                        let now = Instant::now();
+                        if self
+                            .commit_rename_textarea_click_at
+                            .map(|previous| {
+                                now.duration_since(previous) <= Duration::from_millis(400)
+                            })
+                            .unwrap_or(false)
+                        {
+                            // Double-click: select all text in textarea
+                            if let Some(dialog) = &mut self.commit_rename_dialog {
+                                dialog.message_editor.select_all();
+                            }
+                        } else {
+                            // Single click: track for potential double-click
+                            self.commit_rename_textarea_click_at = Some(now);
+                            self.commit_rename_textarea_rect = Some(rect);
+                            // Position cursor in textarea based on click
+                            if let Some(dialog) = &mut self.commit_rename_dialog {
+                                let inner = Rect {
+                                    x: rect.x + 1,
+                                    y: rect.y + 1,
+                                    width: rect.width.saturating_sub(2),
+                                    height: rect.height.saturating_sub(2),
+                                };
+                                // Calculate number width like render_textarea_editor does
+                                let lines = dialog.message_editor.lines();
+                                let (cursor_row, _) = dialog.message_editor.cursor();
+                                let visible_height = inner.height.max(1) as usize;
+                                let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
+                                let number_width = end_row.to_string().len().max(2) as u16;
+                                // Calculate row considering scroll offset
+                                let start_row = cursor_row
+                                    .saturating_sub(visible_height / 2)
+                                    .min(lines.len().saturating_sub(visible_height));
+                                let clicked_row =
+                                    mouse.row.saturating_sub(inner.y) as usize + start_row;
+                                // Calculate col accounting for line number column
+                                let clicked_col =
+                                    mouse.column.saturating_sub(inner.x + number_width + 1)
+                                        as usize;
+                                self.status = StatusMessage::info(format!(
+                                    "Click: mouse({}, {}) inner({}, {}) start({}) -> row({}) col({})",
+                                    mouse.column,
+                                    mouse.row,
+                                    inner.x,
+                                    inner.y,
+                                    start_row,
+                                    clicked_row,
+                                    clicked_col
+                                ));
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::Jump(
+                                        clicked_row as u16,
+                                        clicked_col as u16,
+                                    ));
+                            }
+                        }
+                    } else {
+                        self.commit_rename_textarea_click_at = None;
+                        self.commit_rename_textarea_rect = None;
+                    }
+
                     if let Err(error) = self.handle_hit_action(action) {
                         self.status = StatusMessage::error(error.to_string());
                     }
@@ -2106,7 +2338,10 @@ impl App {
         }
 
         if let Some(dialog) = &mut self.commit_rename_dialog {
-            dialog.message_input.insert_str(&text);
+            for line in text.lines() {
+                dialog.message_editor.insert_str(line);
+                dialog.message_editor.insert_newline();
+            }
             self.status = StatusMessage::info("Pasted into the commit message.");
             return;
         }
@@ -2118,13 +2353,16 @@ impl App {
     }
 
     fn paste_from_clipboard(&mut self) {
+        self.status = StatusMessage::info("Paste triggered".to_string());
         let clipboard = if let Some(ref mut clipboard) = self.clipboard {
             clipboard
         } else {
+            self.status = StatusMessage::info("Creating new clipboard".to_string());
             self.clipboard = Clipboard::new().ok();
             if let Some(ref mut clipboard) = self.clipboard {
                 clipboard
             } else {
+                self.status = StatusMessage::warning("Clipboard creation failed".to_string());
                 if let Some(text) = self.fallback_clipboard.clone() {
                     self.handle_paste(text);
                 } else {
@@ -2134,8 +2372,11 @@ impl App {
             }
         };
 
+        self.status = StatusMessage::info("Getting clipboard text...".to_string());
         match clipboard.get_text() {
             Ok(text) => {
+                self.status =
+                    StatusMessage::info(format!("Got clipboard text: {} chars", text.len()));
                 if let Some(dialog) = &mut self.tag_annotation_dialog {
                     dialog.editor.insert_str(text);
                     self.status = StatusMessage::info("Pasted into the tag annotation.");
@@ -2147,6 +2388,15 @@ impl App {
                 {
                     dialog.release_message.insert_str(text);
                     self.status = StatusMessage::info("Pasted into the release notes.");
+                    return;
+                }
+
+                if let Some(dialog) = &mut self.commit_rename_dialog {
+                    for line in text.lines() {
+                        dialog.message_editor.insert_str(line);
+                        dialog.message_editor.insert_newline();
+                    }
+                    self.status = StatusMessage::info("Pasted into the commit message.");
                     return;
                 }
 
@@ -2191,7 +2441,10 @@ impl App {
         }
 
         if let Some(dialog) = &mut self.commit_rename_dialog {
-            dialog.message_input.insert_str(text);
+            for line in text.lines() {
+                dialog.message_editor.insert_str(line);
+                dialog.message_editor.insert_newline();
+            }
             return true;
         }
 
@@ -3086,10 +3339,7 @@ impl App {
             return self.project_settings_state.active_input_mut();
         }
 
-        if let Some(dialog) = &mut self.commit_rename_dialog {
-            return Some(&mut dialog.message_input);
-        }
-
+        // Commit rename and tag annotation use TuiTextArea directly, not through active_text_input_mut
         None
     }
 
@@ -4665,7 +4915,8 @@ impl App {
             return Ok(());
         };
 
-        let outcome = match rename_commit_with_subject(&dialog.plan, &dialog.message_input.value) {
+        let new_message = dialog.message_editor.lines().join("\n");
+        let outcome = match rename_commit_with_subject(&dialog.plan, &new_message) {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.commit_rename_dialog = Some(dialog);
@@ -6276,6 +6527,8 @@ impl ScopeDraft {
             changelog_path: None,
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
+            changelog_mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
             release_now: crate::config::ReleaseNowSettings::default(),
             version_scheme: self.version_scheme,
             targets: vec![TargetSpec {
@@ -7208,6 +7461,7 @@ fn build_release_notes_markdown(
             Some(&last_public_release),
             scope.hide_pr_messages,
             scope.hide_bump_messages,
+            scope.mini_commit_hashes,
         )
         .markdown);
     }
@@ -7219,6 +7473,7 @@ fn build_release_notes_markdown(
         None,
         scope.hide_pr_messages,
         scope.hide_bump_messages,
+        scope.mini_commit_hashes,
     )
     .markdown)
 }
@@ -7714,18 +7969,24 @@ impl TagAnnotationDialog {
 struct CommitRenameDialog {
     view: RecentChangeView,
     plan: CommitRenamePlan,
-    message_input: TextInput,
+    message_editor: TuiTextArea<'static>,
     push_after_rename: bool,
 }
 
 impl CommitRenameDialog {
     fn new(view: RecentChangeView, plan: CommitRenamePlan) -> Self {
-        let mut message_input = TextInput::with_value(plan.current_subject.clone());
-        message_input.select_all();
+        let mut message_editor = if plan.current_subject.trim().is_empty() {
+            TuiTextArea::default()
+        } else {
+            TuiTextArea::from(plan.current_subject.lines())
+        };
+        message_editor.set_placeholder_text("Edit commit message (supports Markdown)");
+        message_editor.set_tab_length(2);
+        message_editor.set_max_histories(100);
         Self {
             view,
             plan,
-            message_input,
+            message_editor,
             push_after_rename: false,
         }
     }
@@ -7992,55 +8253,56 @@ fn render_annotation_line(
     line: &str,
     line_number: usize,
     number_width: usize,
-    content_width: usize,
+    _content_width: usize,
     active_cursor_col: Option<usize>,
+    sel_start: Option<usize>,
+    sel_end: Option<usize>,
 ) -> Line<'static> {
     let mut spans = vec![Span::styled(
         format!("{:>width$} ", line_number, width = number_width),
         Style::default().fg(Color::DarkGray),
     )];
 
-    let (visible_text, visible_cursor_col) =
-        annotation_visible_segment(line, active_cursor_col.unwrap_or(0), content_width);
-    if active_cursor_col.is_some() {
-        let chars = visible_text.chars().collect::<Vec<_>>();
-        let highlight_index = visible_cursor_col.min(content_width.saturating_sub(1));
-        for (index, character) in chars.iter().enumerate() {
-            let style = if index == highlight_index {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else if active_cursor_col.is_some() {
-                Style::default().bg(Color::Rgb(35, 45, 60))
-            } else {
-                Style::default()
-            };
-            spans.push(Span::styled(character.to_string(), style));
-        }
+    let chars: Vec<_> = line.chars().collect();
+    let line_len = chars.len();
 
-        if chars.is_empty() || (visible_cursor_col >= chars.len() && chars.len() < content_width) {
+    if chars.is_empty() {
+        if active_cursor_col.is_some() && active_cursor_col.unwrap_or(0) == 0 {
             spans.push(Span::styled(
                 " ".to_string(),
                 Style::default().fg(Color::Black).bg(Color::Cyan),
             ));
         }
     } else {
-        spans.push(Span::raw(visible_text));
+        let cursor = active_cursor_col.unwrap_or(0);
+        let selection_start = sel_start.unwrap_or(line_len + 1);
+        let selection_end = sel_end.unwrap_or(0).min(line_len);
+
+        for (index, character) in chars.iter().enumerate() {
+            let in_selection =
+                sel_start.is_some() && index >= selection_start && index < selection_end;
+            let at_cursor = index == cursor && active_cursor_col.is_some();
+
+            let style = if at_cursor {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else if in_selection {
+                Style::default().bg(Color::Rgb(60, 80, 120))
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(character.to_string(), style));
+        }
+
+        // Show cursor at end of line if needed
+        if cursor == line_len && active_cursor_col.is_some() {
+            spans.push(Span::styled(
+                " ".to_string(),
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ));
+        }
     }
 
     Line::from(spans)
-}
-
-fn annotation_visible_segment(line: &str, cursor_col: usize, width: usize) -> (String, usize) {
-    let characters = line.chars().collect::<Vec<_>>();
-    if width == 0 {
-        return (String::new(), 0);
-    }
-
-    let start = cursor_col
-        .saturating_sub(width.saturating_sub(1))
-        .min(characters.len().saturating_sub(width));
-    let end = (start + width).min(characters.len());
-    let visible = characters[start..end].iter().collect::<String>();
-    (visible, cursor_col.saturating_sub(start))
 }
 
 pub(crate) fn dialog_form_row_height(viewport_height: u16) -> u16 {
@@ -8851,6 +9113,8 @@ mod tests {
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
@@ -8864,6 +9128,8 @@ mod tests {
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),

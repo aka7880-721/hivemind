@@ -439,6 +439,7 @@ pub(crate) struct GitScopeContext {
     pub(crate) path_filters: Vec<String>,
     pub(crate) hide_pr_messages: bool,
     pub(crate) hide_bump_messages: bool,
+    pub(crate) mini_commit_hashes: bool,
 }
 
 impl GitScopeContext {
@@ -574,6 +575,7 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             path_filters: project_scope_target_paths(project),
             hide_pr_messages: project.changelog_hide_pr_messages_for_scope(0),
             hide_bump_messages: project.changelog_hide_bump_messages_for_scope(0),
+            mini_commit_hashes: project.changelog_mini_commit_hashes_for_scope(0),
         }]);
     }
 
@@ -601,6 +603,7 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             path_filters: project_scope_target_paths(project),
             hide_pr_messages: project.changelog_hide_pr_messages_for_scope(0),
             hide_bump_messages: project.changelog_hide_bump_messages_for_scope(0),
+            mini_commit_hashes: project.changelog_mini_commit_hashes_for_scope(0),
         }]);
     }
 
@@ -627,6 +630,7 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                 path_filters: collect_target_paths(&branch.targets),
                 hide_pr_messages: project.changelog_hide_pr_messages_for_scope(index),
                 hide_bump_messages: project.changelog_hide_bump_messages_for_scope(index),
+                mini_commit_hashes: project.changelog_mini_commit_hashes_for_scope(index),
             })
         })
         .collect()
@@ -662,6 +666,7 @@ pub(crate) fn collect_all_branch_git_scope_contexts(
                 path_filters: collect_target_paths(&branch.targets),
                 hide_pr_messages: project.changelog_hide_pr_messages_for_scope(index),
                 hide_bump_messages: project.changelog_hide_bump_messages_for_scope(index),
+                mini_commit_hashes: project.changelog_mini_commit_hashes_for_scope(index),
             })
         })
         .collect()
@@ -1096,6 +1101,8 @@ mod tests {
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1114,6 +1121,8 @@ mod tests {
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1171,6 +1180,8 @@ mod tests {
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1193,6 +1204,8 @@ mod tests {
                     changelog_path: None,
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: vec![TargetSpec {
@@ -1228,6 +1241,7 @@ mod tests {
             path_filters: vec!["C:/repo/core".to_string(), "core\\nested".to_string()],
             hide_pr_messages: false,
             hide_bump_messages: false,
+            mini_commit_hashes: false,
         };
 
         assert_eq!(scope.git_pathspecs(), vec!["core", "core/nested"]);
@@ -1255,6 +1269,8 @@ mod tests {
                 changelog_path: None,
                 changelog_hide_pr_messages: false,
                 changelog_hide_bump_messages: false,
+                changelog_mini_commit_hashes: false,
+                changelog_wrap_detailed_if_top_picks: false,
                 release_now: crate::config::ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: vec![TargetSpec {

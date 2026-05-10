@@ -8,6 +8,7 @@
 mod app;
 mod branding;
 mod changelog;
+mod changelog_tp;
 mod cli;
 mod config;
 mod dialogs;

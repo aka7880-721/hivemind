@@ -1476,10 +1476,11 @@ impl App {
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5),
-                Constraint::Length(3),
-                Constraint::Min(5),
-                Constraint::Length(BUTTON_ROW_HEIGHT),
+                Constraint::Length(5),                 // Header
+                Constraint::Length(1),                 // Spacer
+                Constraint::Min(9),                    // Message editor (textarea)
+                Constraint::Length(6),                 // Help text
+                Constraint::Length(BUTTON_ROW_HEIGHT), // Buttons
             ])
             .split(inner);
 
@@ -1497,29 +1498,42 @@ impl App {
             sections[0],
         );
 
-        let input_row = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(20), Constraint::Min(10)])
-            .split(sections[1]);
-        frame.render_widget(Paragraph::new("New message"), input_row[0]);
-        let input_block = Block::default()
-            .borders(Borders::ALL)
-            .title(" value ")
-            .border_style(Style::default().fg(Color::Cyan));
-        frame.render_widget(
-            Paragraph::new(dialog.message_input.display_line(true))
-                .block(input_block)
-                .style(Style::default().fg(Color::White)),
-            input_row[1],
+        // Render multi-line message editor with markdown support
+        self.render_textarea_editor(
+            frame,
+            sections[2],
+            " New Message (Markdown supported) ",
+            "Enter commit message (supports Markdown formatting)",
+            &dialog.message_editor,
         );
         self.hit_targets.push(HitTarget::new(
-            input_row[1],
+            sections[2],
             HitAction::CommitRenameMessageField,
         ));
 
-        let mut body = vec![Line::from(
-            "Enter saves. Esc cancels. Ctrl+P toggles force-push after rename.",
-        )];
+        let mut body = vec![
+            Line::from(vec![
+                Span::styled("Enter", Style::default().fg(Color::Yellow)),
+                Span::raw(" save | "),
+                Span::styled("Alt+Enter", Style::default().fg(Color::Yellow)),
+                Span::raw(" newline | "),
+                Span::styled("Ctrl+P", Style::default().fg(Color::Yellow)),
+                Span::raw(" force-push | "),
+                Span::styled("Ctrl+A/C/X/V", Style::default().fg(Color::Yellow)),
+                Span::raw(" sel/copy/cut/paste"),
+            ]),
+            Line::from(vec![
+                Span::styled("Click", Style::default().fg(Color::Yellow)),
+                Span::raw(" cursor | "),
+                Span::styled("Double-click", Style::default().fg(Color::Yellow)),
+                Span::raw(" select | "),
+                Span::styled("Ctrl+K/U", Style::default().fg(Color::Yellow)),
+                Span::raw(" del to end/start | "),
+                Span::styled("Ctrl+W", Style::default().fg(Color::Yellow)),
+                Span::raw(" del word"),
+            ]),
+            Line::from(""),
+        ];
         if dialog.plan.touches_pushed_history {
             body.push(
                 Line::from(format!(
@@ -1551,7 +1565,7 @@ impl App {
                 "This rename stays local until you choose to push it.",
             ));
         }
-        frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), sections[2]);
+        frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), sections[3]);
 
         let mut buttons = Vec::new();
         if dialog.plan.touches_pushed_history {
@@ -1578,7 +1592,7 @@ impl App {
             HitAction::CancelCommitRename,
             Style::default().fg(Color::White).bg(Color::Red),
         ));
-        self.render_button_row(frame, sections[3], &buttons);
+        self.render_button_row(frame, sections[4], &buttons);
     }
 
     fn render_tag_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -2725,6 +2739,7 @@ impl App {
 
         let lines = editor.lines();
         let (cursor_row, cursor_col) = editor.cursor();
+        let selection_range = editor.selection_range();
         let visible_height = inner.height.max(1) as usize;
         let start_row = cursor_row
             .saturating_sub(visible_height / 2)
@@ -2745,18 +2760,39 @@ impl App {
                 .map(|(offset, line)| {
                     let row_index = start_row + offset;
                     let active = row_index == cursor_row;
+                    let (sel_start, sel_end) = selection_range
+                        .map(|((s_row, s_col), (e_row, e_col))| {
+                            if row_index < s_row || row_index > e_row {
+                                (None, None)
+                            } else {
+                                let start = if row_index == s_row {
+                                    Some(s_col)
+                                } else {
+                                    Some(0)
+                                };
+                                let end = if row_index == e_row {
+                                    Some(e_col)
+                                } else {
+                                    None
+                                };
+                                (start, end)
+                            }
+                        })
+                        .unwrap_or((None, None));
                     render_annotation_line(
                         line,
                         row_index + 1,
                         number_width,
                         content_width,
                         active.then_some(cursor_col),
+                        sel_start,
+                        sel_end,
                     )
                 })
                 .collect::<Vec<_>>()
         };
 
-        frame.render_widget(Paragraph::new(body), inner);
+        frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inner);
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {

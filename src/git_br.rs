@@ -1,15 +1,27 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit License
 //
 // For details, see the LICENSE file in the repository root.
 
-use anyhow::Result;
+use std::io::{self, Write};
+
+use anyhow::{Context, Result, bail};
 use chrono::{Datelike, NaiveDate};
+use crossterm::{
+    cursor::{MoveTo, MoveToColumn},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    execute, queue,
+    style::Print,
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
+};
 
 use crate::{
-    git::is_mainline_branch_name,
+    git::{
+        GitCancellation, is_mainline_branch_name, run_git_checked_with_cancel,
+        switch_to_existing_branch,
+    },
     versioning::{BumpAction, VersionScheme},
 };
 
@@ -412,6 +424,176 @@ fn sanitize_branch_fragment(value: &str) -> Option<String> {
 
     let sanitized = sanitized.trim_matches('-').to_string();
     (!sanitized.is_empty()).then_some(sanitized)
+}
+
+const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_RESET: &str = "\x1b[0m";
+
+pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
+    let mut branches = Vec::new();
+    let mut page = 0;
+    let mut selected = 0;
+
+    // Load initial 5 branches
+    load_branches(repo_root, &mut branches, page, cancel.clone())?;
+
+    if branches.is_empty() {
+        println!("No branches found in this repository.");
+        return Ok(());
+    }
+
+    let raw_mode = TerminalRawModeGuard::enter()?;
+
+    loop {
+        if cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
+            bail!("cancelled by user");
+        }
+
+        render_branch_selection_ui(&branches, selected)?;
+
+        let Event::Key(key) = event::read().context("failed to read branch selection input")?
+        else {
+            continue;
+        };
+
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Up if selected > 0 => {
+                selected = selected.saturating_sub(1);
+            }
+            KeyCode::Down if selected < branches.len().saturating_sub(1) => {
+                selected += 1;
+            }
+            KeyCode::Enter => {
+                drop(raw_mode);
+                let selected_branch = &branches[selected];
+                switch_to_existing_branch(repo_root, selected_branch)?;
+
+                println!();
+                println!("switched to branch: \x1b[33m{}\x1b[0m", selected_branch);
+                println!();
+                return Ok(());
+            }
+            KeyCode::Char(' ') => {
+                page += 1;
+                let start_index = branches.len();
+                load_branches(repo_root, &mut branches, page, cancel.clone())?;
+
+                if branches.len() == start_index {
+                    // No new branches loaded, reset page counter
+                    page -= 1;
+                } else {
+                    // Move selection to the first newly loaded branch
+                    selected = start_index;
+                }
+            }
+            KeyCode::Esc => {
+                drop(raw_mode);
+                println!();
+                println!("Branch selection cancelled.");
+                println!();
+                return Ok(());
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                drop(raw_mode);
+                println!();
+                println!("Branch selection cancelled.");
+                println!();
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn load_branches(
+    repo_root: &str,
+    branches: &mut Vec<String>,
+    page: usize,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let start_line = page * 5 + 1;
+
+    let output =
+        run_git_checked_with_cancel(repo_root, &["branch", "--sort=-committerdate"], cancel)?;
+
+    let lines: Vec<&str> = output.lines().collect();
+
+    for line in lines.iter().skip(start_line - 1).take(5) {
+        // Remove the "* " or "  " prefix and clean up the branch name
+        let branch_name = line
+            .trim_start_matches("* ")
+            .trim_start_matches("  ")
+            .trim();
+        if !branch_name.is_empty() {
+            branches.push(branch_name.to_string());
+        }
+    }
+
+    Ok(())
+}
+
+fn render_branch_selection_ui(branches: &[String], selected: usize) -> Result<()> {
+    let mut stdout = io::stdout();
+    let (terminal_width, _) = size().context("failed to read terminal size")?;
+
+    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))
+        .context("failed to render branch selection UI")?;
+
+    // Header
+    queue!(
+        stdout,
+        MoveToColumn(0),
+        Print(format!(
+            "{}Press ENTER to choose, or SPACE to load another 5 branches: {}\r\n\r\n",
+            ANSI_YELLOW, ANSI_RESET
+        )),
+        Print("What branch would you like to cd into?\r\n\r\n")
+    )
+    .context("failed to queue branch selection header")?;
+
+    // Branch list
+    for (i, branch) in branches.iter().enumerate() {
+        let prefix = if i == selected {
+            format!("{}> {}.{}{}", ANSI_YELLOW, i + 1, branch, ANSI_RESET)
+        } else {
+            format!("  {}.{}", i + 1, branch)
+        };
+
+        let truncated = truncate_for_terminal(&prefix, terminal_width as usize);
+        queue!(stdout, MoveToColumn(0), Print(truncated), Print("\r\n"))
+            .context("failed to queue branch selection item")?;
+    }
+
+    stdout
+        .flush()
+        .context("failed to flush branch selection UI")?;
+    Ok(())
+}
+
+fn truncate_for_terminal(value: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    value.chars().take(width).collect()
+}
+
+struct TerminalRawModeGuard;
+
+impl TerminalRawModeGuard {
+    fn enter() -> Result<Self> {
+        enable_raw_mode().context("failed to enable raw mode")?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalRawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
 }
 
 #[cfg(test)]

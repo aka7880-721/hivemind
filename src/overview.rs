@@ -1852,7 +1852,8 @@ async fn collect_preview_entries_async(
                     changelog_path: changelog_path.clone(),
                     stage_path: stage_path_for_file(&context.repo_root, &changelog_path),
                     document: build_document_from_git_log(next_version, &recent_range.lines)
-                        .with_hide_filters(context.hide_pr_messages, context.hide_bump_messages),
+                        .with_hide_filters(context.hide_pr_messages, context.hide_bump_messages)
+                        .with_mini_commit_hashes(context.mini_commit_hashes),
                 })
             })
             .await
@@ -1957,6 +1958,8 @@ mod tests {
                 changelog_path: None,
                 changelog_hide_pr_messages: false,
                 changelog_hide_bump_messages: false,
+                changelog_mini_commit_hashes: false,
+                changelog_wrap_detailed_if_top_picks: false,
                 release_now: ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: vec![TargetSpec {
