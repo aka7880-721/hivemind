@@ -427,10 +427,12 @@ pub(crate) fn rls_changelog_gen(
     hide_pr_messages: bool,
     hide_bump_messages: bool,
     mini_commit_hashes: bool,
+    wrap_detailed_if_top_picks: bool,
 ) -> RenderedChangelog {
     let mut document = build_document_from_git_log(current_tag, lines)
         .with_hide_filters(hide_pr_messages, hide_bump_messages)
-        .with_mini_commit_hashes(mini_commit_hashes);
+        .with_mini_commit_hashes(mini_commit_hashes)
+        .with_wrap_detailed_if_top_picks(wrap_detailed_if_top_picks);
     if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
         document = document.with_previous_public_release(last_public);
     }
@@ -1956,6 +1958,7 @@ mod tests {
             "v0.7.3",
             &["abc1234 fix: tighten ReleaseNOW history selection".to_string()],
             Some("v0.7.1"),
+            false,
             false,
             false,
             false,
