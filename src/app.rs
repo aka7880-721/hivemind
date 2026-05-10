@@ -2006,11 +2006,6 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                self.status = StatusMessage::info(format!(
-                    "Mouse click at ({}, {})",
-                    mouse.column, mouse.row
-                ));
-
                 if self.overview_bump_workflow_dialog.is_none()
                     && self.screen == Screen::Dashboard
                     && self.overview_tab == OverviewTab::Overview
@@ -2040,10 +2035,6 @@ impl App {
                 if let Some((action, rect)) =
                     self.resolve_hit_target(mouse.column, mouse.row, false)
                 {
-                    let is_commit_rename = matches!(action, HitAction::CommitRenameMessageField);
-                    if is_commit_rename {
-                        self.status = StatusMessage::info("Hit commit rename field".to_string());
-                    }
                     let maybe_click_target = self.text_input_click_target(&action);
                     let maybe_recent_change_target = self.recent_change_click_target(&action);
                     let mut select_all = false;

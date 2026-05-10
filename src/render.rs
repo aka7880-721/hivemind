@@ -1588,7 +1588,7 @@ impl App {
                 "This rename stays local until you choose to push it.",
             ));
         }
-        frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), sections[2]);
+        frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), sections[3]);
 
         let mut buttons = Vec::new();
         if dialog.plan.touches_pushed_history {
@@ -1615,7 +1615,7 @@ impl App {
             HitAction::CancelCommitRename,
             Style::default().fg(Color::White).bg(Color::Red),
         ));
-        self.render_button_row(frame, sections[3], &buttons);
+        self.render_button_row(frame, sections[4], &buttons);
     }
 
     fn render_tag_dialog(&mut self, frame: &mut Frame, area: Rect) {
