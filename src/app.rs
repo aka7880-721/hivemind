@@ -366,6 +366,8 @@ struct App {
     last_text_input_click_at: Option<Instant>,
     last_recent_change_click_target: Option<RecentChangeClickTarget>,
     last_recent_change_click_at: Option<Instant>,
+    commit_rename_textarea_click_at: Option<Instant>,
+    commit_rename_textarea_rect: Option<Rect>,
     status: StatusMessage,
     last_status_toast_id: u64,
     transient_toaster: ToastEngine<()>,
@@ -470,6 +472,8 @@ impl App {
             last_text_input_click_at: None,
             last_recent_change_click_target: None,
             last_recent_change_click_at: None,
+            commit_rename_textarea_click_at: None,
+            commit_rename_textarea_rect: None,
             last_status_toast_id: status.id,
             transient_toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
@@ -1365,6 +1369,14 @@ impl App {
             }
         }
 
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('a') | KeyCode::Char('A'))
+            && let Some(dialog) = &mut self.commit_rename_dialog
+        {
+            dialog.message_editor.select_all();
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Esc => {
                 self.commit_rename_dialog = None;
@@ -1974,6 +1986,46 @@ impl App {
                     } else {
                         self.last_recent_change_click_target = None;
                         self.last_recent_change_click_at = None;
+                    }
+
+                    // Handle commit rename textarea double-click for select all
+                    if matches!(action, HitAction::CommitRenameMessageField) {
+                        let now = Instant::now();
+                        if self
+                            .commit_rename_textarea_click_at
+                            .map(|previous| {
+                                now.duration_since(previous) <= Duration::from_millis(400)
+                            })
+                            .unwrap_or(false)
+                        {
+                            // Double-click: select all text in textarea
+                            if let Some(dialog) = &mut self.commit_rename_dialog {
+                                dialog.message_editor.select_all();
+                            }
+                        } else {
+                            // Single click: track for potential double-click
+                            self.commit_rename_textarea_click_at = Some(now);
+                            self.commit_rename_textarea_rect = Some(rect);
+                            // Position cursor in textarea based on click
+                            if let Some(dialog) = &mut self.commit_rename_dialog {
+                                let inner = Rect {
+                                    x: rect.x + 1,
+                                    y: rect.y + 1,
+                                    width: rect.width.saturating_sub(2),
+                                    height: rect.height.saturating_sub(2),
+                                };
+                                let row = mouse.row.saturating_sub(inner.y) as usize;
+                                let col = mouse.column.saturating_sub(inner.x) as usize;
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::Jump(
+                                        row as u16, col as u16,
+                                    ));
+                            }
+                        }
+                    } else {
+                        self.commit_rename_textarea_click_at = None;
+                        self.commit_rename_textarea_rect = None;
                     }
 
                     if let Err(error) = self.handle_hit_action(action) {
