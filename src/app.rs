@@ -1727,6 +1727,8 @@ impl App {
                             self.last_text_input_click_target = None;
                             self.last_text_input_click_at = None;
                         }
+                        let is_commit_rename_field =
+                            matches!(action, HitAction::CommitRenameMessageField);
                         if let Err(error) = self.handle_hit_action(action) {
                             self.status = StatusMessage::error(error.to_string());
                         }
@@ -1738,6 +1740,39 @@ impl App {
                             } else {
                                 self.set_text_input_cursor_from_mouse(rect, mouse.column);
                             }
+                        }
+                        // Handle textarea cursor positioning for commit rename dialog
+                        if is_commit_rename_field
+                            && let Some(dialog) = &mut self.commit_rename_dialog
+                        {
+                            let inner = Rect {
+                                x: rect.x + 1,
+                                y: rect.y + 1,
+                                width: rect.width.saturating_sub(2),
+                                height: rect.height.saturating_sub(2),
+                            };
+                            let lines = dialog.message_editor.lines();
+                            let (cursor_row, _) = dialog.message_editor.cursor();
+                            let visible_height = inner.height.max(1) as usize;
+                            let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
+                            let number_width = end_row.to_string().len().max(2) as u16;
+                            let start_row = cursor_row
+                                .saturating_sub(visible_height / 2)
+                                .min(lines.len().saturating_sub(visible_height));
+                            let clicked_row =
+                                mouse.row.saturating_sub(inner.y) as usize + start_row;
+                            let clicked_col =
+                                mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
+                            self.status = StatusMessage::info(format!(
+                                "Textarea cursor: row={} col={} (start={} number_w={})",
+                                clicked_row, clicked_col, start_row, number_width
+                            ));
+                            dialog
+                                .message_editor
+                                .move_cursor(tui_textarea::CursorMove::Jump(
+                                    clicked_row as u16,
+                                    clicked_col as u16,
+                                ));
                         }
                     }
                     return;
