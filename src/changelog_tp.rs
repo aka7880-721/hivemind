@@ -109,34 +109,8 @@ pub(crate) fn extract_top_picks(commits: &[&ParsedCommit]) -> Vec<TopPick> {
 
     let mut picks: Vec<TopPick> = merged.into_values().collect();
     // Sort by priority
-    picks.sort_by(|a, b| a.priority.cmp(&b.priority));
+    picks.sort_by_key(|a| a.priority);
     picks
-}
-
-/// Check if this commit is a top pick and extract priority and items
-fn parse_top_pick_from_commit(
-    commit: &ParsedCommit,
-) -> Option<(Option<u8>, Vec<crate::changelog::MessageItem>)> {
-    if commit.is_top_pick_config {
-        // Determine priority from the category prefix
-        let priority = commit.top_pick_priority;
-        Some((priority, commit.message_items.clone()))
-    } else {
-        None
-    }
-}
-
-/// Check if this commit references an existing top pick priority
-fn parse_top_pick_reference(
-    commit: &ParsedCommit,
-) -> Option<(u8, Vec<crate::changelog::MessageItem>)> {
-    if commit.is_top_pick_reference {
-        commit
-            .top_pick_priority
-            .map(|p| (p, commit.message_items.clone()))
-    } else {
-        None
-    }
 }
 
 /// Extract header from message items (text before first ** or ***)
