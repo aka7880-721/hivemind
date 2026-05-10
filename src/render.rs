@@ -1517,20 +1517,10 @@ impl App {
                 Span::raw(" save | "),
                 Span::styled("Alt+Enter", Style::default().fg(Color::Yellow)),
                 Span::raw(" newline | "),
-                Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::raw(" cancel | "),
                 Span::styled("Ctrl+P", Style::default().fg(Color::Yellow)),
-                Span::raw(" force-push"),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+A", Style::default().fg(Color::Yellow)),
-                Span::raw(" select all | "),
-                Span::styled("Ctrl+C", Style::default().fg(Color::Yellow)),
-                Span::raw(" copy | "),
-                Span::styled("Ctrl+X", Style::default().fg(Color::Yellow)),
-                Span::raw(" cut | "),
-                Span::styled("Ctrl+V", Style::default().fg(Color::Yellow)),
-                Span::raw(" paste"),
+                Span::raw(" force-push | "),
+                Span::styled("Ctrl+A/C/X/V", Style::default().fg(Color::Yellow)),
+                Span::raw(" sel/copy/cut/paste"),
             ]),
             Line::from(vec![
                 Span::styled("Click", Style::default().fg(Color::Yellow)),
@@ -1542,6 +1532,7 @@ impl App {
                 Span::styled("Ctrl+W", Style::default().fg(Color::Yellow)),
                 Span::raw(" del word"),
             ]),
+            Line::from(""),
         ];
         if dialog.plan.touches_pushed_history {
             body.push(
