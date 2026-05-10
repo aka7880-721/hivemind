@@ -2066,6 +2066,16 @@ impl App {
                                 let clicked_col =
                                     mouse.column.saturating_sub(inner.x + number_width + 1)
                                         as usize;
+                                self.status = StatusMessage::info(format!(
+                                    "Click: mouse({}, {}) inner({}, {}) start({}) -> row({}) col({})",
+                                    mouse.column,
+                                    mouse.row,
+                                    inner.x,
+                                    inner.y,
+                                    start_row,
+                                    clicked_row,
+                                    clicked_col
+                                ));
                                 dialog
                                     .message_editor
                                     .move_cursor(tui_textarea::CursorMove::Jump(
@@ -2255,6 +2265,15 @@ impl App {
                 {
                     dialog.release_message.insert_str(text);
                     self.status = StatusMessage::info("Pasted into the release notes.");
+                    return;
+                }
+
+                if let Some(dialog) = &mut self.commit_rename_dialog {
+                    for line in text.lines() {
+                        dialog.message_editor.insert_str(line);
+                        dialog.message_editor.insert_newline();
+                    }
+                    self.status = StatusMessage::info("Pasted into the commit message.");
                     return;
                 }
 
