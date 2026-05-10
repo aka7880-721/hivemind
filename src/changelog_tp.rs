@@ -63,80 +63,54 @@ pub(crate) const PRIORITY_QUICK_DOWNLOADS_BOTTOM: u16 = 100;
 
 /// Extract Top Picks from parsed commits
 pub(crate) fn extract_top_picks(commits: &[&ParsedCommit]) -> Vec<TopPick> {
-    let mut picks = Vec::new();
-    let mut priority_headers: HashMap<u8, String> = HashMap::new();
+    // Collect all top picks (both headers with * and bullets-only with **)
+    let mut all_picks: Vec<TopPick> = Vec::new();
 
-    // First pass: collect all top picks and track priority->header mappings
     for commit in commits {
-        if let Some((priority, items)) = parse_top_pick_from_commit(commit) {
-            let header = extract_header(&items);
-            if let Some(p) = priority {
-                priority_headers.insert(p, header.clone());
-            }
-
-            let bullets = extract_bullets(&items);
-            picks.push(TopPick {
-                priority,
-                header,
-                bullets,
-                commit_hash: commit.short_hash.clone(),
-                is_reference: false,
-            });
+        if !commit.is_top_pick_config && !commit.is_top_pick_reference {
+            continue;
         }
+
+        let items = &commit.message_items;
+        let header = extract_header(items);
+        let bullets = extract_bullets(items);
+
+        all_picks.push(TopPick {
+            priority: commit.top_pick_priority,
+            header,
+            bullets,
+            commit_hash: commit.short_hash.clone(),
+            is_reference: commit.is_top_pick_reference,
+        });
     }
 
-    // Handle cross-references: commits that reference an existing priority
-    for commit in commits.iter().rev() {
-        if let Some((priority, items)) = parse_top_pick_reference(commit)
-            && let Some(existing_header) = priority_headers.get(&priority)
-        {
-            // Find existing pick and merge bullets
-            if let Some(existing) = picks.iter_mut().find(|p| {
-                p.priority == Some(priority) && &p.header == existing_header && !p.is_reference
-            }) {
-                let new_bullets = extract_bullets(&items);
-                existing.bullets.extend(new_bullets);
-            } else {
-                // Create a reference pick if original not found
-                let bullets = extract_bullets(&items);
-                picks.push(TopPick {
-                    priority: Some(priority),
-                    header: existing_header.clone(),
-                    bullets,
-                    commit_hash: commit.short_hash.clone(),
-                    is_reference: true,
-                });
+    // Merge picks by priority: if one has header and one doesn't, merge bullets into header
+    let mut merged: HashMap<u8, TopPick> = HashMap::new();
+
+    for pick in all_picks {
+        if let Some(priority) = pick.priority {
+            match merged.entry(priority) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let existing = entry.get_mut();
+                    // If this pick has a header and existing doesn't, use this header
+                    if !pick.header.is_empty() && existing.header.is_empty() {
+                        existing.header = pick.header;
+                    }
+                    // If existing has header and this doesn't, just add bullets
+                    // If both have headers (shouldn't happen), keep existing and add bullets
+                    existing.bullets.extend(pick.bullets);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(pick);
+                }
             }
         }
     }
 
+    let mut picks: Vec<TopPick> = merged.into_values().collect();
+    // Sort by priority
+    picks.sort_by_key(|a| a.priority);
     picks
-}
-
-/// Check if this commit is a top pick and extract priority and items
-fn parse_top_pick_from_commit(
-    commit: &ParsedCommit,
-) -> Option<(Option<u8>, Vec<crate::changelog::MessageItem>)> {
-    if commit.is_top_pick_config {
-        // Determine priority from the category prefix
-        let priority = commit.top_pick_priority;
-        Some((priority, commit.message_items.clone()))
-    } else {
-        None
-    }
-}
-
-/// Check if this commit references an existing top pick priority
-fn parse_top_pick_reference(
-    commit: &ParsedCommit,
-) -> Option<(u8, Vec<crate::changelog::MessageItem>)> {
-    if commit.is_top_pick_reference {
-        commit
-            .top_pick_priority
-            .map(|p| (p, commit.message_items.clone()))
-    } else {
-        None
-    }
 }
 
 /// Extract header from message items (text before first ** or ***)
@@ -161,8 +135,10 @@ fn extract_bullets(items: &[crate::changelog::MessageItem]) -> Vec<TopPickBullet
     for item in items {
         if let crate::changelog::MessageItem::NestedList { items, .. } = item {
             for entry in items {
+                // parse_top_pick_message uses ** → 2, *** → 3 (same marker levels as feat nested lists).
+                // First bullets must render as column-0 list items under the h4 (not indented).
                 bullets.push(TopPickBullet {
-                    level: entry.level.saturating_sub(1), // convert 1->0, 2->1, 3->2
+                    level: entry.level.saturating_sub(2),
                     text: entry.text.clone(),
                 });
             }
@@ -209,7 +185,6 @@ pub(crate) fn render_top_picks_section(picks: &[TopPick]) -> Vec<String> {
             "#### **{}. &nbsp;&nbsp;&nbsp;{}**",
             number, pick.header
         ));
-        lines.push(String::new());
 
         // Group bullets by level for hierarchical rendering
         render_bullets_hierarchical(&mut lines, &pick.bullets);
@@ -236,14 +211,10 @@ fn render_bullets_hierarchical(lines: &mut Vec<String>, bullets: &[TopPickBullet
     while i < bullets.len() {
         let bullet = &bullets[i];
 
-        if bullet.level == 0 {
-            // Top-level bullet
-            lines.push(format!("- {}", bullet.text));
-        } else {
-            // Nested bullet
-            let indent = "    ".repeat(bullet.level);
-            lines.push(format!("{}- {}", indent, bullet.text));
-        }
+        // Level 0 = ** (first bullet level) -> no indent (just "- ")
+        // Level 1 = *** (nested) -> 4 spaces indent ("    - ")
+        let indent = if bullet.level == 0 { "" } else { "    " };
+        lines.push(format!("{}- {}", indent, bullet.text));
 
         i += 1;
     }
@@ -315,11 +286,11 @@ mod tests {
             intro: "Header:".to_string(),
             items: vec![
                 NestedListEntry {
-                    level: 1,
+                    level: 2,
                     text: "Level 1 item".to_string(),
                 },
                 NestedListEntry {
-                    level: 2,
+                    level: 3,
                     text: "Level 2 item".to_string(),
                 },
             ],
@@ -426,5 +397,32 @@ mod tests {
         assert!(output.contains("First improvement"));
         assert!(output.contains("- Contains this"));
         assert!(output.contains("🎉 Enjoy!"));
+    }
+
+    /// First `**` bullets must not be indented; no blank line between h4 and list (valid CommonMark).
+    #[test]
+    fn top_picks_h4_immediately_followed_by_top_level_list() {
+        let picks = vec![TopPick {
+            priority: Some(1),
+            header: "This is first huge improvement".to_string(),
+            bullets: vec![TopPickBullet {
+                level: 0,
+                text: "Contains this".to_string(),
+            }],
+            commit_hash: "abc".to_string(),
+            is_reference: false,
+        }];
+        let lines = render_top_picks_section(&picks);
+        let h4 = lines
+            .iter()
+            .position(|l| l.starts_with("#### **1."))
+            .expect("numbered top pick heading");
+        assert!(
+            h4 + 1 < lines.len()
+                && lines[h4 + 1] == "- Contains this"
+                && !lines[h4 + 1].starts_with(' '),
+            "expected `- Contains this` directly after h4, got: {:?}",
+            lines.get(h4..(h4 + 3).min(lines.len()))
+        );
     }
 }

@@ -328,6 +328,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             crate::git_new::run_new(Some(action), Some(option))?;
             Ok(StartupMode::Handled)
         }
+        [command] if is_toppicks_command(command) => {
+            run_toppicks()?;
+            Ok(StartupMode::Handled)
+        }
         _ => {
             print_usage();
             bail!("unknown command")
@@ -646,6 +650,10 @@ fn is_reroot_rebase_action(value: &str) -> bool {
 
 fn is_new_command(value: &str) -> bool {
     matches!(value, "new")
+}
+
+fn is_toppicks_command(value: &str) -> bool {
+    matches!(value, "toppicks" | "tp" | "topp")
 }
 
 fn parse_merge_pull_request_selector(value: &str) -> Result<u64> {
@@ -3560,6 +3568,109 @@ impl ProjectRootBase for ProjectConfig {
     fn project_root_base(&self) -> Option<PathBuf> {
         self.repo.as_ref().map(repo_root_path)
     }
+}
+
+fn run_toppicks() -> Result<()> {
+    use crate::changelog::ParsedCommit;
+    use crate::changelog_tp::{extract_top_picks, render_top_picks_section, sort_top_picks};
+    use crate::git::run_git;
+
+    println!("Collecting commits...");
+
+    // Get git log output (limit to last 75 commits for performance)
+    let output = run_git(
+        "",
+        &[
+            "--no-pager",
+            "log",
+            "-n",
+            "75",
+            "--pretty=format:%H %s%n%b---COMMIT_END---",
+            "--no-merges",
+            "HEAD",
+        ],
+    )?;
+
+    let log_output = &output.stdout;
+
+    // Parse commits from log output (git log returns newest first, reverse to get chronological order)
+    let mut parsed_commits: Vec<ParsedCommit> = Vec::new();
+    let commit_blocks: Vec<&str> = log_output.split("---COMMIT_END---").collect();
+    for commit_block in commit_blocks.iter().rev() {
+        let block = commit_block.trim();
+        if block.is_empty() {
+            continue;
+        }
+
+        // First line is hash and subject, rest is body
+        let lines: Vec<&str> = block.lines().collect();
+        if lines.is_empty() {
+            continue;
+        }
+
+        // Parse first line for hash and subject
+        let first_line = lines[0];
+        if let Some((hash, subject)) = first_line.split_once(' ') {
+            let body = if lines.len() > 1 {
+                lines[1..].join("\n")
+            } else {
+                String::new()
+            };
+
+            // Parse the commit - hash and message (subject + body)
+            let full_message = if body.is_empty() {
+                subject.to_string()
+            } else {
+                format!("{}\n{}", subject, body)
+            };
+
+            // Use parse_many to handle potential multiple entries
+            let commits = ParsedCommit::parse_many(&full_message, hash.to_string());
+            parsed_commits.extend(commits);
+        }
+    }
+
+    if parsed_commits.is_empty() {
+        println!("No commits found.");
+        return Ok(());
+    }
+
+    // Extract top picks
+    let refs: Vec<&ParsedCommit> = parsed_commits.iter().collect();
+    let mut picks = extract_top_picks(&refs);
+
+    if picks.is_empty() {
+        println!("No Top Picks found in current commits.");
+        println!();
+        println!("To add a Top Pick, use '*' prefix in commit message body:");
+        println!("  feat: your commit subject");
+        println!("  * Your top pick header");
+        println!("  ** Bullet point 1");
+        println!("  ** Bullet point 2");
+        return Ok(());
+    }
+
+    // Sort by priority
+    sort_top_picks(&mut picks);
+
+    // Render and display
+    println!("\n=== Top Picks ===\n");
+    let lines = render_top_picks_section(&picks);
+    for line in lines {
+        println!("{}", line);
+    }
+
+    // Show priority summary
+    println!("\n--- Priority Summary ---");
+    for pick in &picks {
+        let priority_str = pick
+            .priority
+            .map(|p| format!("P{}", p))
+            .unwrap_or_else(|| "Unprioritized".to_string());
+        println!("  [{}] {}", priority_str, pick.header);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

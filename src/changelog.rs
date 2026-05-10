@@ -1091,7 +1091,16 @@ fn parse_top_pick_message(segment: &str) -> Option<MessageItem> {
         } else if cursor.starts_with("**") {
             // Level 2
             let content = cursor[2..].trim();
-            let next_pos = content.find("***").unwrap_or(content.len());
+            // Look for either next *** or next ** at same level
+            let next_stars = content.find("***");
+            // Find next ** but skip position 0 (that would be the current marker)
+            let next_double = content[1..].find("**").map(|p| p + 1);
+            let next_pos = match (next_stars, next_double) {
+                (Some(a), Some(b)) => a.min(b),
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                (None, None) => content.len(),
+            };
             let text = content[..next_pos].trim();
             if !text.is_empty() {
                 items.push(NestedListEntry {
@@ -1120,11 +1129,12 @@ fn parse_top_pick_message(segment: &str) -> Option<MessageItem> {
     })
 }
 
-/// Detect if a message segment references an existing top pick priority
-fn detect_top_pick_reference(_message: &str) -> bool {
-    // This is used when a regular commit message has a top pick clause
-    // We'll detect this during the split_subject_clauses phase instead
-    false
+/// Detect if a top pick message is a reference (adds bullets to existing top pick).
+/// A reference starts with `**` or `***` (has bullets but no `*` header).
+fn detect_top_pick_reference(segment: &str) -> bool {
+    let trimmed = segment.trim();
+    // If it contains ** or *** markers but no * header prefix, it's a reference
+    trimmed.starts_with("**") && !trimmed.starts_with("* ") && !trimmed.starts_with("*\t")
 }
 
 fn split_subject_clauses(subject: &str) -> Vec<String> {
