@@ -8008,7 +8008,7 @@ fn render_annotation_line(
     line: &str,
     line_number: usize,
     number_width: usize,
-    content_width: usize,
+    _content_width: usize,
     active_cursor_col: Option<usize>,
 ) -> Line<'static> {
     let mut spans = vec![Span::styled(
@@ -8016,47 +8016,29 @@ fn render_annotation_line(
         Style::default().fg(Color::DarkGray),
     )];
 
-    let (visible_text, visible_cursor_col) =
-        annotation_visible_segment(line, active_cursor_col.unwrap_or(0), content_width);
     if active_cursor_col.is_some() {
-        let chars = visible_text.chars().collect::<Vec<_>>();
-        let highlight_index = visible_cursor_col.min(content_width.saturating_sub(1));
-        for (index, character) in chars.iter().enumerate() {
-            let style = if index == highlight_index {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else if active_cursor_col.is_some() {
-                Style::default().bg(Color::Rgb(35, 45, 60))
-            } else {
-                Style::default()
-            };
-            spans.push(Span::styled(character.to_string(), style));
-        }
-
-        if chars.is_empty() || (visible_cursor_col >= chars.len() && chars.len() < content_width) {
+        let cursor = active_cursor_col.unwrap_or(0);
+        let chars: Vec<_> = line.chars().collect();
+        if chars.is_empty() {
             spans.push(Span::styled(
                 " ".to_string(),
                 Style::default().fg(Color::Black).bg(Color::Cyan),
             ));
+        } else {
+            for (index, character) in chars.iter().enumerate() {
+                let style = if index == cursor {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default()
+                };
+                spans.push(Span::styled(character.to_string(), style));
+            }
         }
     } else {
-        spans.push(Span::raw(visible_text));
+        spans.push(Span::raw(line.to_string()));
     }
 
     Line::from(spans)
-}
-
-fn annotation_visible_segment(line: &str, cursor_col: usize, width: usize) -> (String, usize) {
-    let characters = line.chars().collect::<Vec<_>>();
-    if width == 0 {
-        return (String::new(), 0);
-    }
-
-    let start = cursor_col
-        .saturating_sub(width.saturating_sub(1))
-        .min(characters.len().saturating_sub(width));
-    let end = (start + width).min(characters.len());
-    let visible = characters[start..end].iter().collect::<String>();
-    (visible, cursor_col.saturating_sub(start))
 }
 
 pub(crate) fn dialog_form_row_height(viewport_height: u16) -> u16 {
