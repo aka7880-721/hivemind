@@ -60,6 +60,7 @@ pub(crate) enum ProjectSettingsFocus {
     ChangelogHidePrMessages,
     ChangelogHideBumpMessages,
     ChangelogMiniCommitHashes,
+    ChangelogWrapDetailedIfTopPicks,
     ReleaseNowEnabled,
     ReleaseNowWindows,
     ReleaseNowLinuxArm,
@@ -83,6 +84,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) changelog_hide_pr_messages: bool,
     pub(crate) changelog_hide_bump_messages: bool,
     pub(crate) changelog_mini_commit_hashes: bool,
+    pub(crate) changelog_wrap_detailed_if_top_picks: bool,
     pub(crate) release_now_windows: TextInput,
     pub(crate) release_now_linux_arm: TextInput,
     pub(crate) release_now_linux_amd: TextInput,
@@ -105,6 +107,7 @@ impl Default for ProjectSettingsState {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
             release_now_windows: TextInput::with_value(""),
             release_now_linux_arm: TextInput::with_value(""),
             release_now_linux_amd: TextInput::with_value(""),
@@ -141,6 +144,8 @@ impl ProjectSettingsState {
             project.changelog_hide_bump_messages_for_scope(scope_index);
         self.changelog_mini_commit_hashes =
             project.changelog_mini_commit_hashes_for_scope(scope_index);
+        self.changelog_wrap_detailed_if_top_picks =
+            project.changelog_wrap_detailed_if_top_picks_for_scope(scope_index);
         self.release_now_windows
             .set_value(release_now.windows_script.clone());
         self.release_now_linux_arm
@@ -178,6 +183,7 @@ impl ProjectSettingsState {
                     fields.push(ProjectSettingsFocus::ChangelogPath);
                     fields.push(ProjectSettingsFocus::ChangelogHidePrMessages);
                     fields.push(ProjectSettingsFocus::ChangelogHideBumpMessages);
+                    fields.push(ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks);
                     fields.push(ProjectSettingsFocus::ChangelogMiniCommitHashes);
                 }
                 fields
@@ -974,6 +980,9 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
             ProjectSettingsFocus::ChangelogHideBumpMessages,
         ));
         rows.push(ProjectSettingsRow::Checkbox(
+            ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks,
+        ));
+        rows.push(ProjectSettingsRow::Checkbox(
             ProjectSettingsFocus::ChangelogMiniCommitHashes,
         ));
         rows.push(ProjectSettingsRow::Spacer(1));
@@ -1129,6 +1138,9 @@ fn render_checkbox_row(
                 .release_now_for_scope(scope_index)
                 .quick_downloads
                 .enabled
+        }
+        ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks => {
+            project.changelog_wrap_detailed_if_top_picks_for_scope(scope_index)
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => {
             project.changelog_mini_commit_hashes_for_scope(scope_index)
@@ -1364,6 +1376,9 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ChangelogEnabled => "Changelog Generation",
         ProjectSettingsFocus::ChangelogHidePrMessages => "Hide PR messages",
         ProjectSettingsFocus::ChangelogHideBumpMessages => "Hide bump messages",
+        ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks => {
+            "Wrap detailed changelog if TopPicks present"
+        }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => "Mini commit hashes",
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
@@ -1397,6 +1412,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ChangelogEnabled
             | ProjectSettingsFocus::ChangelogHidePrMessages
             | ProjectSettingsFocus::ChangelogHideBumpMessages
+            | ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks
             | ProjectSettingsFocus::ChangelogMiniCommitHashes
             | ProjectSettingsFocus::ReleaseNowEnabled
             | ProjectSettingsFocus::QuickDownloadsEnabled
@@ -1500,6 +1516,19 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
             app.status = super::StatusMessage::success(format!(
                 "Bump messages {} for {}.",
                 if next { "hidden" } else { "shown" },
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks => {
+            let next = !app
+                .project_settings_state
+                .changelog_wrap_detailed_if_top_picks;
+            app.project_settings_state
+                .changelog_wrap_detailed_if_top_picks = next;
+            active_project.set_changelog_wrap_detailed_if_top_picks_for_scope(scope_index, next);
+            app.status = super::StatusMessage::success(format!(
+                "Wrap detailed changelog {} for {}.",
+                if next { "enabled" } else { "disabled" },
                 scope_name
             ));
         }
