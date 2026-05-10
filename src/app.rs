@@ -1695,9 +1695,18 @@ impl App {
         if self.commit_rename_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
+                    self.status = StatusMessage::info(format!(
+                        "CR mouse click at ({}, {})",
+                        mouse.column, mouse.row
+                    ));
                     if let Some((action, rect)) =
                         self.resolve_hit_target(mouse.column, mouse.row, false)
                     {
+                        let is_msg_field = matches!(action, HitAction::CommitRenameMessageField);
+                        self.status = StatusMessage::info(format!(
+                            "CR hit action: CommitRenameMessageField={}",
+                            is_msg_field
+                        ));
                         let maybe_click_target = self.text_input_click_target(&action);
                         let mut select_all = false;
                         if let Some(target) = maybe_click_target {
