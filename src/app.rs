@@ -1411,6 +1411,11 @@ impl App {
                 self.status = StatusMessage::info("Commit rename cancelled.");
             }
             KeyCode::Enter => {
+                self.status = StatusMessage::info(format!(
+                    "Enter: alt={} ctrl={}",
+                    key.modifiers.contains(KeyModifiers::ALT),
+                    key.modifiers.contains(KeyModifiers::CONTROL)
+                ));
                 if key.modifiers.contains(KeyModifiers::ALT)
                     || key.modifiers.contains(KeyModifiers::CONTROL)
                 {
