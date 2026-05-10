@@ -1516,6 +1516,8 @@ impl App {
                 Span::styled("Enter", Style::default().fg(Color::Yellow)),
                 Span::raw(" save | "),
                 Span::styled("Alt+Enter", Style::default().fg(Color::Yellow)),
+                Span::raw(" / "),
+                Span::styled("Ctrl+Enter", Style::default().fg(Color::Yellow)),
                 Span::raw(" newline | "),
                 Span::styled("Ctrl+P", Style::default().fg(Color::Yellow)),
                 Span::raw(" force-push | "),
