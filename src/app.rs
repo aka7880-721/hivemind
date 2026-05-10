@@ -1695,7 +1695,7 @@ impl App {
         if self.commit_rename_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    self.status = StatusMessage::info(format!(
+                    self.status = StatusMessage::error(format!(
                         "CR mouse click at ({}, {})",
                         mouse.column, mouse.row
                     ));
@@ -1703,7 +1703,7 @@ impl App {
                         self.resolve_hit_target(mouse.column, mouse.row, false)
                     {
                         let is_msg_field = matches!(action, HitAction::CommitRenameMessageField);
-                        self.status = StatusMessage::info(format!(
+                        self.status = StatusMessage::error(format!(
                             "CR hit action: CommitRenameMessageField={}",
                             is_msg_field
                         ));
@@ -1763,26 +1763,26 @@ impl App {
                             let clicked_row = relative_row + start_row;
                             let clicked_col =
                                 mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
-                            self.status = StatusMessage::info(format!(
-                                "TA: mouse.y={}, inner.y={}, rel_row={}, start_row={}, final_row={}, col={}",
-                                mouse.row,
-                                inner.y,
-                                relative_row,
-                                start_row,
-                                clicked_row,
-                                clicked_col
-                            ));
                             let (prev_row, prev_col) = dialog.message_editor.cursor();
+                            let lines_count = dialog.message_editor.lines().len();
+                            let target_row = clicked_row.min(lines_count.saturating_sub(1));
                             dialog
                                 .message_editor
                                 .move_cursor(tui_textarea::CursorMove::Jump(
-                                    clicked_row as u16,
+                                    target_row as u16,
                                     clicked_col as u16,
                                 ));
                             let (new_row, new_col) = dialog.message_editor.cursor();
-                            self.status = StatusMessage::info(format!(
-                                "TA move: prev=({}, {}) -> new=({}, {})",
-                                prev_row, prev_col, new_row, new_col
+                            self.status = StatusMessage::error(format!(
+                                "rel={} start={} target={} lines={} | prev=({}, {}) -> new=({}, {})",
+                                relative_row,
+                                start_row,
+                                target_row,
+                                lines_count,
+                                prev_row,
+                                prev_col,
+                                new_row,
+                                new_col
                             ));
                         }
                     }
