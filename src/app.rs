@@ -1411,12 +1411,10 @@ impl App {
                 self.status = StatusMessage::info("Commit rename cancelled.");
             }
             KeyCode::Enter => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    // Shift+Enter inserts a newline
-                    self.status = StatusMessage::info("Shift+Enter detected".to_string());
+                if key.modifiers.contains(KeyModifiers::ALT) {
+                    // Alt+Enter inserts a newline
                     if let Some(dialog) = &mut self.commit_rename_dialog {
                         dialog.message_editor.insert_newline();
-                        self.status = StatusMessage::info("Newline inserted".to_string());
                     }
                 } else {
                     return self.apply_commit_rename();

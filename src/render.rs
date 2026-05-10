@@ -1515,7 +1515,7 @@ impl App {
             Line::from(vec![
                 Span::styled("Enter", Style::default().fg(Color::Yellow)),
                 Span::raw(" saves | "),
-                Span::styled("Shift+Enter", Style::default().fg(Color::Yellow)),
+                Span::styled("Alt+Enter", Style::default().fg(Color::Yellow)),
                 Span::raw(" new line | "),
                 Span::styled("Esc", Style::default().fg(Color::Yellow)),
                 Span::raw(" cancels"),
