@@ -1776,30 +1776,24 @@ impl App {
                                 .commit_rename_textarea_click_at
                                 .map(|prev| now.duration_since(prev) <= Duration::from_millis(400))
                                 .unwrap_or(false);
+                            // Always position cursor first
+                            dialog.message_editor.cancel_selection();
+                            dialog
+                                .message_editor
+                                .move_cursor(tui_textarea::CursorMove::Jump(
+                                    target_row as u16,
+                                    target_col as u16,
+                                ));
                             if is_double_click {
                                 // Double-click: select word at cursor position
-                                // Start selection, move to word start, then extend to word end
-                                dialog.message_editor.start_selection();
-                                // Move to start of word
-                                dialog
-                                    .message_editor
-                                    .move_cursor(tui_textarea::CursorMove::WordForward);
+                                // Move to word start, then select to word end
                                 dialog
                                     .message_editor
                                     .move_cursor(tui_textarea::CursorMove::WordBack);
-                                // Extend selection to end of word
+                                dialog.message_editor.start_selection();
                                 dialog
                                     .message_editor
                                     .move_cursor(tui_textarea::CursorMove::WordForward);
-                            } else {
-                                // Single click: just move cursor and clear selection
-                                dialog.message_editor.cancel_selection();
-                                dialog
-                                    .message_editor
-                                    .move_cursor(tui_textarea::CursorMove::Jump(
-                                        target_row as u16,
-                                        target_col as u16,
-                                    ));
                             }
                             self.commit_rename_textarea_click_at = Some(now);
                             self.commit_rename_textarea_rect = Some(rect);
