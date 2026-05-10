@@ -1770,12 +1770,39 @@ impl App {
                             let target_col = clicked_col + (relative_row * content_width);
                             let target_row =
                                 (start_row + relative_row).min(lines.len().saturating_sub(1));
-                            dialog
-                                .message_editor
-                                .move_cursor(tui_textarea::CursorMove::Jump(
-                                    target_row as u16,
-                                    target_col as u16,
-                                ));
+                            // Check for double-click (word selection)
+                            let now = Instant::now();
+                            let is_double_click = self
+                                .commit_rename_textarea_click_at
+                                .map(|prev| now.duration_since(prev) <= Duration::from_millis(400))
+                                .unwrap_or(false);
+                            if is_double_click {
+                                // Double-click: select word at cursor position
+                                // Start selection, move to word start, then extend to word end
+                                dialog.message_editor.start_selection();
+                                // Move to start of word
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::WordForward);
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::WordBack);
+                                // Extend selection to end of word
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::WordForward);
+                            } else {
+                                // Single click: just move cursor and clear selection
+                                dialog.message_editor.cancel_selection();
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::Jump(
+                                        target_row as u16,
+                                        target_col as u16,
+                                    ));
+                            }
+                            self.commit_rename_textarea_click_at = Some(now);
+                            self.commit_rename_textarea_rect = Some(rect);
                         }
                     }
                     return;
@@ -1783,10 +1810,49 @@ impl App {
                 MouseEventKind::Drag(MouseButton::Left) => {
                     if let Some((action, rect)) =
                         self.resolve_hit_target(mouse.column, mouse.row, false)
-                        && let Some(last_target) = self.last_text_input_click_target
-                        && last_target.same_field_action(&action)
                     {
-                        self.update_text_input_drag_selection(rect, mouse.column);
+                        if matches!(action, HitAction::CommitRenameMessageField) {
+                            // Handle drag selection for textarea
+                            if let Some(dialog) = &mut self.commit_rename_dialog {
+                                let inner = Rect {
+                                    x: rect.x + 1,
+                                    y: rect.y + 1,
+                                    width: rect.width.saturating_sub(2),
+                                    height: rect.height.saturating_sub(2),
+                                };
+                                let lines = dialog.message_editor.lines();
+                                let (cursor_row, _) = dialog.message_editor.cursor();
+                                let visible_height = inner.height.max(1) as usize;
+                                let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
+                                let number_width = end_row.to_string().len().max(2) as u16;
+                                let start_row = cursor_row
+                                    .saturating_sub(visible_height / 2)
+                                    .min(lines.len().saturating_sub(visible_height));
+                                let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                                let clicked_col =
+                                    mouse.column.saturating_sub(inner.x + number_width + 1)
+                                        as usize;
+                                let content_width =
+                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                                let target_col = clicked_col + (relative_row * content_width);
+                                let target_row =
+                                    (start_row + relative_row).min(lines.len().saturating_sub(1));
+                                // Ensure selection is active and extend to new position
+                                if !dialog.message_editor.is_selecting() {
+                                    dialog.message_editor.start_selection();
+                                }
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::Jump(
+                                        target_row as u16,
+                                        target_col as u16,
+                                    ));
+                            }
+                        } else if let Some(last_target) = self.last_text_input_click_target
+                            && last_target.same_field_action(&action)
+                        {
+                            self.update_text_input_drag_selection(rect, mouse.column);
+                        }
                     }
                     return;
                 }
