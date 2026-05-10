@@ -63,53 +63,53 @@ pub(crate) const PRIORITY_QUICK_DOWNLOADS_BOTTOM: u16 = 100;
 
 /// Extract Top Picks from parsed commits
 pub(crate) fn extract_top_picks(commits: &[&ParsedCommit]) -> Vec<TopPick> {
-    let mut picks = Vec::new();
-    let mut priority_headers: HashMap<u8, String> = HashMap::new();
+    // Collect all top picks (both headers with * and bullets-only with **)
+    let mut all_picks: Vec<TopPick> = Vec::new();
 
-    // First pass: collect all top picks and track priority->header mappings
     for commit in commits {
-        if let Some((priority, items)) = parse_top_pick_from_commit(commit) {
-            let header = extract_header(&items);
-            if let Some(p) = priority {
-                priority_headers.insert(p, header.clone());
-            }
-
-            let bullets = extract_bullets(&items);
-            picks.push(TopPick {
-                priority,
-                header,
-                bullets,
-                commit_hash: commit.short_hash.clone(),
-                is_reference: false,
-            });
+        if !commit.is_top_pick_config && !commit.is_top_pick_reference {
+            continue;
         }
+
+        let items = &commit.message_items;
+        let header = extract_header(items);
+        let bullets = extract_bullets(items);
+
+        all_picks.push(TopPick {
+            priority: commit.top_pick_priority,
+            header,
+            bullets,
+            commit_hash: commit.short_hash.clone(),
+            is_reference: commit.is_top_pick_reference,
+        });
     }
 
-    // Handle cross-references: commits that reference an existing priority
-    for commit in commits.iter().rev() {
-        if let Some((priority, items)) = parse_top_pick_reference(commit)
-            && let Some(existing_header) = priority_headers.get(&priority)
-        {
-            // Find existing pick and merge bullets
-            if let Some(existing) = picks.iter_mut().find(|p| {
-                p.priority == Some(priority) && &p.header == existing_header && !p.is_reference
-            }) {
-                let new_bullets = extract_bullets(&items);
-                existing.bullets.extend(new_bullets);
-            } else {
-                // Create a reference pick if original not found
-                let bullets = extract_bullets(&items);
-                picks.push(TopPick {
-                    priority: Some(priority),
-                    header: existing_header.clone(),
-                    bullets,
-                    commit_hash: commit.short_hash.clone(),
-                    is_reference: true,
-                });
+    // Merge picks by priority: if one has header and one doesn't, merge bullets into header
+    let mut merged: HashMap<u8, TopPick> = HashMap::new();
+
+    for pick in all_picks {
+        if let Some(priority) = pick.priority {
+            match merged.entry(priority) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let existing = entry.get_mut();
+                    // If this pick has a header and existing doesn't, use this header
+                    if !pick.header.is_empty() && existing.header.is_empty() {
+                        existing.header = pick.header;
+                    }
+                    // If existing has header and this doesn't, just add bullets
+                    // If both have headers (shouldn't happen), keep existing and add bullets
+                    existing.bullets.extend(pick.bullets);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(pick);
+                }
             }
         }
     }
 
+    let mut picks: Vec<TopPick> = merged.into_values().collect();
+    // Sort by priority
+    picks.sort_by(|a, b| a.priority.cmp(&b.priority));
     picks
 }
 

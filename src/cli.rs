@@ -3593,9 +3593,10 @@ fn run_toppicks() -> Result<()> {
 
     let log_output = &output.stdout;
 
-    // Parse commits from log output
+    // Parse commits from log output (git log returns newest first, reverse to get chronological order)
     let mut parsed_commits: Vec<ParsedCommit> = Vec::new();
-    for commit_block in log_output.split("---COMMIT_END---") {
+    let commit_blocks: Vec<&str> = log_output.split("---COMMIT_END---").collect();
+    for commit_block in commit_blocks.iter().rev() {
         let block = commit_block.trim();
         if block.is_empty() {
             continue;

@@ -1137,6 +1137,18 @@ fn detect_top_pick_reference(segment: &str) -> bool {
     trimmed.starts_with("**") && !trimmed.starts_with("* ") && !trimmed.starts_with("*\t")
 }
 
+/// Detect if a segment contains top pick configuration (* marker as header).
+fn detect_top_pick_config(segment: &str) -> bool {
+    // Remove the prefix to get the content
+    if let Some(content) = segment.split_once(':').map(|(_, c)| c) {
+        let trimmed = content.trim();
+        // Must start with * followed by space or tab (header marker, not ** bullet)
+        (trimmed.starts_with("* ") || trimmed.starts_with("*\t"))
+    } else {
+        false
+    }
+}
+
 fn split_subject_clauses(subject: &str) -> Vec<String> {
     let mut clauses = Vec::new();
     let mut current = String::new();
