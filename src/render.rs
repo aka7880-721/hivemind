@@ -1477,7 +1477,8 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(5),                 // Header
-                Constraint::Min(10),                   // Message editor (textarea)
+                Constraint::Length(1),                 // Spacer
+                Constraint::Min(9),                    // Message editor (textarea)
                 Constraint::Length(6),                 // Help text
                 Constraint::Length(BUTTON_ROW_HEIGHT), // Buttons
             ])
@@ -1500,13 +1501,13 @@ impl App {
         // Render multi-line message editor with markdown support
         self.render_textarea_editor(
             frame,
-            sections[1],
+            sections[2],
             " New Message (Markdown supported) ",
             "Enter commit message (supports Markdown formatting)",
             &dialog.message_editor,
         );
         self.hit_targets.push(HitTarget::new(
-            sections[1],
+            sections[2],
             HitAction::CommitRenameMessageField,
         ));
 
@@ -1514,8 +1515,12 @@ impl App {
             Line::from(vec![
                 Span::styled("Enter", Style::default().fg(Color::Yellow)),
                 Span::raw(" saves | "),
+                Span::styled("Shift+Enter", Style::default().fg(Color::Yellow)),
+                Span::raw(" new line | "),
                 Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::raw(" cancels | "),
+                Span::raw(" cancels"),
+            ]),
+            Line::from(vec![
                 Span::styled("Ctrl+P", Style::default().fg(Color::Yellow)),
                 Span::raw(" toggles force-push"),
             ]),

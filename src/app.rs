@@ -1410,7 +1410,17 @@ impl App {
                 self.commit_rename_dialog = None;
                 self.status = StatusMessage::info("Commit rename cancelled.");
             }
-            KeyCode::Enter | KeyCode::F(2) => return self.apply_commit_rename(),
+            KeyCode::Enter => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    // Shift+Enter inserts a newline
+                    if let Some(dialog) = &mut self.commit_rename_dialog {
+                        dialog.message_editor.insert_newline();
+                    }
+                } else {
+                    return self.apply_commit_rename();
+                }
+            }
+            KeyCode::F(2) => return self.apply_commit_rename(),
             KeyCode::Tab => {
                 if self
                     .commit_rename_dialog
