@@ -1695,18 +1695,9 @@ impl App {
         if self.commit_rename_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    self.status = StatusMessage::error(format!(
-                        "CR mouse click at ({}, {})",
-                        mouse.column, mouse.row
-                    ));
                     if let Some((action, rect)) =
                         self.resolve_hit_target(mouse.column, mouse.row, false)
                     {
-                        let is_msg_field = matches!(action, HitAction::CommitRenameMessageField);
-                        self.status = StatusMessage::error(format!(
-                            "CR hit action: CommitRenameMessageField={}",
-                            is_msg_field
-                        ));
                         let maybe_click_target = self.text_input_click_target(&action);
                         let mut select_all = false;
                         if let Some(target) = maybe_click_target {
@@ -1760,30 +1751,21 @@ impl App {
                                 .saturating_sub(visible_height / 2)
                                 .min(lines.len().saturating_sub(visible_height));
                             let relative_row = mouse.row.saturating_sub(inner.y) as usize;
-                            let clicked_row = relative_row + start_row;
                             let clicked_col =
                                 mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
-                            let (prev_row, prev_col) = dialog.message_editor.cursor();
-                            let lines_count = dialog.message_editor.lines().len();
-                            let target_row = clicked_row.min(lines_count.saturating_sub(1));
+                            // For wrapped text: calculate column offset based on visual row
+                            // Approximate chars per line from content width
+                            let content_width =
+                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                            let target_col = clicked_col + (relative_row * content_width);
+                            let target_row =
+                                (start_row + relative_row).min(lines.len().saturating_sub(1));
                             dialog
                                 .message_editor
                                 .move_cursor(tui_textarea::CursorMove::Jump(
                                     target_row as u16,
-                                    clicked_col as u16,
+                                    target_col as u16,
                                 ));
-                            let (new_row, new_col) = dialog.message_editor.cursor();
-                            self.status = StatusMessage::error(format!(
-                                "rel={} start={} target={} lines={} | prev=({}, {}) -> new=({}, {})",
-                                relative_row,
-                                start_row,
-                                target_row,
-                                lines_count,
-                                prev_row,
-                                prev_col,
-                                new_row,
-                                new_col
-                            ));
                         }
                     }
                     return;
