@@ -7462,6 +7462,7 @@ fn build_release_notes_markdown(
             scope.hide_pr_messages,
             scope.hide_bump_messages,
             scope.mini_commit_hashes,
+            scope.changelog_wrap_detailed_if_top_picks,
         )
         .markdown);
     }
@@ -7474,6 +7475,7 @@ fn build_release_notes_markdown(
         scope.hide_pr_messages,
         scope.hide_bump_messages,
         scope.mini_commit_hashes,
+        scope.changelog_wrap_detailed_if_top_picks,
     )
     .markdown)
 }
