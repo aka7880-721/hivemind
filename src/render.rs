@@ -2749,7 +2749,7 @@ impl App {
                 .collect::<Vec<_>>()
         };
 
-        frame.render_widget(Paragraph::new(body), inner);
+        frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inner);
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
