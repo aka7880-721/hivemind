@@ -1794,6 +1794,10 @@ impl App {
                                 dialog
                                     .message_editor
                                     .move_cursor(tui_textarea::CursorMove::WordForward);
+                                // WordForward goes to start of next word, so go back one char
+                                dialog
+                                    .message_editor
+                                    .move_cursor(tui_textarea::CursorMove::Back);
                             }
                             self.commit_rename_textarea_click_at = Some(now);
                             self.commit_rename_textarea_rect = Some(rect);
