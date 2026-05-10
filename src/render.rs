@@ -1517,29 +1517,39 @@ impl App {
                 Span::styled("Esc", Style::default().fg(Color::Yellow)),
                 Span::raw(" cancels | "),
                 Span::styled("Ctrl+P", Style::default().fg(Color::Yellow)),
-                Span::raw(" toggles force-push | "),
+                Span::raw(" toggles force-push"),
+            ]),
+            Line::from(vec![
                 Span::styled("Ctrl+A", Style::default().fg(Color::Yellow)),
-                Span::raw(" selects all"),
+                Span::raw(" Select all | "),
+                Span::styled("Ctrl+C", Style::default().fg(Color::Yellow)),
+                Span::raw(" Copy | "),
+                Span::styled("Ctrl+X", Style::default().fg(Color::Yellow)),
+                Span::raw(" Cut | "),
+                Span::styled("Ctrl+V", Style::default().fg(Color::Yellow)),
+                Span::raw(" Paste"),
             ]),
             Line::from(vec![
                 Span::styled("Arrows", Style::default().fg(Color::Yellow)),
                 Span::raw(" navigate | "),
                 Span::styled("Click", Style::default().fg(Color::Yellow)),
-                Span::raw(" to position cursor | "),
+                Span::raw(" position cursor | "),
                 Span::styled("Double-click", Style::default().fg(Color::Yellow)),
                 Span::raw(" selects all"),
             ]),
             Line::from(vec![
                 Span::styled("Ctrl+K", Style::default().fg(Color::Yellow)),
-                Span::raw(" Delete from cursor to end | "),
+                Span::raw(" Delete to end | "),
                 Span::styled("Ctrl+U", Style::default().fg(Color::Yellow)),
-                Span::raw(" Delete from cursor to start"),
+                Span::raw(" Delete to start | "),
+                Span::styled("Ctrl+W", Style::default().fg(Color::Yellow)),
+                Span::raw(" Delete word"),
             ]),
             Line::from(vec![
-                Span::styled("Ctrl+W", Style::default().fg(Color::Yellow)),
-                Span::raw(" Delete previous word | "),
-                Span::styled("Alt+F/Alt+B", Style::default().fg(Color::Yellow)),
-                Span::raw(" Move by word forward/backward"),
+                Span::styled("Alt+F", Style::default().fg(Color::Yellow)),
+                Span::raw(" Word forward | "),
+                Span::styled("Alt+B", Style::default().fg(Color::Yellow)),
+                Span::raw(" Word backward"),
             ]),
         ];
         if dialog.plan.touches_pushed_history {
@@ -2747,6 +2757,7 @@ impl App {
 
         let lines = editor.lines();
         let (cursor_row, cursor_col) = editor.cursor();
+        let selection_range = editor.selection_range();
         let visible_height = inner.height.max(1) as usize;
         let start_row = cursor_row
             .saturating_sub(visible_height / 2)
@@ -2767,12 +2778,33 @@ impl App {
                 .map(|(offset, line)| {
                     let row_index = start_row + offset;
                     let active = row_index == cursor_row;
+                    let (sel_start, sel_end) = selection_range
+                        .map(|((s_row, s_col), (e_row, e_col))| {
+                            if row_index < s_row || row_index > e_row {
+                                (None, None)
+                            } else {
+                                let start = if row_index == s_row {
+                                    Some(s_col)
+                                } else {
+                                    Some(0)
+                                };
+                                let end = if row_index == e_row {
+                                    Some(e_col)
+                                } else {
+                                    None
+                                };
+                                (start, end)
+                            }
+                        })
+                        .unwrap_or((None, None));
                     render_annotation_line(
                         line,
                         row_index + 1,
                         number_width,
                         content_width,
                         active.then_some(cursor_col),
+                        sel_start,
+                        sel_end,
                     )
                 })
                 .collect::<Vec<_>>()

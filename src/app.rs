@@ -1360,10 +1360,32 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
         {
+            // Try textarea first (commit rename dialog)
+            if let Some(dialog) = &mut self.commit_rename_dialog {
+                dialog.message_editor.copy();
+                let text: String = dialog.message_editor.yank_text();
+                if !text.is_empty() {
+                    self.copy_text_to_clipboard(&text);
+                    return Ok(());
+                }
+            }
+            // Fall back to regular text input
             let selected_text = self
                 .active_text_input_mut()
                 .and_then(|input| input.selected_text().map(str::to_string));
             if let Some(text) = selected_text {
+                self.copy_text_to_clipboard(&text);
+                return Ok(());
+            }
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+            && let Some(dialog) = &mut self.commit_rename_dialog
+        {
+            dialog.message_editor.cut();
+            let text: String = dialog.message_editor.yank_text();
+            if !text.is_empty() {
                 self.copy_text_to_clipboard(&text);
                 return Ok(());
             }
@@ -2028,12 +2050,27 @@ impl App {
                                     width: rect.width.saturating_sub(2),
                                     height: rect.height.saturating_sub(2),
                                 };
-                                let row = mouse.row.saturating_sub(inner.y) as usize;
-                                let col = mouse.column.saturating_sub(inner.x) as usize;
+                                // Calculate number width like render_textarea_editor does
+                                let lines = dialog.message_editor.lines();
+                                let (cursor_row, _) = dialog.message_editor.cursor();
+                                let visible_height = inner.height.max(1) as usize;
+                                let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
+                                let number_width = end_row.to_string().len().max(2) as u16;
+                                // Calculate row considering scroll offset
+                                let start_row = cursor_row
+                                    .saturating_sub(visible_height / 2)
+                                    .min(lines.len().saturating_sub(visible_height));
+                                let clicked_row =
+                                    mouse.row.saturating_sub(inner.y) as usize + start_row;
+                                // Calculate col accounting for line number column
+                                let clicked_col =
+                                    mouse.column.saturating_sub(inner.x + number_width + 1)
+                                        as usize;
                                 dialog
                                     .message_editor
                                     .move_cursor(tui_textarea::CursorMove::Jump(
-                                        row as u16, col as u16,
+                                        clicked_row as u16,
+                                        clicked_col as u16,
                                     ));
                             }
                         }
@@ -8076,32 +8113,51 @@ fn render_annotation_line(
     number_width: usize,
     _content_width: usize,
     active_cursor_col: Option<usize>,
+    sel_start: Option<usize>,
+    sel_end: Option<usize>,
 ) -> Line<'static> {
     let mut spans = vec![Span::styled(
         format!("{:>width$} ", line_number, width = number_width),
         Style::default().fg(Color::DarkGray),
     )];
 
-    if active_cursor_col.is_some() {
-        let cursor = active_cursor_col.unwrap_or(0);
-        let chars: Vec<_> = line.chars().collect();
-        if chars.is_empty() {
+    let chars: Vec<_> = line.chars().collect();
+    let line_len = chars.len();
+
+    if chars.is_empty() {
+        if active_cursor_col.is_some() && active_cursor_col.unwrap_or(0) == 0 {
             spans.push(Span::styled(
                 " ".to_string(),
                 Style::default().fg(Color::Black).bg(Color::Cyan),
             ));
-        } else {
-            for (index, character) in chars.iter().enumerate() {
-                let style = if index == cursor {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    Style::default()
-                };
-                spans.push(Span::styled(character.to_string(), style));
-            }
         }
     } else {
-        spans.push(Span::raw(line.to_string()));
+        let cursor = active_cursor_col.unwrap_or(0);
+        let selection_start = sel_start.unwrap_or(line_len + 1);
+        let selection_end = sel_end.unwrap_or(0).min(line_len);
+
+        for (index, character) in chars.iter().enumerate() {
+            let in_selection =
+                sel_start.is_some() && index >= selection_start && index < selection_end;
+            let at_cursor = index == cursor && active_cursor_col.is_some();
+
+            let style = if at_cursor {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else if in_selection {
+                Style::default().bg(Color::Rgb(60, 80, 120))
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(character.to_string(), style));
+        }
+
+        // Show cursor at end of line if needed
+        if cursor == line_len && active_cursor_col.is_some() {
+            spans.push(Span::styled(
+                " ".to_string(),
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ));
+        }
     }
 
     Line::from(spans)
