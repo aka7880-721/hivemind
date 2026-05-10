@@ -1510,9 +1510,12 @@ impl App {
             HitAction::CommitRenameMessageField,
         ));
 
-        let mut body = vec![Line::from(
-            "Enter saves. Esc cancels. Ctrl+P toggles force-push after rename.",
-        )];
+        let mut body = vec![
+            Line::from(
+                "Enter saves | Esc cancels | Ctrl+P toggles force-push | Ctrl+A selects all",
+            ),
+            Line::from("Arrows navigate | Click to position cursor | Double-click selects all"),
+        ];
         if dialog.plan.touches_pushed_history {
             body.push(
                 Line::from(format!(

@@ -1397,7 +1397,6 @@ impl App {
                 if let Some(dialog) = &mut self.commit_rename_dialog
                     && let Some(input) = convert_to_textarea_input(key)
                 {
-                    self.status = StatusMessage::info(format!("Key: {:?}", key.code));
                     dialog.message_editor.input(input);
                 }
             }
