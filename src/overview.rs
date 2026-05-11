@@ -11,9 +11,7 @@ use super::git_flow::{
     refresh_target_artifacts, stage_path_for_file, unstage_paths,
 };
 use super::*;
-use crate::changelog::{
-    archive_changelog_markdown, build_document_from_git_log, sum_changelog_gen,
-};
+use crate::changelog::{archive_changelog_markdown, sum_changelog_gen};
 use crate::{
     dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
     git::{
@@ -1824,6 +1822,7 @@ async fn collect_preview_entries_async(
     let merged_contexts = collect_preview_contexts(project, git_contexts, affected_scope_indexes)?;
     let custom_selection = custom_range.and_then(CustomChangelogRangeState::selection);
     let semaphore = Arc::new(Semaphore::new(BACKGROUND_MAX_PARALLEL_REPO_JOBS.max(1)));
+    let variator_storage = project.variator_storage.clone();
     let mut tasks = JoinSet::new();
 
     for (context, changelog_path) in merged_contexts {
@@ -1831,6 +1830,7 @@ async fn collect_preview_entries_async(
         let next_version = next_version.to_string();
         let custom_selection = custom_selection.clone();
         let cancel = cancel.clone();
+        let variator_storage = variator_storage.clone();
         tasks.spawn(async move {
             let _permit = semaphore
                 .acquire_owned()
@@ -1851,9 +1851,13 @@ async fn collect_preview_entries_async(
                     repo_root: context.repo_root.clone(),
                     changelog_path: changelog_path.clone(),
                     stage_path: stage_path_for_file(&context.repo_root, &changelog_path),
-                    document: build_document_from_git_log(next_version, &recent_range.lines)
-                        .with_hide_filters(context.hide_pr_messages, context.hide_bump_messages)
-                        .with_mini_commit_hashes(context.mini_commit_hashes),
+                    document: crate::changelog::build_document_from_git_log_with_variator(
+                        next_version,
+                        &recent_range.lines,
+                        Some(&variator_storage),
+                    )
+                    .with_hide_filters(context.hide_pr_messages, context.hide_bump_messages)
+                    .with_mini_commit_hashes(context.mini_commit_hashes),
                 })
             })
             .await
@@ -1890,6 +1894,7 @@ mod tests {
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
+            ..Default::default()
         };
         let scope = BumpScope {
             display_name: "demo".to_string(),
@@ -1970,6 +1975,7 @@ mod tests {
                 }],
             }],
             repo: None,
+            ..Default::default()
         };
         let scope = BumpScope {
             display_name: "core".to_string(),
@@ -2026,6 +2032,7 @@ mod tests {
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
+            ..Default::default()
         }];
         app.selected_project = 0;
 
@@ -2061,6 +2068,7 @@ mod tests {
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
+            ..Default::default()
         }];
         let scopes = vec![BumpScope {
             display_name: "demo".to_string(),
@@ -2098,6 +2106,7 @@ mod tests {
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
+            ..Default::default()
         }];
         let scopes = vec![BumpScope {
             display_name: "demo".to_string(),
