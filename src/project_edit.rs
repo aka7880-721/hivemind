@@ -1113,6 +1113,7 @@ mod tests {
             }],
             branches: Vec::new(),
             repo: None,
+            ..Default::default()
         };
 
         let mut dialog = ProjectEditDialog::from_project(0, &project).expect("dialog should build");
@@ -1159,6 +1160,7 @@ mod tests {
                     mini_commit_hashes: false,
                     wrap_detailed_changelog_if_top_picks: false,
                 },
+                ..Default::default()
             },
         )
         .expect("dialog should build");
@@ -1219,6 +1221,7 @@ mod tests {
                     mini_commit_hashes: false,
                     wrap_detailed_changelog_if_top_picks: false,
                 },
+                ..Default::default()
             },
         )
         .expect("dialog should build");
@@ -1253,6 +1256,7 @@ mod tests {
                 branches: vec![],
                 repo: None,
                 changelog: ChangelogSettings::default(),
+                ..Default::default()
             },
         )
         .expect("dialog should build");
@@ -1283,6 +1287,7 @@ mod tests {
             }],
             branches: Vec::new(),
             repo: None,
+            ..Default::default()
         };
 
         let mut dialog = ProjectEditDialog::from_project(0, &project).expect("dialog should build");
