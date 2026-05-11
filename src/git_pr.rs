@@ -374,7 +374,7 @@ fn render_preview_screen(
             ANSI_RESET
         )),
         Print(format!(
-            "{}Preview ends in {} seconds. Press Enter to create PR now, E to edit, X to change the Target, or Ctrl+C to abort.{}\r\n",
+            "{}Preview ends in {} seconds. Press ENTER to skip the preview, E to edit, X to change the Target, or Ctrl+C to abort.{}\r\n",
             ANSI_YELLOW, PR_PREVIEW_SECONDS, ANSI_RESET
         ))
     )
