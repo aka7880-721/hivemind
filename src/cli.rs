@@ -3698,17 +3698,41 @@ fn run_toppicks() -> Result<()> {
 fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Result<()> {
     use crate::chl_vrtr::VARIATOR_HELP;
 
-    // Load current config
+    if matches!(
+        action,
+        Some("help") | Some("-h") | Some("--help") | Some("h")
+    ) {
+        println!("{}", VARIATOR_HELP);
+        return Ok(());
+    }
+
+    // Load current config and resolve the project matching the current directory
     let config_store = crate::config::ConfigStore::locate()?;
     let mut config = config_store.load()?;
     if config.projects.is_empty() {
         bail!("No projects configured. Run 'cg init' first.");
     }
 
+    let cwd =
+        best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
+    let project_index = config
+        .projects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, project)| {
+            project_root(project)
+                .ok()
+                .map(|root| (i, best_effort_canonicalize(&root)))
+        })
+        .filter(|(_, root)| cwd.starts_with(root))
+        .max_by_key(|(_, root)| path_depth(root))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
     match action {
-        None => {
-            // List all variators
-            if config.projects[0].variator_storage.is_empty() {
+        None | Some("see") | Some("list") => {
+            let storage = &config.projects[project_index].variator_storage;
+            if storage.is_empty() {
                 println!("No variators defined.");
                 println!();
                 println!("Use 'cg var set <id> \"<value>\"' to create one.");
@@ -3718,21 +3742,7 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
             println!("=== Variators ===\n");
             println!("{:<5} {:<15} Value", "ID", "Name");
             println!("{}", "-".repeat(60));
-            for v in config.projects[0].variator_storage.list() {
-                println!("{:<5} {:<15} {}", v.id, v.variator_id, v.variator);
-            }
-        }
-        Some("see") | Some("list") => {
-            // Same as default (list)
-            if config.projects[0].variator_storage.is_empty() {
-                println!("No variators defined.");
-                return Ok(());
-            }
-
-            println!("=== Variators ===\n");
-            println!("{:<5} {:<15} Value", "ID", "Name");
-            println!("{}", "-".repeat(60));
-            for v in config.projects[0].variator_storage.list() {
+            for v in storage.list() {
                 println!("{:<5} {:<15} {}", v.id, v.variator_id, v.variator);
             }
         }
@@ -3740,7 +3750,9 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
             let id = id.ok_or_else(|| anyhow!("Usage: cg var set <id> \"<value>\""))?;
             let variator = value.ok_or_else(|| anyhow!("Usage: cg var set <id> \"<value>\""))?;
 
-            let assigned_id = config.projects[0].variator_storage.set(id, variator);
+            let assigned_id = config.projects[project_index]
+                .variator_storage
+                .set(id, variator);
             config_store.save(&config)?;
 
             println!("Variator set: {} (id={}) -> {}", id, assigned_id, variator);
@@ -3750,11 +3762,13 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
                 id.ok_or_else(|| anyhow!("Usage: cg var clear <id>  or  cg var clear all"))?;
 
             if target == "all" {
-                config.projects[0].variator_storage.clear_all();
+                config.projects[project_index].variator_storage.clear_all();
                 config_store.save(&config)?;
                 println!("All variators cleared.");
             } else {
-                let removed = config.projects[0].variator_storage.remove(target);
+                let removed = config.projects[project_index]
+                    .variator_storage
+                    .remove(target);
                 if removed.is_empty() {
                     println!("No variator found matching '{}'", target);
                 } else {
@@ -3762,9 +3776,6 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
                     println!("Removed: {}", removed.join(", "));
                 }
             }
-        }
-        Some("help") | Some("-h") | Some("--help") | Some("h") => {
-            println!("{}", VARIATOR_HELP);
         }
         Some(unknown) => {
             bail!("Unknown variator command: {}", unknown);
