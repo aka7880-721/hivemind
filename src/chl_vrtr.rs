@@ -15,6 +15,18 @@ pub struct Variator {
     pub variator: String,
 }
 
+/// Outcome of a rename operation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenameOutcome {
+    /// Successfully renamed; contains the updated entry
+    Renamed(Variator),
+    /// Key matched both a numeric id and a variator_id of *different* entries;
+    /// contains the by-numeric match, the by-name match, and the requested new value
+    Conflict(Variator, Variator, String),
+    /// No entry found for the given key
+    NotFound,
+}
+
 impl Variator {
     pub fn new(id: u32, variator_id: impl Into<String>, variator: impl Into<String>) -> Self {
         Self {
@@ -104,6 +116,47 @@ impl VariatorStorage {
         }
 
         removed
+    }
+
+    /// Rename a variator's value by id or variator_id.
+    /// Returns `Ok(None)` when the key is ambiguous (matches both a numeric id and a variator_id
+    /// of different entries), in which case `rename_by_numeric_id` or `rename_by_variator_id`
+    /// should be used after prompting the user.
+    pub fn rename(&mut self, key: impl AsRef<str>, new_value: impl Into<String>) -> RenameOutcome {
+        let key = key.as_ref();
+        let new_value = new_value.into();
+
+        let by_numeric = key
+            .parse::<u32>()
+            .ok()
+            .and_then(|id| self.variators.iter().position(|v| v.id == id));
+        let by_name = self.variators.iter().position(|v| v.variator_id == key);
+
+        match (by_numeric, by_name) {
+            (Some(ni), Some(vi)) if ni != vi => {
+                // Ambiguous: numeric id and variator_id resolve to different entries
+                RenameOutcome::Conflict(
+                    self.variators[ni].clone(),
+                    self.variators[vi].clone(),
+                    new_value,
+                )
+            }
+            (Some(pos), _) | (None, Some(pos)) => {
+                self.variators[pos].variator = new_value;
+                RenameOutcome::Renamed(self.variators[pos].clone())
+            }
+            (None, None) => RenameOutcome::NotFound,
+        }
+    }
+
+    /// Rename a variator's value by its numeric id directly (no ambiguity check).
+    pub fn rename_by_numeric_id(&mut self, id: u32, new_value: impl Into<String>) -> bool {
+        if let Some(v) = self.variators.iter_mut().find(|v| v.id == id) {
+            v.variator = new_value.into();
+            true
+        } else {
+            false
+        }
     }
 
     /// Clear all variators and reset the id counter
@@ -268,5 +321,65 @@ mod tests {
         // Unknown variator should remain unchanged
         let expanded = storage.expand("@.feat(!unknown): message");
         assert_eq!(expanded, "@.feat(!unknown): message");
+    }
+
+    #[test]
+    fn rename_by_variator_id_succeeds() {
+        let mut storage = VariatorStorage::new();
+        storage.set("feat", "old value");
+
+        let outcome = storage.rename("feat", "new value");
+        assert!(matches!(outcome, RenameOutcome::Renamed(ref v) if v.variator == "new value"));
+        assert_eq!(storage.get("feat").unwrap().variator, "new value");
+    }
+
+    #[test]
+    fn rename_by_numeric_id_succeeds() {
+        let mut storage = VariatorStorage::new();
+        let id = storage.set("feat", "old value");
+
+        let outcome = storage.rename(id.to_string(), "new value");
+        assert!(matches!(outcome, RenameOutcome::Renamed(ref v) if v.variator == "new value"));
+    }
+
+    #[test]
+    fn rename_not_found_when_no_match() {
+        let mut storage = VariatorStorage::new();
+        storage.set("feat", "value");
+
+        assert_eq!(storage.rename("nonexistent", "x"), RenameOutcome::NotFound);
+        assert_eq!(storage.rename("99", "x"), RenameOutcome::NotFound);
+    }
+
+    #[test]
+    fn rename_detects_conflict_between_numeric_id_and_variator_id() {
+        let mut storage = VariatorStorage::new();
+        storage.set("v", "first value"); // id=1
+        storage.set("2", "second value"); // id=2 — variator_id is "2"
+        storage.set("1", "third value"); // id=3 — variator_id is "1"
+
+        // "1" matches id=1 (entry with variator_id="v") AND variator_id="1" (entry with id=3)
+        let outcome = storage.rename("1", "new value");
+        assert!(
+            matches!(outcome, RenameOutcome::Conflict(ref by_id, ref by_name, _)
+            if by_id.variator_id == "v" && by_name.variator_id == "1")
+        );
+    }
+
+    #[test]
+    fn rename_by_numeric_id_direct_resolves_conflict() {
+        let mut storage = VariatorStorage::new();
+        let id1 = storage.set("v", "first");
+        let id3 = storage.set("1", "third");
+
+        storage.rename_by_numeric_id(id1, "updated");
+
+        // id1 corresponds to variator_id="v", which should be updated
+        let v_entry = storage.variators.iter().find(|v| v.id == id1).unwrap();
+        assert_eq!(v_entry.variator, "updated");
+
+        // id3 corresponds to variator_id="1", which should be untouched
+        let one_entry = storage.variators.iter().find(|v| v.id == id3).unwrap();
+        assert_eq!(one_entry.variator, "third");
     }
 }
