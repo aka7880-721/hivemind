@@ -3777,12 +3777,173 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
                 }
             }
         }
+        Some("rn") | Some("rnm") | Some("rename") => {
+            let key = id.ok_or_else(|| anyhow!("Usage: cg var rn <id_or_name> \"<new_value>\""))?;
+            let new_value =
+                value.ok_or_else(|| anyhow!("Usage: cg var rn <id_or_name> \"<new_value>\""))?;
+
+            use crate::chl_vrtr::RenameOutcome;
+            match config.projects[project_index]
+                .variator_storage
+                .rename(key, new_value)
+            {
+                RenameOutcome::Renamed(v) => {
+                    config_store.save(&config)?;
+                    println!(
+                        "Renamed variator '{}' (id={}) -> {}",
+                        v.variator_id, v.id, v.variator
+                    );
+                }
+                RenameOutcome::NotFound => {
+                    bail!("No variator found matching '{}'", key);
+                }
+                RenameOutcome::Conflict(by_id, by_name, new_val) => {
+                    let chosen = prompt_rename_conflict(&by_id, &by_name)?;
+                    match chosen {
+                        Some(numeric_id) => {
+                            config.projects[project_index]
+                                .variator_storage
+                                .rename_by_numeric_id(numeric_id, &new_val);
+                            config_store.save(&config)?;
+                            let v = config.projects[project_index]
+                                .variator_storage
+                                .list()
+                                .iter()
+                                .find(|v| v.id == numeric_id)
+                                .map(|v| {
+                                    format!("'{}' (id={}) -> {}", v.variator_id, v.id, v.variator)
+                                })
+                                .unwrap_or_default();
+                            println!("Renamed variator {}", v);
+                        }
+                        None => {
+                            println!("Rename cancelled.");
+                        }
+                    }
+                }
+            }
+        }
         Some(unknown) => {
             bail!("Unknown variator command: {}", unknown);
         }
     }
 
     Ok(())
+}
+
+fn prompt_rename_conflict(
+    by_id: &crate::chl_vrtr::Variator,
+    by_name: &crate::chl_vrtr::Variator,
+) -> Result<Option<u32>> {
+    const ANSI_YELLOW: &str = "\x1b[33m";
+    const ANSI_CYAN: &str = "\x1b[36m";
+    const ANSI_RESET: &str = "\x1b[0m";
+
+    // 0 = by_id entry, 1 = by_name entry, 2 = Cancel
+    let mut selected = 0usize;
+
+    enable_raw_mode().context("failed to enable raw mode for rename conflict")?;
+
+    let result = (|| {
+        loop {
+            let mut stdout = io::stdout();
+            execute!(stdout, Clear(ClearType::All))
+                .context("failed to clear screen for rename conflict")?;
+
+            queue!(
+                stdout,
+                MoveToColumn(0),
+                Print("\r\n"),
+                Print(format!(
+                    "It seems like there is a naming conflict between `{}variator_id{}` and `{}id{}`!\r\n\r\n",
+                    ANSI_YELLOW, ANSI_RESET, ANSI_YELLOW, ANSI_RESET,
+                )),
+                Print(format!(
+                    "{}Please, choose which one should be renamed...{}\r\n\r\n",
+                    ANSI_CYAN, ANSI_RESET,
+                )),
+                Print(format!(
+                    "  {:<5} {:<15} Value\r\n",
+                    "ID", "Variator_ID"
+                )),
+                Print(format!("  {}\r\n", "-".repeat(60))),
+            )
+            .context("failed to queue rename conflict header")?;
+
+            let rows: [(&crate::chl_vrtr::Variator, &str); 2] =
+                [(by_id, "numeric id match"), (by_name, "variator_id match")];
+
+            for (i, (v, _)) in rows.iter().enumerate() {
+                let row = format!("{:<5} {:<15} {}", v.id, v.variator_id, v.variator);
+                if i == selected {
+                    queue!(
+                        stdout,
+                        MoveToColumn(0),
+                        Print(format!("{}> {}{}\r\n", ANSI_YELLOW, row, ANSI_RESET)),
+                    )
+                } else {
+                    queue!(stdout, MoveToColumn(0), Print(format!("  {}\r\n", row)))
+                }
+                .context("failed to queue rename conflict row")?;
+            }
+
+            // Cancel option
+            if selected == 2 {
+                queue!(
+                    stdout,
+                    MoveToColumn(0),
+                    Print(format!("{}> Cancel{}\r\n", ANSI_YELLOW, ANSI_RESET)),
+                )
+            } else {
+                queue!(stdout, MoveToColumn(0), Print("  Cancel\r\n"))
+            }
+            .context("failed to queue rename conflict cancel")?;
+
+            queue!(
+                stdout,
+                Print("\r\n"),
+                Print("Use ↑/↓ to navigate, Enter to select, Esc or Ctrl+C to cancel\r\n"),
+            )
+            .context("failed to queue rename conflict footer")?;
+
+            stdout
+                .flush()
+                .context("failed to flush rename conflict dialog")?;
+
+            let Event::Key(key) = event::read().context("failed to read rename conflict input")?
+            else {
+                continue;
+            };
+
+            if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                continue;
+            }
+
+            match key.code {
+                KeyCode::Up if selected > 0 => selected -= 1,
+                KeyCode::Down if selected < 2 => selected += 1,
+                KeyCode::Enter => {
+                    return Ok(match selected {
+                        0 => Some(by_id.id),
+                        1 => Some(by_name.id),
+                        _ => None,
+                    });
+                }
+                KeyCode::Esc => return Ok(None),
+                KeyCode::Char('c')
+                    if key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+    })();
+
+    disable_raw_mode().context("failed to disable raw mode after rename conflict")?;
+    result
 }
 
 #[cfg(test)]
