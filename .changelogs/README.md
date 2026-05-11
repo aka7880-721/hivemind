@@ -2,6 +2,127 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog `v0.23.6` <sup><div align="end">🗓️ 2026-05-11</div></sup>
+
+### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+
+#### **1. &nbsp;&nbsp;&nbsp;Optional detailed changelog wrapping**
+- This is the first RLS changelog that uses a fully automated auto-wrap!
+    - Purpose? I'd say 90% of people are not interested in all those nerdy changelogs, and they would very much prefer to see just the most relevant info...that's exactly what this feature is about!
+- Can be enabled/disabled in Project Settings
+- Is applied only if the current release has Top Picks defined
+
+#### **2. &nbsp;&nbsp;&nbsp;Please meet: the V A R I A T O R**
+- The ComfyGitFlow just got even smoother...
+- Make sure to check Variator's WIKI to understand how great it is!
+
+#### **3. &nbsp;&nbsp;&nbsp;Misc**
+- `cg br end` / `cg pr` flow got enhanced with auto-target misdetection warning with IA CLI flow
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+
+### 💫 _Changed in:_ **RLS Changelog**
+
+#### 🧩 Features
+
+* add support for detailed changelog wrapping based on top picks configuration   _(3c69c2a)_
+
+---
+
+### 💫 _Changed in:_ **!v**
+
+#### 📝 Other
+
+* introduce variator storage for managing commit message configurations with auto-assigned IDs   _(66f785d)_
+
+* integrate variator storage into release notes generation for enhanced commit message management   _(a6b5392)_
+
+* enhance changelog generation by integrating variator storage into parsing and document building functions   _(3a57e15)_
+
+* add variator command support for listing, setting, and clearing variators   _(72bb355)_
+
+* add variator_storage field to ProjectConfig with default initialization   _(9a3dbe2)_
+
+* ensure default values are set for RepoConfig in test cases   _(06daeaf)_
+
+* add chl_vrtr module for enhanced functionality integration   _(642cd56)_
+
+* refactor changelog document building to utilize variator storage and streamline default initialization in tests   _(29a7e72)_
+
+* streamline default initialization in ProjectEditDialog and ProjectWizard to enhance test reliability   _(08ec87a)_
+
+---
+
+### 💫 _Changed in:_ **CLI flows**
+
+#### 💎 Enhancements
+
+* Enhance PR preview functionality to warn users when targeting main/master from a -dev branch   _(1f7cd02)_
+* added custom main branch support and improved user prompts for target branch changes.   _(1f7cd02)_
+
+---
+
+### 💫 _Changed in:_ **Top Picks**
+
+#### ♻️ Refactor
+
+* Excluding TopPicks from PR Description/Changelog   _(56fb784)_
+
+---
+
+### 💫 _Changed in:_ **Variator**
+
+#### 🐛 Fix(es)
+
+* Fixed bug that was causing the variator to be global instead of being project-aware   _(d9f783c)_
+
+#### 💎 Enhancements
+
+* Add rename functionality with conflict detection and outcomes   _(6e4ef04)_
+
+* Implement rename command with conflict resolution and IA CLI menu   _(7b7bfed)_
+
+---
+
+## 💬 General Improvements & Fixes:
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.23.0   _(62995b9)_
+
+* CG app version bump to v0.23.1   _(206e355)_
+
+* CG app version bump to v0.23.2   _(46ec1bd)_
+
+* CG app version bump to v0.23.3   _(91279e5)_
+
+* CG app version bump to v0.23.4   _(c52fbb7)_
+
+* CG app version bump to v0.23.5   _(7215e5d)_
+
+* CG app version bump to v0.23.6   _(b520554)_
+
+### 📝 Other
+
+* Merge pull request #92 (via ComfyGit)   _(2ed9fa2)_
+
+* Merge pull request #93 (via ComfyGit)   _(dba12a1)_
+
+* Merge pull request #94 (via ComfyGit)   _(10d3fcd)_
+
+* Merge pull request #95 (via ComfyGit)   _(ed71eaf)_
+
+* Merge pull request #96 (via ComfyGit)   _(219636a)_
+
+* Merge pull request #97 (via ComfyGit)   _(3e547ae)_
+
+* Merge pull request #98 (via ComfyGit)   _(840a762)_
+
+---
+
 ## Changelog `v0.22.7` <sup><div align="end">🗓️ 2026-05-10</div></sup>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
