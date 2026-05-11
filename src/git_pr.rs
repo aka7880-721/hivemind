@@ -25,13 +25,15 @@ use crate::{
     changelog::{pr_changelog_gen, write_temp_changelog_markdown},
     git::{
         GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
-        ensure_local_branch_published_and_in_sync_with_cancel, resolve_main_branch_name,
-        run_git_checked_with_cancel, split_output_lines,
+        ensure_local_branch_published_and_in_sync_with_cancel, is_mainline_branch_name,
+        resolve_main_branch_name, run_git_checked_with_cancel, split_output_lines,
     },
 };
 
 const PR_PREVIEW_SECONDS: u64 = 30;
 const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_RED: &str = "\x1b[31m";
+const ANSI_LIGHT_GREY: &str = "\x1b[37m";
 const ANSI_RESET: &str = "\x1b[0m";
 const GH_CREATED_PR_LOOKUP_FIELDS: &str = "number,url,baseRefName";
 
@@ -106,6 +108,7 @@ pub(crate) fn run_pr_and_capture(
         &current_branch,
         &title,
         &body,
+        custom_main_branch,
         cancel.clone(),
     )?;
 
@@ -121,10 +124,48 @@ pub(crate) fn run_pr_and_capture(
 
         // Re-run the preview with the new target
         body = build_pr_body(repo_root, &new_target, &current_branch, cancel.clone())?;
-        body = preview_pr(&new_target, &current_branch, &title, &body, cancel.clone())?;
+        body = preview_pr(
+            &new_target,
+            &current_branch,
+            &title,
+            &body,
+            custom_main_branch,
+            cancel.clone(),
+        )?;
 
         // Update target branch for the rest of the function
         target_branch = new_target;
+    }
+
+    // Warn if a -dev branch is targeting main/master directly
+    if is_dev_to_main_scenario(&current_branch, &target_branch, custom_main_branch) {
+        match prompt_dev_to_main_warning(
+            repo_root,
+            &current_branch,
+            &target_branch,
+            cancel.clone(),
+        )? {
+            DevToMainChoice::Proceed => {}
+            DevToMainChoice::ChangeTarget => {
+                let new_target = prompt_target_branch_change(
+                    repo_root,
+                    &current_branch,
+                    &target_branch,
+                    cancel.clone(),
+                )?;
+                body = build_pr_body(repo_root, &new_target, &current_branch, cancel.clone())?;
+                body = preview_pr(
+                    &new_target,
+                    &current_branch,
+                    &title,
+                    &body,
+                    custom_main_branch,
+                    cancel.clone(),
+                )?;
+                target_branch = new_target;
+            }
+            DevToMainChoice::Cancel => bail!("cancelled by user"),
+        }
     }
     let body_path = write_temp_changelog_markdown(repo_root, &body)?;
     let args = build_pr_create_args(&target_pr_branch, &current_pr_branch, &title, &body_path);
@@ -165,18 +206,28 @@ fn build_pr_body(
     Ok(pr_changelog_gen(current_branch, &lines).markdown)
 }
 
+fn is_dev_to_main_scenario(
+    current_branch: &str,
+    target_branch: &str,
+    custom_main_branch: Option<&str>,
+) -> bool {
+    current_branch.ends_with("-dev") && is_mainline_branch_name(target_branch, custom_main_branch)
+}
+
 fn preview_pr(
     target_branch: &str,
     current_branch: &str,
     title: &str,
     body: &str,
+    custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<String> {
+    let warn = is_dev_to_main_scenario(current_branch, target_branch, custom_main_branch);
     let mut body = body.to_string();
 
     loop {
         let raw_mode = TerminalRawModeGuard::enter()?;
-        render_preview_screen(target_branch, current_branch, title, &body)?;
+        render_preview_screen(target_branch, current_branch, title, &body, warn)?;
 
         match wait_for_preview_action(cancel.clone(), PR_PREVIEW_SECONDS)? {
             PreviewAction::Create => return Ok(body),
@@ -270,7 +321,13 @@ fn render_preview_screen(
     current_branch: &str,
     title: &str,
     body: &str,
+    warn_dev_to_main: bool,
 ) -> Result<()> {
+    let target_color = if warn_dev_to_main {
+        ANSI_RED
+    } else {
+        ANSI_YELLOW
+    };
     let mut stdout = io::stdout();
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All)).context("failed to render PR preview")?;
 
@@ -278,12 +335,14 @@ fn render_preview_screen(
         stdout,
         MoveToColumn(0),
         Print(format!(
-            "{}Dry-run PR preview{}\r\n  {}Target branch:{} {}\r\n  {}Source branch:{} {}\r\n  {}Title:{} {}\r\n\r\n",
+            "{}Dry-run PR preview{}\r\n  {}Target branch:{} {}{}{}\r\n  {}Source branch:{} {}\r\n  {}Title:{} {}\r\n\r\n",
             ANSI_YELLOW,
             ANSI_RESET,
             ANSI_YELLOW,
             ANSI_RESET,
+            target_color,
             target_branch,
+            ANSI_RESET,
             ANSI_YELLOW,
             ANSI_RESET,
             current_branch,
@@ -304,13 +363,15 @@ fn render_preview_screen(
         MoveToColumn(0),
         Print("\r\n"),
         Print(format!(
-            "{}Source branch:{} {} ----> {}Target branch:{} {}\r\n\r\n",
+            "{}Source branch:{} {} ----> {}Target branch:{} {}{}{}\r\n\r\n",
             ANSI_YELLOW,
             ANSI_RESET,
             current_branch,
             ANSI_YELLOW,
             ANSI_RESET,
-            target_branch
+            target_color,
+            target_branch,
+            ANSI_RESET
         )),
         Print(format!(
             "{}Preview ends in {} seconds. Press Enter to create PR now, E to edit, X to change the Target, or Ctrl+C to abort.{}\r\n",
@@ -1473,9 +1534,148 @@ fn render_target_confirmation_dialog(
 
 const ANSI_CYAN: &str = "\x1b[36m";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DevToMainChoice {
+    ChangeTarget,
+    Proceed,
+    Cancel,
+}
+
+fn prompt_dev_to_main_warning(
+    _repo_root: &str,
+    current_branch: &str,
+    target_branch: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<DevToMainChoice> {
+    let options = [
+        "SELECT a new target branch...",
+        "I am aware, proceed!",
+        "Cancel the process!",
+    ];
+    let mut selected = 0usize;
+    let raw_mode = TerminalRawModeGuard::enter()?;
+
+    loop {
+        render_dev_to_main_warning(current_branch, target_branch, &options, selected)?;
+
+        if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+            drop(raw_mode);
+            return Ok(DevToMainChoice::Cancel);
+        }
+
+        let Event::Key(key) = event::read().context("failed to read dev-to-main warning input")?
+        else {
+            continue;
+        };
+
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Up if selected > 0 => selected -= 1,
+            KeyCode::Down if selected < options.len() - 1 => selected += 1,
+            KeyCode::Enter => {
+                drop(raw_mode);
+                return Ok(match selected {
+                    0 => DevToMainChoice::ChangeTarget,
+                    1 => DevToMainChoice::Proceed,
+                    _ => DevToMainChoice::Cancel,
+                });
+            }
+            KeyCode::Esc => {
+                drop(raw_mode);
+                return Ok(DevToMainChoice::Cancel);
+            }
+            KeyCode::Char('c')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                drop(raw_mode);
+                return Ok(DevToMainChoice::Cancel);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn render_dev_to_main_warning(
+    current_branch: &str,
+    target_branch: &str,
+    options: &[&str],
+    selected: usize,
+) -> Result<()> {
+    let mut stdout = io::stdout();
+
+    execute!(stdout, Clear(ClearType::All))
+        .context("failed to clear screen for dev-to-main warning")?;
+
+    queue!(
+        stdout,
+        MoveToColumn(0),
+        Print("\r\n"),
+        Print(format!(
+            "It seems like you are trying to create PR from {}{}{} that will be merged directly to {}{}{}.\r\n\r\n",
+            ANSI_YELLOW, current_branch, ANSI_RESET,
+            ANSI_YELLOW, target_branch, ANSI_RESET,
+        )),
+        Print(format!(
+            "ComfyGitFlow assumes {}-dev{} branches to be merged into {}{}{} branches.\r\n\r\n",
+            ANSI_YELLOW, ANSI_RESET,
+            ANSI_YELLOW, "x", ANSI_RESET,
+        )),
+        Print(format!(
+            "{}Please, confirm you are aware of this, or select an alternative:{}\r\n",
+            ANSI_CYAN, ANSI_RESET,
+        )),
+        Print(format!(
+            "{}NOTE: If you are not, not to worry, this auto-target misdetection might happen e.g. when you have more unmerged -dev branches open at the same time, and you are not working in perfect order. You can easily change the target by pressing ENTER.{}\r\n\r\n",
+            ANSI_LIGHT_GREY, ANSI_RESET,
+        )),
+    )
+    .context("failed to queue dev-to-main warning header")?;
+
+    for (i, option) in options.iter().enumerate() {
+        let display_line = if i == selected {
+            format!("{}> {}{}", ANSI_YELLOW, option, ANSI_RESET)
+        } else {
+            format!("  {}", option)
+        };
+        queue!(stdout, MoveToColumn(0), Print(display_line), Print("\r\n"))
+            .context("failed to queue dev-to-main option")?;
+    }
+
+    queue!(
+        stdout,
+        Print("\r\n"),
+        Print("Use ↑/↓ to navigate, Enter to select, Esc or Ctrl+C to cancel\r\n")
+    )
+    .context("failed to queue dev-to-main warning footer")?;
+
+    stdout
+        .flush()
+        .context("failed to flush dev-to-main warning")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dev_to_main_scenario_detects_dev_branch_targeting_mainline() {
+        assert!(is_dev_to_main_scenario("feature-dev", "main", None));
+        assert!(is_dev_to_main_scenario("my-branch-dev", "master", None));
+        assert!(is_dev_to_main_scenario("some-dev", "trunk", Some("trunk")));
+        assert!(!is_dev_to_main_scenario(
+            "feature-dev",
+            "release/1.0.x",
+            None
+        ));
+        assert!(!is_dev_to_main_scenario("feature", "main", None));
+        assert!(!is_dev_to_main_scenario("main", "main", None));
+    }
 
     #[test]
     fn build_pr_create_args_uses_non_interactive_flags() {
