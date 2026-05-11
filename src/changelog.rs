@@ -227,6 +227,7 @@ pub(crate) struct ChangelogDocument {
     hide_bump_messages: bool,
     mini_commit_hashes: bool,
     pub(crate) wrap_detailed_if_top_picks: bool,
+    include_top_picks: bool,
     commits: Vec<ParsedCommit>,
 }
 
@@ -242,6 +243,7 @@ impl ChangelogDocument {
             hide_bump_messages: false,
             mini_commit_hashes: false,
             wrap_detailed_if_top_picks: false,
+            include_top_picks: true,
             commits,
         }
     }
@@ -333,7 +335,11 @@ impl ChangelogDocument {
         render_breaking_section(&mut lines, &visible_commits, self.mini_commit_hashes);
 
         // Extract and render Top Picks section (priority 825)
-        let top_picks = crate::changelog_tp::extract_top_picks(&visible_commits);
+        let top_picks = if self.include_top_picks {
+            crate::changelog_tp::extract_top_picks(&visible_commits)
+        } else {
+            Vec::new()
+        };
         let has_top_picks = !top_picks.is_empty();
 
         if has_top_picks {
@@ -454,7 +460,9 @@ pub(crate) fn pr_changelog_gen(
     branch_name: impl Into<String>,
     lines: &[String],
 ) -> RenderedChangelog {
-    build_document_from_git_log(branch_name, lines).render_markdown()
+    let mut doc = build_document_from_git_log(branch_name, lines);
+    doc.include_top_picks = false;
+    doc.render_markdown()
 }
 
 pub(crate) fn ensure_previous_public_release_header(
@@ -2316,6 +2324,21 @@ mod tests {
 
         // Top pick config message should NOT appear in standard sections
         assert!(!changelog.markdown.contains("top5:"));
+    }
+
+    #[test]
+    fn pr_changelog_gen_excludes_top_picks_section() {
+        let lines = vec![
+            "a1b2c3d feat: regular feature".to_string(),
+            "b2c3d4e top5: *Top pick entry".to_string(),
+            "c3d4e5f fix: regular fix".to_string(),
+        ];
+        let result = pr_changelog_gen("feature-branch", &lines);
+
+        assert!(!result.markdown.contains("This Release's Top Picks"));
+        assert!(!result.markdown.contains("Top pick entry"));
+        assert!(result.markdown.contains("regular feature"));
+        assert!(result.markdown.contains("regular fix"));
     }
 
     #[test]
