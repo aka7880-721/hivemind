@@ -9,6 +9,8 @@ mod app;
 mod branding;
 mod changelog;
 mod changelog_tp;
+#[path = "chl_vrtr.rs"]
+mod chl_vrtr;
 mod cli;
 mod config;
 mod dialogs;

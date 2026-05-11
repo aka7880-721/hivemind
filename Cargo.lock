@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "comfygit"
-version = "0.22.7"
+version = "0.23.6"
 dependencies = [
  "anyhow",
  "arboard",
@@ -480,7 +480,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0b1fab2ae45819af2d0731d60f2afe17227ebb1a1538a236da84c93e9a60162"
 dependencies = [
  "dispatch2",
- "nix 0.31.2",
+ "nix 0.31.3",
  "windows-sys 0.61.2",
 ]
 
@@ -1609,9 +1609,9 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.31.2"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d6d0705320c1e6ba1d912b5e37cf18071b6c2e9b7fa8215a1e8a7651966f5d3"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.11.1",
  "cfg-if",

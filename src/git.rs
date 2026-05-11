@@ -440,6 +440,7 @@ pub(crate) struct GitScopeContext {
     pub(crate) hide_pr_messages: bool,
     pub(crate) hide_bump_messages: bool,
     pub(crate) mini_commit_hashes: bool,
+    pub(crate) changelog_wrap_detailed_if_top_picks: bool,
 }
 
 impl GitScopeContext {
@@ -576,6 +577,8 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             hide_pr_messages: project.changelog_hide_pr_messages_for_scope(0),
             hide_bump_messages: project.changelog_hide_bump_messages_for_scope(0),
             mini_commit_hashes: project.changelog_mini_commit_hashes_for_scope(0),
+            changelog_wrap_detailed_if_top_picks: project
+                .changelog_wrap_detailed_if_top_picks_for_scope(0),
         }]);
     }
 
@@ -604,6 +607,8 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             hide_pr_messages: project.changelog_hide_pr_messages_for_scope(0),
             hide_bump_messages: project.changelog_hide_bump_messages_for_scope(0),
             mini_commit_hashes: project.changelog_mini_commit_hashes_for_scope(0),
+            changelog_wrap_detailed_if_top_picks: project
+                .changelog_wrap_detailed_if_top_picks_for_scope(0),
         }]);
     }
 
@@ -631,6 +636,8 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                 hide_pr_messages: project.changelog_hide_pr_messages_for_scope(index),
                 hide_bump_messages: project.changelog_hide_bump_messages_for_scope(index),
                 mini_commit_hashes: project.changelog_mini_commit_hashes_for_scope(index),
+                changelog_wrap_detailed_if_top_picks: project
+                    .changelog_wrap_detailed_if_top_picks_for_scope(index),
             })
         })
         .collect()
@@ -667,6 +674,8 @@ pub(crate) fn collect_all_branch_git_scope_contexts(
                 hide_pr_messages: project.changelog_hide_pr_messages_for_scope(index),
                 hide_bump_messages: project.changelog_hide_bump_messages_for_scope(index),
                 mini_commit_hashes: project.changelog_mini_commit_hashes_for_scope(index),
+                changelog_wrap_detailed_if_top_picks: project
+                    .changelog_wrap_detailed_if_top_picks_for_scope(index),
             })
         })
         .collect()
@@ -1138,6 +1147,7 @@ mod tests {
                 remote_url: Some("origin-project".to_string()),
                 ..RepoConfig::default()
             }),
+            ..Default::default()
         };
 
         let scopes =
@@ -1217,6 +1227,7 @@ mod tests {
                 },
             ],
             repo: None,
+            ..Default::default()
         };
 
         let scopes = collect_all_branch_git_scope_contexts(&project)
@@ -1242,6 +1253,7 @@ mod tests {
             hide_pr_messages: false,
             hide_bump_messages: false,
             mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
         };
 
         assert_eq!(scope.git_pathspecs(), vec!["core", "core/nested"]);
@@ -1285,6 +1297,7 @@ mod tests {
                 remote_url: Some("origin".to_string()),
                 ..RepoConfig::default()
             }),
+            ..Default::default()
         };
 
         let scopes = collect_all_branch_git_scope_contexts(&project).expect("scope contexts");

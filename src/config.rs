@@ -86,7 +86,7 @@ impl FooterContent {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub name: String,
     #[serde(default)]
@@ -107,6 +107,8 @@ pub struct ProjectConfig {
     pub branches: Vec<BranchConfig>,
     #[serde(default)]
     pub repo: Option<RepoConfig>,
+    #[serde(default)]
+    pub variator_storage: crate::chl_vrtr::VariatorStorage,
 }
 
 impl ProjectConfig {
@@ -1141,6 +1143,7 @@ format = "json"
                 }],
                 branches: Vec::new(),
                 repo: None,
+                ..Default::default()
             }],
             ui: UiSettings::default(),
         };
@@ -1186,6 +1189,7 @@ format = "json"
                 targets: Vec::new(),
             }],
             repo: None,
+            ..Default::default()
         };
 
         let mixed_project = ProjectConfig {
