@@ -7434,6 +7434,14 @@ fn build_release_notes_markdown(
     tag_name: &str,
     scope: &crate::git::GitScopeContext,
 ) -> Result<String> {
+    // Load project config for variator storage
+    let variator_storage = crate::config::ConfigStore::locate()
+        .ok()
+        .and_then(|s| s.load().ok())
+        .and_then(|c| c.projects.into_iter().next())
+        .map(|p| p.variator_storage)
+        .unwrap_or_default();
+
     let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
     if let Some(markdown) = find_archived_changelog_markdown(&scope.repo_root, tag_name)? {
         return Ok(ensure_previous_public_release_header(
@@ -7463,6 +7471,7 @@ fn build_release_notes_markdown(
             scope.hide_bump_messages,
             scope.mini_commit_hashes,
             scope.changelog_wrap_detailed_if_top_picks,
+            variator_storage,
         )
         .markdown);
     }
@@ -7476,6 +7485,7 @@ fn build_release_notes_markdown(
         scope.hide_bump_messages,
         scope.mini_commit_hashes,
         scope.changelog_wrap_detailed_if_top_picks,
+        variator_storage,
     )
     .markdown)
 }
@@ -8884,6 +8894,7 @@ mod tests {
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
+            ..Default::default()
         }];
         app.selected_project = 0;
         app.screen = Screen::Dashboard;
@@ -8916,6 +8927,7 @@ mod tests {
             targets: Vec::new(),
             branches: Vec::new(),
             repo: None,
+            ..Default::default()
         }];
         app.screen = Screen::Dashboard;
 
@@ -9138,6 +9150,7 @@ mod tests {
                 },
             ],
             repo: None,
+            ..Default::default()
         }];
         app.screen = Screen::Dashboard;
         app.overview_focused_scope = 1;

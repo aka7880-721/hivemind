@@ -226,7 +226,7 @@ pub(crate) struct ChangelogDocument {
     hide_pr_messages: bool,
     hide_bump_messages: bool,
     mini_commit_hashes: bool,
-    wrap_detailed_if_top_picks: bool,
+    pub(crate) wrap_detailed_if_top_picks: bool,
     commits: Vec<ParsedCommit>,
 }
 
@@ -406,9 +406,17 @@ pub(crate) fn build_document_from_git_log(
     current_tag: impl Into<String>,
     lines: &[String],
 ) -> ChangelogDocument {
+    build_document_from_git_log_with_variator(current_tag, lines, None)
+}
+
+pub(crate) fn build_document_from_git_log_with_variator(
+    current_tag: impl Into<String>,
+    lines: &[String],
+    variator_storage: Option<&crate::chl_vrtr::VariatorStorage>,
+) -> ChangelogDocument {
     let commits = lines
         .iter()
-        .flat_map(|line| parse_graph_log_entries(line))
+        .flat_map(|line| parse_graph_log_entries_with_variator(line, variator_storage))
         .collect::<Vec<_>>();
     ChangelogDocument::new(current_tag, commits)
 }
@@ -420,6 +428,7 @@ pub(crate) fn std_changelog_gen(
     build_document_from_git_log(current_tag, lines).render_markdown()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rls_changelog_gen(
     current_tag: impl Into<String>,
     lines: &[String],
@@ -428,11 +437,13 @@ pub(crate) fn rls_changelog_gen(
     hide_bump_messages: bool,
     mini_commit_hashes: bool,
     wrap_detailed_if_top_picks: bool,
+    variator_storage: crate::chl_vrtr::VariatorStorage,
 ) -> RenderedChangelog {
-    let mut document = build_document_from_git_log(current_tag, lines)
-        .with_hide_filters(hide_pr_messages, hide_bump_messages)
-        .with_mini_commit_hashes(mini_commit_hashes)
-        .with_wrap_detailed_if_top_picks(wrap_detailed_if_top_picks);
+    let mut document =
+        build_document_from_git_log_with_variator(current_tag, lines, Some(&variator_storage))
+            .with_hide_filters(hide_pr_messages, hide_bump_messages)
+            .with_mini_commit_hashes(mini_commit_hashes)
+            .with_wrap_detailed_if_top_picks(wrap_detailed_if_top_picks);
     if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
         document = document.with_previous_public_release(last_public);
     }
@@ -833,7 +844,15 @@ fn parse_graph_log_line(line: &str) -> Option<ParsedCommit> {
     parse_graph_log_entries(line).into_iter().next()
 }
 
+#[cfg(test)]
 fn parse_graph_log_entries(line: &str) -> Vec<ParsedCommit> {
+    parse_graph_log_entries_with_variator(line, None)
+}
+
+fn parse_graph_log_entries_with_variator(
+    line: &str,
+    variator_storage: Option<&crate::chl_vrtr::VariatorStorage>,
+) -> Vec<ParsedCommit> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -861,7 +880,11 @@ fn parse_graph_log_entries(line: &str) -> Vec<ParsedCommit> {
         if hash.len() >= 7 {
             let subject = trimmed[end_offset..].trim();
             if !subject.is_empty() {
-                return ParsedCommit::parse_many(subject, hash.to_string());
+                // Apply variator expansion if storage is available
+                let expanded_subject = variator_storage
+                    .map(|vs| vs.expand(subject))
+                    .unwrap_or_else(|| subject.to_string());
+                return ParsedCommit::parse_many(&expanded_subject, hash.to_string());
             }
         }
 
@@ -1962,6 +1985,7 @@ mod tests {
             false,
             false,
             false,
+            crate::chl_vrtr::VariatorStorage::default(),
         );
 
         assert!(changelog.markdown.contains(

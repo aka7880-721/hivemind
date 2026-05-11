@@ -679,6 +679,7 @@ impl ProjectWizard {
                 targets: vec![target],
                 branches: Vec::new(),
                 repo,
+                ..Default::default()
             }
         } else {
             ProjectConfig {
@@ -694,6 +695,7 @@ impl ProjectWizard {
                 targets: Vec::new(),
                 branches: self.build_branches(true)?,
                 repo,
+                ..Default::default()
             }
         };
 

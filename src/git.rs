@@ -1147,6 +1147,7 @@ mod tests {
                 remote_url: Some("origin-project".to_string()),
                 ..RepoConfig::default()
             }),
+            ..Default::default()
         };
 
         let scopes =
@@ -1226,6 +1227,7 @@ mod tests {
                 },
             ],
             repo: None,
+            ..Default::default()
         };
 
         let scopes = collect_all_branch_git_scope_contexts(&project)
@@ -1295,6 +1297,7 @@ mod tests {
                 remote_url: Some("origin".to_string()),
                 ..RepoConfig::default()
             }),
+            ..Default::default()
         };
 
         let scopes = collect_all_branch_git_scope_contexts(&project).expect("scope contexts");
