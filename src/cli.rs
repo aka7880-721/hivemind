@@ -332,6 +332,24 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             run_toppicks()?;
             Ok(StartupMode::Handled)
         }
+        // Variator commands
+        [command] if is_var_command(command) => {
+            run_var(None, None, None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_var_command(command) => {
+            run_var(Some(action), None, None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, id] if is_var_command(command) => {
+            run_var(Some(action), Some(id), None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, id, value @ ..] if is_var_command(command) => {
+            let joined = value.join(" ");
+            run_var(Some(action), Some(id), Some(&joined))?;
+            Ok(StartupMode::Handled)
+        }
         _ => {
             print_usage();
             bail!("unknown command")
@@ -654,6 +672,10 @@ fn is_new_command(value: &str) -> bool {
 
 fn is_toppicks_command(value: &str) -> bool {
     matches!(value, "toppicks" | "tp" | "topp")
+}
+
+fn is_var_command(value: &str) -> bool {
+    matches!(value, "var" | "vr")
 }
 
 fn parse_merge_pull_request_selector(value: &str) -> Result<u64> {
@@ -3673,6 +3695,85 @@ fn run_toppicks() -> Result<()> {
     Ok(())
 }
 
+fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Result<()> {
+    use crate::chl_vrtr::VARIATOR_HELP;
+
+    // Load current config
+    let config_store = crate::config::ConfigStore::locate()?;
+    let mut config = config_store.load()?;
+    if config.projects.is_empty() {
+        bail!("No projects configured. Run 'cg init' first.");
+    }
+
+    match action {
+        None => {
+            // List all variators
+            if config.projects[0].variator_storage.is_empty() {
+                println!("No variators defined.");
+                println!();
+                println!("Use 'cg var set <id> \"<value>\"' to create one.");
+                return Ok(());
+            }
+
+            println!("=== Variators ===\n");
+            println!("{:<5} {:<15} Value", "ID", "Name");
+            println!("{}", "-".repeat(60));
+            for v in config.projects[0].variator_storage.list() {
+                println!("{:<5} {:<15} {}", v.id, v.variator_id, v.variator);
+            }
+        }
+        Some("see") | Some("list") => {
+            // Same as default (list)
+            if config.projects[0].variator_storage.is_empty() {
+                println!("No variators defined.");
+                return Ok(());
+            }
+
+            println!("=== Variators ===\n");
+            println!("{:<5} {:<15} Value", "ID", "Name");
+            println!("{}", "-".repeat(60));
+            for v in config.projects[0].variator_storage.list() {
+                println!("{:<5} {:<15} {}", v.id, v.variator_id, v.variator);
+            }
+        }
+        Some("set") => {
+            let id = id.ok_or_else(|| anyhow!("Usage: cg var set <id> \"<value>\""))?;
+            let variator = value.ok_or_else(|| anyhow!("Usage: cg var set <id> \"<value>\""))?;
+
+            let assigned_id = config.projects[0].variator_storage.set(id, variator);
+            config_store.save(&config)?;
+
+            println!("Variator set: {} (id={}) -> {}", id, assigned_id, variator);
+        }
+        Some("clear") | Some("del") | Some("rem") => {
+            let target =
+                id.ok_or_else(|| anyhow!("Usage: cg var clear <id>  or  cg var clear all"))?;
+
+            if target == "all" {
+                config.projects[0].variator_storage.clear_all();
+                config_store.save(&config)?;
+                println!("All variators cleared.");
+            } else {
+                let removed = config.projects[0].variator_storage.remove(target);
+                if removed.is_empty() {
+                    println!("No variator found matching '{}'", target);
+                } else {
+                    config_store.save(&config)?;
+                    println!("Removed: {}", removed.join(", "));
+                }
+            }
+        }
+        Some("help") | Some("-h") | Some("--help") | Some("h") => {
+            println!("{}", VARIATOR_HELP);
+        }
+        Some(unknown) => {
+            bail!("Unknown variator command: {}", unknown);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3705,6 +3806,7 @@ mod tests {
                 remote_url: None,
                 ..RepoConfig::default()
             }),
+            ..Default::default()
         }
     }
 
