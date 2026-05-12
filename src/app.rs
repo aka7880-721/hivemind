@@ -394,6 +394,7 @@ struct App {
     last_recent_change_click_at: Option<Instant>,
     commit_rename_textarea_click_at: Option<Instant>,
     commit_rename_textarea_rect: Option<Rect>,
+    release_now_notes_textarea_click_at: Option<Instant>,
     status: StatusMessage,
     last_status_toast_id: u64,
     toaster: ToastEngine<()>,
@@ -501,6 +502,7 @@ impl App {
             last_recent_change_click_at: None,
             commit_rename_textarea_click_at: None,
             commit_rename_textarea_rect: None,
+            release_now_notes_textarea_click_at: None,
             last_status_toast_id: status.id,
             toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
@@ -854,6 +856,41 @@ impl App {
     fn handle_release_now_notes_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
             return self.save_release_now_notes();
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+        {
+            if let Some(dialog) = &mut self.release_now_notes_dialog {
+                dialog.editor.copy();
+                let text = dialog.editor.yank_text();
+                if !text.is_empty() {
+                    self.copy_text_to_clipboard(&text);
+                    return Ok(());
+                }
+            }
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+        {
+            if let Some(dialog) = &mut self.release_now_notes_dialog {
+                dialog.editor.cut();
+                let text = dialog.editor.yank_text();
+                if !text.is_empty() {
+                    self.copy_text_to_clipboard(&text);
+                    return Ok(());
+                }
+            }
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('a') | KeyCode::Char('A'))
+        {
+            if let Some(dialog) = &mut self.release_now_notes_dialog {
+                dialog.editor.select_all();
+                return Ok(());
+            }
         }
 
         match key.code {
@@ -1664,11 +1701,132 @@ impl App {
         if self.release_now_notes_dialog.is_some() {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(action) = self.resolve_hit_action(mouse.column, mouse.row, false)
-                        && let Err(error) = self.handle_hit_action(action)
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
                     {
-                        self.status = StatusMessage::error(error.to_string());
+                        if matches!(action, HitAction::ReleaseNowNotesField) {
+                            if let Some(dialog) = &mut self.release_now_notes_dialog {
+                                let inner = Rect {
+                                    x: rect.x + 1,
+                                    y: rect.y + 1,
+                                    width: rect.width.saturating_sub(2),
+                                    height: rect.height.saturating_sub(2),
+                                };
+                                let lines = dialog.editor.lines();
+                                let (cursor_row, _) = dialog.editor.cursor();
+                                let visible_height = inner.height.max(1) as usize;
+                                let start_row = cursor_row
+                                    .saturating_sub(visible_height / 2)
+                                    .min(lines.len().saturating_sub(visible_height));
+                                let end_row = (start_row + visible_height).min(lines.len());
+                                let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                                let content_width =
+                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                                let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                                let clicked_col = mouse
+                                    .column
+                                    .saturating_sub(inner.x + number_width + 1)
+                                    as usize;
+                                let lines_ref: Vec<&str> =
+                                    lines.iter().map(|s| s.as_str()).collect();
+                                let (target_row, target_col) = textarea_click_position(
+                                    &lines_ref,
+                                    start_row,
+                                    content_width,
+                                    relative_row,
+                                    clicked_col,
+                                );
+                                let now = Instant::now();
+                                let is_double_click = self
+                                    .release_now_notes_textarea_click_at
+                                    .map(|prev| {
+                                        now.duration_since(prev) <= Duration::from_millis(400)
+                                    })
+                                    .unwrap_or(false);
+                                dialog.editor.cancel_selection();
+                                dialog.editor.move_cursor(tui_textarea::CursorMove::Jump(
+                                    target_row as u16,
+                                    target_col as u16,
+                                ));
+                                if is_double_click {
+                                    dialog
+                                        .editor
+                                        .move_cursor(tui_textarea::CursorMove::WordBack);
+                                    dialog.editor.start_selection();
+                                    dialog
+                                        .editor
+                                        .move_cursor(tui_textarea::CursorMove::WordForward);
+                                    dialog
+                                        .editor
+                                        .move_cursor(tui_textarea::CursorMove::Back);
+                                }
+                                self.release_now_notes_textarea_click_at = Some(now);
+                            }
+                        } else if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
                     }
+                    return;
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
+                        && matches!(action, HitAction::ReleaseNowNotesField)
+                    {
+                        if let Some(dialog) = &mut self.release_now_notes_dialog {
+                            let inner = Rect {
+                                x: rect.x + 1,
+                                y: rect.y + 1,
+                                width: rect.width.saturating_sub(2),
+                                height: rect.height.saturating_sub(2),
+                            };
+                            let lines = dialog.editor.lines();
+                            let (cursor_row, _) = dialog.editor.cursor();
+                            let visible_height = inner.height.max(1) as usize;
+                            let start_row = cursor_row
+                                .saturating_sub(visible_height / 2)
+                                .min(lines.len().saturating_sub(visible_height));
+                            let end_row = (start_row + visible_height).min(lines.len());
+                            let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                            let content_width =
+                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                            let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                            let clicked_col = mouse
+                                .column
+                                .saturating_sub(inner.x + number_width + 1)
+                                as usize;
+                            let lines_ref: Vec<&str> =
+                                lines.iter().map(|s| s.as_str()).collect();
+                            let (target_row, target_col) = textarea_click_position(
+                                &lines_ref,
+                                start_row,
+                                content_width,
+                                relative_row,
+                                clicked_col,
+                            );
+                            if !dialog.editor.is_selecting() {
+                                dialog.editor.start_selection();
+                            }
+                            dialog.editor.move_cursor(tui_textarea::CursorMove::Jump(
+                                target_row as u16,
+                                target_col as u16,
+                            ));
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    if let Some(dialog) = &mut self.release_now_notes_dialog {
+                        if dialog.editor.is_selecting() {
+                            dialog.editor.copy();
+                            let text = dialog.editor.yank_text();
+                            if !text.is_empty() {
+                                self.copy_text_to_clipboard(&text);
+                                return;
+                            }
+                        }
+                    }
+                    self.paste_from_clipboard();
                     return;
                 }
                 _ => return,
@@ -1789,21 +1947,25 @@ impl App {
                             let lines = dialog.message_editor.lines();
                             let (cursor_row, _) = dialog.message_editor.cursor();
                             let visible_height = inner.height.max(1) as usize;
-                            let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
-                            let number_width = end_row.to_string().len().max(2) as u16;
                             let start_row = cursor_row
                                 .saturating_sub(visible_height / 2)
                                 .min(lines.len().saturating_sub(visible_height));
+                            let end_row = (start_row + visible_height).min(lines.len());
+                            let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                            let content_width =
+                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
                             let relative_row = mouse.row.saturating_sub(inner.y) as usize;
                             let clicked_col =
                                 mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
-                            // For wrapped text: calculate column offset based on visual row
-                            // Approximate chars per line from content width
-                            let content_width =
-                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
-                            let target_col = clicked_col + (relative_row * content_width);
-                            let target_row =
-                                (start_row + relative_row).min(lines.len().saturating_sub(1));
+                            let lines_ref: Vec<&str> =
+                                lines.iter().map(|s| s.as_str()).collect();
+                            let (target_row, target_col) = textarea_click_position(
+                                &lines_ref,
+                                start_row,
+                                content_width,
+                                relative_row,
+                                clicked_col,
+                            );
                             // Check for double-click (word selection)
                             let now = Instant::now();
                             let is_double_click = self
@@ -1855,20 +2017,26 @@ impl App {
                                 let lines = dialog.message_editor.lines();
                                 let (cursor_row, _) = dialog.message_editor.cursor();
                                 let visible_height = inner.height.max(1) as usize;
-                                let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
-                                let number_width = end_row.to_string().len().max(2) as u16;
                                 let start_row = cursor_row
                                     .saturating_sub(visible_height / 2)
                                     .min(lines.len().saturating_sub(visible_height));
+                                let end_row = (start_row + visible_height).min(lines.len());
+                                let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                                let content_width =
+                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
                                 let relative_row = mouse.row.saturating_sub(inner.y) as usize;
                                 let clicked_col =
                                     mouse.column.saturating_sub(inner.x + number_width + 1)
                                         as usize;
-                                let content_width =
-                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
-                                let target_col = clicked_col + (relative_row * content_width);
-                                let target_row =
-                                    (start_row + relative_row).min(lines.len().saturating_sub(1));
+                                let lines_ref: Vec<&str> =
+                                    lines.iter().map(|s| s.as_str()).collect();
+                                let (target_row, target_col) = textarea_click_position(
+                                    &lines_ref,
+                                    start_row,
+                                    content_width,
+                                    relative_row,
+                                    clicked_col,
+                                );
                                 // Ensure selection is active and extend to new position
                                 if !dialog.message_editor.is_selecting() {
                                     dialog.message_editor.start_selection();
@@ -2411,6 +2579,15 @@ impl App {
             return;
         }
 
+        if let Some(dialog) = &mut self.release_now_notes_dialog {
+            for line in text.lines() {
+                dialog.editor.insert_str(line);
+                dialog.editor.insert_newline();
+            }
+            self.status = StatusMessage::info("Pasted into the release notes.");
+            return;
+        }
+
         if let Some(dialog) = &mut self.commit_rename_dialog {
             for line in text.lines() {
                 dialog.message_editor.insert_str(line);
@@ -2466,6 +2643,15 @@ impl App {
                     && dialog.workflow.is_some()
                 {
                     dialog.release_message.insert_str(text);
+                    self.status = StatusMessage::info("Pasted into the release notes.");
+                    return;
+                }
+
+                if let Some(dialog) = &mut self.release_now_notes_dialog {
+                    for line in text.lines() {
+                        dialog.editor.insert_str(line);
+                        dialog.editor.insert_newline();
+                    }
                     self.status = StatusMessage::info("Pasted into the release notes.");
                     return;
                 }
@@ -2725,6 +2911,7 @@ impl App {
                 self.commit_rename_dialog = None;
                 self.status = StatusMessage::info("Commit rename cancelled.");
             }
+            HitAction::ReleaseNowNotesField => {}
             HitAction::CommitRenameMessageField => {}
             HitAction::OpenTagDialog => return self.open_tag_dialog(),
             HitAction::OpenTagAnnotation => return self.open_tag_annotation_dialog(),
@@ -3342,7 +3529,9 @@ impl App {
                 if self.release_now_notes_dialog.is_some()
                     && !matches!(
                         action,
-                        HitAction::SaveReleaseNowNotes | HitAction::CancelReleaseNowNotes
+                        HitAction::SaveReleaseNowNotes
+                            | HitAction::CancelReleaseNowNotes
+                            | HitAction::ReleaseNowNotesField
                     )
                 {
                     return None;
@@ -5342,6 +5531,7 @@ pub(crate) enum HitAction {
     ToggleCommitRenameForcePush,
     SaveCommitRename,
     CancelCommitRename,
+    ReleaseNowNotesField,
     CommitRenameMessageField,
     OpenTagDialog,
     OpenTagAnnotation,
@@ -8355,6 +8545,41 @@ fn convert_to_textarea_input(key: KeyEvent) -> Option<TextAreaInput> {
     })
 }
 
+/// Maps a mouse click at `(relative_row, clicked_col)` inside the textarea content area to a
+/// logical `(line_index, col)` position, accounting for line wrapping.
+///
+/// * `lines`        – all logical lines from `editor.lines()`
+/// * `start_row`    – first visible logical line (scroll offset)
+/// * `content_width`– number of visible character columns (after number gutter)
+/// * `relative_row` – terminal row relative to the first content row (0-indexed)
+/// * `clicked_col`  – column offset after the number gutter (0-indexed)
+fn textarea_click_position(
+    lines: &[&str],
+    start_row: usize,
+    content_width: usize,
+    relative_row: usize,
+    clicked_col: usize,
+) -> (usize, usize) {
+    let cw = content_width.max(1);
+    let mut terminal_rows_consumed = 0usize;
+    for (i, line) in lines[start_row..].iter().enumerate() {
+        let logical_index = start_row + i;
+        let char_count = line.chars().count();
+        let rows_for_line = ((char_count + cw - 1) / cw).max(1);
+        if terminal_rows_consumed + rows_for_line > relative_row {
+            // The click falls within this logical line
+            let row_within_line = relative_row - terminal_rows_consumed;
+            let col = (row_within_line * cw + clicked_col).min(char_count);
+            return (logical_index, col);
+        }
+        terminal_rows_consumed += rows_for_line;
+    }
+    // Click is past the last line
+    let last = lines.len().saturating_sub(1);
+    let last_len = lines.get(last).map(|l| l.chars().count()).unwrap_or(0);
+    (last, last_len)
+}
+
 fn render_annotation_line(
     line: &str,
     line_number: usize,
@@ -8382,7 +8607,7 @@ fn render_annotation_line(
     } else {
         let cursor = active_cursor_col.unwrap_or(0);
         let selection_start = sel_start.unwrap_or(line_len + 1);
-        let selection_end = sel_end.unwrap_or(0).min(line_len);
+        let selection_end = sel_end.unwrap_or(line_len).min(line_len);
 
         for (index, character) in chars.iter().enumerate() {
             let in_selection =
