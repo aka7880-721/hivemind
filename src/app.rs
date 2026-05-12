@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -115,6 +115,8 @@ mod p_s_s;
 mod render;
 #[path = "rls-now.rs"]
 mod rls_now;
+#[path = "rls-now-inj.rs"]
+mod rls_now_inj;
 
 use self::p_s_s::{ProjectSettingsFocus, ProjectSettingsState, ProjectSettingsTab};
 
@@ -5080,19 +5082,15 @@ impl App {
     fn handle_toast_mouse(&mut self, mouse: MouseEvent) -> bool {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let interaction = self.toaster.handle_click(
-                    mouse.column,
-                    mouse.row,
-                    ToastMouseButton::Left,
-                );
+                let interaction =
+                    self.toaster
+                        .handle_click(mouse.column, mouse.row, ToastMouseButton::Left);
                 self.handle_toast_interaction(interaction)
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                let interaction = self.toaster.handle_click(
-                    mouse.column,
-                    mouse.row,
-                    ToastMouseButton::Right,
-                );
+                let interaction =
+                    self.toaster
+                        .handle_click(mouse.column, mouse.row, ToastMouseButton::Right);
                 self.handle_toast_interaction(interaction)
             }
             _ => false,
