@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 //
 fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
     if cancel.is_cancelled() {
@@ -156,6 +156,7 @@ pub(super) struct ReleaseNowDialog {
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
     pub(super) readme_injection_enabled: bool,
     pub(super) readme_inject_at_row: u16,
+    pub(super) release_title_template: String,
     pub(super) started_at: Option<Instant>,
     /// Elapsed time frozen when the run stops (success, failure, or cancel).
     pub(super) frozen_elapsed: Option<Duration>,
@@ -200,6 +201,7 @@ impl ReleaseNowDialog {
             quick_downloads: validation.quick_downloads,
             readme_injection_enabled: validation.readme_injection_enabled,
             readme_inject_at_row: validation.readme_inject_at_row,
+            release_title_template: validation.release_title_template,
             started_at: None,
             frozen_elapsed: None,
         }
@@ -677,6 +679,7 @@ pub(super) struct ReleaseNowValidation {
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
     pub(super) readme_injection_enabled: bool,
     pub(super) readme_inject_at_row: u16,
+    pub(super) release_title_template: String,
 }
 
 #[derive(Clone)]
@@ -763,6 +766,10 @@ pub(super) fn validate_release_now(
         readme_inject_at_row: project
             .release_now_for_scope(scope_index)
             .readme_inject_at_row,
+        release_title_template: project
+            .release_now_for_scope(scope_index)
+            .release_title_template
+            .clone(),
     })
 }
 
@@ -773,7 +780,14 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
         changelog_enabled: dialog.changelog_enabled,
         repo_root: dialog.repo_root.clone(),
         tag_name: dialog.tag_name.clone(),
-        release_title: format!("{} {}", dialog.project_name, dialog.tag_name),
+        release_title: {
+            let tmpl = dialog.release_title_template.trim();
+            if tmpl.is_empty() {
+                format!("{} {}", dialog.project_name, dialog.tag_name)
+            } else {
+                tmpl.replace("{version}", &dialog.tag_name)
+            }
+        },
         selected_option_label: dialog.selected_option().label.clone(),
         scripts: dialog.selected_option().scripts.clone(),
         artifact_dirs: dialog.selected_option().artifact_dirs.clone(),
@@ -812,23 +826,28 @@ pub(super) async fn execute_release_now_async(
     }
 
     ensure_not_cancelled(&cancel)?;
-    emit_progress(vec![
-        "Scanning dist/latest for release artifacts...".to_string(),
-    ]);
-    let repo_root = request.repo_root.clone();
-    let artifact_dirs = request.artifact_dirs.clone();
-    let artifact_files =
-        run_blocking_job(move || discover_artifacts(&repo_root, &artifact_dirs)).await?;
-    if artifact_files.is_empty() {
-        bail!(
-            "ReleaseNOW finished running scripts, but no artifacts were found under dist/latest for {}",
-            request.selected_option_label
-        )
-    }
-    emit_progress(vec![format!(
-        "Discovered {} artifact(s).",
-        artifact_files.len()
-    )]);
+    let artifact_files = if request.artifact_dirs.is_empty() {
+        emit_progress(vec![
+            "No artifact directories configured; skipping artifact scan (source-only release).".to_string(),
+        ]);
+        Vec::new()
+    } else {
+        emit_progress(vec![
+            "Scanning dist/latest for release artifacts...".to_string(),
+        ]);
+        let repo_root = request.repo_root.clone();
+        let artifact_dirs = request.artifact_dirs.clone();
+        let files =
+            run_blocking_job(move || discover_artifacts(&repo_root, &artifact_dirs)).await?;
+        if files.is_empty() {
+            bail!(
+                "ReleaseNOW finished running scripts, but no artifacts were found under dist/latest for {}",
+                request.selected_option_label
+            )
+        }
+        emit_progress(vec![format!("Discovered {} artifact(s).", files.len())]);
+        files
+    };
 
     ensure_not_cancelled(&cancel)?;
     emit_progress(vec![format!(
