@@ -342,6 +342,8 @@ struct App {
     release_now_log_viewport: Option<Rect>,
     overview_tile_rects: Vec<(Rect, usize)>,
     overview_drag_scope: Option<usize>,
+    project_rects: Vec<(Rect, usize)>,
+    drag_project: Option<usize>,
     wizard: ProjectWizard,
     bump_dialog: Option<BumpDialog>,
     overview_bump_kind_dialog: Option<OverviewBumpKindDialog>,
@@ -448,6 +450,8 @@ impl App {
             release_now_log_viewport: None,
             overview_tile_rects: Vec::new(),
             overview_drag_scope: None,
+            project_rects: Vec::new(),
+            drag_project: None,
             wizard: ProjectWizard::default(),
             bump_dialog: None,
             overview_bump_kind_dialog: None,
@@ -2128,6 +2132,27 @@ impl App {
                     }
                 }
 
+                // Handle project drag start in Projects pane
+                if self.screen == Screen::Dashboard
+                    && self.dashboard_focus == DashboardPane::Projects
+                {
+                    self.drag_project =
+                        self.project_rects.iter().rev().find_map(|(rect, index)| {
+                            if mouse.column >= rect.x
+                                && mouse.column < rect.x + rect.width
+                                && mouse.row >= rect.y
+                                && mouse.row < rect.y + rect.height
+                            {
+                                Some(*index)
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some(project_index) = self.drag_project {
+                        self.selected_project = project_index;
+                    }
+                }
+
                 if let Some((action, rect)) =
                     self.resolve_hit_target(mouse.column, mouse.row, false)
                 {
@@ -2278,6 +2303,24 @@ impl App {
                     }
                 }
 
+                // Handle project drag reordering
+                if let Some(from_project) = self.drag_project {
+                    let target_project =
+                        self.project_rects.iter().rev().find_map(|(rect, index)| {
+                            (mouse.column >= rect.x
+                                && mouse.column < rect.x + rect.width
+                                && mouse.row >= rect.y
+                                && mouse.row < rect.y + rect.height)
+                                .then_some(*index)
+                        });
+                    if let Some(to_project) = target_project
+                        && to_project != from_project
+                    {
+                        self.reorder_projects(from_project, to_project);
+                        self.drag_project = Some(to_project);
+                    }
+                }
+
                 if let Some((action, rect)) =
                     self.resolve_hit_target(mouse.column, mouse.row, false)
                     && let Some(last_target) = self.last_text_input_click_target
@@ -2288,6 +2331,7 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.overview_drag_scope = None;
+                self.drag_project = None;
             }
             MouseEventKind::Down(MouseButton::Right) => {
                 if self.overview_bump_workflow_dialog.is_none()
@@ -4359,6 +4403,23 @@ impl App {
         if self.selected_project != next {
             self.selected_project = next;
             self.prime_selected_project_dashboard_data();
+        }
+    }
+
+    fn reorder_projects(&mut self, from_index: usize, to_index: usize) {
+        if from_index >= self.config.projects.len() || to_index >= self.config.projects.len() {
+            return;
+        }
+        if from_index == to_index {
+            return;
+        }
+        let project = self.config.projects.remove(from_index);
+        self.config.projects.insert(to_index, project);
+        self.selected_project = to_index;
+        if let Err(error) = self.config_store.save(&self.config) {
+            self.status = StatusMessage::error(format!("Failed to save project order: {}", error));
+        } else {
+            self.status = StatusMessage::info("Project order updated.".to_string());
         }
     }
 

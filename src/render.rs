@@ -257,6 +257,7 @@ impl App {
     }
 
     fn render_dashboard(&mut self, frame: &mut Frame, area: Rect) {
+        self.project_rects.clear();
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(38), Constraint::Min(40)])
@@ -320,6 +321,7 @@ impl App {
                 if rect.y < left_inner.y + left_inner.height {
                     self.hit_targets
                         .push(HitTarget::new(rect, HitAction::SelectProject(index)));
+                    self.project_rects.push((rect, index));
                 }
             }
         }
