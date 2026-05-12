@@ -70,6 +70,8 @@ pub(crate) enum ProjectSettingsFocus {
     QuickDownloadsEnabled,
     QuickDownloadsPosition,
     QuickDownloadsFooter,
+    ReadmeInjectionEnabled,
+    ReadmeInjectAtRow,
 }
 
 #[derive(Clone)]
@@ -93,6 +95,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) release_now_macos: TextInput,
     pub(crate) quick_downloads_position: TextInput,
     pub(crate) quick_downloads_footer: TextInput,
+    pub(crate) readme_inject_at_row: TextInput,
 }
 
 impl Default for ProjectSettingsState {
@@ -117,6 +120,7 @@ impl Default for ProjectSettingsState {
             release_now_macos: TextInput::with_value(""),
             quick_downloads_position: TextInput::with_value(""),
             quick_downloads_footer: TextInput::with_value(""),
+            readme_inject_at_row: TextInput::with_value(""),
         }
     }
 }
@@ -164,6 +168,13 @@ impl ProjectSettingsState {
             .set_value(qd.position.display_name().to_string());
         self.quick_downloads_footer
             .set_value(qd.footer_message.clone());
+        let rls = project.release_now_for_scope(scope_index);
+        self.readme_inject_at_row
+            .set_value(if rls.readme_injection_enabled {
+                rls.readme_inject_at_row.to_string()
+            } else {
+                String::new()
+            });
         self.ensure_focus_visible(tab, project, scope_index);
     }
 
@@ -190,6 +201,13 @@ impl ProjectSettingsState {
                     fields.push(ProjectSettingsFocus::ChangelogHideBumpMessages);
                     fields.push(ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks);
                     fields.push(ProjectSettingsFocus::ChangelogMiniCommitHashes);
+                    fields.push(ProjectSettingsFocus::ReadmeInjectionEnabled);
+                    if project
+                        .release_now_for_scope(scope_index)
+                        .readme_injection_enabled
+                    {
+                        fields.push(ProjectSettingsFocus::ReadmeInjectAtRow);
+                    }
                 }
                 fields
             }
@@ -278,6 +296,7 @@ impl ProjectSettingsState {
                     | ProjectSettingsFocus::ReleaseNowLinuxAmd
                     | ProjectSettingsFocus::ReleaseNowMacOs
                     | ProjectSettingsFocus::QuickDownloadsFooter
+                    | ProjectSettingsFocus::ReadmeInjectAtRow
             )
     }
 
@@ -292,11 +311,19 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ReleaseNowLinuxAmd => Some(&mut self.release_now_linux_amd),
             ProjectSettingsFocus::ReleaseNowMacOs => Some(&mut self.release_now_macos),
             ProjectSettingsFocus::QuickDownloadsFooter => Some(&mut self.quick_downloads_footer),
+            ProjectSettingsFocus::ReadmeInjectAtRow => Some(&mut self.readme_inject_at_row),
             _ => None,
         }
     }
 
     fn handle_text_input(&mut self, key: KeyEvent) {
+        if self.focus == ProjectSettingsFocus::ReadmeInjectAtRow {
+            if let crossterm::event::KeyCode::Char(c) = key.code {
+                if !c.is_ascii_digit() {
+                    return;
+                }
+            }
+        }
         if let Some(input) = self.active_input_mut() {
             input.handle_key(key);
         }
@@ -345,6 +372,9 @@ impl ProjectSettingsState {
             )),
             ProjectSettingsFocus::QuickDownloadsFooter => self
                 .quick_downloads_footer
+                .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::ReadmeInjectAtRow => self
+                .readme_inject_at_row
                 .display_line_with_width(focused, max_width),
             _ => Line::from(String::new()),
         }
@@ -1005,6 +1035,17 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
         rows.push(ProjectSettingsRow::Checkbox(
             ProjectSettingsFocus::ChangelogMiniCommitHashes,
         ));
+        rows.push(ProjectSettingsRow::Checkbox(
+            ProjectSettingsFocus::ReadmeInjectionEnabled,
+        ));
+        if project
+            .release_now_for_scope(scope_index)
+            .readme_injection_enabled
+        {
+            rows.push(ProjectSettingsRow::Path(
+                ProjectSettingsFocus::ReadmeInjectAtRow,
+            ));
+        }
         rows.push(ProjectSettingsRow::Spacer(1));
     }
     rows.extend([
@@ -1165,6 +1206,11 @@ fn render_checkbox_row(
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => {
             project.changelog_mini_commit_hashes_for_scope(scope_index)
+        }
+        ProjectSettingsFocus::ReadmeInjectionEnabled => {
+            project
+                .release_now_for_scope(scope_index)
+                .readme_injection_enabled
         }
         _ => false,
     };
@@ -1352,7 +1398,8 @@ fn render_path_row(
     let side_button = match field {
         ProjectSettingsFocus::Alias | ProjectSettingsFocus::CustomMainBranchName => None,
         ProjectSettingsFocus::QuickDownloadsPosition
-        | ProjectSettingsFocus::QuickDownloadsFooter => None,
+        | ProjectSettingsFocus::QuickDownloadsFooter
+        | ProjectSettingsFocus::ReadmeInjectAtRow => None,
         _ => Some(FormRowButton::new(
             "Browse",
             HitAction::BrowseProjectSettingsField(field),
@@ -1401,6 +1448,7 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
             "Wrap detailed changelog if TopPicks present"
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => "Mini commit hashes",
+        ProjectSettingsFocus::ReadmeInjectionEnabled => "👀 What's new README injection enabled",
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
         }
@@ -1423,6 +1471,7 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ReleaseNowMacOs => "MacOS",
         ProjectSettingsFocus::QuickDownloadsPosition => "Position (←/→)",
         ProjectSettingsFocus::QuickDownloadsFooter => "Footer",
+        ProjectSettingsFocus::ReadmeInjectAtRow => "Inject at row:",
         _ => "",
     }
 }
@@ -1436,6 +1485,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ChangelogHideBumpMessages
             | ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks
             | ProjectSettingsFocus::ChangelogMiniCommitHashes
+            | ProjectSettingsFocus::ReadmeInjectionEnabled
             | ProjectSettingsFocus::ReleaseNowEnabled
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
@@ -1564,6 +1614,16 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
                 scope_name
             ));
         }
+        ProjectSettingsFocus::ReadmeInjectionEnabled => {
+            let rls = active_project.release_now_for_scope_mut(scope_index);
+            rls.readme_injection_enabled = !rls.readme_injection_enabled;
+            let enabled = rls.readme_injection_enabled;
+            app.status = super::StatusMessage::success(format!(
+                "README injection {} for {}.",
+                if enabled { "enabled" } else { "disabled" },
+                scope_name
+            ));
+        }
         _ => return Ok(()),
     }
 
@@ -1655,6 +1715,17 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     release_now.linux_amd_script = linux_amd_script;
     release_now.macos_script = macos_script;
     release_now.quick_downloads.footer_message = qd_footer;
+    let readme_inject_at_row_str = app
+        .project_settings_state
+        .readme_inject_at_row
+        .value()
+        .trim()
+        .to_string();
+    if release_now.readme_injection_enabled {
+        release_now.readme_inject_at_row = readme_inject_at_row_str
+            .parse::<u16>()
+            .unwrap_or(release_now.readme_inject_at_row);
+    }
     app.config_store.save(&app.config)?;
     Ok(())
 }
