@@ -860,37 +860,34 @@ impl App {
 
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+            && let Some(dialog) = &mut self.release_now_notes_dialog
         {
-            if let Some(dialog) = &mut self.release_now_notes_dialog {
-                dialog.editor.copy();
-                let text = dialog.editor.yank_text();
-                if !text.is_empty() {
-                    self.copy_text_to_clipboard(&text);
-                    return Ok(());
-                }
+            dialog.editor.copy();
+            let text = dialog.editor.yank_text();
+            if !text.is_empty() {
+                self.copy_text_to_clipboard(&text);
+                return Ok(());
             }
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+            && let Some(dialog) = &mut self.release_now_notes_dialog
         {
-            if let Some(dialog) = &mut self.release_now_notes_dialog {
-                dialog.editor.cut();
-                let text = dialog.editor.yank_text();
-                if !text.is_empty() {
-                    self.copy_text_to_clipboard(&text);
-                    return Ok(());
-                }
+            dialog.editor.cut();
+            let text = dialog.editor.yank_text();
+            if !text.is_empty() {
+                self.copy_text_to_clipboard(&text);
+                return Ok(());
             }
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('a') | KeyCode::Char('A'))
+            && let Some(dialog) = &mut self.release_now_notes_dialog
         {
-            if let Some(dialog) = &mut self.release_now_notes_dialog {
-                dialog.editor.select_all();
-                return Ok(());
-            }
+            dialog.editor.select_all();
+            return Ok(());
         }
 
         match key.code {
@@ -1723,10 +1720,9 @@ impl App {
                                 let content_width =
                                     inner.width.saturating_sub(number_width + 1).max(1) as usize;
                                 let relative_row = mouse.row.saturating_sub(inner.y) as usize;
-                                let clicked_col = mouse
-                                    .column
-                                    .saturating_sub(inner.x + number_width + 1)
-                                    as usize;
+                                let clicked_col =
+                                    mouse.column.saturating_sub(inner.x + number_width + 1)
+                                        as usize;
                                 let lines_ref: Vec<&str> =
                                     lines.iter().map(|s| s.as_str()).collect();
                                 let (target_row, target_col) = textarea_click_position(
@@ -1756,9 +1752,7 @@ impl App {
                                     dialog
                                         .editor
                                         .move_cursor(tui_textarea::CursorMove::WordForward);
-                                    dialog
-                                        .editor
-                                        .move_cursor(tui_textarea::CursorMove::Back);
+                                    dialog.editor.move_cursor(tui_textarea::CursorMove::Back);
                                 }
                                 self.release_now_notes_textarea_click_at = Some(now);
                             }
@@ -1772,58 +1766,54 @@ impl App {
                     if let Some((action, rect)) =
                         self.resolve_hit_target(mouse.column, mouse.row, false)
                         && matches!(action, HitAction::ReleaseNowNotesField)
+                        && let Some(dialog) = &mut self.release_now_notes_dialog
                     {
-                        if let Some(dialog) = &mut self.release_now_notes_dialog {
-                            let inner = Rect {
-                                x: rect.x + 1,
-                                y: rect.y + 1,
-                                width: rect.width.saturating_sub(2),
-                                height: rect.height.saturating_sub(2),
-                            };
-                            let lines = dialog.editor.lines();
-                            let (cursor_row, _) = dialog.editor.cursor();
-                            let visible_height = inner.height.max(1) as usize;
-                            let start_row = cursor_row
-                                .saturating_sub(visible_height / 2)
-                                .min(lines.len().saturating_sub(visible_height));
-                            let end_row = (start_row + visible_height).min(lines.len());
-                            let number_width = end_row.max(1).to_string().len().max(2) as u16;
-                            let content_width =
-                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
-                            let relative_row = mouse.row.saturating_sub(inner.y) as usize;
-                            let clicked_col = mouse
-                                .column
-                                .saturating_sub(inner.x + number_width + 1)
-                                as usize;
-                            let lines_ref: Vec<&str> =
-                                lines.iter().map(|s| s.as_str()).collect();
-                            let (target_row, target_col) = textarea_click_position(
-                                &lines_ref,
-                                start_row,
-                                content_width,
-                                relative_row,
-                                clicked_col,
-                            );
-                            if !dialog.editor.is_selecting() {
-                                dialog.editor.start_selection();
-                            }
-                            dialog.editor.move_cursor(tui_textarea::CursorMove::Jump(
-                                target_row as u16,
-                                target_col as u16,
-                            ));
+                        let inner = Rect {
+                            x: rect.x + 1,
+                            y: rect.y + 1,
+                            width: rect.width.saturating_sub(2),
+                            height: rect.height.saturating_sub(2),
+                        };
+                        let lines = dialog.editor.lines();
+                        let (cursor_row, _) = dialog.editor.cursor();
+                        let visible_height = inner.height.max(1) as usize;
+                        let start_row = cursor_row
+                            .saturating_sub(visible_height / 2)
+                            .min(lines.len().saturating_sub(visible_height));
+                        let end_row = (start_row + visible_height).min(lines.len());
+                        let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                        let content_width =
+                            inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                        let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                        let clicked_col =
+                            mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
+                        let lines_ref: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+                        let (target_row, target_col) = textarea_click_position(
+                            &lines_ref,
+                            start_row,
+                            content_width,
+                            relative_row,
+                            clicked_col,
+                        );
+                        if !dialog.editor.is_selecting() {
+                            dialog.editor.start_selection();
                         }
+                        dialog.editor.move_cursor(tui_textarea::CursorMove::Jump(
+                            target_row as u16,
+                            target_col as u16,
+                        ));
                     }
                     return;
                 }
                 MouseEventKind::Down(MouseButton::Right) => {
-                    if let Some(dialog) = &mut self.release_now_notes_dialog {
-                        if dialog.editor.is_selecting() {
-                            dialog.editor.copy();
-                            let text = dialog.editor.yank_text();
-                            if !text.is_empty() {
-                                self.copy_text_to_clipboard(&text);
-                                return;
-                            }
+                    if let Some(dialog) = &mut self.release_now_notes_dialog
+                        && dialog.editor.is_selecting()
+                    {
+                        dialog.editor.copy();
+                        let text = dialog.editor.yank_text();
+                        if !text.is_empty() {
+                            self.copy_text_to_clipboard(&text);
+                            return;
                         }
                     }
                     self.paste_from_clipboard();
@@ -1957,8 +1947,7 @@ impl App {
                             let relative_row = mouse.row.saturating_sub(inner.y) as usize;
                             let clicked_col =
                                 mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
-                            let lines_ref: Vec<&str> =
-                                lines.iter().map(|s| s.as_str()).collect();
+                            let lines_ref: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
                             let (target_row, target_col) = textarea_click_position(
                                 &lines_ref,
                                 start_row,
@@ -8565,7 +8554,7 @@ fn textarea_click_position(
     for (i, line) in lines[start_row..].iter().enumerate() {
         let logical_index = start_row + i;
         let char_count = line.chars().count();
-        let rows_for_line = ((char_count + cw - 1) / cw).max(1);
+        let rows_for_line = char_count.div_ceil(cw).max(1);
         if terminal_rows_consumed + rows_for_line > relative_row {
             // The click falls within this logical line
             let row_within_line = relative_row - terminal_rows_consumed;

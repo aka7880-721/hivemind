@@ -2335,10 +2335,8 @@ impl App {
             dialog.placeholder.as_str(),
             &dialog.editor,
         );
-        self.hit_targets.push(HitTarget::new(
-            sections[1],
-            HitAction::ReleaseNowNotesField,
-        ));
+        self.hit_targets
+            .push(HitTarget::new(sections[1], HitAction::ReleaseNowNotesField));
         self.render_button_row(
             frame,
             sections[2],
