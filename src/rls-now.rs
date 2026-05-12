@@ -814,6 +814,34 @@ pub(super) async fn execute_release_now_async(
         request.scope_label, request.selected_option_label
     )]);
 
+    if request.readme_injection_enabled {
+        ensure_not_cancelled(&cancel)?;
+        emit_progress(vec![
+            "Injecting 👀 What's new block into README.md.".to_string(),
+        ]);
+        let inj_repo_root = request.repo_root.clone();
+        let inj_tag = request.tag_name.clone();
+        let inj_markdown = request.release_notes_markdown.clone().unwrap_or_default();
+        let inj_row = request.readme_inject_at_row;
+        let inj_remote = request.scope.remote_spec.clone();
+        let inj_result = run_blocking_job(move || {
+            super::rls_now_inj::inject_whats_new(&super::rls_now_inj::ReadmeInjectionParams {
+                repo_root: &inj_repo_root,
+                tag_name: &inj_tag,
+                changelog_markdown: &inj_markdown,
+                inject_at_row: inj_row,
+                remote_url: inj_remote.as_deref(),
+            })?;
+            run_git_checked(&inj_repo_root, &["add", "README.md"])?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+        match inj_result {
+            Ok(()) => emit_progress(vec!["README.md updated with What's new block.".to_string()]),
+            Err(e) => emit_progress(vec![format!("Warning: README injection skipped: {}", e)]),
+        }
+    }
+
     for script in &request.scripts {
         ensure_not_cancelled(&cancel)?;
         run_script_with_live_logs(
@@ -921,34 +949,6 @@ pub(super) async fn execute_release_now_async(
         &mut emit_progress,
     )
     .await?;
-
-    if request.readme_injection_enabled {
-        ensure_not_cancelled(&cancel)?;
-        emit_progress(vec![
-            "Injecting 👀 What's new block into README.md.".to_string(),
-        ]);
-        let inj_repo_root = request.repo_root.clone();
-        let inj_tag = request.tag_name.clone();
-        let inj_markdown = request.release_notes_markdown.clone().unwrap_or_default();
-        let inj_row = request.readme_inject_at_row;
-        let inj_remote = request.scope.remote_spec.clone();
-        let inj_result = run_blocking_job(move || {
-            super::rls_now_inj::inject_whats_new(&super::rls_now_inj::ReadmeInjectionParams {
-                repo_root: &inj_repo_root,
-                tag_name: &inj_tag,
-                changelog_markdown: &inj_markdown,
-                inject_at_row: inj_row,
-                remote_url: inj_remote.as_deref(),
-            })?;
-            run_git_checked(&inj_repo_root, &["add", "README.md"])?;
-            Ok::<(), anyhow::Error>(())
-        })
-        .await;
-        match inj_result {
-            Ok(()) => emit_progress(vec!["README.md updated with What's new block.".to_string()]),
-            Err(e) => emit_progress(vec![format!("Warning: README injection skipped: {}", e)]),
-        }
-    }
 
     if request.changelog_enabled || request.readme_injection_enabled {
         ensure_not_cancelled(&cancel)?;
