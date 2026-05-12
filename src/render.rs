@@ -2163,7 +2163,7 @@ impl App {
         let body_inner = body_block.inner(sections[2]);
         self.release_now_log_viewport = Some(body_inner);
         if let Some(dialog) = &mut self.release_now_dialog {
-            dialog.set_body_viewport_height(body_inner.height);
+            dialog.set_body_viewport(body_inner.height, body_inner.width);
         }
         let dialog = self
             .release_now_dialog

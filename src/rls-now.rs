@@ -146,6 +146,7 @@ pub(super) struct ReleaseNowDialog {
     pub(super) warning_confirm_selected: bool,
     pub(super) scroll: u16,
     pub(super) body_viewport_height: u16,
+    pub(super) body_viewport_width: u16,
     pub(super) selection_anchor: Option<usize>,
     pub(super) selection_focus: Option<usize>,
     pub(super) summary: Option<String>,
@@ -191,6 +192,7 @@ impl ReleaseNowDialog {
             warning_confirm_selected: false,
             scroll: 0,
             body_viewport_height: 0,
+            body_viewport_width: 0,
             selection_anchor: None,
             selection_focus: None,
             summary: None,
@@ -227,8 +229,9 @@ impl ReleaseNowDialog {
         self.cancel_requested
     }
 
-    pub(super) fn set_body_viewport_height(&mut self, height: u16) {
+    pub(super) fn set_body_viewport(&mut self, height: u16, width: u16) {
         self.body_viewport_height = height;
+        self.body_viewport_width = width;
         if self.running && self.auto_follow {
             self.scroll_to_tail();
         }
@@ -462,13 +465,29 @@ impl ReleaseNowDialog {
     }
 
     fn body_line_index_for_row(&self, row_offset: u16) -> Option<usize> {
-        let count = self.body_plain_lines().len();
+        let lines = self.body_plain_lines();
+        let count = lines.len();
         if count == 0 {
             return None;
         }
 
-        let index = self.scroll_offset() as usize + row_offset as usize;
-        (index < count).then_some(index)
+        let content_width = self.body_viewport_width.max(1) as usize;
+        let scroll_offset = self.scroll_offset() as usize;
+        let target_row = row_offset as usize;
+
+        // Account for line wrapping: calculate which logical line contains the target row
+        let mut terminal_rows_consumed = 0usize;
+        for (i, line) in lines.iter().enumerate().skip(scroll_offset) {
+            let char_count = line.chars().count();
+            let rows_for_line = char_count.div_ceil(content_width).max(1);
+            if terminal_rows_consumed + rows_for_line > target_row {
+                return Some(i);
+            }
+            terminal_rows_consumed += rows_for_line;
+        }
+
+        // Target row is past the last line, return the last line
+        Some(count.saturating_sub(1))
     }
 
     pub(super) fn body_title(&self) -> &'static str {
@@ -856,7 +875,8 @@ pub(super) async fn execute_release_now_async(
     ensure_not_cancelled(&cancel)?;
     let artifact_files = if request.artifact_dirs.is_empty() {
         emit_progress(vec![
-            "No artifact directories configured; skipping artifact scan (source-only release).".to_string(),
+            "No artifact directories configured; skipping artifact scan (source-only release)."
+                .to_string(),
         ]);
         Vec::new()
     } else {
