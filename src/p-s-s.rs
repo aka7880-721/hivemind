@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -72,6 +72,7 @@ pub(crate) enum ProjectSettingsFocus {
     QuickDownloadsFooter,
     ReadmeInjectionEnabled,
     ReadmeInjectAtRow,
+    ReleaseTitleTemplate,
 }
 
 #[derive(Clone)]
@@ -96,6 +97,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) quick_downloads_position: TextInput,
     pub(crate) quick_downloads_footer: TextInput,
     pub(crate) readme_inject_at_row: TextInput,
+    pub(crate) release_title_template: TextInput,
 }
 
 impl Default for ProjectSettingsState {
@@ -121,6 +123,7 @@ impl Default for ProjectSettingsState {
             quick_downloads_position: TextInput::with_value(""),
             quick_downloads_footer: TextInput::with_value(""),
             readme_inject_at_row: TextInput::with_value(""),
+            release_title_template: TextInput::with_value(""),
         }
     }
 }
@@ -175,6 +178,8 @@ impl ProjectSettingsState {
             } else {
                 String::new()
             });
+        self.release_title_template
+            .set_value(rls.release_title_template.clone());
         self.ensure_focus_visible(tab, project, scope_index);
     }
 
@@ -220,6 +225,7 @@ impl ProjectSettingsState {
                         ProjectSettingsFocus::ReleaseNowLinuxArm,
                         ProjectSettingsFocus::ReleaseNowLinuxAmd,
                         ProjectSettingsFocus::ReleaseNowMacOs,
+                        ProjectSettingsFocus::ReleaseTitleTemplate,
                     ]);
                 }
                 fields
@@ -297,6 +303,7 @@ impl ProjectSettingsState {
                     | ProjectSettingsFocus::ReleaseNowMacOs
                     | ProjectSettingsFocus::QuickDownloadsFooter
                     | ProjectSettingsFocus::ReadmeInjectAtRow
+                    | ProjectSettingsFocus::ReleaseTitleTemplate
             )
     }
 
@@ -312,6 +319,7 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ReleaseNowMacOs => Some(&mut self.release_now_macos),
             ProjectSettingsFocus::QuickDownloadsFooter => Some(&mut self.quick_downloads_footer),
             ProjectSettingsFocus::ReadmeInjectAtRow => Some(&mut self.readme_inject_at_row),
+            ProjectSettingsFocus::ReleaseTitleTemplate => Some(&mut self.release_title_template),
             _ => None,
         }
     }
@@ -374,6 +382,9 @@ impl ProjectSettingsState {
                 .display_line_with_width(focused, max_width),
             ProjectSettingsFocus::ReadmeInjectAtRow => self
                 .readme_inject_at_row
+                .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::ReleaseTitleTemplate => self
+                .release_title_template
                 .display_line_with_width(focused, max_width),
             _ => Line::from(String::new()),
         }
@@ -1086,6 +1097,7 @@ fn build_distro_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Project
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowLinuxArm),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowLinuxAmd),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowMacOs),
+            ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseTitleTemplate),
         ]);
     }
     rows.extend([
@@ -1398,7 +1410,8 @@ fn render_path_row(
         ProjectSettingsFocus::Alias | ProjectSettingsFocus::CustomMainBranchName => None,
         ProjectSettingsFocus::QuickDownloadsPosition
         | ProjectSettingsFocus::QuickDownloadsFooter
-        | ProjectSettingsFocus::ReadmeInjectAtRow => None,
+        | ProjectSettingsFocus::ReadmeInjectAtRow
+        | ProjectSettingsFocus::ReleaseTitleTemplate => None,
         _ => Some(FormRowButton::new(
             "Browse",
             HitAction::BrowseProjectSettingsField(field),
@@ -1471,6 +1484,7 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::QuickDownloadsPosition => "Position (←/→)",
         ProjectSettingsFocus::QuickDownloadsFooter => "Footer",
         ProjectSettingsFocus::ReadmeInjectAtRow => "Inject at row:",
+        ProjectSettingsFocus::ReleaseTitleTemplate => "Release title:",
         _ => "",
     }
 }
@@ -1713,6 +1727,11 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     release_now.linux_arm_script = linux_arm_script;
     release_now.linux_amd_script = linux_amd_script;
     release_now.macos_script = macos_script;
+    release_now.release_title_template = app
+        .project_settings_state
+        .release_title_template
+        .value()
+        .to_string();
     release_now.quick_downloads.footer_message = qd_footer;
     let readme_inject_at_row_str = app
         .project_settings_state
