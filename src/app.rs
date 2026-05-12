@@ -267,6 +267,28 @@ fn copy_text_via_linux_clipboard_cli(text: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+fn paste_from_linux_clipboard_cli() -> Option<String> {
+    try_clipboard_stdout_command("wl-paste", &[])
+        .or_else(|| try_clipboard_stdout_command("xclip", &["-selection", "clipboard", "-o"]))
+        .or_else(|| try_clipboard_stdout_command("xsel", &["--clipboard", "--output"]))
+}
+
+#[cfg(target_os = "linux")]
+fn try_clipboard_stdout_command(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if output.status.success() {
+        String::from_utf8(output.stdout).ok()
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn try_clipboard_stdin_command(program: &str, args: &[&str], text: &str) -> bool {
     use std::io::Write;
     let mut child = match Command::new(program)
@@ -879,6 +901,11 @@ impl App {
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
             return self.open_browser_for_wizard_focus();
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
+            self.paste_from_clipboard();
+            return Ok(());
         }
 
         if self.wizard.focus_accepts_text() {
@@ -1505,6 +1532,11 @@ impl App {
     fn handle_project_edit_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
             return self.open_browser_for_project_edit_focus();
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
+            self.paste_from_clipboard();
+            return Ok(());
         }
 
         let focus_accepts_text = self
@@ -2363,6 +2395,11 @@ impl App {
                 clipboard
             } else {
                 self.status = StatusMessage::warning("Clipboard creation failed".to_string());
+                #[cfg(target_os = "linux")]
+                if let Some(text) = paste_from_linux_clipboard_cli() {
+                    self.handle_paste(text);
+                    return;
+                }
                 if let Some(text) = self.fallback_clipboard.clone() {
                     self.handle_paste(text);
                 } else {
@@ -2408,6 +2445,11 @@ impl App {
                 }
             }
             Err(_) => {
+                #[cfg(target_os = "linux")]
+                if let Some(text) = paste_from_linux_clipboard_cli() {
+                    self.handle_paste(text);
+                    return;
+                }
                 if let Some(text) = self.fallback_clipboard.clone() {
                     self.handle_paste(text);
                 } else {
