@@ -394,8 +394,7 @@ struct App {
     commit_rename_textarea_rect: Option<Rect>,
     status: StatusMessage,
     last_status_toast_id: u64,
-    transient_toaster: ToastEngine<()>,
-    sticky_toaster: ToastEngine<()>,
+    toaster: ToastEngine<()>,
     logo: PixelLogo,
     footer_auto_hidden: bool,
     footer_manual_override: bool,
@@ -501,10 +500,7 @@ impl App {
             commit_rename_textarea_click_at: None,
             commit_rename_textarea_rect: None,
             last_status_toast_id: status.id,
-            transient_toaster: ToastEngineBuilder::new(Rect::default())
-                .default_duration(Duration::from_secs(2))
-                .build(),
-            sticky_toaster: ToastEngineBuilder::new(Rect::default())
+            toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
                 .build(),
             status,
@@ -3499,7 +3495,7 @@ impl App {
     }
 
     fn next_poll_timeout(&self) -> Duration {
-        if self.background_jobs_inflight > 0 || self.transient_toaster.has_toast() {
+        if self.background_jobs_inflight > 0 || self.toaster.has_toast() {
             ACTIVE_UI_TICK_INTERVAL
         } else {
             IDLE_UI_POLL_INTERVAL
@@ -3507,14 +3503,11 @@ impl App {
     }
 
     fn tick_ui_state(&mut self) -> bool {
-        let had_transient_toast = self.transient_toaster.has_toast();
-        let had_sticky_toast = self.sticky_toaster.has_toast();
-        self.transient_toaster.tick();
-        self.sticky_toaster.tick();
+        let had_toast = self.toaster.has_toast();
+        self.toaster.tick();
 
-        had_transient_toast
-            || self.transient_toaster.has_toast() != had_transient_toast
-            || self.sticky_toaster.has_toast() != had_sticky_toast
+        had_toast
+            || self.toaster.has_toast() != had_toast
             || overview::tick_dashboard_tile_rotation(self)
     }
 
@@ -5070,12 +5063,12 @@ impl App {
         if key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
         {
-            let interaction = self.sticky_toaster.handle_shortcut(ToastShortcut::Dismiss);
+            let interaction = self.toaster.handle_shortcut(ToastShortcut::Dismiss);
             return self.handle_toast_interaction(interaction);
         }
 
         if key.code == KeyCode::F(5) && self.screen != Screen::Wizard {
-            let interaction = self.sticky_toaster.handle_shortcut(ToastShortcut::Copy);
+            let interaction = self.toaster.handle_shortcut(ToastShortcut::Copy);
             return self.handle_toast_interaction(interaction);
         }
 
@@ -5085,7 +5078,7 @@ impl App {
     fn handle_toast_mouse(&mut self, mouse: MouseEvent) -> bool {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let interaction = self.sticky_toaster.handle_click(
+                let interaction = self.toaster.handle_click(
                     mouse.column,
                     mouse.row,
                     ToastMouseButton::Left,
@@ -5093,7 +5086,7 @@ impl App {
                 self.handle_toast_interaction(interaction)
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                let interaction = self.sticky_toaster.handle_click(
+                let interaction = self.toaster.handle_click(
                     mouse.column,
                     mouse.row,
                     ToastMouseButton::Right,
@@ -5166,17 +5159,15 @@ impl App {
         self.last_status_toast_id = self.status.id;
         let builder = ToastBuilder::new(self.status.text.clone().into());
         match self.status.kind {
-            StatusKind::Info => self
-                .transient_toaster
-                .show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Info => self.toaster.show_toast(builder.toast_type(ToastType::Info)),
             StatusKind::Success => self
-                .transient_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Success)),
             StatusKind::Warning => self
-                .transient_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Warning)),
             StatusKind::Error => self
-                .sticky_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
         }
     }
@@ -5184,23 +5175,21 @@ impl App {
     fn show_transient_toast(&mut self, kind: StatusKind, text: impl Into<String>) {
         let builder = ToastBuilder::new(text.into().into());
         match kind {
-            StatusKind::Info => self
-                .transient_toaster
-                .show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Info => self.toaster.show_toast(builder.toast_type(ToastType::Info)),
             StatusKind::Success => self
-                .transient_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Success)),
             StatusKind::Warning => self
-                .transient_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Warning)),
             StatusKind::Error => self
-                .sticky_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
         }
     }
 
     fn show_sticky_error_toast(&mut self, text: impl Into<String>) {
-        self.sticky_toaster.show_toast(
+        self.toaster.show_toast(
             ToastBuilder::new(text.into().into())
                 .toast_type(ToastType::Error)
                 .keep_on(1),
