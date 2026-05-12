@@ -1804,12 +1804,16 @@ impl App {
                 }
                 MouseEventKind::Down(MouseButton::Right) => {
                     if let Some(dialog) = &mut self.release_now_notes_dialog {
-                        dialog.editor.copy();
-                        let text = dialog.editor.yank_text();
-                        if !text.is_empty() {
-                            self.copy_text_to_clipboard(&text);
+                        if dialog.editor.is_selecting() {
+                            dialog.editor.copy();
+                            let text = dialog.editor.yank_text();
+                            if !text.is_empty() {
+                                self.copy_text_to_clipboard(&text);
+                                return;
+                            }
                         }
                     }
+                    self.paste_from_clipboard();
                     return;
                 }
                 _ => return,
@@ -2548,6 +2552,15 @@ impl App {
             && dialog.workflow.is_some()
         {
             dialog.release_message.insert_str(text);
+            self.status = StatusMessage::info("Pasted into the release notes.");
+            return;
+        }
+
+        if let Some(dialog) = &mut self.release_now_notes_dialog {
+            for line in text.lines() {
+                dialog.editor.insert_str(line);
+                dialog.editor.insert_newline();
+            }
             self.status = StatusMessage::info("Pasted into the release notes.");
             return;
         }
