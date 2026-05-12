@@ -37,7 +37,7 @@ directories = "6"
 document-features = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 ratatui = "0.30"
-ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
+ratatui-comfy-toaster = "0.2.2"
 ratatui-explorer = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
