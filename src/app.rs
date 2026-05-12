@@ -4717,6 +4717,7 @@ impl App {
                 .map(|dialog| dialog.repo_root.value().to_string())
                 .unwrap_or_default(),
             BrowseTarget::ProjectSettingsChangelogPath
+            | BrowseTarget::ProjectSettingsReleaseNowGeneral
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
@@ -4777,6 +4778,7 @@ impl App {
                 }
             }
             BrowseTarget::ProjectSettingsChangelogPath
+            | BrowseTarget::ProjectSettingsReleaseNowGeneral
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
@@ -8103,6 +8105,7 @@ enum BrowseTarget {
     ProjectEditTargetPath,
     ProjectEditRepoRoot,
     ProjectSettingsChangelogPath,
+    ProjectSettingsReleaseNowGeneral,
     ProjectSettingsReleaseNowWindows,
     ProjectSettingsReleaseNowLinuxArm,
     ProjectSettingsReleaseNowLinuxAmd,
@@ -8130,7 +8133,8 @@ impl FileBrowserDialog {
         let title = match target {
             BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot => "Browse Repo Root",
             BrowseTarget::ProjectSettingsChangelogPath => "Browse Changelog Path",
-            BrowseTarget::ProjectSettingsReleaseNowWindows
+            BrowseTarget::ProjectSettingsReleaseNowGeneral
+            | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
             | BrowseTarget::ProjectSettingsReleaseNowMacOs => "Browse Release Script",
