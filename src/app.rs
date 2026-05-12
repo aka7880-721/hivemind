@@ -8540,7 +8540,7 @@ fn render_annotation_line(
     } else {
         let cursor = active_cursor_col.unwrap_or(0);
         let selection_start = sel_start.unwrap_or(line_len + 1);
-        let selection_end = sel_end.unwrap_or(0).min(line_len);
+        let selection_end = sel_end.unwrap_or(line_len).min(line_len);
 
         for (index, character) in chars.iter().enumerate() {
             let in_selection =
