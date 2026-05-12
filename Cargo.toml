@@ -26,6 +26,7 @@ name = "ComfyGit"
 path = "src/bin/cg-bin.rs"
 
 [workspace]
+exclude = ["src/components/comfy-toaster"]
 
 [dependencies]
 anyhow = "1"
