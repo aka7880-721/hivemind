@@ -643,6 +643,7 @@ pub struct ReleaseNowSettings {
     pub quick_downloads: ReleaseNowQuickDownloadsSettings,
     pub readme_injection_enabled: bool,
     pub readme_inject_at_row: u16,
+    pub release_title_template: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
