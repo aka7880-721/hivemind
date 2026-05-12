@@ -641,6 +641,8 @@ pub struct ReleaseNowSettings {
     pub linux_amd_script: String,
     pub macos_script: String,
     pub quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub readme_injection_enabled: bool,
+    pub readme_inject_at_row: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
