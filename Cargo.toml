@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.23.6"
+version = "0.24.6"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -15,7 +15,7 @@ categories = ["development-tools", "command-line-utilities", "command-line-inter
 [package.metadata]
 license-link = "https://github.com/comfy-home/ComfyGit?tab=License-1-ov-file"
 minimum_required = "0.17.0"
-minimum_required_reason = "..."
+minimum_required_reason = "Before 0.17.x, the app was in very early alpha stage..."
 
 [[bin]]
 name = "cg"
@@ -26,6 +26,7 @@ name = "ComfyGit"
 path = "src/bin/cg-bin.rs"
 
 [workspace]
+exclude = ["src/components/comfy-toaster"]
 
 [dependencies]
 anyhow = "1"
@@ -37,7 +38,8 @@ directories = "6"
 document-features = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 ratatui = "0.30"
-ratatui-comfy-toaster = "0.2.2"
+# ratatui-comfy-toaster = "0.3.1"
+ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
 ratatui-explorer = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

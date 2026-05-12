@@ -94,16 +94,8 @@ impl App {
         if !self.config.ui.hide_footer {
             self.render_footer(frame, root[2]);
         }
-        self.transient_toaster.set_area(frame.area());
-        let transient_area = self.transient_toaster.toast_area();
-        if self.transient_toaster.has_toast() {
-            self.sticky_toaster
-                .set_area_avoiding(frame.area(), &[transient_area]);
-        } else {
-            self.sticky_toaster.set_area(frame.area());
-        }
-        frame.render_widget(&self.transient_toaster, frame.area());
-        frame.render_widget(&self.sticky_toaster, frame.area());
+        self.toaster.set_area(frame.area());
+        frame.render_widget(&self.toaster, frame.area());
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect) {
@@ -257,6 +249,7 @@ impl App {
     }
 
     fn render_dashboard(&mut self, frame: &mut Frame, area: Rect) {
+        self.project_rects.clear();
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(38), Constraint::Min(40)])
@@ -320,6 +313,7 @@ impl App {
                 if rect.y < left_inner.y + left_inner.height {
                     self.hit_targets
                         .push(HitTarget::new(rect, HitAction::SelectProject(index)));
+                    self.project_rects.push((rect, index));
                 }
             }
         }

@@ -635,11 +635,14 @@ impl Default for ReleaseNowQuickDownloadsSettings {
 #[serde(default)]
 pub struct ReleaseNowSettings {
     pub enabled: bool,
+    pub general_script: String,
     pub windows_script: String,
     pub linux_arm_script: String,
     pub linux_amd_script: String,
     pub macos_script: String,
     pub quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub readme_injection_enabled: bool,
+    pub readme_inject_at_row: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

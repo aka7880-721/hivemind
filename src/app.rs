@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -115,6 +115,8 @@ mod p_s_s;
 mod render;
 #[path = "rls-now.rs"]
 mod rls_now;
+#[path = "rls-now-inj.rs"]
+mod rls_now_inj;
 
 use self::p_s_s::{ProjectSettingsFocus, ProjectSettingsState, ProjectSettingsTab};
 
@@ -267,6 +269,28 @@ fn copy_text_via_linux_clipboard_cli(text: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+fn paste_from_linux_clipboard_cli() -> Option<String> {
+    try_clipboard_stdout_command("wl-paste", &[])
+        .or_else(|| try_clipboard_stdout_command("xclip", &["-selection", "clipboard", "-o"]))
+        .or_else(|| try_clipboard_stdout_command("xsel", &["--clipboard", "--output"]))
+}
+
+#[cfg(target_os = "linux")]
+fn try_clipboard_stdout_command(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if output.status.success() {
+        String::from_utf8(output.stdout).ok()
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn try_clipboard_stdin_command(program: &str, args: &[&str], text: &str) -> bool {
     use std::io::Write;
     let mut child = match Command::new(program)
@@ -320,6 +344,8 @@ struct App {
     release_now_log_viewport: Option<Rect>,
     overview_tile_rects: Vec<(Rect, usize)>,
     overview_drag_scope: Option<usize>,
+    project_rects: Vec<(Rect, usize)>,
+    drag_project: Option<usize>,
     wizard: ProjectWizard,
     bump_dialog: Option<BumpDialog>,
     overview_bump_kind_dialog: Option<OverviewBumpKindDialog>,
@@ -370,8 +396,7 @@ struct App {
     commit_rename_textarea_rect: Option<Rect>,
     status: StatusMessage,
     last_status_toast_id: u64,
-    transient_toaster: ToastEngine<()>,
-    sticky_toaster: ToastEngine<()>,
+    toaster: ToastEngine<()>,
     logo: PixelLogo,
     footer_auto_hidden: bool,
     footer_manual_override: bool,
@@ -426,6 +451,8 @@ impl App {
             release_now_log_viewport: None,
             overview_tile_rects: Vec::new(),
             overview_drag_scope: None,
+            project_rects: Vec::new(),
+            drag_project: None,
             wizard: ProjectWizard::default(),
             bump_dialog: None,
             overview_bump_kind_dialog: None,
@@ -475,10 +502,7 @@ impl App {
             commit_rename_textarea_click_at: None,
             commit_rename_textarea_rect: None,
             last_status_toast_id: status.id,
-            transient_toaster: ToastEngineBuilder::new(Rect::default())
-                .default_duration(Duration::from_secs(2))
-                .build(),
-            sticky_toaster: ToastEngineBuilder::new(Rect::default())
+            toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
                 .build(),
             status,
@@ -879,6 +903,11 @@ impl App {
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
             return self.open_browser_for_wizard_focus();
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
+            self.paste_from_clipboard();
+            return Ok(());
         }
 
         if self.wizard.focus_accepts_text() {
@@ -1507,6 +1536,11 @@ impl App {
             return self.open_browser_for_project_edit_focus();
         }
 
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
+            self.paste_from_clipboard();
+            return Ok(());
+        }
+
         let focus_accepts_text = self
             .project_edit_dialog
             .as_ref()
@@ -2096,6 +2130,27 @@ impl App {
                     }
                 }
 
+                // Handle project drag start in Projects pane
+                if self.screen == Screen::Dashboard
+                    && self.dashboard_focus == DashboardPane::Projects
+                {
+                    self.drag_project =
+                        self.project_rects.iter().rev().find_map(|(rect, index)| {
+                            if mouse.column >= rect.x
+                                && mouse.column < rect.x + rect.width
+                                && mouse.row >= rect.y
+                                && mouse.row < rect.y + rect.height
+                            {
+                                Some(*index)
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some(project_index) = self.drag_project {
+                        self.selected_project = project_index;
+                    }
+                }
+
                 if let Some((action, rect)) =
                     self.resolve_hit_target(mouse.column, mouse.row, false)
                 {
@@ -2246,6 +2301,24 @@ impl App {
                     }
                 }
 
+                // Handle project drag reordering
+                if let Some(from_project) = self.drag_project {
+                    let target_project =
+                        self.project_rects.iter().rev().find_map(|(rect, index)| {
+                            (mouse.column >= rect.x
+                                && mouse.column < rect.x + rect.width
+                                && mouse.row >= rect.y
+                                && mouse.row < rect.y + rect.height)
+                                .then_some(*index)
+                        });
+                    if let Some(to_project) = target_project
+                        && to_project != from_project
+                    {
+                        self.reorder_projects(from_project, to_project);
+                        self.drag_project = Some(to_project);
+                    }
+                }
+
                 if let Some((action, rect)) =
                     self.resolve_hit_target(mouse.column, mouse.row, false)
                     && let Some(last_target) = self.last_text_input_click_target
@@ -2256,6 +2329,7 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.overview_drag_scope = None;
+                self.drag_project = None;
             }
             MouseEventKind::Down(MouseButton::Right) => {
                 if self.overview_bump_workflow_dialog.is_none()
@@ -2363,6 +2437,11 @@ impl App {
                 clipboard
             } else {
                 self.status = StatusMessage::warning("Clipboard creation failed".to_string());
+                #[cfg(target_os = "linux")]
+                if let Some(text) = paste_from_linux_clipboard_cli() {
+                    self.handle_paste(text);
+                    return;
+                }
                 if let Some(text) = self.fallback_clipboard.clone() {
                     self.handle_paste(text);
                 } else {
@@ -2408,6 +2487,11 @@ impl App {
                 }
             }
             Err(_) => {
+                #[cfg(target_os = "linux")]
+                if let Some(text) = paste_from_linux_clipboard_cli() {
+                    self.handle_paste(text);
+                    return;
+                }
                 if let Some(text) = self.fallback_clipboard.clone() {
                     self.handle_paste(text);
                 } else {
@@ -3413,7 +3497,7 @@ impl App {
     }
 
     fn next_poll_timeout(&self) -> Duration {
-        if self.background_jobs_inflight > 0 || self.transient_toaster.has_toast() {
+        if self.background_jobs_inflight > 0 || self.toaster.has_toast() {
             ACTIVE_UI_TICK_INTERVAL
         } else {
             IDLE_UI_POLL_INTERVAL
@@ -3421,14 +3505,11 @@ impl App {
     }
 
     fn tick_ui_state(&mut self) -> bool {
-        let had_transient_toast = self.transient_toaster.has_toast();
-        let had_sticky_toast = self.sticky_toaster.has_toast();
-        self.transient_toaster.tick();
-        self.sticky_toaster.tick();
+        let had_toast = self.toaster.has_toast();
+        self.toaster.tick();
 
-        had_transient_toast
-            || self.transient_toaster.has_toast() != had_transient_toast
-            || self.sticky_toaster.has_toast() != had_sticky_toast
+        had_toast
+            || self.toaster.has_toast() != had_toast
             || overview::tick_dashboard_tile_rotation(self)
     }
 
@@ -4320,6 +4401,23 @@ impl App {
         }
     }
 
+    fn reorder_projects(&mut self, from_index: usize, to_index: usize) {
+        if from_index >= self.config.projects.len() || to_index >= self.config.projects.len() {
+            return;
+        }
+        if from_index == to_index {
+            return;
+        }
+        let project = self.config.projects.remove(from_index);
+        self.config.projects.insert(to_index, project);
+        self.selected_project = to_index;
+        if let Err(error) = self.config_store.save(&self.config) {
+            self.status = StatusMessage::error(format!("Failed to save project order: {}", error));
+        } else {
+            self.status = StatusMessage::info("Project order updated.".to_string());
+        }
+    }
+
     fn request_dashboard_delete(&mut self) -> Result<()> {
         let Some(project) = self.config.projects.get(self.selected_project).cloned() else {
             self.status = StatusMessage::info("No project is selected.");
@@ -4621,6 +4719,7 @@ impl App {
                 .map(|dialog| dialog.repo_root.value().to_string())
                 .unwrap_or_default(),
             BrowseTarget::ProjectSettingsChangelogPath
+            | BrowseTarget::ProjectSettingsReleaseNowGeneral
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
@@ -4681,6 +4780,7 @@ impl App {
                 }
             }
             BrowseTarget::ProjectSettingsChangelogPath
+            | BrowseTarget::ProjectSettingsReleaseNowGeneral
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
@@ -4967,12 +5067,12 @@ impl App {
         if key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
         {
-            let interaction = self.sticky_toaster.handle_shortcut(ToastShortcut::Dismiss);
+            let interaction = self.toaster.handle_shortcut(ToastShortcut::Dismiss);
             return self.handle_toast_interaction(interaction);
         }
 
         if key.code == KeyCode::F(5) && self.screen != Screen::Wizard {
-            let interaction = self.sticky_toaster.handle_shortcut(ToastShortcut::Copy);
+            let interaction = self.toaster.handle_shortcut(ToastShortcut::Copy);
             return self.handle_toast_interaction(interaction);
         }
 
@@ -4982,19 +5082,15 @@ impl App {
     fn handle_toast_mouse(&mut self, mouse: MouseEvent) -> bool {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let interaction = self.sticky_toaster.handle_click(
-                    mouse.column,
-                    mouse.row,
-                    ToastMouseButton::Left,
-                );
+                let interaction =
+                    self.toaster
+                        .handle_click(mouse.column, mouse.row, ToastMouseButton::Left);
                 self.handle_toast_interaction(interaction)
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                let interaction = self.sticky_toaster.handle_click(
-                    mouse.column,
-                    mouse.row,
-                    ToastMouseButton::Right,
-                );
+                let interaction =
+                    self.toaster
+                        .handle_click(mouse.column, mouse.row, ToastMouseButton::Right);
                 self.handle_toast_interaction(interaction)
             }
             _ => false,
@@ -5063,17 +5159,15 @@ impl App {
         self.last_status_toast_id = self.status.id;
         let builder = ToastBuilder::new(self.status.text.clone().into());
         match self.status.kind {
-            StatusKind::Info => self
-                .transient_toaster
-                .show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Info => self.toaster.show_toast(builder.toast_type(ToastType::Info)),
             StatusKind::Success => self
-                .transient_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Success)),
             StatusKind::Warning => self
-                .transient_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Warning)),
             StatusKind::Error => self
-                .sticky_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
         }
     }
@@ -5081,23 +5175,21 @@ impl App {
     fn show_transient_toast(&mut self, kind: StatusKind, text: impl Into<String>) {
         let builder = ToastBuilder::new(text.into().into());
         match kind {
-            StatusKind::Info => self
-                .transient_toaster
-                .show_toast(builder.toast_type(ToastType::Info)),
+            StatusKind::Info => self.toaster.show_toast(builder.toast_type(ToastType::Info)),
             StatusKind::Success => self
-                .transient_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Success)),
             StatusKind::Warning => self
-                .transient_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Warning)),
             StatusKind::Error => self
-                .sticky_toaster
+                .toaster
                 .show_toast(builder.toast_type(ToastType::Error).keep_on(1)),
         }
     }
 
     fn show_sticky_error_toast(&mut self, text: impl Into<String>) {
-        self.sticky_toaster.show_toast(
+        self.toaster.show_toast(
             ToastBuilder::new(text.into().into())
                 .toast_type(ToastType::Error)
                 .keep_on(1),
@@ -8011,6 +8103,7 @@ enum BrowseTarget {
     ProjectEditTargetPath,
     ProjectEditRepoRoot,
     ProjectSettingsChangelogPath,
+    ProjectSettingsReleaseNowGeneral,
     ProjectSettingsReleaseNowWindows,
     ProjectSettingsReleaseNowLinuxArm,
     ProjectSettingsReleaseNowLinuxAmd,
@@ -8038,7 +8131,8 @@ impl FileBrowserDialog {
         let title = match target {
             BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot => "Browse Repo Root",
             BrowseTarget::ProjectSettingsChangelogPath => "Browse Changelog Path",
-            BrowseTarget::ProjectSettingsReleaseNowWindows
+            BrowseTarget::ProjectSettingsReleaseNowGeneral
+            | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
             | BrowseTarget::ProjectSettingsReleaseNowMacOs => "Browse Release Script",

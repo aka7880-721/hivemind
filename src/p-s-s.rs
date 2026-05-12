@@ -62,6 +62,7 @@ pub(crate) enum ProjectSettingsFocus {
     ChangelogMiniCommitHashes,
     ChangelogWrapDetailedIfTopPicks,
     ReleaseNowEnabled,
+    ReleaseNowGeneral,
     ReleaseNowWindows,
     ReleaseNowLinuxArm,
     ReleaseNowLinuxAmd,
@@ -69,6 +70,8 @@ pub(crate) enum ProjectSettingsFocus {
     QuickDownloadsEnabled,
     QuickDownloadsPosition,
     QuickDownloadsFooter,
+    ReadmeInjectionEnabled,
+    ReadmeInjectAtRow,
 }
 
 #[derive(Clone)]
@@ -85,12 +88,14 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) changelog_hide_bump_messages: bool,
     pub(crate) changelog_mini_commit_hashes: bool,
     pub(crate) changelog_wrap_detailed_if_top_picks: bool,
+    pub(crate) release_now_general: TextInput,
     pub(crate) release_now_windows: TextInput,
     pub(crate) release_now_linux_arm: TextInput,
     pub(crate) release_now_linux_amd: TextInput,
     pub(crate) release_now_macos: TextInput,
     pub(crate) quick_downloads_position: TextInput,
     pub(crate) quick_downloads_footer: TextInput,
+    pub(crate) readme_inject_at_row: TextInput,
 }
 
 impl Default for ProjectSettingsState {
@@ -108,12 +113,14 @@ impl Default for ProjectSettingsState {
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
             changelog_wrap_detailed_if_top_picks: false,
+            release_now_general: TextInput::with_value(""),
             release_now_windows: TextInput::with_value(""),
             release_now_linux_arm: TextInput::with_value(""),
             release_now_linux_amd: TextInput::with_value(""),
             release_now_macos: TextInput::with_value(""),
             quick_downloads_position: TextInput::with_value(""),
             quick_downloads_footer: TextInput::with_value(""),
+            readme_inject_at_row: TextInput::with_value(""),
         }
     }
 }
@@ -146,6 +153,8 @@ impl ProjectSettingsState {
             project.changelog_mini_commit_hashes_for_scope(scope_index);
         self.changelog_wrap_detailed_if_top_picks =
             project.changelog_wrap_detailed_if_top_picks_for_scope(scope_index);
+        self.release_now_general
+            .set_value(release_now.general_script.clone());
         self.release_now_windows
             .set_value(release_now.windows_script.clone());
         self.release_now_linux_arm
@@ -159,6 +168,13 @@ impl ProjectSettingsState {
             .set_value(qd.position.display_name().to_string());
         self.quick_downloads_footer
             .set_value(qd.footer_message.clone());
+        let rls = project.release_now_for_scope(scope_index);
+        self.readme_inject_at_row
+            .set_value(if rls.readme_injection_enabled {
+                rls.readme_inject_at_row.to_string()
+            } else {
+                String::new()
+            });
         self.ensure_focus_visible(tab, project, scope_index);
     }
 
@@ -185,6 +201,13 @@ impl ProjectSettingsState {
                     fields.push(ProjectSettingsFocus::ChangelogHideBumpMessages);
                     fields.push(ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks);
                     fields.push(ProjectSettingsFocus::ChangelogMiniCommitHashes);
+                    fields.push(ProjectSettingsFocus::ReadmeInjectionEnabled);
+                    if project
+                        .release_now_for_scope(scope_index)
+                        .readme_injection_enabled
+                    {
+                        fields.push(ProjectSettingsFocus::ReadmeInjectAtRow);
+                    }
                 }
                 fields
             }
@@ -192,6 +215,7 @@ impl ProjectSettingsState {
                 let mut fields = vec![ProjectSettingsFocus::ReleaseNowEnabled];
                 if project.release_now_for_scope(scope_index).enabled {
                     fields.extend([
+                        ProjectSettingsFocus::ReleaseNowGeneral,
                         ProjectSettingsFocus::ReleaseNowWindows,
                         ProjectSettingsFocus::ReleaseNowLinuxArm,
                         ProjectSettingsFocus::ReleaseNowLinuxAmd,
@@ -266,11 +290,13 @@ impl ProjectSettingsState {
                 ProjectSettingsFocus::CustomMainBranchName
                     | ProjectSettingsFocus::Alias
                     | ProjectSettingsFocus::ChangelogPath
+                    | ProjectSettingsFocus::ReleaseNowGeneral
                     | ProjectSettingsFocus::ReleaseNowWindows
                     | ProjectSettingsFocus::ReleaseNowLinuxArm
                     | ProjectSettingsFocus::ReleaseNowLinuxAmd
                     | ProjectSettingsFocus::ReleaseNowMacOs
                     | ProjectSettingsFocus::QuickDownloadsFooter
+                    | ProjectSettingsFocus::ReadmeInjectAtRow
             )
     }
 
@@ -279,16 +305,24 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::CustomMainBranchName => Some(&mut self.custom_main_branch_name),
             ProjectSettingsFocus::Alias => Some(&mut self.alias),
             ProjectSettingsFocus::ChangelogPath => Some(&mut self.changelog_path),
+            ProjectSettingsFocus::ReleaseNowGeneral => Some(&mut self.release_now_general),
             ProjectSettingsFocus::ReleaseNowWindows => Some(&mut self.release_now_windows),
             ProjectSettingsFocus::ReleaseNowLinuxArm => Some(&mut self.release_now_linux_arm),
             ProjectSettingsFocus::ReleaseNowLinuxAmd => Some(&mut self.release_now_linux_amd),
             ProjectSettingsFocus::ReleaseNowMacOs => Some(&mut self.release_now_macos),
             ProjectSettingsFocus::QuickDownloadsFooter => Some(&mut self.quick_downloads_footer),
+            ProjectSettingsFocus::ReadmeInjectAtRow => Some(&mut self.readme_inject_at_row),
             _ => None,
         }
     }
 
     fn handle_text_input(&mut self, key: KeyEvent) {
+        if self.focus == ProjectSettingsFocus::ReadmeInjectAtRow
+            && let crossterm::event::KeyCode::Char(c) = key.code
+            && !c.is_ascii_digit()
+        {
+            return;
+        }
         if let Some(input) = self.active_input_mut() {
             input.handle_key(key);
         }
@@ -316,6 +350,9 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ChangelogPath => self
                 .changelog_path
                 .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::ReleaseNowGeneral => self
+                .release_now_general
+                .display_line_with_width(focused, max_width),
             ProjectSettingsFocus::ReleaseNowWindows => self
                 .release_now_windows
                 .display_line_with_width(focused, max_width),
@@ -335,6 +372,9 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::QuickDownloadsFooter => self
                 .quick_downloads_footer
                 .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::ReadmeInjectAtRow => self
+                .readme_inject_at_row
+                .display_line_with_width(focused, max_width),
             _ => Line::from(String::new()),
         }
     }
@@ -342,6 +382,7 @@ impl ProjectSettingsState {
     fn set_value_from_browse(&mut self, field: ProjectSettingsFocus, value: String) {
         match field {
             ProjectSettingsFocus::ChangelogPath => self.changelog_path.set_value(value),
+            ProjectSettingsFocus::ReleaseNowGeneral => self.release_now_general.set_value(value),
             ProjectSettingsFocus::ReleaseNowWindows => self.release_now_windows.set_value(value),
             ProjectSettingsFocus::ReleaseNowLinuxArm => self.release_now_linux_arm.set_value(value),
             ProjectSettingsFocus::ReleaseNowLinuxAmd => self.release_now_linux_amd.set_value(value),
@@ -666,6 +707,7 @@ pub(crate) fn open_browser_for_project_settings_focus(app: &mut App) -> Result<(
     sync_project_settings_state(app);
     let target = match app.project_settings_state.focus {
         ProjectSettingsFocus::ChangelogPath => BrowseTarget::ProjectSettingsChangelogPath,
+        ProjectSettingsFocus::ReleaseNowGeneral => BrowseTarget::ProjectSettingsReleaseNowGeneral,
         ProjectSettingsFocus::ReleaseNowWindows => BrowseTarget::ProjectSettingsReleaseNowWindows,
         ProjectSettingsFocus::ReleaseNowLinuxArm => BrowseTarget::ProjectSettingsReleaseNowLinuxArm,
         ProjectSettingsFocus::ReleaseNowLinuxAmd => BrowseTarget::ProjectSettingsReleaseNowLinuxAmd,
@@ -680,6 +722,12 @@ pub(crate) fn initial_browser_path(app: &App, target: BrowseTarget) -> Option<St
         BrowseTarget::ProjectSettingsChangelogPath => Some(
             app.project_settings_state
                 .changelog_path
+                .value()
+                .to_string(),
+        ),
+        BrowseTarget::ProjectSettingsReleaseNowGeneral => Some(
+            app.project_settings_state
+                .release_now_general
                 .value()
                 .to_string(),
         ),
@@ -718,6 +766,7 @@ pub(crate) fn apply_browser_selection(
 ) -> Result<bool> {
     let field = match target {
         BrowseTarget::ProjectSettingsChangelogPath => ProjectSettingsFocus::ChangelogPath,
+        BrowseTarget::ProjectSettingsReleaseNowGeneral => ProjectSettingsFocus::ReleaseNowGeneral,
         BrowseTarget::ProjectSettingsReleaseNowWindows => ProjectSettingsFocus::ReleaseNowWindows,
         BrowseTarget::ProjectSettingsReleaseNowLinuxArm => ProjectSettingsFocus::ReleaseNowLinuxArm,
         BrowseTarget::ProjectSettingsReleaseNowLinuxAmd => ProjectSettingsFocus::ReleaseNowLinuxAmd,
@@ -985,6 +1034,17 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
         rows.push(ProjectSettingsRow::Checkbox(
             ProjectSettingsFocus::ChangelogMiniCommitHashes,
         ));
+        rows.push(ProjectSettingsRow::Checkbox(
+            ProjectSettingsFocus::ReadmeInjectionEnabled,
+        ));
+        if project
+            .release_now_for_scope(scope_index)
+            .readme_injection_enabled
+        {
+            rows.push(ProjectSettingsRow::Path(
+                ProjectSettingsFocus::ReadmeInjectAtRow,
+            ));
+        }
         rows.push(ProjectSettingsRow::Spacer(1));
     }
     rows.extend([
@@ -1021,6 +1081,7 @@ fn build_distro_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Project
     ];
     if project.release_now_for_scope(scope_index).enabled {
         rows.extend([
+            ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowGeneral),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowWindows),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowLinuxArm),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowLinuxAmd),
@@ -1144,6 +1205,11 @@ fn render_checkbox_row(
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => {
             project.changelog_mini_commit_hashes_for_scope(scope_index)
+        }
+        ProjectSettingsFocus::ReadmeInjectionEnabled => {
+            project
+                .release_now_for_scope(scope_index)
+                .readme_injection_enabled
         }
         _ => false,
     };
@@ -1331,7 +1397,8 @@ fn render_path_row(
     let side_button = match field {
         ProjectSettingsFocus::Alias | ProjectSettingsFocus::CustomMainBranchName => None,
         ProjectSettingsFocus::QuickDownloadsPosition
-        | ProjectSettingsFocus::QuickDownloadsFooter => None,
+        | ProjectSettingsFocus::QuickDownloadsFooter
+        | ProjectSettingsFocus::ReadmeInjectAtRow => None,
         _ => Some(FormRowButton::new(
             "Browse",
             HitAction::BrowseProjectSettingsField(field),
@@ -1380,6 +1447,7 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
             "Wrap detailed changelog if TopPicks present"
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => "Mini commit hashes",
+        ProjectSettingsFocus::ReadmeInjectionEnabled => "👀 What's new README injection enabled",
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
         }
@@ -1395,12 +1463,14 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ChangelogPath => "Changelog path",
         ProjectSettingsFocus::ChangelogHidePrMessages => "Hide PR messages",
         ProjectSettingsFocus::ChangelogHideBumpMessages => "Hide bump messages",
+        ProjectSettingsFocus::ReleaseNowGeneral => "General",
         ProjectSettingsFocus::ReleaseNowWindows => "Windows",
         ProjectSettingsFocus::ReleaseNowLinuxArm => "Linux ARM",
         ProjectSettingsFocus::ReleaseNowLinuxAmd => "Linux AMD",
         ProjectSettingsFocus::ReleaseNowMacOs => "MacOS",
         ProjectSettingsFocus::QuickDownloadsPosition => "Position (←/→)",
         ProjectSettingsFocus::QuickDownloadsFooter => "Footer",
+        ProjectSettingsFocus::ReadmeInjectAtRow => "Inject at row:",
         _ => "",
     }
 }
@@ -1414,6 +1484,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ChangelogHideBumpMessages
             | ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks
             | ProjectSettingsFocus::ChangelogMiniCommitHashes
+            | ProjectSettingsFocus::ReadmeInjectionEnabled
             | ProjectSettingsFocus::ReleaseNowEnabled
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
@@ -1542,6 +1613,16 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
                 scope_name
             ));
         }
+        ProjectSettingsFocus::ReadmeInjectionEnabled => {
+            let rls = active_project.release_now_for_scope_mut(scope_index);
+            rls.readme_injection_enabled = !rls.readme_injection_enabled;
+            let enabled = rls.readme_injection_enabled;
+            app.status = super::StatusMessage::success(format!(
+                "README injection {} for {}.",
+                if enabled { "enabled" } else { "disabled" },
+                scope_name
+            ));
+        }
         _ => return Ok(()),
     }
 
@@ -1574,6 +1655,11 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     let changelog_path = app
         .project_settings_state
         .changelog_path
+        .value()
+        .to_string();
+    let general_script = app
+        .project_settings_state
+        .release_now_general
         .value()
         .to_string();
     let windows_script = app
@@ -1622,11 +1708,23 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     active_project.alias = alias;
     active_project.set_changelog_path_for_scope(scope_index, changelog_path);
     let release_now = active_project.release_now_for_scope_mut(scope_index);
+    release_now.general_script = general_script;
     release_now.windows_script = windows_script;
     release_now.linux_arm_script = linux_arm_script;
     release_now.linux_amd_script = linux_amd_script;
     release_now.macos_script = macos_script;
     release_now.quick_downloads.footer_message = qd_footer;
+    let readme_inject_at_row_str = app
+        .project_settings_state
+        .readme_inject_at_row
+        .value()
+        .trim()
+        .to_string();
+    if release_now.readme_injection_enabled {
+        release_now.readme_inject_at_row = readme_inject_at_row_str
+            .parse::<u16>()
+            .unwrap_or(release_now.readme_inject_at_row);
+    }
     app.config_store.save(&app.config)?;
     Ok(())
 }

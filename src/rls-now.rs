@@ -154,6 +154,8 @@ pub(super) struct ReleaseNowDialog {
     pub(super) artifact_files: Vec<String>,
     pub(super) log_lines: Vec<String>,
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(super) readme_injection_enabled: bool,
+    pub(super) readme_inject_at_row: u16,
     pub(super) started_at: Option<Instant>,
     /// Elapsed time frozen when the run stops (success, failure, or cancel).
     pub(super) frozen_elapsed: Option<Duration>,
@@ -196,6 +198,8 @@ impl ReleaseNowDialog {
             artifact_files: Vec::new(),
             log_lines: Vec::new(),
             quick_downloads: validation.quick_downloads,
+            readme_injection_enabled: validation.readme_injection_enabled,
+            readme_inject_at_row: validation.readme_inject_at_row,
             started_at: None,
             frozen_elapsed: None,
         }
@@ -671,6 +675,8 @@ pub(super) struct ReleaseNowValidation {
     pub(super) warning_message: Option<String>,
     pub(super) release_notes_markdown: String,
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(super) readme_injection_enabled: bool,
+    pub(super) readme_inject_at_row: u16,
 }
 
 #[derive(Clone)]
@@ -699,6 +705,8 @@ pub(super) struct ReleaseNowExecutionRequest {
     pub(super) artifact_dirs: Vec<String>,
     pub(super) release_notes_markdown: Option<String>,
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(super) readme_injection_enabled: bool,
+    pub(super) readme_inject_at_row: u16,
 }
 
 #[derive(Clone)]
@@ -749,6 +757,12 @@ pub(super) fn validate_release_now(
             .release_now_for_scope(scope_index)
             .quick_downloads
             .clone(),
+        readme_injection_enabled: project
+            .release_now_for_scope(scope_index)
+            .readme_injection_enabled,
+        readme_inject_at_row: project
+            .release_now_for_scope(scope_index)
+            .readme_inject_at_row,
     })
 }
 
@@ -768,6 +782,8 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
             .then(|| dialog.release_notes_markdown.trim().to_string())
             .filter(|notes| !notes.is_empty()),
         quick_downloads: dialog.quick_downloads.clone(),
+        readme_injection_enabled: dialog.readme_injection_enabled,
+        readme_inject_at_row: dialog.readme_inject_at_row,
     }
 }
 
@@ -887,7 +903,35 @@ pub(super) async fn execute_release_now_async(
     )
     .await?;
 
-    if request.changelog_enabled {
+    if request.readme_injection_enabled {
+        ensure_not_cancelled(&cancel)?;
+        emit_progress(vec![
+            "Injecting 👀 What's new block into README.md.".to_string(),
+        ]);
+        let inj_repo_root = request.repo_root.clone();
+        let inj_tag = request.tag_name.clone();
+        let inj_markdown = request.release_notes_markdown.clone().unwrap_or_default();
+        let inj_row = request.readme_inject_at_row;
+        let inj_remote = request.scope.remote_spec.clone();
+        let inj_result = run_blocking_job(move || {
+            super::rls_now_inj::inject_whats_new(&super::rls_now_inj::ReadmeInjectionParams {
+                repo_root: &inj_repo_root,
+                tag_name: &inj_tag,
+                changelog_markdown: &inj_markdown,
+                inject_at_row: inj_row,
+                remote_url: inj_remote.as_deref(),
+            })?;
+            run_git_checked(&inj_repo_root, &["add", "README.md"])?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+        match inj_result {
+            Ok(()) => emit_progress(vec!["README.md updated with What's new block.".to_string()]),
+            Err(e) => emit_progress(vec![format!("Warning: README injection skipped: {}", e)]),
+        }
+    }
+
+    if request.changelog_enabled || request.readme_injection_enabled {
         ensure_not_cancelled(&cancel)?;
         let repo_root_for_commit = request.repo_root.clone();
         let tag_name_for_commit = request.tag_name.clone();
@@ -1072,6 +1116,12 @@ fn collect_release_now_options(settings: &ReleaseNowSettings) -> Result<Vec<Rele
     }
 
     let mut individual = Vec::new();
+    push_release_option(
+        &mut individual,
+        "General",
+        settings.general_script.as_str(),
+        &[],
+    );
     push_release_option(
         &mut individual,
         "Windows",
