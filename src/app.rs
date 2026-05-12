@@ -1713,22 +1713,27 @@ impl App {
                                 let lines = dialog.editor.lines();
                                 let (cursor_row, _) = dialog.editor.cursor();
                                 let visible_height = inner.height.max(1) as usize;
-                                let end_row =
-                                    (cursor_row + visible_height).min(lines.len()).max(1);
-                                let number_width = end_row.to_string().len().max(2) as u16;
                                 let start_row = cursor_row
                                     .saturating_sub(visible_height / 2)
                                     .min(lines.len().saturating_sub(visible_height));
+                                let end_row = (start_row + visible_height).min(lines.len());
+                                let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                                let content_width =
+                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
                                 let relative_row = mouse.row.saturating_sub(inner.y) as usize;
                                 let clicked_col = mouse
                                     .column
                                     .saturating_sub(inner.x + number_width + 1)
                                     as usize;
-                                let content_width =
-                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
-                                let target_col = clicked_col + (relative_row * content_width);
-                                let target_row = (start_row + relative_row)
-                                    .min(lines.len().saturating_sub(1));
+                                let lines_ref: Vec<&str> =
+                                    lines.iter().map(|s| s.as_str()).collect();
+                                let (target_row, target_col) = textarea_click_position(
+                                    &lines_ref,
+                                    start_row,
+                                    content_width,
+                                    relative_row,
+                                    clicked_col,
+                                );
                                 let now = Instant::now();
                                 let is_double_click = self
                                     .release_now_notes_textarea_click_at
@@ -1776,21 +1781,27 @@ impl App {
                             let lines = dialog.editor.lines();
                             let (cursor_row, _) = dialog.editor.cursor();
                             let visible_height = inner.height.max(1) as usize;
-                            let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
-                            let number_width = end_row.to_string().len().max(2) as u16;
                             let start_row = cursor_row
                                 .saturating_sub(visible_height / 2)
                                 .min(lines.len().saturating_sub(visible_height));
+                            let end_row = (start_row + visible_height).min(lines.len());
+                            let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                            let content_width =
+                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
                             let relative_row = mouse.row.saturating_sub(inner.y) as usize;
                             let clicked_col = mouse
                                 .column
                                 .saturating_sub(inner.x + number_width + 1)
                                 as usize;
-                            let content_width =
-                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
-                            let target_col = clicked_col + (relative_row * content_width);
-                            let target_row =
-                                (start_row + relative_row).min(lines.len().saturating_sub(1));
+                            let lines_ref: Vec<&str> =
+                                lines.iter().map(|s| s.as_str()).collect();
+                            let (target_row, target_col) = textarea_click_position(
+                                &lines_ref,
+                                start_row,
+                                content_width,
+                                relative_row,
+                                clicked_col,
+                            );
                             if !dialog.editor.is_selecting() {
                                 dialog.editor.start_selection();
                             }
@@ -1934,21 +1945,25 @@ impl App {
                             let lines = dialog.message_editor.lines();
                             let (cursor_row, _) = dialog.message_editor.cursor();
                             let visible_height = inner.height.max(1) as usize;
-                            let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
-                            let number_width = end_row.to_string().len().max(2) as u16;
                             let start_row = cursor_row
                                 .saturating_sub(visible_height / 2)
                                 .min(lines.len().saturating_sub(visible_height));
+                            let end_row = (start_row + visible_height).min(lines.len());
+                            let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                            let content_width =
+                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
                             let relative_row = mouse.row.saturating_sub(inner.y) as usize;
                             let clicked_col =
                                 mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
-                            // For wrapped text: calculate column offset based on visual row
-                            // Approximate chars per line from content width
-                            let content_width =
-                                inner.width.saturating_sub(number_width + 1).max(1) as usize;
-                            let target_col = clicked_col + (relative_row * content_width);
-                            let target_row =
-                                (start_row + relative_row).min(lines.len().saturating_sub(1));
+                            let lines_ref: Vec<&str> =
+                                lines.iter().map(|s| s.as_str()).collect();
+                            let (target_row, target_col) = textarea_click_position(
+                                &lines_ref,
+                                start_row,
+                                content_width,
+                                relative_row,
+                                clicked_col,
+                            );
                             // Check for double-click (word selection)
                             let now = Instant::now();
                             let is_double_click = self
@@ -2000,20 +2015,26 @@ impl App {
                                 let lines = dialog.message_editor.lines();
                                 let (cursor_row, _) = dialog.message_editor.cursor();
                                 let visible_height = inner.height.max(1) as usize;
-                                let end_row = (cursor_row + visible_height).min(lines.len()).max(1);
-                                let number_width = end_row.to_string().len().max(2) as u16;
                                 let start_row = cursor_row
                                     .saturating_sub(visible_height / 2)
                                     .min(lines.len().saturating_sub(visible_height));
+                                let end_row = (start_row + visible_height).min(lines.len());
+                                let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                                let content_width =
+                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
                                 let relative_row = mouse.row.saturating_sub(inner.y) as usize;
                                 let clicked_col =
                                     mouse.column.saturating_sub(inner.x + number_width + 1)
                                         as usize;
-                                let content_width =
-                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
-                                let target_col = clicked_col + (relative_row * content_width);
-                                let target_row =
-                                    (start_row + relative_row).min(lines.len().saturating_sub(1));
+                                let lines_ref: Vec<&str> =
+                                    lines.iter().map(|s| s.as_str()).collect();
+                                let (target_row, target_col) = textarea_click_position(
+                                    &lines_ref,
+                                    start_row,
+                                    content_width,
+                                    relative_row,
+                                    clicked_col,
+                                );
                                 // Ensure selection is active and extend to new position
                                 if !dialog.message_editor.is_selecting() {
                                     dialog.message_editor.start_selection();
@@ -8524,6 +8545,41 @@ fn convert_to_textarea_input(key: KeyEvent) -> Option<TextAreaInput> {
         alt: key.modifiers.contains(KeyModifiers::ALT),
         shift: key.modifiers.contains(KeyModifiers::SHIFT),
     })
+}
+
+/// Maps a mouse click at `(relative_row, clicked_col)` inside the textarea content area to a
+/// logical `(line_index, col)` position, accounting for line wrapping.
+///
+/// * `lines`        – all logical lines from `editor.lines()`
+/// * `start_row`    – first visible logical line (scroll offset)
+/// * `content_width`– number of visible character columns (after number gutter)
+/// * `relative_row` – terminal row relative to the first content row (0-indexed)
+/// * `clicked_col`  – column offset after the number gutter (0-indexed)
+fn textarea_click_position(
+    lines: &[&str],
+    start_row: usize,
+    content_width: usize,
+    relative_row: usize,
+    clicked_col: usize,
+) -> (usize, usize) {
+    let cw = content_width.max(1);
+    let mut terminal_rows_consumed = 0usize;
+    for (i, line) in lines[start_row..].iter().enumerate() {
+        let logical_index = start_row + i;
+        let char_count = line.chars().count();
+        let rows_for_line = ((char_count + cw - 1) / cw).max(1);
+        if terminal_rows_consumed + rows_for_line > relative_row {
+            // The click falls within this logical line
+            let row_within_line = relative_row - terminal_rows_consumed;
+            let col = (row_within_line * cw + clicked_col).min(char_count);
+            return (logical_index, col);
+        }
+        terminal_rows_consumed += rows_for_line;
+    }
+    // Click is past the last line
+    let last = lines.len().saturating_sub(1);
+    let last_len = lines.get(last).map(|l| l.chars().count()).unwrap_or(0);
+    (last, last_len)
 }
 
 fn render_annotation_line(
