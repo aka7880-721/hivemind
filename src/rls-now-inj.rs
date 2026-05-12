@@ -64,14 +64,12 @@ fn build_details_block(
     lines.push(String::new());
     lines.push(String::new());
 
-    if top_picks_mode {
-        if let Some(url) = release_url {
-            lines.push(format!(
-                "<sup>For detailed changelog [CLICK HERE]({})</sup>",
-                url
-            ));
-            lines.push(String::new());
-        }
+    if top_picks_mode && let Some(url) = release_url {
+        lines.push(format!(
+            "<sup>For detailed changelog [CLICK HERE]({})</sup>",
+            url
+        ));
+        lines.push(String::new());
     }
 
     lines.push(FOOTER_RULE.to_string());
@@ -110,10 +108,8 @@ fn inject_into_file(readme_path: &Path, inject_at_row: u16, block: &str) -> Resu
 
     // Remove trailing empty string caused by trailing newline
     let had_trailing_newline = content.ends_with('\n');
-    if had_trailing_newline {
-        if file_lines.last() == Some(&"") {
-            file_lines.pop();
-        }
+    if had_trailing_newline && file_lines.last() == Some(&"") {
+        file_lines.pop();
     }
 
     let insert_index = if inject_at_row == 0 {

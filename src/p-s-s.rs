@@ -317,12 +317,11 @@ impl ProjectSettingsState {
     }
 
     fn handle_text_input(&mut self, key: KeyEvent) {
-        if self.focus == ProjectSettingsFocus::ReadmeInjectAtRow {
-            if let crossterm::event::KeyCode::Char(c) = key.code {
-                if !c.is_ascii_digit() {
-                    return;
-                }
-            }
+        if self.focus == ProjectSettingsFocus::ReadmeInjectAtRow
+            && let crossterm::event::KeyCode::Char(c) = key.code
+            && !c.is_ascii_digit()
+        {
+            return;
         }
         if let Some(input) = self.active_input_mut() {
             input.handle_key(key);
