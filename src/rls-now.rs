@@ -1074,6 +1074,12 @@ fn collect_release_now_options(settings: &ReleaseNowSettings) -> Result<Vec<Rele
     let mut individual = Vec::new();
     push_release_option(
         &mut individual,
+        "General",
+        settings.general_script.as_str(),
+        &[],
+    );
+    push_release_option(
+        &mut individual,
         "Windows",
         settings.windows_script.as_str(),
         &["windows-x64"],

@@ -62,6 +62,7 @@ pub(crate) enum ProjectSettingsFocus {
     ChangelogMiniCommitHashes,
     ChangelogWrapDetailedIfTopPicks,
     ReleaseNowEnabled,
+    ReleaseNowGeneral,
     ReleaseNowWindows,
     ReleaseNowLinuxArm,
     ReleaseNowLinuxAmd,
@@ -85,6 +86,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) changelog_hide_bump_messages: bool,
     pub(crate) changelog_mini_commit_hashes: bool,
     pub(crate) changelog_wrap_detailed_if_top_picks: bool,
+    pub(crate) release_now_general: TextInput,
     pub(crate) release_now_windows: TextInput,
     pub(crate) release_now_linux_arm: TextInput,
     pub(crate) release_now_linux_amd: TextInput,
@@ -108,6 +110,7 @@ impl Default for ProjectSettingsState {
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
             changelog_wrap_detailed_if_top_picks: false,
+            release_now_general: TextInput::with_value(""),
             release_now_windows: TextInput::with_value(""),
             release_now_linux_arm: TextInput::with_value(""),
             release_now_linux_amd: TextInput::with_value(""),
@@ -146,6 +149,8 @@ impl ProjectSettingsState {
             project.changelog_mini_commit_hashes_for_scope(scope_index);
         self.changelog_wrap_detailed_if_top_picks =
             project.changelog_wrap_detailed_if_top_picks_for_scope(scope_index);
+        self.release_now_general
+            .set_value(release_now.general_script.clone());
         self.release_now_windows
             .set_value(release_now.windows_script.clone());
         self.release_now_linux_arm
@@ -192,6 +197,7 @@ impl ProjectSettingsState {
                 let mut fields = vec![ProjectSettingsFocus::ReleaseNowEnabled];
                 if project.release_now_for_scope(scope_index).enabled {
                     fields.extend([
+                        ProjectSettingsFocus::ReleaseNowGeneral,
                         ProjectSettingsFocus::ReleaseNowWindows,
                         ProjectSettingsFocus::ReleaseNowLinuxArm,
                         ProjectSettingsFocus::ReleaseNowLinuxAmd,
@@ -266,6 +272,7 @@ impl ProjectSettingsState {
                 ProjectSettingsFocus::CustomMainBranchName
                     | ProjectSettingsFocus::Alias
                     | ProjectSettingsFocus::ChangelogPath
+                    | ProjectSettingsFocus::ReleaseNowGeneral
                     | ProjectSettingsFocus::ReleaseNowWindows
                     | ProjectSettingsFocus::ReleaseNowLinuxArm
                     | ProjectSettingsFocus::ReleaseNowLinuxAmd
@@ -279,6 +286,7 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::CustomMainBranchName => Some(&mut self.custom_main_branch_name),
             ProjectSettingsFocus::Alias => Some(&mut self.alias),
             ProjectSettingsFocus::ChangelogPath => Some(&mut self.changelog_path),
+            ProjectSettingsFocus::ReleaseNowGeneral => Some(&mut self.release_now_general),
             ProjectSettingsFocus::ReleaseNowWindows => Some(&mut self.release_now_windows),
             ProjectSettingsFocus::ReleaseNowLinuxArm => Some(&mut self.release_now_linux_arm),
             ProjectSettingsFocus::ReleaseNowLinuxAmd => Some(&mut self.release_now_linux_amd),
@@ -316,6 +324,9 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ChangelogPath => self
                 .changelog_path
                 .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::ReleaseNowGeneral => self
+                .release_now_general
+                .display_line_with_width(focused, max_width),
             ProjectSettingsFocus::ReleaseNowWindows => self
                 .release_now_windows
                 .display_line_with_width(focused, max_width),
@@ -342,6 +353,7 @@ impl ProjectSettingsState {
     fn set_value_from_browse(&mut self, field: ProjectSettingsFocus, value: String) {
         match field {
             ProjectSettingsFocus::ChangelogPath => self.changelog_path.set_value(value),
+            ProjectSettingsFocus::ReleaseNowGeneral => self.release_now_general.set_value(value),
             ProjectSettingsFocus::ReleaseNowWindows => self.release_now_windows.set_value(value),
             ProjectSettingsFocus::ReleaseNowLinuxArm => self.release_now_linux_arm.set_value(value),
             ProjectSettingsFocus::ReleaseNowLinuxAmd => self.release_now_linux_amd.set_value(value),
@@ -666,6 +678,7 @@ pub(crate) fn open_browser_for_project_settings_focus(app: &mut App) -> Result<(
     sync_project_settings_state(app);
     let target = match app.project_settings_state.focus {
         ProjectSettingsFocus::ChangelogPath => BrowseTarget::ProjectSettingsChangelogPath,
+        ProjectSettingsFocus::ReleaseNowGeneral => BrowseTarget::ProjectSettingsReleaseNowGeneral,
         ProjectSettingsFocus::ReleaseNowWindows => BrowseTarget::ProjectSettingsReleaseNowWindows,
         ProjectSettingsFocus::ReleaseNowLinuxArm => BrowseTarget::ProjectSettingsReleaseNowLinuxArm,
         ProjectSettingsFocus::ReleaseNowLinuxAmd => BrowseTarget::ProjectSettingsReleaseNowLinuxAmd,
@@ -680,6 +693,12 @@ pub(crate) fn initial_browser_path(app: &App, target: BrowseTarget) -> Option<St
         BrowseTarget::ProjectSettingsChangelogPath => Some(
             app.project_settings_state
                 .changelog_path
+                .value()
+                .to_string(),
+        ),
+        BrowseTarget::ProjectSettingsReleaseNowGeneral => Some(
+            app.project_settings_state
+                .release_now_general
                 .value()
                 .to_string(),
         ),
@@ -718,6 +737,7 @@ pub(crate) fn apply_browser_selection(
 ) -> Result<bool> {
     let field = match target {
         BrowseTarget::ProjectSettingsChangelogPath => ProjectSettingsFocus::ChangelogPath,
+        BrowseTarget::ProjectSettingsReleaseNowGeneral => ProjectSettingsFocus::ReleaseNowGeneral,
         BrowseTarget::ProjectSettingsReleaseNowWindows => ProjectSettingsFocus::ReleaseNowWindows,
         BrowseTarget::ProjectSettingsReleaseNowLinuxArm => ProjectSettingsFocus::ReleaseNowLinuxArm,
         BrowseTarget::ProjectSettingsReleaseNowLinuxAmd => ProjectSettingsFocus::ReleaseNowLinuxAmd,
@@ -1021,6 +1041,7 @@ fn build_distro_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Project
     ];
     if project.release_now_for_scope(scope_index).enabled {
         rows.extend([
+            ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowGeneral),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowWindows),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowLinuxArm),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowLinuxAmd),
@@ -1395,6 +1416,7 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ChangelogPath => "Changelog path",
         ProjectSettingsFocus::ChangelogHidePrMessages => "Hide PR messages",
         ProjectSettingsFocus::ChangelogHideBumpMessages => "Hide bump messages",
+        ProjectSettingsFocus::ReleaseNowGeneral => "General",
         ProjectSettingsFocus::ReleaseNowWindows => "Windows",
         ProjectSettingsFocus::ReleaseNowLinuxArm => "Linux ARM",
         ProjectSettingsFocus::ReleaseNowLinuxAmd => "Linux AMD",
@@ -1576,6 +1598,11 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
         .changelog_path
         .value()
         .to_string();
+    let general_script = app
+        .project_settings_state
+        .release_now_general
+        .value()
+        .to_string();
     let windows_script = app
         .project_settings_state
         .release_now_windows
@@ -1622,6 +1649,7 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     active_project.alias = alias;
     active_project.set_changelog_path_for_scope(scope_index, changelog_path);
     let release_now = active_project.release_now_for_scope_mut(scope_index);
+    release_now.general_script = general_script;
     release_now.windows_script = windows_script;
     release_now.linux_arm_script = linux_arm_script;
     release_now.linux_amd_script = linux_amd_script;

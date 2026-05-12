@@ -635,6 +635,7 @@ impl Default for ReleaseNowQuickDownloadsSettings {
 #[serde(default)]
 pub struct ReleaseNowSettings {
     pub enabled: bool,
+    pub general_script: String,
     pub windows_script: String,
     pub linux_arm_script: String,
     pub linux_amd_script: String,
