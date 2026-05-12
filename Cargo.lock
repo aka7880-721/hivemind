@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "comfygit"
-version = "0.24.2"
+version = "0.24.3"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2219,9 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "ratatui-comfy-toaster"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3719e88cdba9ac612f7b2a478c26c5bc4065b756481ac3f6c200e694bc948546"
+version = "0.3.1"
 dependencies = [
  "ratatui 0.30.0",
  "textwrap",
