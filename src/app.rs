@@ -64,9 +64,10 @@ use windows_sys::Win32::System::Console::{
 use crate::{
     branding::{PixelLogo, choose_header_content},
     changelog::{
-        ChangelogDocument, archive_changelog_markdown, ensure_previous_public_release_header,
-        find_archived_changelog_markdown, rebuild_history_summary_readme, rls_changelog_gen,
-        std_changelog_gen, write_changelog_markdown, write_temp_changelog_markdown,
+        ChangelogDocument, ParsedCommit, archive_changelog_markdown,
+        ensure_previous_public_release_header, find_archived_changelog_markdown,
+        rebuild_history_summary_readme, rls_changelog_gen, std_changelog_gen,
+        write_changelog_markdown, write_temp_changelog_markdown,
     },
     cli::{
         CommitRenamePlan, prepare_commit_rename, push_branch_force_with_lease,
@@ -82,7 +83,7 @@ use crate::{
         load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
     },
     git::{
-        GitCancellation, RepoActivitySummary, branches_containing_ref_with_cancel,
+        GitCancellation, GitScopeContext, RepoActivitySummary, branches_containing_ref_with_cancel,
         collect_all_branch_git_scope_contexts, current_branch_with_cancel, ensure_gh_available,
         ensure_local_tag, is_mainline_branch_name, latest_local_tag_with_cancel,
         load_scope_activity_summary_with_cancel, run_git, run_git_checked,
@@ -90,8 +91,9 @@ use crate::{
     },
     git_br::{BranchNameOption, semver_dev_branch_canonical_label},
     mmr::{
-        load_merged_std_changelog_memory, record_std_changelog_created, record_std_changelog_error,
-        record_std_changelog_generated, record_std_changelog_postponed,
+        load_merged_std_changelog_memory, load_top_picks_edits, record_std_changelog_created,
+        record_std_changelog_error, record_std_changelog_generated, record_std_changelog_postponed,
+        save_top_picks_edits,
     },
     overview_pg::{OverviewTab, overview_tab_rects, overview_tabs, render_overview_tabs},
     project_edit::{ProjectEditDialog, ProjectEditFocus},
@@ -119,6 +121,7 @@ mod rls_now;
 mod rls_now_inj;
 
 use self::p_s_s::{ProjectSettingsFocus, ProjectSettingsState, ProjectSettingsTab};
+use crate::changelog_tp;
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SUPPORT_EMAIL: &str = " dev@comfyhome.io ";
@@ -361,6 +364,7 @@ struct App {
     tag_annotation_dialog: Option<TagAnnotationDialog>,
     release_now_dialog: Option<rls_now::ReleaseNowDialog>,
     release_now_notes_dialog: Option<TagAnnotationDialog>,
+    top_picks_editor_dialog: Option<changelog_tp::TopPicksEditorDialog>,
     delete_confirmation_dialog: Option<DeleteConfirmationDialog>,
     progress_dialog: Option<ProgressDialog>,
     foreground_request_tx: UnboundedSender<BackgroundJobRequestMessage>,
@@ -395,6 +399,8 @@ struct App {
     commit_rename_textarea_click_at: Option<Instant>,
     commit_rename_textarea_rect: Option<Rect>,
     release_now_notes_textarea_click_at: Option<Instant>,
+    top_picks_editor_click_at: Option<Instant>,
+    top_picks_editor_rect: Option<Rect>,
     status: StatusMessage,
     last_status_toast_id: u64,
     toaster: ToastEngine<()>,
@@ -469,6 +475,7 @@ impl App {
             tag_annotation_dialog: None,
             release_now_dialog: None,
             release_now_notes_dialog: None,
+            top_picks_editor_dialog: None,
             delete_confirmation_dialog: None,
             progress_dialog: None,
             foreground_request_tx,
@@ -503,6 +510,8 @@ impl App {
             commit_rename_textarea_click_at: None,
             commit_rename_textarea_rect: None,
             release_now_notes_textarea_click_at: None,
+            top_picks_editor_click_at: None,
+            top_picks_editor_rect: None,
             last_status_toast_id: status.id,
             toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
@@ -549,6 +558,10 @@ impl App {
 
         if self.release_now_notes_dialog.is_some() {
             return self.handle_release_now_notes_key(key);
+        }
+
+        if self.top_picks_editor_dialog.is_some() {
+            return self.handle_top_picks_editor_key(key);
         }
 
         if self.release_now_dialog.is_some() {
@@ -664,6 +677,7 @@ impl App {
             KeyCode::Char('e') => self.open_project_edit_dialog()?,
             KeyCode::Char('d') | KeyCode::Char('D') => self.request_dashboard_delete()?,
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_release_now_with_scope(None)?,
+            KeyCode::Char('p') | KeyCode::Char('P') => self.open_top_picks_editor()?,
             KeyCode::Char('b') => self.open_bump_dialog()?,
             KeyCode::Char('g') => self.open_recent_changes()?,
             KeyCode::Char('c') | KeyCode::Char('C') => {
@@ -841,6 +855,7 @@ impl App {
                 }
             }
             KeyCode::Char('e') | KeyCode::Char('E') => self.open_release_now_notes_dialog()?,
+            KeyCode::Char('p') | KeyCode::Char('P') => self.open_top_picks_editor()?,
             KeyCode::Enter | KeyCode::F(2) => return self.request_run_release_now(),
             KeyCode::Up => self.scroll_release_now(-1),
             KeyCode::Down => self.scroll_release_now(1),
@@ -898,6 +913,61 @@ impl App {
             KeyCode::F(2) => return self.save_release_now_notes(),
             _ => {
                 if let Some(dialog) = &mut self.release_now_notes_dialog
+                    && let Some(input) = convert_to_textarea_input(key)
+                {
+                    dialog.editor.input(input);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_top_picks_editor_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            return self.save_top_picks();
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+            && let Some(dialog) = &mut self.top_picks_editor_dialog
+        {
+            dialog.editor.copy();
+            let text = dialog.editor.yank_text();
+            if !text.is_empty() {
+                self.copy_text_to_clipboard(&text);
+                return Ok(());
+            }
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X'))
+            && let Some(dialog) = &mut self.top_picks_editor_dialog
+        {
+            dialog.editor.cut();
+            let text = dialog.editor.yank_text();
+            if !text.is_empty() {
+                self.copy_text_to_clipboard(&text);
+                return Ok(());
+            }
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('a') | KeyCode::Char('A'))
+            && let Some(dialog) = &mut self.top_picks_editor_dialog
+        {
+            dialog.editor.select_all();
+            return Ok(());
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.top_picks_editor_dialog = None;
+                self.status = StatusMessage::info("Top Picks editor closed.");
+            }
+            KeyCode::F(2) => return self.save_top_picks(),
+            _ => {
+                if let Some(dialog) = &mut self.top_picks_editor_dialog
                     && let Some(input) = convert_to_textarea_input(key)
                 {
                     dialog.editor.input(input);
@@ -1823,6 +1893,136 @@ impl App {
             }
         }
 
+        if self.top_picks_editor_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
+                    {
+                        if matches!(action, HitAction::TopPicksEditorField) {
+                            if let Some(dialog) = &mut self.top_picks_editor_dialog {
+                                let inner = Rect {
+                                    x: rect.x + 1,
+                                    y: rect.y + 1,
+                                    width: rect.width.saturating_sub(2),
+                                    height: rect.height.saturating_sub(2),
+                                };
+                                let lines = dialog.editor.lines();
+                                let (cursor_row, _) = dialog.editor.cursor();
+                                let visible_height = inner.height.max(1) as usize;
+                                let start_row = cursor_row
+                                    .saturating_sub(visible_height / 2)
+                                    .min(lines.len().saturating_sub(visible_height));
+                                let end_row = (start_row + visible_height).min(lines.len());
+                                let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                                let content_width =
+                                    inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                                let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                                let clicked_col =
+                                    mouse.column.saturating_sub(inner.x + number_width + 1)
+                                        as usize;
+                                let lines_ref: Vec<&str> =
+                                    lines.iter().map(|s| s.as_str()).collect();
+                                let (target_row, target_col) = textarea_click_position(
+                                    &lines_ref,
+                                    start_row,
+                                    content_width,
+                                    relative_row,
+                                    clicked_col,
+                                );
+                                // Check for double-click (word selection)
+                                let now = Instant::now();
+                                let is_double_click = self
+                                    .top_picks_editor_click_at
+                                    .map(|prev| {
+                                        now.duration_since(prev) <= Duration::from_millis(400)
+                                    })
+                                    .unwrap_or(false);
+                                dialog.editor.cancel_selection();
+                                dialog.editor.move_cursor(tui_textarea::CursorMove::Jump(
+                                    target_row as u16,
+                                    target_col as u16,
+                                ));
+                                if is_double_click {
+                                    dialog
+                                        .editor
+                                        .move_cursor(tui_textarea::CursorMove::WordBack);
+                                    dialog.editor.start_selection();
+                                    dialog
+                                        .editor
+                                        .move_cursor(tui_textarea::CursorMove::WordForward);
+                                    dialog.editor.move_cursor(tui_textarea::CursorMove::Back);
+                                }
+                                self.top_picks_editor_click_at = Some(now);
+                                self.top_picks_editor_rect = Some(rect);
+                            }
+                        } else if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
+                        && matches!(action, HitAction::TopPicksEditorField)
+                        && let Some(dialog) = &mut self.top_picks_editor_dialog
+                    {
+                        let inner = Rect {
+                            x: rect.x + 1,
+                            y: rect.y + 1,
+                            width: rect.width.saturating_sub(2),
+                            height: rect.height.saturating_sub(2),
+                        };
+                        let lines = dialog.editor.lines();
+                        let (cursor_row, _) = dialog.editor.cursor();
+                        let visible_height = inner.height.max(1) as usize;
+                        let start_row = cursor_row
+                            .saturating_sub(visible_height / 2)
+                            .min(lines.len().saturating_sub(visible_height));
+                        let end_row = (start_row + visible_height).min(lines.len());
+                        let number_width = end_row.max(1).to_string().len().max(2) as u16;
+                        let content_width =
+                            inner.width.saturating_sub(number_width + 1).max(1) as usize;
+                        let relative_row = mouse.row.saturating_sub(inner.y) as usize;
+                        let clicked_col =
+                            mouse.column.saturating_sub(inner.x + number_width + 1) as usize;
+                        let lines_ref: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+                        let (target_row, target_col) = textarea_click_position(
+                            &lines_ref,
+                            start_row,
+                            content_width,
+                            relative_row,
+                            clicked_col,
+                        );
+                        if !dialog.editor.is_selecting() {
+                            dialog.editor.start_selection();
+                        }
+                        dialog.editor.move_cursor(tui_textarea::CursorMove::Jump(
+                            target_row as u16,
+                            target_col as u16,
+                        ));
+                    }
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    if let Some(dialog) = &mut self.top_picks_editor_dialog
+                        && dialog.editor.is_selecting()
+                    {
+                        dialog.editor.copy();
+                        let text = dialog.editor.yank_text();
+                        if !text.is_empty() {
+                            self.copy_text_to_clipboard(&text);
+                            return;
+                        }
+                    }
+                    self.paste_from_clipboard();
+                    return;
+                }
+                _ => return,
+            }
+        }
+
         if self.release_now_dialog.is_some() {
             let in_log_viewport = self
                 .release_now_log_viewport
@@ -2586,6 +2786,15 @@ impl App {
             return;
         }
 
+        if let Some(dialog) = &mut self.top_picks_editor_dialog {
+            for line in text.lines() {
+                dialog.editor.insert_str(line);
+                dialog.editor.insert_newline();
+            }
+            self.status = StatusMessage::info("Pasted into the Top Picks editor.");
+            return;
+        }
+
         let sanitized = sanitize_pasted_text(&text);
         if self.insert_text(&sanitized) {
             self.status = StatusMessage::info("Pasted into the active field.");
@@ -2651,6 +2860,15 @@ impl App {
                         dialog.message_editor.insert_newline();
                     }
                     self.status = StatusMessage::info("Pasted into the commit message.");
+                    return;
+                }
+
+                if let Some(dialog) = &mut self.top_picks_editor_dialog {
+                    for line in text.lines() {
+                        dialog.editor.insert_str(line);
+                        dialog.editor.insert_newline();
+                    }
+                    self.status = StatusMessage::info("Pasted into the Top Picks editor.");
                     return;
                 }
 
@@ -2925,6 +3143,12 @@ impl App {
                 self.screen = Screen::Dashboard;
                 self.status = StatusMessage::info("Wizard cancelled.");
             }
+            HitAction::SaveTopPicks => return self.save_top_picks(),
+            HitAction::CancelTopPicks => {
+                self.top_picks_editor_dialog = None;
+                self.status = StatusMessage::info("Top Picks editor closed.");
+            }
+            HitAction::TopPicksEditorField => {}
         }
         Ok(())
     }
@@ -3033,6 +3257,203 @@ impl App {
         dialog.release_notes_markdown = notes;
         self.release_now_notes_dialog = None;
         self.status = StatusMessage::success("ReleaseNOW release notes updated.");
+        Ok(())
+    }
+
+    fn active_top_picks_scope(&self, project: &ProjectConfig) -> Result<GitScopeContext> {
+        if let Some(dialog) = &self.release_now_dialog {
+            return Ok(dialog.scope.clone());
+        }
+
+        let git_contexts = collect_all_branch_git_scope_contexts(project)?;
+        let scope_index = if project.project_type == ProjectType::Branched {
+            self.overview_focused_scope
+                .min(git_contexts.len().saturating_sub(1))
+        } else {
+            0
+        };
+        git_contexts
+            .get(scope_index)
+            .cloned()
+            .ok_or_else(|| anyhow!("no git scope available for this project"))
+    }
+
+    fn refresh_release_now_notes_from_current_scope(&mut self) -> Result<bool> {
+        let Some((tag_name, scope)) = self
+            .release_now_dialog
+            .as_ref()
+            .map(|dialog| (dialog.tag_name.clone(), dialog.scope.clone()))
+        else {
+            return Ok(false);
+        };
+
+        let markdown = build_release_notes_markdown(&tag_name, &scope)?;
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.release_notes_markdown = markdown;
+        }
+        Ok(true)
+    }
+
+    fn open_top_picks_editor(&mut self) -> Result<()> {
+        let project = self.selected_project()?.clone();
+        let scope = self.active_top_picks_scope(&project)?;
+
+        // Get the repo root for the active release/dashboard scope.
+        let repo_root = scope.repo_root.as_str();
+
+        // First, check if there's a memory file with edits
+        let memory_content = load_top_picks_edits(repo_root);
+        let has_memory_edits = !memory_content.trim().is_empty();
+
+        if has_memory_edits {
+            // Use the memory file content directly
+            self.top_picks_editor_dialog = Some(changelog_tp::TopPicksEditorDialog::with_text(
+                &memory_content,
+            ));
+            self.status = StatusMessage::info(
+                "Top Picks editor opened with saved edits. These will be applied during release.",
+            );
+        } else {
+            // No memory edits, extract from commits as before
+            let mut existing_picks = project.manual_top_picks.clone();
+
+            if let Ok(picks_from_commits) = self.extract_top_picks_from_commits(&scope) {
+                // Merge picks from commits with manual picks (manual takes precedence)
+                let mut seen_headers: std::collections::HashSet<String> =
+                    existing_picks.iter().map(|p| p.header.clone()).collect();
+                for pick in picks_from_commits {
+                    if !seen_headers.contains(&pick.header) {
+                        seen_headers.insert(pick.header.clone());
+                        existing_picks.push(pick);
+                    }
+                }
+                // Sort by priority
+                changelog_tp::sort_top_picks(&mut existing_picks);
+            }
+
+            self.top_picks_editor_dialog = Some(changelog_tp::TopPicksEditorDialog::with_picks(
+                &existing_picks,
+            ));
+            self.status = StatusMessage::info(
+                "Top Picks editor opened. Edit using the format: '1. Header' followed by '- Bullet points'",
+            );
+        }
+        Ok(())
+    }
+
+    fn extract_top_picks_from_commits(
+        &self,
+        scope: &GitScopeContext,
+    ) -> Result<Vec<changelog_tp::TopPick>> {
+        let repo_root = &scope.repo_root;
+
+        // Get the latest tag to determine commits since last release
+        let revision_range = match latest_local_tag_with_cancel(repo_root, None)? {
+            Some(tag) => format!("{}..HEAD", tag),
+            None => "HEAD".to_string(), // No tags yet, use all commits
+        };
+
+        let pathspecs = scope.git_pathspecs();
+        let mut args = vec![
+            "--no-pager".to_string(),
+            "log".to_string(),
+            "--pretty=format:%H %s%n%b---COMMIT_END---".to_string(),
+            "--no-merges".to_string(),
+            revision_range,
+        ];
+        if !pathspecs.is_empty() {
+            args.push("--".to_string());
+            args.extend(pathspecs);
+        }
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+
+        // Get git log output for commits since last tag
+        let output = run_git(repo_root, &arg_refs)?;
+
+        let log_output = output.stdout;
+
+        // Parse commits from log output
+        let mut parsed_commits: Vec<ParsedCommit> = Vec::new();
+        let commit_blocks: Vec<&str> = log_output.split("---COMMIT_END---").collect();
+        for commit_block in commit_blocks.iter().rev() {
+            let block = commit_block.trim();
+            if block.is_empty() {
+                continue;
+            }
+
+            let lines: Vec<&str> = block.lines().collect();
+            if lines.is_empty() {
+                continue;
+            }
+
+            let first_line = lines[0];
+            if let Some((hash, subject)) = first_line.split_once(' ') {
+                let body = if lines.len() > 1 {
+                    lines[1..].join("\n")
+                } else {
+                    String::new()
+                };
+
+                let full_message = if body.is_empty() {
+                    subject.to_string()
+                } else {
+                    format!("{}\n{}", subject, body)
+                };
+
+                let commits = ParsedCommit::parse_many(&full_message, hash.to_string());
+                parsed_commits.extend(commits);
+            }
+        }
+
+        // Extract top picks
+        let refs: Vec<&ParsedCommit> = parsed_commits.iter().collect();
+        let picks = changelog_tp::extract_top_picks(&refs);
+
+        Ok(picks)
+    }
+
+    fn save_top_picks(&mut self) -> Result<()> {
+        let dialog = self
+            .top_picks_editor_dialog
+            .as_ref()
+            .ok_or_else(|| anyhow!("Top Picks editor is not open"))?;
+
+        // Get the raw text content from the editor
+        let text_content = dialog.editor.lines().join("\n");
+
+        // Save to memory file in the project's repo
+        let project = self.selected_project()?;
+        let scope = self.active_top_picks_scope(project)?;
+        let repo_root = &scope.repo_root;
+        let mut warnings = Vec::new();
+
+        // Ensure gitignore entry exists
+        if let Err(error) = ensure_gitignore_entry(repo_root, ".comfygit/mem/.tp_edits.md") {
+            warnings.push(format!("failed to update .gitignore: {}", error));
+        }
+
+        // Save the edits to memory file
+        if let Err(error) = save_top_picks_edits(repo_root, &text_content) {
+            self.status =
+                StatusMessage::error(format!("Failed to save Top Picks edits: {}", error));
+            return Ok(());
+        }
+
+        if let Err(error) = self.refresh_release_now_notes_from_current_scope() {
+            warnings.push(format!("failed to refresh ReleaseNOW notes: {}", error));
+        }
+
+        self.status = if warnings.is_empty() {
+            StatusMessage::success(
+                "Top Picks edits saved. They will be applied during the next release.".to_string(),
+            )
+        } else {
+            StatusMessage::warning(format!(
+                "Top Picks edits saved, but {}",
+                warnings.join(" Also, ")
+            ))
+        };
+        self.top_picks_editor_dialog = None;
         Ok(())
     }
 
@@ -3521,6 +3942,17 @@ impl App {
                         HitAction::SaveReleaseNowNotes
                             | HitAction::CancelReleaseNowNotes
                             | HitAction::ReleaseNowNotesField
+                    )
+                {
+                    return None;
+                }
+
+                if self.top_picks_editor_dialog.is_some()
+                    && !matches!(
+                        action,
+                        HitAction::SaveTopPicks
+                            | HitAction::CancelTopPicks
+                            | HitAction::TopPicksEditorField
                     )
                 {
                     return None;
@@ -5541,6 +5973,9 @@ pub(crate) enum HitAction {
     ValidateWizard,
     SaveWizard,
     CancelWizard,
+    SaveTopPicks,
+    CancelTopPicks,
+    TopPicksEditorField,
 }
 
 #[derive(Clone, Copy)]
@@ -7425,6 +7860,7 @@ fn execute_standard_changelog_for_tag_blocking(
     std_changelog_policy: StdChangelogExecutionPolicy,
 ) -> Result<StandardChangelogExecutionOutcome> {
     let repo_root = &scope.repo_root;
+    let top_picks_edits = current_release_top_picks_edits(repo_root);
     ensure_std_changelog_memory_entry(repo_root, tag_name, branch_name)?;
 
     let sorted_tags = sorted_local_tags_with_cancel(repo_root, None)?;
@@ -7455,7 +7891,9 @@ fn execute_standard_changelog_for_tag_blocking(
     let mut outcome = StandardChangelogExecutionOutcome::default();
     match decision {
         StdChangelogDecision::Generate => {
-            if find_archived_changelog_markdown(repo_root, tag_name)?.is_some() {
+            if top_picks_edits.is_none()
+                && find_archived_changelog_markdown(repo_root, tag_name)?.is_some()
+            {
                 rebuild_history_summary_readme(repo_root)?;
                 record_std_changelog_generated(repo_root, tag_name, branch_name)?;
             } else if let Some(previous_tag) = previous_tag.as_deref() {
@@ -7466,7 +7904,12 @@ fn execute_standard_changelog_for_tag_blocking(
                     record_std_changelog_error(repo_root, tag_name, branch_name, &reason)?;
                     outcome.summary_notes.push("Standard changelog was not generated because the computed tag range was empty.".to_string());
                 } else {
-                    let markdown = std_changelog_gen(tag_name.to_string(), &range.lines).markdown;
+                    let markdown = std_changelog_gen(
+                        tag_name.to_string(),
+                        &range.lines,
+                        top_picks_edits.as_deref(),
+                    )
+                    .markdown;
                     archive_changelog_markdown(repo_root, tag_name, &markdown)?;
                     record_std_changelog_generated(repo_root, tag_name, branch_name)?;
                 }
@@ -7627,7 +8070,7 @@ fn replay_postponed_std_changelogs_blocking(
             continue;
         }
 
-        let markdown = std_changelog_gen(entry.tag_from.clone(), &range.lines).markdown;
+        let markdown = std_changelog_gen(entry.tag_from.clone(), &range.lines, None).markdown;
         archive_changelog_markdown(repo_root, &entry.tag_from, &markdown)?;
         record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
         outcome.notices.push(format!(
@@ -7701,6 +8144,11 @@ fn is_mainline_branch(branch: &str, custom_main_branch: Option<&str>) -> bool {
     is_mainline_branch_name(branch, custom_main_branch)
 }
 
+fn current_release_top_picks_edits(repo_root: &str) -> Option<String> {
+    let edits = load_top_picks_edits(repo_root);
+    (!edits.trim().is_empty()).then_some(edits)
+}
+
 fn build_release_notes_markdown(
     tag_name: &str,
     scope: &crate::git::GitScopeContext,
@@ -7713,8 +8161,11 @@ fn build_release_notes_markdown(
         .map(|p| p.variator_storage)
         .unwrap_or_default();
 
+    let top_picks_edits = current_release_top_picks_edits(&scope.repo_root);
     let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
-    if let Some(markdown) = find_archived_changelog_markdown(&scope.repo_root, tag_name)? {
+    if top_picks_edits.is_none()
+        && let Some(markdown) = find_archived_changelog_markdown(&scope.repo_root, tag_name)?
+    {
         return Ok(ensure_previous_public_release_header(
             &markdown,
             tag_name,
@@ -7742,6 +8193,7 @@ fn build_release_notes_markdown(
             scope.hide_bump_messages,
             scope.mini_commit_hashes,
             scope.changelog_wrap_detailed_if_top_picks,
+            top_picks_edits.as_deref(),
             variator_storage,
         )
         .markdown);
@@ -7756,6 +8208,7 @@ fn build_release_notes_markdown(
         scope.hide_bump_messages,
         scope.mini_commit_hashes,
         scope.changelog_wrap_detailed_if_top_picks,
+        top_picks_edits.as_deref(),
         variator_storage,
     )
     .markdown)

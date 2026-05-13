@@ -81,6 +81,9 @@ impl App {
         if self.release_now_notes_dialog.is_some() {
             self.render_release_now_notes_dialog(frame, frame.area());
         }
+        if self.top_picks_editor_dialog.is_some() {
+            self.render_top_picks_editor(frame, frame.area());
+        }
         if self.delete_confirmation_dialog.is_some() {
             self.render_delete_confirmation_dialog(frame, frame.area());
         }
@@ -2163,7 +2166,7 @@ impl App {
         let body_inner = body_block.inner(sections[2]);
         self.release_now_log_viewport = Some(body_inner);
         if let Some(dialog) = &mut self.release_now_dialog {
-            dialog.set_body_viewport_height(body_inner.height);
+            dialog.set_body_viewport(body_inner.height, body_inner.width);
         }
         let dialog = self
             .release_now_dialog
@@ -2351,6 +2354,67 @@ impl App {
                     "Cancel",
                     false,
                     HitAction::CancelReleaseNowNotes,
+                    Style::default().fg(Color::White).bg(Color::Red),
+                ),
+            ],
+        );
+    }
+
+    fn render_top_picks_editor(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.top_picks_editor_dialog else {
+            return;
+        };
+
+        let popup = centered_rect(area, 84, 62);
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Top Picks Editor ")
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4),
+                Constraint::Min(10),
+                Constraint::Length(BUTTON_ROW_HEIGHT),
+            ])
+            .split(inner);
+
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from("Edit Top Picks that will appear in the changelog.").bold(),
+                Line::from("Format: '1. Header' followed by '- Bullet points'"),
+                Line::from("Ctrl+S or F2 saves. Esc closes without saving."),
+            ])
+            .wrap(Wrap { trim: false }),
+            sections[0],
+        );
+        self.render_textarea_editor(
+            frame,
+            sections[1],
+            " Top Picks ",
+            dialog.placeholder.as_str(),
+            &dialog.editor,
+        );
+        self.hit_targets
+            .push(HitTarget::new(sections[1], HitAction::TopPicksEditorField));
+        self.render_button_row(
+            frame,
+            sections[2],
+            &[
+                DialogButton::new(
+                    "Save",
+                    false,
+                    HitAction::SaveTopPicks,
+                    Style::default().fg(Color::Black).bg(Color::Green),
+                ),
+                DialogButton::new(
+                    "Cancel",
+                    false,
+                    HitAction::CancelTopPicks,
                     Style::default().fg(Color::White).bg(Color::Red),
                 ),
             ],

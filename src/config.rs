@@ -109,6 +109,8 @@ pub struct ProjectConfig {
     pub repo: Option<RepoConfig>,
     #[serde(default)]
     pub variator_storage: crate::chl_vrtr::VariatorStorage,
+    #[serde(default)]
+    pub manual_top_picks: Vec<crate::changelog_tp::TopPick>,
 }
 
 impl ProjectConfig {
