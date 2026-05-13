@@ -223,6 +223,7 @@ pub(crate) struct ChangelogDocument {
     previous_public_release: Option<String>,
     context_lines: Vec<String>,
     release_message: Option<String>,
+    top_picks_edits: Option<String>,
     hide_pr_messages: bool,
     hide_bump_messages: bool,
     mini_commit_hashes: bool,
@@ -239,6 +240,7 @@ impl ChangelogDocument {
             previous_public_release: None,
             context_lines: Vec::new(),
             release_message: None,
+            top_picks_edits: None,
             hide_pr_messages: false,
             hide_bump_messages: false,
             mini_commit_hashes: false,
@@ -258,6 +260,14 @@ impl ChangelogDocument {
         let message = release_message.into();
         if !message.trim().is_empty() {
             self.release_message = Some(message.trim().to_string());
+        }
+        self
+    }
+
+    pub(crate) fn with_top_picks_edits(mut self, edits: impl Into<String>) -> Self {
+        let edits = edits.into();
+        if !edits.trim().is_empty() {
+            self.top_picks_edits = Some(edits);
         }
         self
     }
@@ -336,7 +346,12 @@ impl ChangelogDocument {
 
         // Extract and render Top Picks section (priority 825)
         let top_picks = if self.include_top_picks {
-            crate::changelog_tp::extract_top_picks(&visible_commits)
+            let commit_top_picks = crate::changelog_tp::extract_top_picks(&visible_commits);
+            if let Some(edits) = self.top_picks_edits.as_deref() {
+                crate::changelog_tp::merge_top_picks_with_edits(commit_top_picks, edits)
+            } else {
+                commit_top_picks
+            }
         } else {
             Vec::new()
         };
@@ -430,8 +445,13 @@ pub(crate) fn build_document_from_git_log_with_variator(
 pub(crate) fn std_changelog_gen(
     current_tag: impl Into<String>,
     lines: &[String],
+    top_picks_edits: Option<&str>,
 ) -> RenderedChangelog {
-    build_document_from_git_log(current_tag, lines).render_markdown()
+    let mut document = build_document_from_git_log(current_tag, lines);
+    if let Some(top_picks_edits) = top_picks_edits {
+        document = document.with_top_picks_edits(top_picks_edits);
+    }
+    document.render_markdown()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -443,6 +463,7 @@ pub(crate) fn rls_changelog_gen(
     hide_bump_messages: bool,
     mini_commit_hashes: bool,
     wrap_detailed_if_top_picks: bool,
+    top_picks_edits: Option<&str>,
     variator_storage: crate::chl_vrtr::VariatorStorage,
 ) -> RenderedChangelog {
     let mut document =
@@ -450,6 +471,9 @@ pub(crate) fn rls_changelog_gen(
             .with_hide_filters(hide_pr_messages, hide_bump_messages)
             .with_mini_commit_hashes(mini_commit_hashes)
             .with_wrap_detailed_if_top_picks(wrap_detailed_if_top_picks);
+    if let Some(top_picks_edits) = top_picks_edits {
+        document = document.with_top_picks_edits(top_picks_edits);
+    }
     if let Some(last_public) = last_public.filter(|value| !value.trim().is_empty()) {
         document = document.with_previous_public_release(last_public);
     }
@@ -1993,6 +2017,7 @@ mod tests {
             false,
             false,
             false,
+            None,
             crate::chl_vrtr::VariatorStorage::default(),
         );
 
@@ -2016,7 +2041,7 @@ mod tests {
     #[test]
     fn standard_and_custom_generators_use_shared_engine() {
         let lines = vec!["abc1234 feat: ship shared generator wrappers".to_string()];
-        let standard = std_changelog_gen("v0.7.3", &lines);
+        let standard = std_changelog_gen("v0.7.3", &lines, None);
         let custom = custom_changelog_gen("v0.7.3", &lines, Some("Custom range output."));
 
         assert!(standard.markdown.contains("### 🧩 Features"));
@@ -2431,5 +2456,38 @@ mod tests {
         // Second should be the top pick config
         assert!(parsed[1].is_top_pick_config);
         assert_eq!(parsed[1].top_pick_priority, Some(3));
+    }
+
+    #[test]
+    fn top_picks_edits_override_commit_based_entries() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![ParsedCommit::parse(
+                "top1: *Important improvement **Original bullet",
+                "a1b2c3d",
+            )],
+        )
+        .with_top_picks_edits("1. Important improvement\n- Edited bullet")
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        .render_markdown();
+
+        assert!(changelog.markdown.contains("Important improvement"));
+        assert!(changelog.markdown.contains("- Edited bullet"));
+        assert!(!changelog.markdown.contains("Original bullet"));
+    }
+
+    #[test]
+    fn top_picks_edits_can_add_manual_entries() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![ParsedCommit::parse("@feat: regular feature", "a1b2c3d")],
+        )
+        .with_top_picks_edits("1. Manual highlight\n- Saved from editor")
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        .render_markdown();
+
+        assert!(changelog.markdown.contains("This Release's Top Picks"));
+        assert!(changelog.markdown.contains("Manual highlight"));
+        assert!(changelog.markdown.contains("Saved from editor"));
     }
 }
