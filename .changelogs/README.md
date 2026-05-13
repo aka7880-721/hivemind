@@ -2,6 +2,40 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog `v0.26.0` <sup><div align="end">🗓️ 2026-05-13</div></sup>
+
+### ✨ New in Auto-README 'What's new' inject!:
+
+#### 🧩 Features
+
+* Improve TopPicks section extraction and footer formatting in changelog markdown. Ensure proper handling of nested details.   _(a0deb22)_
+
+---
+
+## 💬 General Improvements & Fixes:
+
+### 🐛 Fix(es)
+
+* Update "click here" changelog summary formatting with nbsp   _(da18d36)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.26.0   _(cb8077c)_
+
+* Update ratatui-comfy-toaster to version 0.3.2 and add default progress bar settings in ToastEngine   _(e0aa8e8)_
+
+### ♻️ Refactor
+
+* Simplify file staging and commit logic for release process. Introduce dedicated functions for handling generated paths and staged changes, enhancing readability and maintainability. Add async support for README auto-injection confirmation.   _(a99b33c)_
+
+* Improve code readability by formatting multiline expressions and enhancing consistency in progress message handling.   _(d5731be)_
+
+### 📝 Other
+
+* Merge pull request #111 (via ComfyGit)   _(40f2e0b)_
+
+---
+
 ## Changelog `v0.25.4` <sup><div align="end">🗓️ 2026-05-13</div></sup>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
