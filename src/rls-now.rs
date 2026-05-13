@@ -10,7 +10,7 @@ fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
     Ok(())
 }
 
-fn stage_release_now_generated_files(repo_root: &str) -> Result<bool> {
+fn release_now_generated_paths(repo_root: &str) -> Vec<String> {
     let mut paths = Vec::new();
     if Path::new(repo_root).join(".changelogs").is_dir() {
         paths.push(".changelogs".to_string());
@@ -23,7 +23,11 @@ fn stage_release_now_generated_files(repo_root: &str) -> Result<bool> {
     {
         paths.push(".comfygit/syncmem/stdchlg.json".to_string());
     }
+    paths
+}
 
+fn stage_release_now_generated_files(repo_root: &str) -> Result<bool> {
+    let paths = release_now_generated_paths(repo_root);
     if paths.is_empty() {
         return Ok(false);
     }
@@ -35,12 +39,24 @@ fn stage_release_now_generated_files(repo_root: &str) -> Result<bool> {
     Ok(true)
 }
 
-fn has_staged_changes(repo_root: &str) -> Result<bool> {
-    Ok(!run_git(repo_root, &["diff", "--cached", "--quiet", "--exit-code"])?.success)
+fn has_staged_changes_for_paths(repo_root: &str, paths: &[String]) -> Result<bool> {
+    let mut args = vec![
+        "diff".to_string(),
+        "--cached".to_string(),
+        "--quiet".to_string(),
+        "--exit-code".to_string(),
+    ];
+    if !paths.is_empty() {
+        args.push("--".to_string());
+        args.extend(paths.iter().cloned());
+    }
+    let arg_refs = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    Ok(!run_git(repo_root, &arg_refs)?.success)
 }
 
 fn commit_release_now_generated_files(repo_root: &str, tag_name: &str) -> Result<bool> {
-    if !has_staged_changes(repo_root)? {
+    let paths = release_now_generated_paths(repo_root);
+    if paths.is_empty() || !has_staged_changes_for_paths(repo_root, &paths)? {
         return Ok(false);
     }
 
@@ -48,7 +64,30 @@ fn commit_release_now_generated_files(repo_root: &str, tag_name: &str) -> Result
         "~: ReleaseNOW! → {} has just been released via ComfyGit!",
         tag_name
     );
-    run_git_checked(repo_root, &["commit", "-m", &commit_message])?;
+    let mut args = vec!["commit".to_string(), "-m".to_string(), commit_message];
+    args.push("--".to_string());
+    args.extend(paths);
+    let arg_refs = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    run_git_checked(repo_root, &arg_refs)?;
+    Ok(true)
+}
+
+fn commit_auto_injected_readme(repo_root: &str) -> Result<bool> {
+    let readme_path = vec!["README.md".to_string()];
+    if !has_staged_changes_for_paths(repo_root, &readme_path)? {
+        return Ok(false);
+    }
+
+    run_git_checked(
+        repo_root,
+        &[
+            "commit",
+            "-m",
+            "~ReleaseNOW: Changelog Auto-injection",
+            "--",
+            "README.md",
+        ],
+    )?;
     Ok(true)
 }
 
@@ -64,16 +103,177 @@ fn create_release_now_generated_files_commit(
     repo_root: &str,
     tag_name: &str,
 ) -> Result<Option<ReleaseNowGeneratedFilesCommit>> {
-    if !stage_release_now_generated_files(repo_root)? || !has_staged_changes(repo_root)? {
-        return Ok(None);
+    let previous_head = current_head_commit(repo_root)?;
+    let mut created_any = false;
+
+    if commit_auto_injected_readme(repo_root)? {
+        created_any = true;
     }
 
-    let previous_head = current_head_commit(repo_root)?;
-    if commit_release_now_generated_files(repo_root, tag_name)? {
-        Ok(Some(ReleaseNowGeneratedFilesCommit { previous_head }))
-    } else {
-        Ok(None)
+    if stage_release_now_generated_files(repo_root)? && commit_release_now_generated_files(repo_root, tag_name)? {
+        created_any = true;
     }
+
+    Ok(created_any.then_some(ReleaseNowGeneratedFilesCommit {
+        previous_head,
+    }))
+}
+
+fn stage_auto_injected_readme(
+    repo_root: &str,
+    tag_name: &str,
+    changelog_markdown: &str,
+    inject_at_row: u16,
+    remote_url: Option<&str>,
+) -> Result<()> {
+    super::rls_now_inj::inject_whats_new(&super::rls_now_inj::ReadmeInjectionParams {
+        repo_root,
+        tag_name,
+        changelog_markdown,
+        inject_at_row,
+        remote_url,
+    })?;
+    run_git_checked(repo_root, &["add", "README.md"])?;
+    Ok(())
+}
+
+fn remote_branch_head_commit(
+    repo_root: &str,
+    remote_name: &str,
+    branch_name: &str,
+) -> Result<Option<String>> {
+    let output = run_git_checked(repo_root, &["ls-remote", "--heads", remote_name, branch_name])?;
+    let line = output.lines().find(|line| !line.trim().is_empty());
+    let hash = line
+        .and_then(|entry| entry.split_whitespace().next())
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty())
+        .map(ToOwned::to_owned);
+    Ok(hash)
+}
+
+async fn confirm_remote_branch_head_with_retry(
+    repo_root: String,
+    remote_name: String,
+    branch_name: String,
+    expected_head: String,
+    cancel: &GitCancellation,
+    mut emit_progress: impl FnMut(Vec<String>),
+) -> Result<()> {
+    for (attempt, delay_secs) in [(1_u8, 5_u64), (2_u8, 10_u64)] {
+        ensure_not_cancelled(cancel)?;
+        emit_progress(vec![format!(
+            "Waiting {}s to confirm the README auto-injection push on {}.",
+            delay_secs, remote_name
+        )]);
+        sleep(Duration::from_secs(delay_secs)).await;
+        ensure_not_cancelled(cancel)?;
+
+        let repo_root_for_check = repo_root.clone();
+        let remote_name_for_check = remote_name.clone();
+        let branch_name_for_check = branch_name.clone();
+        let remote_head = run_blocking_job(move || {
+            remote_branch_head_commit(
+                &repo_root_for_check,
+                &remote_name_for_check,
+                &branch_name_for_check,
+            )
+        })
+        .await?;
+
+        if remote_head.as_deref() == Some(expected_head.as_str()) {
+            emit_progress(vec!["README auto-injection push confirmed on remote.".to_string()]);
+            return Ok(());
+        }
+
+        if attempt == 1 {
+            emit_progress(vec![format!(
+                "README auto-injection push was not visible on {} after {}s; retrying confirmation once more.",
+                remote_name, delay_secs
+            )]);
+        }
+    }
+
+    bail!(
+        "README auto-injection push could not be confirmed on remote '{}' for branch '{}'",
+        remote_name,
+        branch_name
+    )
+}
+
+async fn prepush_auto_injected_readme_async(
+    request: &ReleaseNowExecutionRequest,
+    cancel: &GitCancellation,
+    mut emit_progress: impl FnMut(Vec<String>),
+) -> Result<()> {
+    ensure_not_cancelled(cancel)?;
+    emit_progress(vec!["Injecting 👀 What's new block into README.md.".to_string()]);
+
+    let inj_repo_root = request.repo_root.clone();
+    let inj_tag = request.tag_name.clone();
+    let inj_markdown = request.release_notes_markdown.clone().unwrap_or_default();
+    let inj_row = request.readme_inject_at_row;
+    let inj_remote = request.scope.remote_spec.clone();
+    run_blocking_job(move || {
+        stage_auto_injected_readme(
+            &inj_repo_root,
+            &inj_tag,
+            &inj_markdown,
+            inj_row,
+            inj_remote.as_deref(),
+        )
+    })
+    .await?;
+
+    let repo_root_for_commit = request.repo_root.clone();
+    let committed = run_blocking_job(move || commit_auto_injected_readme(&repo_root_for_commit)).await?;
+    if !committed {
+        emit_progress(vec![
+            "README auto-injection produced no staged changes to commit.".to_string(),
+        ]);
+        return Ok(());
+    }
+
+    let remote_spec = request.scope.remote_spec.clone().ok_or_else(|| {
+        anyhow!("ReleaseNOW requires a configured git remote to push the auto-injected README")
+    })?;
+    let repo_root_for_branch = request.repo_root.clone();
+    let cancel_for_branch = cancel.clone();
+    let branch_name = run_blocking_job(move || {
+        current_branch_with_cancel(&repo_root_for_branch, Some(cancel_for_branch))
+    })
+    .await?;
+    let repo_root_for_remote = request.repo_root.clone();
+    let remote_name = run_blocking_job(move || {
+        crate::git::resolve_push_remote_name(&repo_root_for_remote, &remote_spec)
+    })
+    .await?;
+    let repo_root_for_head = request.repo_root.clone();
+    let expected_head = run_blocking_job(move || current_head_commit(&repo_root_for_head)).await?;
+
+    emit_progress(vec![format!(
+        "Pushing README auto-injection commit to {}.",
+        remote_name
+    )]);
+    run_command_with_retry_async(
+        request.repo_root.clone(),
+        "git",
+        vec!["push".to_string(), remote_name.clone(), branch_name.clone()],
+        GIT_PUSH_TIMEOUT,
+        NETWORK_RETRY_ATTEMPTS,
+        "git push",
+    )
+    .await?;
+
+    confirm_remote_branch_head_with_retry(
+        request.repo_root.clone(),
+        remote_name,
+        branch_name,
+        expected_head,
+        cancel,
+        &mut emit_progress,
+    )
+    .await
 }
 
 fn rollback_release_now_generated_files_commit(
@@ -835,31 +1035,7 @@ pub(super) async fn execute_release_now_async(
     )]);
 
     if request.readme_injection_enabled {
-        ensure_not_cancelled(&cancel)?;
-        emit_progress(vec![
-            "Injecting 👀 What's new block into README.md.".to_string(),
-        ]);
-        let inj_repo_root = request.repo_root.clone();
-        let inj_tag = request.tag_name.clone();
-        let inj_markdown = request.release_notes_markdown.clone().unwrap_or_default();
-        let inj_row = request.readme_inject_at_row;
-        let inj_remote = request.scope.remote_spec.clone();
-        let inj_result = run_blocking_job(move || {
-            super::rls_now_inj::inject_whats_new(&super::rls_now_inj::ReadmeInjectionParams {
-                repo_root: &inj_repo_root,
-                tag_name: &inj_tag,
-                changelog_markdown: &inj_markdown,
-                inject_at_row: inj_row,
-                remote_url: inj_remote.as_deref(),
-            })?;
-            run_git_checked(&inj_repo_root, &["add", "README.md"])?;
-            Ok::<(), anyhow::Error>(())
-        })
-        .await;
-        match inj_result {
-            Ok(()) => emit_progress(vec!["README.md updated with What's new block.".to_string()]),
-            Err(e) => emit_progress(vec![format!("Warning: README injection skipped: {}", e)]),
-        }
+        prepush_auto_injected_readme_async(&request, &cancel, &mut emit_progress).await?;
     }
 
     for script in &request.scripts {
@@ -2229,5 +2405,155 @@ mod tests {
         assert!(status.contains("A  .comfygit/syncmem/stdchlg.json"));
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn create_release_now_generated_files_commit_commits_auto_injected_readme() {
+        let repo_dir = create_temp_repo_dir("release-now-readme-auto-injection");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+
+        fs::write(repo_dir.join("README.md"), "seed\n").expect("write seed file");
+        run_git_checked(&repo_root, &["add", "README.md"]).expect("stage seed file");
+        run_git_checked(&repo_root, &["commit", "-m", "seed"]).expect("commit seed file");
+
+        fs::write(repo_dir.join("README.md"), "seed\n\ninjected\n").expect("update readme");
+        run_git_checked(&repo_root, &["add", "README.md"]).expect("stage readme injection");
+
+        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3")
+            .expect("create generated commit")
+            .expect("readme commit should exist");
+
+        let release_commit_subject = run_git_checked(&repo_root, &["log", "-1", "--pretty=%s"])
+            .expect("read readme commit subject");
+        assert_eq!(release_commit_subject.trim(), "~ReleaseNOW: Changelog Auto-injection");
+
+        rollback_release_now_generated_files_commit(&repo_root, &generated_commit)
+            .expect("roll back generated commit");
+
+        let status = run_git_checked(&repo_root, &["status", "--short"])
+            .expect("read staged status after rollback");
+        assert!(status.contains("M  README.md"));
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn create_release_now_generated_files_commit_keeps_readme_in_separate_commit() {
+        let repo_dir = create_temp_repo_dir("release-now-readme-and-generated");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+
+        fs::write(repo_dir.join("README.md"), "seed\n").expect("write seed file");
+        run_git_checked(&repo_root, &["add", "README.md"]).expect("stage seed file");
+        run_git_checked(&repo_root, &["commit", "-m", "seed"]).expect("commit seed file");
+
+        fs::write(repo_dir.join("README.md"), "seed\n\ninjected\n").expect("update readme");
+        run_git_checked(&repo_root, &["add", "README.md"]).expect("stage readme injection");
+
+        let syncmem_dir = repo_dir.join(".comfygit").join("syncmem");
+        fs::create_dir_all(&syncmem_dir).expect("create syncmem dir");
+        fs::write(syncmem_dir.join("stdchlg.json"), "{}\n").expect("write syncmem file");
+
+        create_release_now_generated_files_commit(&repo_root, "v1.2.3")
+            .expect("create generated commit")
+            .expect("commits should exist");
+
+        let subjects = run_git_checked(&repo_root, &["log", "-2", "--pretty=%s"])
+            .expect("read top two commit subjects");
+        let subject_lines = subjects.lines().collect::<Vec<_>>();
+        assert_eq!(subject_lines.len(), 2);
+        assert!(subject_lines[0].contains("ReleaseNOW! → v1.2.3 has just been released"));
+        assert_eq!(subject_lines[1].trim(), "~ReleaseNOW: Changelog Auto-injection");
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn stage_auto_injected_readme_updates_and_stages_readme() {
+        let repo_dir = create_temp_repo_dir("release-now-stage-auto-readme");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+
+        run_git_checked(&repo_root, &["init"]).expect("init repo");
+        run_git_checked(&repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+
+        fs::write(repo_dir.join("README.md"), "# crate\n\nbody\n").expect("write readme");
+        run_git_checked(&repo_root, &["add", "README.md"]).expect("stage readme");
+        run_git_checked(&repo_root, &["commit", "-m", "seed"]).expect("commit seed");
+
+        stage_auto_injected_readme(
+            &repo_root,
+            "v1.2.3",
+            "## Changelog `v1.2.3`\n\n### ♻️ Refactor\n\n* Updated docs\n",
+            2,
+            Some("https://github.com/comfy-home/ComfyGit"),
+        )
+        .expect("stage injected readme");
+
+        let status = run_git_checked(&repo_root, &["status", "--short"])
+            .expect("read staged status");
+        assert!(status.contains("M  README.md"));
+
+        let readme = fs::read_to_string(repo_dir.join("README.md")).expect("read updated readme");
+        assert!(readme.contains("👀 What's new in v1.2.3"));
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn remote_branch_head_commit_reads_pushed_branch_head() {
+        let remote_dir = create_temp_repo_dir("release-now-remote-head-remote");
+        let local_dir = create_temp_repo_dir("release-now-remote-head-local");
+        let remote_root = remote_dir.to_string_lossy().to_string();
+        let local_root = local_dir.to_string_lossy().to_string();
+
+        run_git_checked(&remote_root, &["init", "--bare"]).expect("init bare remote");
+        run_git_checked(&local_root, &["init"]).expect("init local repo");
+        run_git_checked(&local_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            &local_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+
+        fs::write(local_dir.join("README.md"), "seed\n").expect("write readme");
+        run_git_checked(&local_root, &["add", "README.md"]).expect("stage readme");
+        run_git_checked(&local_root, &["commit", "-m", "seed"]).expect("commit readme");
+        run_git_checked(&local_root, &["branch", "-M", "main"]).expect("rename branch");
+        run_git_checked(&local_root, &["remote", "add", "origin", &remote_root])
+            .expect("add origin remote");
+        run_git_checked(&local_root, &["push", "-u", "origin", "main"]).expect("push main");
+
+        let local_head = current_head_commit(&local_root).expect("read local head");
+        let remote_head =
+            remote_branch_head_commit(&local_root, "origin", "main").expect("read remote head");
+
+        assert_eq!(remote_head.as_deref(), Some(local_head.as_str()));
+
+        fs::remove_dir_all(&local_dir).expect("remove local temp repo dir");
+        fs::remove_dir_all(&remote_dir).expect("remove remote temp repo dir");
     }
 }
