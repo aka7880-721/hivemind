@@ -117,7 +117,8 @@ pub(crate) fn extract_top_picks(commits: &[&ParsedCommit]) -> Vec<TopPick> {
 }
 
 /// Merge commit-based Top Picks with manual edits from memory file
-/// Memory file edits take precedence over commit-based picks (by header)
+/// Memory file edits take precedence over commit-based picks (by slot/priority,
+/// with a normalized-header fallback for minor header tweaks).
 pub(crate) fn merge_top_picks_with_edits(
     commit_picks: Vec<TopPick>,
     edits_content: &str,
@@ -133,15 +134,24 @@ pub(crate) fn merge_top_picks_with_edits(
         return commit_picks;
     }
 
-    // Merge: edited picks take precedence by header
-    let mut seen_headers: HashSet<String> = edited_picks.iter().map(|p| p.header.clone()).collect();
+    // Merge: edited picks take precedence by priority slot. Header matching is
+    // retained as a fallback so cosmetic header changes still collapse.
+    let seen_priorities: HashSet<u8> = edited_picks.iter().filter_map(|p| p.priority).collect();
+    let seen_headers: HashSet<String> = edited_picks
+        .iter()
+        .map(|p| normalized_header_key(&p.header))
+        .filter(|key| !key.is_empty())
+        .collect();
 
     let mut result = edited_picks;
 
-    // Add commit picks that don't have a matching edited header
+    // Add commit picks that don't have a matching edited slot/header
     for pick in commit_picks {
-        if !seen_headers.contains(&pick.header) {
-            seen_headers.insert(pick.header.clone());
+        let priority_overridden = pick
+            .priority
+            .is_some_and(|priority| seen_priorities.contains(&priority));
+        let header_overridden = seen_headers.contains(&normalized_header_key(&pick.header));
+        if !priority_overridden && !header_overridden {
             result.push(pick);
         }
     }
@@ -149,6 +159,23 @@ pub(crate) fn merge_top_picks_with_edits(
     // Sort by priority
     sort_top_picks(&mut result);
     result
+}
+
+fn normalized_header_key(header: &str) -> String {
+    let mut normalized = String::new();
+    let mut previous_was_space = false;
+
+    for ch in header.chars() {
+        if ch.is_alphanumeric() {
+            normalized.extend(ch.to_lowercase());
+            previous_was_space = false;
+        } else if ch.is_whitespace() && !normalized.is_empty() && !previous_was_space {
+            normalized.push(' ');
+            previous_was_space = true;
+        }
+    }
+
+    normalized.trim().to_string()
 }
 
 /// Extract header from message items (text before first ** or ***)
@@ -362,14 +389,14 @@ impl TopPicksEditorDialog {
             }
 
             // Check for header line (starts with number followed by .)
-            if let Some(header) = Self::parse_header_line(trimmed) {
+            if let Some((priority, header)) = Self::parse_header_line(trimmed) {
                 // Save previous pick if exists
                 if let Some(pick) = current_pick.take() {
                     picks.push(pick);
                 }
                 // Start new pick
                 current_pick = Some(TopPick {
-                    priority: Some(picks.len() as u8 + 1),
+                    priority: Some(priority),
                     header,
                     bullets: Vec::new(),
                     commit_hash: String::new(),
@@ -392,14 +419,16 @@ impl TopPicksEditorDialog {
     }
 
     /// Parse a header line like "1. Header text" or "1.   Header text"
-    fn parse_header_line(line: &str) -> Option<String> {
+    fn parse_header_line(line: &str) -> Option<(u8, String)> {
         // Match pattern: number followed by . and optional whitespace
         let mut chars = line.chars().peekable();
+        let mut digits = String::new();
 
         // Skip digits
         while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-            chars.next();
+            digits.push(chars.next()?);
         }
+        let priority = digits.parse::<u8>().ok().filter(|value| *value > 0)?;
 
         // Check for .
         if chars.next() != Some('.') {
@@ -417,7 +446,7 @@ impl TopPicksEditorDialog {
             return None;
         }
 
-        Some(header)
+        Some((priority, header))
     }
 
     /// Parse a bullet line like "- Bullet text" or "    - Nested bullet"
@@ -634,7 +663,7 @@ mod tests {
                 is_reference: false,
             },
             TopPick {
-                priority: Some(2),
+                priority: Some(3),
                 header: "Commit-only pick".to_string(),
                 bullets: vec![TopPickBullet {
                     level: 0,
@@ -655,5 +684,50 @@ mod tests {
         assert_eq!(merged[0].bullets[0].text, "Edited bullet");
         assert!(merged.iter().any(|pick| pick.header == "Manual pick"));
         assert!(merged.iter().any(|pick| pick.header == "Commit-only pick"));
+    }
+
+    #[test]
+    fn merge_top_picks_edits_override_same_priority_when_header_changes() {
+        let commit_picks = vec![
+            TopPick {
+                priority: Some(1),
+                header: "TOP PICKS EDITOR!".to_string(),
+                bullets: vec![TopPickBullet {
+                    level: 0,
+                    text: "Original bullet".to_string(),
+                }],
+                commit_hash: "abc".to_string(),
+                is_reference: false,
+            },
+            TopPick {
+                priority: Some(2),
+                header: "Auto-README changelog injection!".to_string(),
+                bullets: vec![TopPickBullet {
+                    level: 0,
+                    text: "Second item".to_string(),
+                }],
+                commit_hash: "def".to_string(),
+                is_reference: false,
+            },
+        ];
+
+        let merged = merge_top_picks_with_edits(
+            commit_picks,
+            "1. TOP PICKS EDITOR! ⭐\n- Edited bullet\n\n2. Auto-README changelog injection!\n- Second item",
+        );
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].header, "TOP PICKS EDITOR! ⭐");
+        assert_eq!(merged[0].bullets[0].text, "Edited bullet");
+        assert_eq!(merged[1].header, "Auto-README changelog injection!");
+    }
+
+    #[test]
+    fn text_to_picks_preserves_explicit_priority_numbers() {
+        let picks = TopPicksEditorDialog::text_to_picks("3. Reordered item\n- Bullet");
+
+        assert_eq!(picks.len(), 1);
+        assert_eq!(picks[0].priority, Some(3));
+        assert_eq!(picks[0].header, "Reordered item");
     }
 }
