@@ -40,7 +40,7 @@ use ratatui::{
 };
 use ratatui_comfy_toaster::{
     ToastBuilder, ToastEngine, ToastEngineBuilder, ToastInteraction, ToastMouseButton,
-    ToastShortcut, ToastType,
+    ToastProgressBarStyle, ToastShortcut, ToastType,
 };
 use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Input as ExplorerInput};
 use tokio::{
@@ -515,6 +515,8 @@ impl App {
             last_status_toast_id: status.id,
             toaster: ToastEngineBuilder::new(Rect::default())
                 .default_duration(Duration::from_secs(2))
+                .default_progress_bar(true)
+                .default_progress_bar_style(ToastProgressBarStyle::Minimal)
                 .build(),
             status,
             logo: PixelLogo::load(),

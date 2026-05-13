@@ -37,6 +37,14 @@ tracked in the correct place.
 Pull Requests (PRs) are welcome and appreciated.  
 By submitting a PR, you agree to the following:
 
+### 3.0 Pre-contribution must-do checklist
+- Before investing time into improving this project, first ensure that you:
+  - check via **Discussions** whether this feature is not already in development
+  - check via **Discussions** whether this feature is planned and will be accepted
+- Contributions must be original work by the contributor
+- Contributor agrees that all contributions are licensed to ComfyHome™ under the terms of its License
+- Contributor grants ComfyHome™ the right to relicense contributions under commercial terms if needed
+
 ### 3.1 Contribution License Agreement
 All contributions are:
 - Your original work
@@ -72,7 +80,7 @@ ComfyHome™ reserves the right to request changes or decline contributions.
 ## 4. Project Scope
 Contributions should align with the project’s purpose:
 - A clean, reliable version‑bumping tool
-- A polished TUI experience
+  - A polished TUI experience
 - Git‑aware workflows (local or remote)
 - High‑quality Rust code
 
@@ -81,7 +89,7 @@ Features outside this scope may be declined.
 ---
 
 ## 5. Non‑Commercial License Reminder
-This project is distributed under the **ComfyGit License v1.2**, which:
+This project is distributed under the **ComfyGit SA-PS License**, which:
 - Allows non‑commercial use
 - Prohibits commercial use without a separate license
 - Protects Branding Elements and trademarks

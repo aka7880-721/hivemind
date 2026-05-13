@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 // For details, see the LICENSE file in the repository root.
 use std::{
     collections::HashSet,
@@ -382,7 +382,7 @@ impl ChangelogDocument {
 
         if should_wrap {
             lines.push(String::new());
-            lines.push("<details closed><summary closed><span>👉   C l i c k   <b>H E R E</b>  t o  <b>s h o w / h i d e</b>  a l l  n e r d y  d e t a i l s  👈</span></summary>".to_string());
+            lines.push("<details closed><summary closed><span>👉&nbsp&nbsp C l i c k&nbsp&nbsp&nbsp&nbsp&nbsp<b>H E R E</b>&nbsp&nbsp&nbsp&nbsp&nbspt o&nbsp&nbsp&nbsp&nbsp&nbsp<b>s h o w &nbsp/ &nbsph i d e</b>&nbsp&nbsp&nbsp&nbsp&nbspa l l&nbsp&nbsp&nbsp&nbsp&nbspn e r d y&nbsp&nbsp&nbsp&nbsp&nbspd e t a i l s &nbsp&nbsp👈</span></summary>".to_string());
             lines.push(String::new());
         }
 
