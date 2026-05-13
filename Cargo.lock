@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "ratatui-comfy-toaster"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "ratatui 0.30.0",
  "textwrap",
