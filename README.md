@@ -107,8 +107,13 @@ Enjoy!
   - [🎯 Core Capabilities](#-core-capabilities)
   - [🚀 Advanced Features](#-advanced-features)
 - [Installation](#installation)
-  - [AppImage (Recommended)](#appimage-recommended)
-  - [Cargo Install](#cargo-install)
+  - [From Release Page (Recommended)](#from-release-page-recommended)
+    - [Windows](#windows)
+  - [Alternatively via CLI](#alternatively-via-cli)
+    - [RPM (Fedora, SUSE, etc.)](#rpm-fedora-suse-etc)
+    - [DEB (Ubuntu, Debian, etc.)](#deb-ubuntu-debian-etc)
+    - [AppImage](#appimage)
+    - [Cargo Install](#cargo-install)
   - [Shell Integration](#shell-integration)
 - [Quick Start](#quick-start)
   - [1. Launch the TUI](#1-launch-the-tui)
@@ -191,23 +196,56 @@ Whether you're managing a simple single-package project or a complex multi-scope
 
 ## Installation
 
-### AppImage (Recommended)
+### From Release Page (Recommended)
 
-Download the latest AppImage from [GitHub Releases](https://github.com/comfy-home/ComfyGit/releases):
+1. Download the latest AppImage from [GitHub Releases](https://github.com/comfy-home/ComfyGit/releases)
+2. Install via `apt`, `dnf`, or whatever applies to your OS.
+
+#### Windows
+
+1. Just download the MSI from [GitHub Releases](https://github.com/comfy-home/ComfyGit/releases)
+2. Double-click to install
+3. Done
+
+### Alternatively via CLI
+
+#### RPM (Fedora, SUSE, etc.)
 
 ```bash
-# Download (replace with actual version)
-wget https://github.com/comfy-home/ComfyGit/releases/download/v0.23.6/ComfyGit-0.23.6-x86_64.AppImage
-chmod +x ComfyGit-0.23.6-x86_64.AppImage
-
-# Install shell integration
-./ComfyGit-0.23.6-x86_64.AppImage install-shell
-
-# Or run directly
-./ComfyGit-0.23.6-x86_64.AppImage
+# Download (replace <> with actual version and architecture)
+wget https://github.com/comfy-home/ComfyGit/releases/latest/ComfyGit-<version>-<architecture>.rpm
+chmod +x ComfyGit-<version>-<architecture>.rpm
+sudo dnf install ./ComfyGit-<version>-<architecture>.rpm
 ```
 
-### Cargo Install
+#### DEB (Ubuntu, Debian, etc.)
+
+```bash
+# Download (replace <> with actual version and architecture)
+wget https://github.com/comfy-home/ComfyGit/releases/latest/ComfyGit-<version>-<architecture>.deb
+chmod +x ComfyGit-<version>-<architecture>.deb
+sudo apt install ./ComfyGit-<version>-<architecture>.deb
+```
+
+#### AppImage
+
+> [!WARNING]
+> Unlike `deb`, `rpm`, or `msi`, AppImage requires a manual shell integration installation
+> I think all devs understand why...
+
+```bash
+# Download (replace <> with actual version and architecture)
+wget https://github.com/comfy-home/ComfyGit/releases/latest/ComfyGit-<version>-<architecture>.AppImage
+chmod +x ComfyGit-<version>-<architecture>.AppImage
+
+# Install shell integration
+./ComfyGit-<version>-<architecture>.AppImage install-shell
+
+# Or run directly
+./ComfyGit-<version>-<architecture>.AppImage
+```
+
+#### Cargo Install
 
 ```bash
 cargo install --git https://github.com/comfy-home/ComfyGit
@@ -269,11 +307,16 @@ In the TUI:
 ```bash
 cd /path/to/your/project
 cg bmp minor
+
+# or if you already configure your alias:
+cg cd <alias>
+cg bmp .. #`..` is synonym for minor
+
 ```
 
 ### 5. Generate Changelog
 
-In the TUI Overview, select your project and press `C` to **Generate Changelog** or use the ReleaseNOW workflow.
+In the TUI Overview, select your project and press `C` to **Generate Changelog** or use the ReleaseNOW workflow via **RLS** tile button or `R` shortcut.
 
 ---
 
