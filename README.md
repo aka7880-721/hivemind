@@ -193,6 +193,11 @@ Whether you're managing a simple single-package project or a complex multi-scope
 - **ReleaseNOW** — Generate release-ready changelogs with QuickDownloads integration
 - **Top Picks** — Highlight significant improvements in a dedicated release summary section
 
+>[!TIP]
+> Make sure to visit [ComfyGit's WIKI](https://github.com/comfy-home/ComfyGit/wiki)
+> 
+> We’re rolling out lots of deep‑info educational CG usage scenarios with full step‑by‑step breakdowns — and some are already live!
+
 ---
 
 ## Installation
