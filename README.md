@@ -115,6 +115,7 @@ Enjoy!
     - [AppImage](#appimage)
     - [Cargo Install](#cargo-install)
   - [Shell Integration](#shell-integration)
+- [Update](#update)
 - [Quick Start](#quick-start)
   - [1. Launch the TUI](#1-launch-the-tui)
   - [2. Add Your First Project](#2-add-your-first-project)
@@ -196,9 +197,14 @@ Whether you're managing a simple single-package project or a complex multi-scope
 
 ## Installation
 
+> [!NOTE]
+> ComfyGit will be soon available via Distro channels like `flatpak` and similar.
+>
+> To be announced when it happens...
+
 ### From Release Page (Recommended)
 
-1. Download the latest AppImage from [GitHub Releases](https://github.com/comfy-home/ComfyGit/releases)
+1. Download the latest installation package from [GitHub Releases](https://github.com/comfy-home/ComfyGit/releases)
 2. Install via `apt`, `dnf`, or whatever applies to your OS.
 
 #### Windows
@@ -230,7 +236,8 @@ sudo apt install ./ComfyGit-<version>-<architecture>.deb
 #### AppImage
 
 > [!WARNING]
-> Unlike `deb`, `rpm`, or `msi`, AppImage requires a manual shell integration installation
+> Unlike `deb`, `rpm`, or `msi`, AppImage requires a manual shell integration installation.
+> 
 > I think all devs understand why...
 
 ```bash
@@ -276,6 +283,12 @@ After installation, open a new shell session or run:
 ```bash
 source ~/.config/comfygit/cg.sh  # bash/zsh
 ```
+
+## Update
+- Simply download the new installation package and reinstall
+
+>[!NOTE]
+> Auto-update feature to be implemented very soon!
 
 ---
 
