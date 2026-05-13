@@ -59,7 +59,7 @@ fn extract_top_picks_section(markdown: &str) -> Option<String> {
     let after_start = &markdown[start..];
     let search = &after_start[TOP_PICKS_HEADING_PREFIX.len()..];
     let next_heading = search
-        .find("\n###")
+        .find("\n### ")
         .map(|p| p + TOP_PICKS_HEADING_PREFIX.len());
     let next_footer = search
         .find(&format!("\n{}\n", FOOTER_RULE))
@@ -228,9 +228,33 @@ mod tests {
         let md = "## Changelog\n\n### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n#### 1. Something\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
         let section = extract_top_picks_section(md).unwrap();
         assert!(section.starts_with("### 💥"));
+        assert!(section.contains("#### 1. Something"));
         assert!(!section.contains("## Changelog"));
         assert!(!section.contains("made with [ComfyGit]"));
         assert!(!section.contains("\n---"));
+    }
+
+    #[test]
+    fn keeps_top_pick_entries_until_next_real_section_heading() {
+        let md = concat!(
+            "## Changelog\n\n",
+            "### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n",
+            "#### **1. First pick**\n",
+            "- First bullet\n\n",
+            "#### **2. Second pick**\n",
+            "- Second bullet\n\n",
+            "### ♻️ Refactor\n\n",
+            "* Refactor item\n"
+        );
+
+        let section = extract_top_picks_section(md).unwrap();
+
+        assert!(section.contains("#### **1. First pick**"));
+        assert!(section.contains("- First bullet"));
+        assert!(section.contains("#### **2. Second pick**"));
+        assert!(section.contains("- Second bullet"));
+        assert!(!section.contains("### ♻️ Refactor"));
+        assert!(!section.contains("Refactor item"));
     }
 
     #[test]
