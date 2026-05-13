@@ -13,9 +13,8 @@
 //! content shifts down).
 //!
 //! TopPicks awareness: when the changelog markdown contains a TopPicks section
-//! (detected by the `### 💥` heading), only that section is injected and a
-//! "For detailed changelog CLICK HERE" line pointing to the specific GitHub
-//! release page is appended before the footer.
+//! (detected by the `### 💥` heading), only that section is injected. The
+//! footer then links both to ComfyGit and to the full GitHub release page.
 
 use std::{fs, path::Path};
 
@@ -28,6 +27,7 @@ const ORIGINAL_FOOTER_LINE: &str =
     "... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
 const AUTO_INJECTED_MARKER: &str = "auto-injected by [ComfyGit]";
 const DETAILS_OPEN_PREFIX: &str = "<details><summary>👀 What's new in ";
+const SPACE_AROUND_FOOTER_PIPE: usize = 7;
 
 fn strip_original_comfygit_footer(markdown: &str) -> String {
     let mut lines: Vec<&str> = markdown.lines().collect();
@@ -55,7 +55,8 @@ fn strip_original_comfygit_footer(markdown: &str) -> String {
 
 /// Extract the TopPicks section from changelog markdown, if present.
 /// Returns `Some(section_text)` where `section_text` starts with the `### 💥`
-/// heading and ends just before the next `###` heading or the footer `---`.
+/// heading and ends just before the next `###` heading, nested `<details>`
+/// wrapper, or the footer `---`.
 fn extract_top_picks_section(markdown: &str) -> Option<String> {
     let start = markdown.find(TOP_PICKS_HEADING_PREFIX)?;
     let after_start = &markdown[start..];
@@ -63,15 +64,17 @@ fn extract_top_picks_section(markdown: &str) -> Option<String> {
     let next_heading = search
         .find("\n### ")
         .map(|p| p + TOP_PICKS_HEADING_PREFIX.len());
+    let next_details = search
+        .find("\n<details")
+        .map(|p| p + TOP_PICKS_HEADING_PREFIX.len());
     let next_footer = search
         .find(&format!("\n{}\n", FOOTER_RULE))
         .map(|p| p + TOP_PICKS_HEADING_PREFIX.len());
-    let end = match (next_heading, next_footer) {
-        (Some(heading), Some(footer)) => heading.min(footer),
-        (Some(heading), None) => heading,
-        (None, Some(footer)) => footer,
-        (None, None) => after_start.len(),
-    };
+    let end = [next_heading, next_details, next_footer]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(after_start.len());
     let section = strip_original_comfygit_footer(after_start[..end].trim_end());
     Some(section)
 }
@@ -82,7 +85,7 @@ fn extract_top_picks_section(markdown: &str) -> Option<String> {
 /// * `body`    – markdown body (full changelog or TopPicks-only section)
 /// * `release_url` – optional GitHub release URL for the "CLICK HERE" link
 ///   (only used in TopPicks mode)
-/// * `top_picks_mode` – when `true` a "CLICK HERE" line is appended
+/// * `top_picks_mode` – when `true` the footer includes the release link
 fn build_details_block(
     version: &str,
     body: &str,
@@ -90,7 +93,10 @@ fn build_details_block(
     top_picks_mode: bool,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
-    let sanitized_body = strip_original_comfygit_footer(body);
+    let mut sanitized_body = strip_original_comfygit_footer(body);
+    if top_picks_mode && sanitized_body.ends_with("<br>") && !sanitized_body.ends_with("<br><br>") {
+        sanitized_body.push_str("<br>");
+    }
 
     lines.push(format!(
         "<details><summary>👀 What's new in {} ...</summary>",
@@ -101,19 +107,26 @@ fn build_details_block(
     lines.push(String::new());
     lines.push(String::new());
 
-    if top_picks_mode && let Some(url) = release_url {
-        lines.push(format!(
-            "<sup>For detailed changelog [CLICK HERE]({})</sup>",
-            url
-        ));
-        lines.push(String::new());
-    }
-
     lines.push(FOOTER_RULE.to_string());
-    lines.push(format!(
-        "<sup>... ✨ auto-injected by [ComfyGit]({})</sup>",
-        COMFYGIT_LINK
-    ));
+    let footer_line = if top_picks_mode {
+        let separator_spacing = "\u{00A0}".repeat(SPACE_AROUND_FOOTER_PIPE);
+        match release_url {
+            Some(url) => format!(
+                "<sup>... ✨ auto-injected by [ComfyGit]({}){}|{}For detailed changelog [CLICK HERE]({})</sup>",
+                COMFYGIT_LINK, separator_spacing, separator_spacing, url
+            ),
+            None => format!(
+                "<sup>... ✨ auto-injected by [ComfyGit]({})</sup>",
+                COMFYGIT_LINK
+            ),
+        }
+    } else {
+        format!(
+            "<sup>... ✨ auto-injected by [ComfyGit]({})</sup>",
+            COMFYGIT_LINK
+        )
+    };
+    lines.push(footer_line);
     lines.push(String::new());
     lines.push(FOOTER_RULE.to_string());
     lines.push(String::new());
@@ -284,6 +297,30 @@ mod tests {
     }
 
     #[test]
+    fn stops_top_picks_before_nested_details_wrapper() {
+        let md = concat!(
+            "## Changelog\n\n",
+            "### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n",
+            "#### **1. First pick**\n",
+            "- First bullet\n\n",
+            "<sub>...  🎉 Enjoy!</sub>\n\n",
+            "<br>\n\n",
+            "<details closed><summary closed><span>nerdy details</span></summary>\n",
+            "### ♻️ Refactor\n",
+            "</details>\n"
+        );
+
+        let section = extract_top_picks_section(md).unwrap();
+
+        assert!(section.contains("#### **1. First pick**"));
+        assert!(section.contains("<sub>...  🎉 Enjoy!</sub>"));
+        assert!(section.contains("<br>"));
+        assert!(!section.contains("<details closed>"));
+        assert!(!section.contains("nerdy details"));
+        assert!(!section.contains("### ♻️ Refactor"));
+    }
+
+    #[test]
     fn no_top_picks_returns_none() {
         let md = "## Changelog\n\n### Refactor\n\n* Fix stuff";
         assert!(extract_top_picks_section(md).is_none());
@@ -310,12 +347,16 @@ mod tests {
     fn builds_details_block_top_picks_with_url() {
         let block = build_details_block(
             "v0.3.1",
-            "### 💥 Top picks",
+            "### 💥 Top picks\n\n<sub>...  🎉 Enjoy!</sub>\n\n<br>",
             Some("https://github.com/owner/repo/releases/tag/v0.3.1"),
             true,
         );
         assert!(block.contains("CLICK HERE"));
         assert!(block.contains("releases/tag/v0.3.1"));
+        assert!(!block.contains("<sup>For detailed changelog [CLICK HERE]("));
+        assert!(block.contains("auto-injected by [ComfyGit]"));
+        assert!(block.contains("\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}|\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}"));
+        assert!(block.contains("<br><br>"));
     }
 
     #[test]
