@@ -58,7 +58,7 @@ Enjoy!
 
 ---
 
-<details><summary>👀 What's new in v0.25.4 ...</summary>
+<details><summary>👀 What's new in v0.26.0 - The first ever public release!</summary>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
 
