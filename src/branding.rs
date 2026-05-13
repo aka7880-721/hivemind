@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -65,8 +65,8 @@ pub struct PixelLogoRender {
 
 impl PixelLogo {
     pub fn load() -> Self {
-        let primary = load_image(include_bytes!("../assets/logo-pix.webp"));
-        let source = primary.or_else(|| load_image(include_bytes!("../assets/ico.png")));
+        let primary = load_image(include_bytes!("../assets/logo-protected.webp"));
+        let source = primary.or_else(|| load_image(include_bytes!("../assets/logo-protected.webp")));
         Self { source }
     }
 
