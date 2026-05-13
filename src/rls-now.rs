@@ -109,6 +109,7 @@ use crate::{
     config::{ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
     git::GitScopeContext,
     git_stt::recent_merge_check,
+    mmr::clear_top_picks_edits,
 };
 
 #[path = "rls-now-qd.rs"]
@@ -1022,6 +1023,15 @@ pub(super) async fn execute_release_now_async(
                 return Err(push_error);
             }
         }
+    }
+
+    if let Err(error) = clear_top_picks_edits(&request.repo_root) {
+        let warning = format!(
+            "Release completed, but failed to clear saved Top Picks edits: {}",
+            error
+        );
+        emit_progress(vec![format!("Warning: {}", warning)]);
+        release_notes.push(warning);
     }
 
     Ok(ReleaseNowExecutionOutcome {
