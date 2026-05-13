@@ -24,6 +24,32 @@ use anyhow::{Context, Result, bail};
 const COMFYGIT_LINK: &str = "https://github.com/comfy-home/ComfyGit";
 const TOP_PICKS_HEADING_PREFIX: &str = "### 💥";
 const FOOTER_RULE: &str = "---";
+const ORIGINAL_FOOTER_LINE: &str =
+    "... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
+
+fn strip_original_comfygit_footer(markdown: &str) -> String {
+    let mut lines: Vec<&str> = markdown.lines().collect();
+
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+
+    if let Some(footer_idx) = lines
+        .iter()
+        .rposition(|line| line.trim() == ORIGINAL_FOOTER_LINE)
+    {
+        let mut truncate_at = footer_idx;
+        if truncate_at > 0 && lines[truncate_at - 1].trim() == FOOTER_RULE {
+            truncate_at -= 1;
+        }
+        lines.truncate(truncate_at);
+        while lines.last().is_some_and(|line| line.trim().is_empty()) {
+            lines.pop();
+        }
+    }
+
+    lines.join("\n")
+}
 
 /// Extract the TopPicks section from changelog markdown, if present.
 /// Returns `Some(section_text)` where `section_text` starts with the `### 💥`
@@ -31,12 +57,20 @@ const FOOTER_RULE: &str = "---";
 fn extract_top_picks_section(markdown: &str) -> Option<String> {
     let start = markdown.find(TOP_PICKS_HEADING_PREFIX)?;
     let after_start = &markdown[start..];
-    // Find next ### heading or standalone --- after the section
-    let end = after_start[TOP_PICKS_HEADING_PREFIX.len()..]
+    let search = &after_start[TOP_PICKS_HEADING_PREFIX.len()..];
+    let next_heading = search
         .find("\n###")
-        .map(|p| p + TOP_PICKS_HEADING_PREFIX.len())
-        .unwrap_or(after_start.len());
-    let section = after_start[..end].trim_end().to_string();
+        .map(|p| p + TOP_PICKS_HEADING_PREFIX.len());
+    let next_footer = search
+        .find(&format!("\n{}\n", FOOTER_RULE))
+        .map(|p| p + TOP_PICKS_HEADING_PREFIX.len());
+    let end = match (next_heading, next_footer) {
+        (Some(heading), Some(footer)) => heading.min(footer),
+        (Some(heading), None) => heading,
+        (None, Some(footer)) => footer,
+        (None, None) => after_start.len(),
+    };
+    let section = strip_original_comfygit_footer(after_start[..end].trim_end());
     Some(section)
 }
 
@@ -54,13 +88,14 @@ fn build_details_block(
     top_picks_mode: bool,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
+    let sanitized_body = strip_original_comfygit_footer(body);
 
     lines.push(format!(
         "<details><summary>👀 What's new in {} ...</summary>",
         version
     ));
     lines.push(String::new());
-    lines.push(body.trim_end().to_string());
+    lines.push(sanitized_body);
     lines.push(String::new());
     lines.push(String::new());
 
@@ -79,6 +114,8 @@ fn build_details_block(
     ));
     lines.push(String::new());
     lines.push(FOOTER_RULE.to_string());
+    lines.push(String::new());
+    lines.push("</details>".to_string());
     lines.push(String::new());
 
     lines.join("\n")
@@ -188,10 +225,12 @@ mod tests {
 
     #[test]
     fn detects_top_picks_section() {
-        let md = "## Changelog\n\n### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n#### 1. Something\n\n---\n... footer";
+        let md = "## Changelog\n\n### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n#### 1. Something\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
         let section = extract_top_picks_section(md).unwrap();
         assert!(section.starts_with("### 💥"));
         assert!(!section.contains("## Changelog"));
+        assert!(!section.contains("made with [ComfyGit]"));
+        assert!(!section.contains("\n---"));
     }
 
     #[test]
@@ -202,11 +241,19 @@ mod tests {
 
     #[test]
     fn builds_details_block_full_changelog() {
-        let block = build_details_block("v0.3.1", "## Changelog body", None, false);
+        let block = build_details_block(
+            "v0.3.1",
+            "## Changelog body\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)",
+            None,
+            false,
+        );
         assert!(block.contains("<details><summary>👀 What's new in v0.3.1 ...</summary>"));
         assert!(block.contains("## Changelog body"));
         assert!(block.contains("auto-injected by [ComfyGit]"));
+        assert!(!block.contains("... ✨ made with [ComfyGit]"));
         assert!(!block.contains("CLICK HERE"));
+        assert!(block.contains("</details>"));
+        assert!(block.trim_end().ends_with("</details>"));
     }
 
     #[test]
