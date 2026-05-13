@@ -6,6 +6,20 @@ README to be updated
 
 ---
 
+<details><summary>👀 What's new in v0.25.3 ...</summary>
+
+### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+
+
+<sup>For detailed changelog [CLICK HERE](https://github.com/comfy-home/ComfyGit/releases/tag/v0.25.3)</sup>
+
+---
+<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)</sup>
+
+---
+
+</details>
+
 
 
 ---
