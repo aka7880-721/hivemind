@@ -182,8 +182,7 @@ fn inject_into_file(readme_path: &Path, inject_at_row: u16, block: &str) -> Resu
     let block_lines: Vec<String> = block.split('\n').map(ToOwned::to_owned).collect();
     let replace_range = existing_auto_injected_block_range(&file_lines, insert_index);
     let (prefix_end, suffix_start) = replace_range.unwrap_or((insert_index, insert_index));
-    let mut result: Vec<String> =
-        Vec::with_capacity(file_lines.len() + block_lines.len());
+    let mut result: Vec<String> = Vec::with_capacity(file_lines.len() + block_lines.len());
     result.extend_from_slice(&file_lines[..prefix_end]);
     result.extend(block_lines);
     result.extend_from_slice(&file_lines[suffix_start..]);
@@ -380,13 +379,21 @@ mod tests {
         assert!(result.contains("new body"));
         assert!(!result.contains("v0.1.0"));
         assert!(!result.contains("old body"));
-        assert_eq!(result.matches("<details><summary>👀 What's new in ").count(), 1);
+        assert_eq!(
+            result
+                .matches("<details><summary>👀 What's new in ")
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn does_not_replace_non_auto_injected_details_block() {
         let mut path = std::env::temp_dir();
-        path.push(format!("cg_rls_inj_preserve_test_{}.md", std::process::id()));
+        path.push(format!(
+            "cg_rls_inj_preserve_test_{}.md",
+            std::process::id()
+        ));
         fs::write(
             &path,
             concat!(
