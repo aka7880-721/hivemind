@@ -17,8 +17,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const COMFYGIT_DIR: &str = ".comfygit";
 const SYNCMEM_DIR: &str = "syncmem";
+const MEM_DIR: &str = "mem";
 const STD_CHANGELOG_FILE: &str = "stdchlg.json";
 const STD_CHANGELOG_LOCAL_FILE: &str = "stdchlg-local.json";
+const TOP_PICKS_EDITS_FILE: &str = ".tp_edits.md";
 
 pub(crate) fn syncmem_dir_path(repo_root: &str) -> PathBuf {
     Path::new(repo_root).join(COMFYGIT_DIR).join(SYNCMEM_DIR)
@@ -36,6 +38,46 @@ pub(crate) fn std_changelog_memory_path(repo_root: &str, local: bool) -> PathBuf
     } else {
         STD_CHANGELOG_FILE
     })
+}
+
+pub(crate) fn mem_dir_path(repo_root: &str) -> PathBuf {
+    Path::new(repo_root).join(COMFYGIT_DIR).join(MEM_DIR)
+}
+
+pub(crate) fn ensure_mem_dir(repo_root: &str) -> Result<PathBuf> {
+    let path = mem_dir_path(repo_root);
+    fs::create_dir_all(&path).with_context(|| format!("failed to create {}", path.display()))?;
+    Ok(path)
+}
+
+pub(crate) fn top_picks_edits_path(repo_root: &str) -> PathBuf {
+    mem_dir_path(repo_root).join(TOP_PICKS_EDITS_FILE)
+}
+
+/// Load Top Picks edits from memory file (returns empty string if not exists)
+pub(crate) fn load_top_picks_edits(repo_root: &str) -> String {
+    let path = top_picks_edits_path(repo_root);
+    if !path.is_file() {
+        return String::new();
+    }
+    fs::read_to_string(&path).unwrap_or_default()
+}
+
+/// Save Top Picks edits to memory file
+pub(crate) fn save_top_picks_edits(repo_root: &str, content: &str) -> Result<()> {
+    ensure_mem_dir(repo_root)?;
+    let path = top_picks_edits_path(repo_root);
+    fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+/// Clear Top Picks edits memory file (truncate to empty)
+pub(crate) fn clear_top_picks_edits(repo_root: &str) -> Result<()> {
+    let path = top_picks_edits_path(repo_root);
+    if path.is_file() {
+        fs::write(&path, "").with_context(|| format!("failed to clear {}", path.display()))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn load_json_or_default<T>(path: &Path) -> Result<T>
