@@ -58,35 +58,34 @@ Enjoy!
 
 ---
 
-<details><summary>👀 What's new in v0.25.4 ...</summary>
+<details><summary>👀 What's new in v0.26.0 ...</summary>
 
-### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+## Changelog `v0.26.0` <sub><sup>← `v0.25.4` (Previous Public Version)</sup></sub> <sup><div align="end">🗓️ 2026-05-13</div></sup>
 
-#### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
-- Now you can add, and edit your TP from TUI
-    - Assigned shortcut `P`
-- Fully implemented keyboard shortcuts (ctrl+a/c/v)
-- Fully implemented mouse action shortcuts 
-    - rightClick to paste/copy, doubleClick to select word, click to position cursor, drag&hold to select
+### ✨ New in Auto-README 'What's new' inject!:
 
-#### **2. &nbsp;&nbsp;&nbsp;Auto-README changelog injection!**
-- You can now automatically inject an expandable one-liner with latest changes from the last release, amazing feature if you ask me...! 🤩
-- Make sure to check WIKI pages to understand it fully...
+#### 🧩 Features
 
-#### **3. &nbsp;&nbsp;&nbsp;Misc**
-- Added support in Distro for "General" scripts
-    - Unlike Win/Arm/Amd/Mac, General is not required to produce any artifacts
-    - Useful for small projects (e.g. crates, plugins, etc)
-- Project reordering in Projects pane
-    - Now you can click&drag your projects to change their order
-    - Remember, you can do this for a while also with tiles within the project
-- Release Notes Editor in ReleaseNOW got enhanced
-    - added mouse and keyboard shortcuts
+* Improve TopPicks section extraction and footer formatting in changelog markdown. Ensure proper handling of nested details. <sub><sup><sup>_a0deb22_</sup></sup></sub>
 
+---
 
-<sub>...  🎉 Enjoy!</sub>
+## 💬 General Improvements & Fixes:
 
-<br>
+### 🐛 Fix(es)
+
+* Update "click here" changelog summary formatting with nbsp <sub><sup><sup>_da18d36_</sup></sup></sub>
+
+### 🔧 Maintenance
+
+* Update ratatui-comfy-toaster to version 0.3.2 and add default progress bar settings in ToastEngine <sub><sup><sup>_e0aa8e8_</sup></sup></sub>
+
+### ♻️ Refactor
+
+* Simplify file staging and commit logic for release process. Introduce dedicated functions for handling generated paths and staged changes, enhancing readability and maintainability. Add async support for README auto-injection confirmation. <sub><sup><sup>_a99b33c_</sup></sup></sub>
+
+* Improve code readability by formatting multiline expressions and enhancing consistency in progress message handling. <sub><sup><sup>_d5731be_</sup></sup></sub>
+
 
 ---
 <sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)</sup>
@@ -94,6 +93,7 @@ Enjoy!
 ---
 
 </details>
+
 
 ---
 
