@@ -17,7 +17,7 @@
 //! - Category (500) - plain category
 //! - QuickDownloads (100) - if enabled and Position is "Bottom"
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -114,6 +114,41 @@ pub(crate) fn extract_top_picks(commits: &[&ParsedCommit]) -> Vec<TopPick> {
     // Sort by priority
     picks.sort_by_key(|a| a.priority);
     picks
+}
+
+/// Merge commit-based Top Picks with manual edits from memory file
+/// Memory file edits take precedence over commit-based picks (by header)
+pub(crate) fn merge_top_picks_with_edits(
+    commit_picks: Vec<TopPick>,
+    edits_content: &str,
+) -> Vec<TopPick> {
+    if edits_content.trim().is_empty() {
+        return commit_picks;
+    }
+
+    // Parse the edits content into picks
+    let edited_picks = TopPicksEditorDialog::text_to_picks(edits_content);
+
+    if edited_picks.is_empty() {
+        return commit_picks;
+    }
+
+    // Merge: edited picks take precedence by header
+    let mut seen_headers: HashSet<String> = edited_picks.iter().map(|p| p.header.clone()).collect();
+
+    let mut result = edited_picks;
+
+    // Add commit picks that don't have a matching edited header
+    for pick in commit_picks {
+        if !seen_headers.contains(&pick.header) {
+            seen_headers.insert(pick.header.clone());
+            result.push(pick);
+        }
+    }
+
+    // Sort by priority
+    sort_top_picks(&mut result);
+    result
 }
 
 /// Extract header from message items (text before first ** or ***)
@@ -261,16 +296,21 @@ impl TopPicksEditorDialog {
     /// Create a new editor dialog with existing top picks
     pub fn with_picks(picks: &[TopPick]) -> Self {
         let text = Self::picks_to_text(picks);
+        Self::with_text(&text)
+    }
+
+    /// Create a new editor dialog with raw text content
+    pub fn with_text(text: &str) -> Self {
         let editor_text = if text.trim().is_empty() {
             // Provide template for new users
-            "# Top Picks - highlight key features for this release\n\n1. First key feature or improvement\n- What this does for users\n- Why it matters\n  - Technical detail if needed\n\n2. Second highlight\n- Bullet describing the benefit\n\n# Lines starting with # are ignored\n# Use format: '1. Header' then '- Bullet' (indent with 4 spaces for nested)"
+            "// Top Picks - highlight key features for this release\n\n1. First key feature or improvement\n- What this does for users\n- Why it matters\n  - Technical detail if needed\n\n2. Second highlight\n- Bullet describing the benefit\n\n// Lines starting with // are ignored\n// Use format: '1. Header' then '- Bullet' (indent with 4 spaces for nested)"
                 .lines()
                 .collect::<Vec<_>>()
         } else {
             text.lines().collect::<Vec<_>>()
         };
         let mut editor = TuiTextArea::from(editor_text);
-        editor.set_placeholder_text("Define Top Picks using the format:\n1. Header text\n- Bullet point\n    - Nested bullet (4 spaces)\n\n2. Another header\n- Another bullet\n\n# Lines starting with # are ignored");
+        editor.set_placeholder_text("Define Top Picks using the format:\n1. Header text\n- Bullet point\n    - Nested bullet (4 spaces)\n\n2. Another header\n- Another bullet\n\n// Lines starting with // are ignored");
         editor.set_tab_length(2);
         editor.set_max_histories(100);
         Self {
@@ -308,22 +348,16 @@ impl TopPicksEditorDialog {
         lines.join("\n")
     }
 
-    /// Parse edited text back into TopPicks
-    pub fn parse_picks(&self) -> Vec<TopPick> {
-        let text = self.editor.lines().join("\n");
-        Self::text_to_picks(&text)
-    }
-
     /// Parse text format into TopPicks
-    fn text_to_picks(text: &str) -> Vec<TopPick> {
+    pub(crate) fn text_to_picks(text: &str) -> Vec<TopPick> {
         let mut picks = Vec::new();
         let mut current_pick: Option<TopPick> = None;
 
         for line in text.lines() {
             let trimmed = line.trim_start();
 
-            // Skip empty lines and comments
-            if trimmed.is_empty() || trimmed.starts_with('#') {
+            // Skip empty lines and comments (lines starting with //)
+            if trimmed.is_empty() || trimmed.starts_with("//") {
                 continue;
             }
 
@@ -584,5 +618,42 @@ mod tests {
             "expected `- Contains this` directly after h4, got: {:?}",
             lines.get(h4..(h4 + 3).min(lines.len()))
         );
+    }
+
+    #[test]
+    fn merge_top_picks_edits_override_matching_headers() {
+        let commit_picks = vec![
+            TopPick {
+                priority: Some(1),
+                header: "Important improvement".to_string(),
+                bullets: vec![TopPickBullet {
+                    level: 0,
+                    text: "Original bullet".to_string(),
+                }],
+                commit_hash: "abc".to_string(),
+                is_reference: false,
+            },
+            TopPick {
+                priority: Some(2),
+                header: "Commit-only pick".to_string(),
+                bullets: vec![TopPickBullet {
+                    level: 0,
+                    text: "Still included".to_string(),
+                }],
+                commit_hash: "def".to_string(),
+                is_reference: false,
+            },
+        ];
+
+        let merged = merge_top_picks_with_edits(
+            commit_picks,
+            "1. Important improvement\n- Edited bullet\n\n2. Manual pick\n- Added from editor",
+        );
+
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].header, "Important improvement");
+        assert_eq!(merged[0].bullets[0].text, "Edited bullet");
+        assert!(merged.iter().any(|pick| pick.header == "Manual pick"));
+        assert!(merged.iter().any(|pick| pick.header == "Commit-only pick"));
     }
 }
