@@ -2,6 +2,58 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog `v0.25.4` <sup><div align="end">🗓️ 2026-05-13</div></sup>
+
+### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+
+#### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
+- Now you can add, and edit your TP from TUI
+    - Assigned shortcut `P`
+- Fully implemented keyboard shortcuts (ctrl+a/c/v)
+- Fully implemented mouse action shortcuts 
+    - rightClick to paste/copy, doubleClick to select word, click to position cursor, drag&hold to select
+
+#### **2. &nbsp;&nbsp;&nbsp;Auto-README changelog injection!**
+- You can now automatically inject an expandable one-liner with latest changes from the last release, amazing feature if you ask me...! 🤩
+- Make sure to check WIKI pages to understand it fully...
+
+#### **3. &nbsp;&nbsp;&nbsp;Misc**
+- Added support in Distro for "General" scripts
+    - Unlike Win/Arm/Amd/Mac, General is not required to produce any artifacts
+    - Useful for small projects (e.g. crates, plugins, etc)
+- Project reordering in Projects pane
+    - Now you can click&drag your projects to change their order
+    - Remember, you can do this for a while also with tiles within the project
+- Release Notes Editor in ReleaseNOW got enhanced
+    - added mouse and keyboard shortcuts
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+
+### 🐛 Fix(es)
+
+* Update top picks section extraction to correctly identify headings and retain entries until the next section. Enhance tests to verify functionality.   _(896abed)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.25.4   _(d7530cf)_
+
+### 💎 Enhancements
+
+* Enhance auto-injection logic to replace existing auto-injected blocks in README files. Introduce a new function to identify and manage existing blocks, ensuring proper updates without duplicating content. Add tests to verify the replacement behavior and preserve non-auto-injected details.   _(4bc8eeb)_
+
+### 🧪 Tests
+
+* Enhance Top Picks merging logic to prioritize edits by slot and header normalization. Introduce a new function for header normalization and update tests to validate behavior with priority and header changes. This is an alternative approach to avoid duplicites that needs to be properly tested   _(5ce4400)_
+
+### 📝 Other
+
+* Merge pull request #110 (via ComfyGit)   _(10be2ff)_
+
+---
+
 ## Changelog `v0.25.3` <sup><div align="end">🗓️ 2026-05-13</div></sup>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
