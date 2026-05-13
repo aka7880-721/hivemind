@@ -110,13 +110,13 @@ fn create_release_now_generated_files_commit(
         created_any = true;
     }
 
-    if stage_release_now_generated_files(repo_root)? && commit_release_now_generated_files(repo_root, tag_name)? {
+    if stage_release_now_generated_files(repo_root)?
+        && commit_release_now_generated_files(repo_root, tag_name)?
+    {
         created_any = true;
     }
 
-    Ok(created_any.then_some(ReleaseNowGeneratedFilesCommit {
-        previous_head,
-    }))
+    Ok(created_any.then_some(ReleaseNowGeneratedFilesCommit { previous_head }))
 }
 
 fn stage_auto_injected_readme(
@@ -142,7 +142,10 @@ fn remote_branch_head_commit(
     remote_name: &str,
     branch_name: &str,
 ) -> Result<Option<String>> {
-    let output = run_git_checked(repo_root, &["ls-remote", "--heads", remote_name, branch_name])?;
+    let output = run_git_checked(
+        repo_root,
+        &["ls-remote", "--heads", remote_name, branch_name],
+    )?;
     let line = output.lines().find(|line| !line.trim().is_empty());
     let hash = line
         .and_then(|entry| entry.split_whitespace().next())
@@ -182,7 +185,9 @@ async fn confirm_remote_branch_head_with_retry(
         .await?;
 
         if remote_head.as_deref() == Some(expected_head.as_str()) {
-            emit_progress(vec!["README auto-injection push confirmed on remote.".to_string()]);
+            emit_progress(vec![
+                "README auto-injection push confirmed on remote.".to_string(),
+            ]);
             return Ok(());
         }
 
@@ -207,7 +212,9 @@ async fn prepush_auto_injected_readme_async(
     mut emit_progress: impl FnMut(Vec<String>),
 ) -> Result<()> {
     ensure_not_cancelled(cancel)?;
-    emit_progress(vec!["Injecting 👀 What's new block into README.md.".to_string()]);
+    emit_progress(vec![
+        "Injecting 👀 What's new block into README.md.".to_string(),
+    ]);
 
     let inj_repo_root = request.repo_root.clone();
     let inj_tag = request.tag_name.clone();
@@ -226,7 +233,8 @@ async fn prepush_auto_injected_readme_async(
     .await?;
 
     let repo_root_for_commit = request.repo_root.clone();
-    let committed = run_blocking_job(move || commit_auto_injected_readme(&repo_root_for_commit)).await?;
+    let committed =
+        run_blocking_job(move || commit_auto_injected_readme(&repo_root_for_commit)).await?;
     if !committed {
         emit_progress(vec![
             "README auto-injection produced no staged changes to commit.".to_string(),
@@ -2434,7 +2442,10 @@ mod tests {
 
         let release_commit_subject = run_git_checked(&repo_root, &["log", "-1", "--pretty=%s"])
             .expect("read readme commit subject");
-        assert_eq!(release_commit_subject.trim(), "~ReleaseNOW: Changelog Auto-injection");
+        assert_eq!(
+            release_commit_subject.trim(),
+            "~ReleaseNOW: Changelog Auto-injection"
+        );
 
         rollback_release_now_generated_files_commit(&repo_root, &generated_commit)
             .expect("roll back generated commit");
@@ -2480,7 +2491,10 @@ mod tests {
         let subject_lines = subjects.lines().collect::<Vec<_>>();
         assert_eq!(subject_lines.len(), 2);
         assert!(subject_lines[0].contains("ReleaseNOW! → v1.2.3 has just been released"));
-        assert_eq!(subject_lines[1].trim(), "~ReleaseNOW: Changelog Auto-injection");
+        assert_eq!(
+            subject_lines[1].trim(),
+            "~ReleaseNOW: Changelog Auto-injection"
+        );
 
         fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
     }
@@ -2512,8 +2526,8 @@ mod tests {
         )
         .expect("stage injected readme");
 
-        let status = run_git_checked(&repo_root, &["status", "--short"])
-            .expect("read staged status");
+        let status =
+            run_git_checked(&repo_root, &["status", "--short"]).expect("read staged status");
         assert!(status.contains("M  README.md"));
 
         let readme = fs::read_to_string(repo_dir.join("README.md")).expect("read updated readme");
