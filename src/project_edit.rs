@@ -51,13 +51,26 @@ pub(crate) struct ProjectEditDialog {
 }
 
 impl ProjectEditDialog {
-    pub(crate) fn from_project(project_index: usize, project: &ProjectConfig) -> Result<Self> {
+    pub(crate) fn from_project(
+        project_index: usize,
+        project: &ProjectConfig,
+        preferred_scope: Option<usize>,
+    ) -> Result<Self> {
+        let selected_scope = if project.project_type == ProjectType::Branched {
+            preferred_scope
+                .unwrap_or(0)
+                .min(project.branches.len().saturating_sub(1))
+        } else {
+            0
+        };
+
         let primary_target = if project.project_type == ProjectType::AllInOne {
             project.targets.first()
         } else {
             project
                 .branches
-                .first()
+                .get(selected_scope)
+                .or_else(|| project.branches.first())
                 .and_then(|branch| branch.targets.first())
         }
         .ok_or_else(|| anyhow!("selected project does not contain any editable targets yet"))?;
@@ -73,12 +86,12 @@ impl ProjectEditDialog {
         };
 
         let (repo_root, remote_url) = if project.project_type == ProjectType::Branched {
-            let first_repo = scopes.first().and_then(|scope| scope.repo.as_ref());
+            let selected_repo = scopes.get(selected_scope).and_then(|scope| scope.repo.as_ref());
             (
-                first_repo
+                selected_repo
                     .map(|repo| repo.local_root.clone())
                     .unwrap_or_default(),
-                first_repo
+                selected_repo
                     .and_then(|repo| repo.remote_url.clone())
                     .unwrap_or_default(),
             )
@@ -108,7 +121,7 @@ impl ProjectEditDialog {
                 &primary_target.key_path,
             ),
             scopes,
-            selected_scope: 0,
+            selected_scope,
             field_scroll: 0,
             viewport_rows: 1,
             repo_root: TextInput::with_value(repo_root),
@@ -123,7 +136,7 @@ impl ProjectEditDialog {
             unified_versioning: project.unified_versioning,
             integration_mode: project.integration_mode,
             version_scheme: project.version_scheme,
-            focus: ProjectEditFocus::Name,
+            focus: ProjectEditFocus::ProjectType,
         })
     }
 
@@ -151,8 +164,16 @@ impl ProjectEditDialog {
         self.focus == ProjectEditFocus::Save
     }
 
+    pub(crate) fn is_add_scope_focused(&self) -> bool {
+        self.focus == ProjectEditFocus::AddScope
+    }
+
     pub(crate) fn is_remove_focused(&self) -> bool {
         self.focus == ProjectEditFocus::Remove
+    }
+
+    pub(crate) fn is_remove_scope_focused(&self) -> bool {
+        self.focus == ProjectEditFocus::RemoveScope
     }
 
     pub(crate) fn is_cancel_focused(&self) -> bool {
@@ -172,10 +193,9 @@ impl ProjectEditDialog {
     }
 
     fn visible_fields(&self) -> Vec<ProjectEditFocus> {
-        let mut fields = vec![ProjectEditFocus::Name, ProjectEditFocus::ProjectType];
+        let mut fields = vec![ProjectEditFocus::ProjectType, ProjectEditFocus::Name];
         if self.project_type == ProjectType::Branched {
             fields.extend([
-                ProjectEditFocus::ScopeSelection,
                 ProjectEditFocus::ScopeName,
                 ProjectEditFocus::ScopeKind,
                 ProjectEditFocus::UnifiedVersioning,
@@ -187,14 +207,6 @@ impl ProjectEditDialog {
             ProjectEditFocus::TargetPath,
             ProjectEditFocus::TargetKey,
         ]);
-        if self.project_type == ProjectType::Branched {
-            fields.extend([
-                ProjectEditFocus::AddScope,
-                ProjectEditFocus::RemoveScope,
-                ProjectEditFocus::MoveScopeUp,
-                ProjectEditFocus::MoveScopeDown,
-            ]);
-        }
         let integration_mode = self.selected_integration_mode();
         if integration_mode.requires_repo() {
             fields.push(ProjectEditFocus::RepoRoot);
@@ -207,11 +219,20 @@ impl ProjectEditDialog {
             fields.push(ProjectEditFocus::TileRotates);
             fields.push(ProjectEditFocus::TileRotationTiming);
         }
-        fields.extend([
-            ProjectEditFocus::Save,
-            ProjectEditFocus::Remove,
-            ProjectEditFocus::Cancel,
-        ]);
+        if self.project_type == ProjectType::Branched {
+            fields.extend([
+                ProjectEditFocus::Save,
+                ProjectEditFocus::AddScope,
+                ProjectEditFocus::RemoveScope,
+                ProjectEditFocus::Cancel,
+            ]);
+        } else {
+            fields.extend([
+                ProjectEditFocus::Save,
+                ProjectEditFocus::Remove,
+                ProjectEditFocus::Cancel,
+            ]);
+        }
         fields
     }
 
@@ -221,7 +242,11 @@ impl ProjectEditDialog {
             .filter(|field| {
                 !matches!(
                     field,
-                    ProjectEditFocus::Save | ProjectEditFocus::Remove | ProjectEditFocus::Cancel
+                    ProjectEditFocus::AddScope
+                        | ProjectEditFocus::RemoveScope
+                        | ProjectEditFocus::Save
+                        | ProjectEditFocus::Remove
+                        | ProjectEditFocus::Cancel
                 )
             })
             .collect()
@@ -231,7 +256,6 @@ impl ProjectEditDialog {
         match field {
             ProjectEditFocus::Name => ("Project name", HitAction::EditProjectField(field)),
             ProjectEditFocus::ProjectType => ("Project type", HitAction::EditProjectField(field)),
-            ProjectEditFocus::ScopeSelection => ("Scope", HitAction::EditProjectField(field)),
             ProjectEditFocus::ScopeName => ("Scope name", HitAction::EditProjectField(field)),
             ProjectEditFocus::ScopeKind => ("Scope kind", HitAction::EditProjectField(field)),
             ProjectEditFocus::VersionScheme => {
@@ -252,14 +276,6 @@ impl ProjectEditDialog {
             ProjectEditFocus::RemoveScope => (
                 "Remove scope",
                 HitAction::ProjectEditScopeAction(ScopeAction::Remove),
-            ),
-            ProjectEditFocus::MoveScopeUp => (
-                "Move scope up",
-                HitAction::ProjectEditScopeAction(ScopeAction::MoveUp),
-            ),
-            ProjectEditFocus::MoveScopeDown => (
-                "Move scope down",
-                HitAction::ProjectEditScopeAction(ScopeAction::MoveDown),
             ),
             ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
             ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
@@ -287,7 +303,6 @@ impl ProjectEditDialog {
             ProjectEditFocus::ProjectType => {
                 Line::from(format!("< {} >", self.project_type.display_name()))
             }
-            ProjectEditFocus::ScopeSelection => Line::from(self.selected_scope_summary()),
             ProjectEditFocus::ScopeName => self
                 .current_scope()
                 .map(|scope| scope.name.display_line_with_width(focused, max_width))
@@ -348,8 +363,6 @@ impl ProjectEditDialog {
             }
             ProjectEditFocus::AddScope => Line::from("Create a new scope draft"),
             ProjectEditFocus::RemoveScope => Line::from("Drop the selected scope"),
-            ProjectEditFocus::MoveScopeUp => Line::from("Move the selected scope earlier"),
-            ProjectEditFocus::MoveScopeDown => Line::from("Move the selected scope later"),
             ProjectEditFocus::RepoRoot => {
                 self.repo_root.display_line_with_width(focused, max_width)
             }
@@ -386,7 +399,6 @@ impl ProjectEditDialog {
                     self.copy_selected_scope_to_primary_target();
                 }
             }
-            ProjectEditFocus::ScopeSelection => self.move_scope_selection(delta),
             ProjectEditFocus::ScopeKind => {
                 if let Some(scope) = self.current_scope_mut() {
                     scope.scope_kind = rotate_scope_kind(scope.scope_kind, delta);
@@ -829,30 +841,6 @@ impl ProjectEditDialog {
         self.scopes.get_mut(self.selected_scope)
     }
 
-    fn selected_scope_summary(&self) -> String {
-        let total = self.scopes.len();
-        if total == 0 {
-            "< no scopes >".to_string()
-        } else {
-            let summary = self
-                .current_scope()
-                .map(|scope| scope.display_name())
-                .unwrap_or_else(|| "(unknown)".to_string());
-            format!("< {}/{}: {} >", self.selected_scope + 1, total, summary)
-        }
-    }
-
-    fn move_scope_selection(&mut self, delta: i32) {
-        if self.scopes.is_empty() {
-            return;
-        }
-        self.persist_scope_repo_inputs();
-        let len = self.scopes.len() as i32;
-        let next = (self.selected_scope as i32 + delta).rem_euclid(len) as usize;
-        self.selected_scope = next;
-        self.sync_repo_inputs_from_scope();
-    }
-
     fn next_scope_name(&self) -> String {
         let mut index = self.scopes.len() + 1;
         loop {
@@ -887,7 +875,7 @@ impl ProjectEditDialog {
         self.scopes.remove(self.selected_scope);
         self.selected_scope = self.selected_scope.min(self.scopes.len().saturating_sub(1));
         self.sync_repo_inputs_from_scope();
-        self.focus = ProjectEditFocus::ScopeSelection;
+        self.focus = ProjectEditFocus::ScopeName;
         Ok(())
     }
 
@@ -1042,11 +1030,10 @@ impl ProjectEditDialog {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProjectEditFocus {
     Name,
     ProjectType,
-    ScopeSelection,
     ScopeName,
     ScopeKind,
     VersionScheme,
@@ -1056,8 +1043,6 @@ pub(crate) enum ProjectEditFocus {
     TargetKey,
     AddScope,
     RemoveScope,
-    MoveScopeUp,
-    MoveScopeDown,
     RepoRoot,
     RemoteUrl,
     TileAutoRotation,
@@ -1116,7 +1101,8 @@ mod tests {
             ..Default::default()
         };
 
-        let mut dialog = ProjectEditDialog::from_project(0, &project).expect("dialog should build");
+        let mut dialog =
+            ProjectEditDialog::from_project(0, &project, None).expect("dialog should build");
         dialog
             .changelog_path
             .set_value("notes/CHANGELOG.md".to_string());
@@ -1162,6 +1148,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            None,
         )
         .expect("dialog should build");
 
@@ -1223,6 +1210,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            None,
         )
         .expect("dialog should build");
 
@@ -1258,6 +1246,7 @@ mod tests {
                 changelog: ChangelogSettings::default(),
                 ..Default::default()
             },
+            None,
         )
         .expect("dialog should build");
 
@@ -1290,11 +1279,165 @@ mod tests {
             ..Default::default()
         };
 
-        let mut dialog = ProjectEditDialog::from_project(0, &project).expect("dialog should build");
+        let mut dialog =
+            ProjectEditDialog::from_project(0, &project, None).expect("dialog should build");
         dialog.tile_rotates = TileRotationTarget::DevLineOnly;
 
         dialog.apply(&mut project).expect("apply should succeed");
 
         assert_eq!(project.tile_info.rotates, TileRotationTarget::DevLineOnly);
+    }
+
+    #[test]
+    fn branched_dialog_uses_preferred_scope_and_non_text_initial_focus() {
+        let dialog = ProjectEditDialog::from_project(
+            0,
+            &ProjectConfig {
+                name: "demo".to_string(),
+                alias: String::new(),
+                project_type: ProjectType::Branched,
+                version_scheme: VersionScheme::SemVer,
+                unified_versioning: false,
+                integration_mode: IntegrationMode::GitHubEnabled,
+                release_now: crate::config::ReleaseNowSettings::default(),
+                tile_info: crate::config::TileInfoSettings::default(),
+                targets: vec![],
+                branches: vec![
+                    BranchConfig {
+                        name: "core".to_string(),
+                        label: "Core".to_string(),
+                        scope_kind: BranchScopeKind::Branch,
+                        repo: Some(RepoConfig {
+                            local_root: "C:/core".to_string(),
+                            remote_url: Some("https://example.test/core.git".to_string()),
+                            ..RepoConfig::default()
+                        }),
+                        changelog_enabled: true,
+                        changelog_path: Some("CHANGELOG.md".to_string()),
+                        changelog_hide_pr_messages: false,
+                        changelog_hide_bump_messages: false,
+                        changelog_mini_commit_hashes: false,
+                        changelog_wrap_detailed_if_top_picks: false,
+                        release_now: crate::config::ReleaseNowSettings::default(),
+                        version_scheme: VersionScheme::SemVer,
+                        targets: vec![TargetSpec {
+                            label: "Version".to_string(),
+                            path: "C:/core/Cargo.toml".to_string(),
+                            key_path: "package.version".to_string(),
+                            format: crate::config::TargetFormat::Toml,
+                        }],
+                    },
+                    BranchConfig {
+                        name: "api".to_string(),
+                        label: "API".to_string(),
+                        scope_kind: BranchScopeKind::Service,
+                        repo: Some(RepoConfig {
+                            local_root: "C:/api".to_string(),
+                            remote_url: Some("https://example.test/api.git".to_string()),
+                            ..RepoConfig::default()
+                        }),
+                        changelog_enabled: true,
+                        changelog_path: Some("CHANGELOG.md".to_string()),
+                        changelog_hide_pr_messages: false,
+                        changelog_hide_bump_messages: false,
+                        changelog_mini_commit_hashes: false,
+                        changelog_wrap_detailed_if_top_picks: false,
+                        release_now: crate::config::ReleaseNowSettings::default(),
+                        version_scheme: VersionScheme::CalVerYearMonthMicro,
+                        targets: vec![TargetSpec {
+                            label: "Version".to_string(),
+                            path: "C:/api/package.json".to_string(),
+                            key_path: "package.version".to_string(),
+                            format: crate::config::TargetFormat::Json,
+                        }],
+                    },
+                ],
+                repo: None,
+                changelog: ChangelogSettings {
+                    enabled: true,
+                    file_path: "CHANGELOG.md".to_string(),
+                    hide_pr_messages: false,
+                    hide_bump_messages: false,
+                    mini_commit_hashes: false,
+                    wrap_detailed_changelog_if_top_picks: false,
+                },
+                ..Default::default()
+            },
+            Some(1),
+        )
+        .expect("dialog should build");
+
+        assert_eq!(dialog.selected_scope, 1);
+        assert_eq!(dialog.focus, ProjectEditFocus::ProjectType);
+        assert!(!dialog.focus_accepts_text());
+        assert_eq!(dialog.repo_root.value(), "C:/api");
+        assert_eq!(dialog.remote_url.value(), "https://example.test/api.git");
+        assert_eq!(
+            dialog.selected_version_scheme(),
+            VersionScheme::CalVerYearMonthMicro
+        );
+    }
+
+    #[test]
+    fn branched_edit_fields_remove_scope_selector_and_move_controls() {
+        let dialog = ProjectEditDialog::from_project(
+            0,
+            &ProjectConfig {
+                name: "demo".to_string(),
+                alias: String::new(),
+                project_type: ProjectType::Branched,
+                version_scheme: VersionScheme::SemVer,
+                unified_versioning: false,
+                integration_mode: IntegrationMode::LocalOnly,
+                release_now: crate::config::ReleaseNowSettings::default(),
+                tile_info: crate::config::TileInfoSettings::default(),
+                targets: vec![],
+                branches: vec![BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    repo: None,
+                    changelog_enabled: true,
+                    changelog_path: Some("CHANGELOG.md".to_string()),
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "Cargo.toml".to_string(),
+                        key_path: "package.version".to_string(),
+                        format: crate::config::TargetFormat::Toml,
+                    }],
+                }],
+                repo: None,
+                changelog: ChangelogSettings::default(),
+                ..Default::default()
+            },
+            None,
+        )
+        .expect("dialog should build");
+
+        let fields = dialog.visible_fields();
+        let labels: Vec<_> = fields
+            .iter()
+            .map(|field| dialog.render_field(*field).0)
+            .collect();
+        assert!(!labels.contains(&"Scope"));
+        assert!(!labels.contains(&"Move scope up"));
+        assert!(!labels.contains(&"Move scope down"));
+        assert!(fields.contains(&ProjectEditFocus::AddScope));
+        assert!(fields.contains(&ProjectEditFocus::RemoveScope));
+        assert_eq!(
+            fields[fields.len() - 4..],
+            [
+                ProjectEditFocus::Save,
+                ProjectEditFocus::AddScope,
+                ProjectEditFocus::RemoveScope,
+                ProjectEditFocus::Cancel,
+            ]
+        );
     }
 }
