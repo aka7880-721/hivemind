@@ -390,12 +390,32 @@ fn center_to_width(value: &str, width: usize) -> String {
     pad_to_width(truncate_to_width(value, width), width, Alignment::Center)
 }
 
+fn display_width(value: &str) -> usize {
+    value.graphemes(true).map(grapheme_display_width).sum()
+}
+
+fn grapheme_display_width(grapheme: &str) -> usize {
+    let width = UnicodeWidthStr::width(grapheme);
+
+    #[cfg(windows)]
+    {
+        // Windows terminals can render emoji variation-selector graphemes one cell wider
+        // than unicode-width reports, which pushes the closing border to the right.
+        width + usize::from(width > 0 && grapheme.chars().any(|character| character == '\u{FE0F}'))
+    }
+
+    #[cfg(not(windows))]
+    {
+        width
+    }
+}
+
 fn truncate_to_width(value: &str, width: usize) -> String {
     let mut rendered = String::new();
     let mut used_width = 0usize;
 
     for grapheme in value.graphemes(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        let grapheme_width = grapheme_display_width(grapheme);
         if used_width + grapheme_width > width {
             break;
         }
@@ -407,7 +427,7 @@ fn truncate_to_width(value: &str, width: usize) -> String {
 }
 
 fn pad_to_width(value: String, width: usize, alignment: Alignment) -> String {
-    let visible_width = UnicodeWidthStr::width(value.as_str());
+    let visible_width = display_width(value.as_str());
     if visible_width >= width {
         return value;
     }
@@ -510,7 +530,7 @@ mod tests {
     fn format_tile_info_row_centers_unicode_prefix_without_overflow() {
         let formatted = format_tile_info_row("🚧", "tag..→HEAD", "8c ahead", 28);
 
-        assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
+        assert_eq!(display_width(formatted.as_str()), 28);
         assert!(formatted.contains("🚧 tag..→HEAD: 8c ahead"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
@@ -520,7 +540,7 @@ mod tests {
     fn format_tile_dev_row_starts_with_last_prefix() {
         let formatted = format_tile_dev_info_row("🚧", "tag..→HEAD", "8c ahead", 28);
 
-        assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 28);
+        assert_eq!(display_width(formatted.as_str()), 28);
         assert!(formatted.contains("🚧 last tag..→HEAD: 8c ahead"));
     }
 
@@ -528,10 +548,21 @@ mod tests {
     fn format_tile_tag_row_centers_unicode_prefix_without_overflow() {
         let formatted = format_tile_tag_row("🏷️️", "11c ahead", 22);
 
-        assert_eq!(UnicodeWidthStr::width(formatted.as_str()), 22);
+        assert_eq!(display_width(formatted.as_str()), 22);
         assert!(formatted.contains("🏷️️..HEAD: 11c ahead"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
+    }
+
+    #[test]
+    fn variation_selector_width_matches_platform_expectation() {
+        let base_width = UnicodeWidthStr::width("🏷️");
+
+        #[cfg(windows)]
+        assert_eq!(display_width("🏷️"), base_width + 1);
+
+        #[cfg(not(windows))]
+        assert_eq!(display_width("🏷️"), base_width);
     }
 
     #[test]
