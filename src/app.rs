@@ -1708,17 +1708,11 @@ impl App {
                     if dialog.is_save_focused() {
                         return self.save_project_edit();
                     }
-                    if dialog.focus == ProjectEditFocus::AddScope {
+                    if dialog.is_add_scope_focused() {
                         return self.apply_project_edit_scope_action(ScopeAction::Add);
                     }
-                    if dialog.focus == ProjectEditFocus::RemoveScope {
+                    if dialog.is_remove_scope_focused() {
                         return self.apply_project_edit_scope_action(ScopeAction::Remove);
-                    }
-                    if dialog.focus == ProjectEditFocus::MoveScopeUp {
-                        return self.apply_project_edit_scope_action(ScopeAction::MoveUp);
-                    }
-                    if dialog.focus == ProjectEditFocus::MoveScopeDown {
-                        return self.apply_project_edit_scope_action(ScopeAction::MoveDown);
                     }
                     if dialog.focus == ProjectEditFocus::TargetKey {
                         if let Some(dialog) = &mut self.project_edit_dialog {
@@ -1738,7 +1732,16 @@ impl App {
                 }
             }
             KeyCode::F(2) => return self.save_project_edit(),
-            KeyCode::Delete if key.modifiers.is_empty() => return self.remove_project(),
+            KeyCode::Delete if key.modifiers.is_empty() => {
+                let remove_scope = self
+                    .project_edit_dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.project_type == ProjectType::Branched);
+                if remove_scope {
+                    return self.apply_project_edit_scope_action(ScopeAction::Remove);
+                }
+                return self.remove_project();
+            }
             KeyCode::Left => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.adjust_current_enum(-1);
@@ -4609,11 +4612,17 @@ impl App {
     fn open_project_edit_dialog(&mut self) -> Result<()> {
         let project_index = self.selected_project;
         let project = self.selected_project()?;
-        let dialog = ProjectEditDialog::from_project(project_index, project)?;
+        let preferred_scope = (project.project_type == ProjectType::Branched)
+            .then_some(self.overview_focused_scope);
+        let dialog = ProjectEditDialog::from_project(project_index, project, preferred_scope)?;
+        let status = if project.project_type == ProjectType::Branched {
+            "Amend the selected scope settings, then save or update scopes."
+        } else {
+            "Amend project settings, then save or remove the project."
+        };
         self.browser_dialog = None;
         self.project_edit_dialog = Some(dialog);
-        self.status =
-            StatusMessage::info("Amend project settings, then save or remove the project.");
+        self.status = StatusMessage::info(status);
         Ok(())
     }
 
@@ -4974,24 +4983,38 @@ impl App {
     }
 
     fn apply_project_edit_scope_action(&mut self, action: ScopeAction) -> Result<()> {
-        let Some(dialog) = &mut self.project_edit_dialog else {
-            return Ok(());
-        };
-
         match action {
             ScopeAction::Add => {
+                let Some(dialog) = &mut self.project_edit_dialog else {
+                    return Ok(());
+                };
                 dialog.add_scope();
                 self.status = StatusMessage::info("Added a new branched scope draft.");
             }
             ScopeAction::Remove => {
+                let Some(dialog) = &self.project_edit_dialog else {
+                    return Ok(());
+                };
+                if dialog.scopes.len() == 1 {
+                    return self.request_scope_deletion(dialog.project_index, dialog.selected_scope);
+                }
+                let Some(dialog) = &mut self.project_edit_dialog else {
+                    return Ok(());
+                };
                 dialog.remove_selected_scope()?;
                 self.status = StatusMessage::info("Removed the selected branched scope.");
             }
             ScopeAction::MoveUp => {
+                let Some(dialog) = &mut self.project_edit_dialog else {
+                    return Ok(());
+                };
                 dialog.move_selected_scope(-1);
                 self.status = StatusMessage::info("Moved the selected scope earlier.");
             }
             ScopeAction::MoveDown => {
+                let Some(dialog) = &mut self.project_edit_dialog else {
+                    return Ok(());
+                };
                 dialog.move_selected_scope(1);
                 self.status = StatusMessage::info("Moved the selected scope later.");
             }
@@ -9927,6 +9950,138 @@ mod tests {
         assert_eq!(app.config.projects[0].branches.len(), 1);
         assert_eq!(app.config.projects[0].branches[0].name, "core");
         assert_eq!(app.overview_focused_scope, 0);
+    }
+
+    #[test]
+    fn project_edit_opens_branched_scope_from_focused_tile() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitHubEnabled,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
+            targets: Vec::new(),
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/core".to_string(),
+                        remote_url: Some("https://example.test/core.git".to_string()),
+                        ..RepoConfig::default()
+                    }),
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "C:/core/Cargo.toml".to_string(),
+                        key_path: "package.version".to_string(),
+                        format: TargetFormat::Toml,
+                    }],
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    label: "API".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    repo: Some(RepoConfig {
+                        local_root: "C:/api".to_string(),
+                        remote_url: Some("https://example.test/api.git".to_string()),
+                        ..RepoConfig::default()
+                    }),
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_wrap_detailed_if_top_picks: false,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::CalVerYearMonthMicro,
+                    targets: vec![TargetSpec {
+                        label: "Version".to_string(),
+                        path: "C:/api/package.json".to_string(),
+                        key_path: "package.version".to_string(),
+                        format: TargetFormat::Json,
+                    }],
+                },
+            ],
+            repo: None,
+            ..Default::default()
+        }];
+        app.screen = Screen::Dashboard;
+        app.overview_focused_scope = 1;
+
+        app.open_project_edit_dialog()
+            .expect("project edit should open");
+
+        let dialog = app
+            .project_edit_dialog
+            .as_ref()
+            .expect("project edit dialog should be present");
+        assert_eq!(dialog.selected_scope, 1);
+        assert_eq!(dialog.focus, ProjectEditFocus::ProjectType);
+        assert_eq!(dialog.repo_root.value(), "C:/api");
+    }
+
+    #[test]
+    fn project_edit_remove_scope_requests_delete_when_last_scope_remains() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
+            targets: Vec::new(),
+            branches: vec![BranchConfig {
+                name: "core".to_string(),
+                label: "Core".to_string(),
+                scope_kind: BranchScopeKind::Branch,
+                repo: None,
+                changelog_enabled: false,
+                changelog_path: None,
+                changelog_hide_pr_messages: false,
+                changelog_hide_bump_messages: false,
+                changelog_mini_commit_hashes: false,
+                changelog_wrap_detailed_if_top_picks: false,
+                release_now: crate::config::ReleaseNowSettings::default(),
+                version_scheme: VersionScheme::SemVer,
+                targets: vec![TargetSpec {
+                    label: "Version".to_string(),
+                    path: "Cargo.toml".to_string(),
+                    key_path: "package.version".to_string(),
+                    format: TargetFormat::Toml,
+                }],
+            }],
+            repo: None,
+            ..Default::default()
+        }];
+
+        app.open_project_edit_dialog()
+            .expect("project edit should open");
+        if let Some(dialog) = &mut app.project_edit_dialog {
+            dialog.focus = ProjectEditFocus::RemoveScope;
+        }
+
+        app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE))
+            .expect("delete should open confirmation");
+
+        assert!(app.delete_confirmation_dialog.is_some());
     }
 
     #[test]
