@@ -1868,10 +1868,13 @@ impl App {
 
         let (
             project_name,
+            project_type,
             field_rows,
             show_above,
             show_below,
             save_focused,
+            add_scope_focused,
+            remove_scope_focused,
             remove_focused,
             cancel_focused,
         ) = {
@@ -1892,10 +1895,13 @@ impl App {
                 .collect::<Vec<_>>();
             (
                 dialog.project_name.clone(),
+                dialog.project_type,
                 rows,
                 top,
                 bottom,
                 dialog.focus == ProjectEditFocus::Save,
+                dialog.focus == ProjectEditFocus::AddScope,
+                dialog.focus == ProjectEditFocus::RemoveScope,
                 dialog.focus == ProjectEditFocus::Remove,
                 dialog.focus == ProjectEditFocus::Cancel,
             )
@@ -1905,7 +1911,7 @@ impl App {
             Line::from(format!("Project: {}", project_name)).bold(),
             Line::from("Edit the same core fields as New Project, then press F2 or Save."),
             Line::from(
-                "Tab/Shift+Tab moves between fields. Left/Right changes enums. Enter applies scope action rows. Ctrl+O browses. PgUp/PgDn or wheel scrolls. Del removes the project.",
+                "Tab/Shift+Tab moves between fields. Left/Right changes enums. Enter activates the focused footer action. Ctrl+O browses. PgUp/PgDn or wheel scrolls. Del removes the current target.",
             ),
         ];
         frame.render_widget(
@@ -1938,32 +1944,42 @@ impl App {
         }
         render_vertical_overflow_indicators(frame, sections[1], show_above, show_below);
 
-        self.render_button_row(
-            frame,
-            sections[3],
-            &[
-                DialogButton::new(
-                    "Save",
-                    save_focused,
-                    HitAction::SaveProjectEdit,
-                    Style::default().fg(Color::Black).bg(Color::Green),
-                ),
-                DialogButton::new(
-                    "Remove",
-                    remove_focused,
-                    HitAction::RemoveProject,
-                    Style::default().fg(Color::White).bg(Color::Red),
-                ),
-                DialogButton::new(
-                    "Cancel",
-                    cancel_focused,
-                    HitAction::CancelProjectEdit,
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(230, 190, 90)),
-                ),
-            ],
-        );
+        let mut buttons = vec![DialogButton::new(
+            "Save",
+            save_focused,
+            HitAction::SaveProjectEdit,
+            Style::default().fg(Color::Black).bg(Color::Green),
+        )];
+        if project_type == ProjectType::Branched {
+            buttons.push(DialogButton::new(
+                "Add Scope",
+                add_scope_focused,
+                HitAction::ProjectEditScopeAction(ScopeAction::Add),
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ));
+            buttons.push(DialogButton::new(
+                "Remove Scope",
+                remove_scope_focused,
+                HitAction::ProjectEditScopeAction(ScopeAction::Remove),
+                Style::default().fg(Color::White).bg(Color::Red),
+            ));
+        } else {
+            buttons.push(DialogButton::new(
+                "Remove",
+                remove_focused,
+                HitAction::RemoveProject,
+                Style::default().fg(Color::White).bg(Color::Red),
+            ));
+        }
+        buttons.push(DialogButton::new(
+            "Cancel",
+            cancel_focused,
+            HitAction::CancelProjectEdit,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Rgb(230, 190, 90)),
+        ));
+        self.render_button_row(frame, sections[3], &buttons);
     }
 
     fn render_delete_confirmation_dialog(&mut self, frame: &mut Frame, area: Rect) {
