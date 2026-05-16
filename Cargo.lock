@@ -2219,9 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "ratatui-comfy-toaster"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2858b98aeaa72b0cd8cf1df4b7c84b9dc8fca1553668e0a7cb24a494825a23a0"
+version = "0.3.3"
 dependencies = [
  "ratatui 0.30.0",
  "textwrap",
