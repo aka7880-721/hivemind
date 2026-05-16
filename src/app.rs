@@ -40,7 +40,7 @@ use ratatui::{
 };
 use ratatui_comfy_toaster::{
     ToastBuilder, ToastEngine, ToastEngineBuilder, ToastInteraction, ToastMouseButton,
-    ToastProgressBarStyle, ToastShortcut, ToastType,
+    ToastProgressBarStyle, ToastShortcut, ToastTitleAlign, ToastTitleSeparator, ToastType,
 };
 use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Input as ExplorerInput};
 use tokio::{
@@ -4634,9 +4634,20 @@ impl App {
         let project = self
             .config
             .projects
-            .get_mut(dialog.project_index)
+            .get(dialog.project_index)
             .ok_or_else(|| anyhow!("selected project no longer exists"))?;
-        dialog.apply(project)?;
+        let mut updated_project = project.clone();
+        if let Err(error) = dialog.apply(&mut updated_project) {
+            let error_text = error.to_string();
+            if dialog.project_type == ProjectType::Branched
+                && error_text.contains("target path cannot be empty")
+            {
+                self.status = StatusMessage::error(error_text).with_new_scope_toast_preview();
+                return Ok(());
+            }
+            return Err(error);
+        }
+        self.config.projects[dialog.project_index] = updated_project;
         self.config_store.save(&self.config)?;
         self.invalidate_overview_cache();
         self.prime_selected_project_dashboard_data();
@@ -5792,7 +5803,12 @@ impl App {
         }
 
         self.last_status_toast_id = self.status.id;
-        let builder = ToastBuilder::new(self.status.text.clone().into());
+        let mut builder = ToastBuilder::new(self.status.text.clone().into());
+        if self.status.new_scope_toast_preview {
+            builder = apply_new_scope_error_toast_preview(builder);
+        } else if let Some(title) = self.status.toast_title.clone() {
+            builder = builder.title(title);
+        }
         match self.status.kind {
             StatusKind::Info => self.toaster.show_toast(builder.toast_type(ToastType::Info)),
             StatusKind::Success => self
@@ -7272,11 +7288,64 @@ impl ScopeDraft {
     }
 }
 
+/// Added this to test multiple layouts for the branched
+/// project-edit "New Scope" validation error toast after comfy-toaster title update.
+#[cfg(test)]
+const NEW_SCOPE_ERROR_TOAST_PREVIEW: NewScopeErrorToastPreview =
+    NewScopeErrorToastPreview::CompactPlainStart;
+#[cfg(not(test))]
+const NEW_SCOPE_ERROR_TOAST_PREVIEW: NewScopeErrorToastPreview =
+    NewScopeErrorToastPreview::CompactPlainStart;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+enum NewScopeErrorToastPreview {
+    MessageOnly,
+    CompactPlainStart,
+    CompactHighlightStart,
+    CompactPlainCenter,
+    CompactHighlightCenter,
+    GappedDotStart,
+    GappedLineStart,
+    GappedEmptyStart,
+    GappedDotHighlightCenter,
+}
+
+fn apply_new_scope_error_toast_preview(builder: ToastBuilder) -> ToastBuilder {
+    match NEW_SCOPE_ERROR_TOAST_PREVIEW {
+        NewScopeErrorToastPreview::MessageOnly => builder,
+        NewScopeErrorToastPreview::CompactPlainStart => builder.title("New Scope:"),
+        NewScopeErrorToastPreview::CompactHighlightStart => {
+            builder.title("New Scope:").title_highlight()
+        }
+        NewScopeErrorToastPreview::CompactPlainCenter => builder
+            .title("New Scope:")
+            .title_align(ToastTitleAlign::Center),
+        NewScopeErrorToastPreview::CompactHighlightCenter => builder
+            .title("New Scope:")
+            .title_highlight()
+            .title_align(ToastTitleAlign::Center),
+        NewScopeErrorToastPreview::GappedDotStart => builder.title_gapped("New Scope:"),
+        NewScopeErrorToastPreview::GappedLineStart => builder
+            .title_gapped("New Scope:")
+            .title_separator(ToastTitleSeparator::Line),
+        NewScopeErrorToastPreview::GappedEmptyStart => builder
+            .title_gapped("New Scope:")
+            .title_separator(ToastTitleSeparator::Empty),
+        NewScopeErrorToastPreview::GappedDotHighlightCenter => builder
+            .title_gapped("New Scope:")
+            .title_highlight()
+            .title_align(ToastTitleAlign::Center),
+    }
+}
+
 #[derive(Clone)]
 struct StatusMessage {
     id: u64,
     kind: StatusKind,
     text: String,
+    toast_title: Option<String>,
+    new_scope_toast_preview: bool,
 }
 
 impl StatusMessage {
@@ -7296,12 +7365,26 @@ impl StatusMessage {
         Self::new(StatusKind::Error, text)
     }
 
+    #[allow(dead_code)]
+    fn with_toast_title(mut self, title: impl Into<String>) -> Self {
+        let title = title.into();
+        self.toast_title = (!title.trim().is_empty()).then_some(title);
+        self
+    }
+
+    fn with_new_scope_toast_preview(mut self) -> Self {
+        self.new_scope_toast_preview = true;
+        self
+    }
+
     fn new(kind: StatusKind, text: impl Into<String>) -> Self {
         static NEXT_STATUS_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             id: NEXT_STATUS_ID.fetch_add(1, Ordering::Relaxed),
             kind,
             text: text.into(),
+            toast_title: None,
+            new_scope_toast_preview: false,
         }
     }
 }
@@ -10082,6 +10165,57 @@ mod tests {
             .expect("delete should open confirmation");
 
         assert!(app.delete_confirmation_dialog.is_some());
+    }
+
+    #[test]
+    fn project_edit_empty_new_scope_uses_titled_error_status() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::LocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: crate::config::ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
+            targets: Vec::new(),
+            branches: vec![BranchConfig {
+                name: "core".to_string(),
+                label: "Core".to_string(),
+                scope_kind: BranchScopeKind::Branch,
+                repo: None,
+                changelog_enabled: false,
+                changelog_path: None,
+                changelog_hide_pr_messages: false,
+                changelog_hide_bump_messages: false,
+                changelog_mini_commit_hashes: false,
+                changelog_wrap_detailed_if_top_picks: false,
+                release_now: crate::config::ReleaseNowSettings::default(),
+                version_scheme: VersionScheme::SemVer,
+                targets: vec![TargetSpec {
+                    label: "Version".to_string(),
+                    path: "Cargo.toml".to_string(),
+                    key_path: "package.version".to_string(),
+                    format: TargetFormat::Toml,
+                }],
+            }],
+            repo: None,
+            ..Default::default()
+        }];
+
+        app.open_project_edit_dialog()
+            .expect("project edit should open");
+        if let Some(dialog) = &mut app.project_edit_dialog {
+            dialog.add_scope();
+        }
+
+        app.save_project_edit().expect("save should be handled");
+
+        assert_eq!(app.status.text, "scope 'scope-2' target path cannot be empty");
+        assert!(app.status.new_scope_toast_preview);
+        assert!(app.project_edit_dialog.is_some());
     }
 
     #[test]
