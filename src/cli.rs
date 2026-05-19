@@ -320,6 +320,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             crate::git_new::run_new(None, None)?;
             Ok(StartupMode::Handled)
         }
+        [command, action] if is_new_command(command) && action == "alt" => {
+            crate::git_alt::run_new_alt(None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, option] if is_new_command(command) && action == "alt" => {
+            crate::git_alt::run_new_alt(Some(option))?;
+            Ok(StartupMode::Handled)
+        }
         [command, action] if is_new_command(command) => {
             crate::git_new::run_new(Some(action), None)?;
             Ok(StartupMode::Handled)
@@ -2759,6 +2767,10 @@ fn resolve_parent_branch_name_with_cancel(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<String> {
+    if let Some(parent_branch) = crate::git_alt::alt_merge_parent_branch(current_branch) {
+        return Ok(parent_branch);
+    }
+
     let lineage =
         load_branch_lineage_with_cancel(repo_root, current_branch, custom_main_branch, cancel)?
             .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
