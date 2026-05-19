@@ -433,17 +433,44 @@ fn sanitize_branch_fragment(value: &str) -> Option<String> {
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_RESET: &str = "\x1b[0m";
 
+pub(crate) struct BranchPickerPrompt {
+    pub(crate) header_hint: &'static str,
+    pub(crate) question: &'static str,
+}
+
+pub(crate) const BRANCH_CD_PICKER_PROMPT: BranchPickerPrompt = BranchPickerPrompt {
+    header_hint: "\x1b[33mPress ENTER to choose, or SPACE to load another 5 branches:\x1b[0m",
+    question: "What branch would you like to cd into?",
+};
+
+pub(crate) const LOCAL_MERGE_TARGET_PICKER_PROMPT: BranchPickerPrompt = BranchPickerPrompt {
+    header_hint: "\x1b[90mPress ENTER to choose, or SPACE to load another 5 branches:\x1b[0m",
+    question: "What branch would you like to be the \x1b[35mTARGET\x1b[0m of this local merge?",
+};
+
 pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
+    let selected_branch = prompt_branch_selection(repo_root, &BRANCH_CD_PICKER_PROMPT, cancel)?;
+    switch_to_existing_branch(repo_root, &selected_branch)?;
+
+    println!();
+    println!("switched to branch: \x1b[33m{selected_branch}\x1b[0m");
+    println!();
+    Ok(())
+}
+
+pub(crate) fn prompt_branch_selection(
+    repo_root: &str,
+    prompt: &BranchPickerPrompt,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
     let mut branches = Vec::new();
     let mut page = 0;
     let mut selected = 0;
 
-    // Load initial 5 branches
     load_branches(repo_root, &mut branches, page, cancel.clone())?;
 
     if branches.is_empty() {
-        println!("No branches found in this repository.");
-        return Ok(());
+        bail!("no branches found in this repository");
     }
 
     let raw_mode = TerminalRawModeGuard::enter()?;
@@ -453,7 +480,7 @@ pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) ->
             bail!("cancelled by user");
         }
 
-        render_branch_selection_ui(&branches, selected)?;
+        render_branch_selection_ui(&branches, selected, prompt)?;
 
         let Event::Key(key) = event::read().context("failed to read branch selection input")?
         else {
@@ -472,14 +499,10 @@ pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) ->
                 selected += 1;
             }
             KeyCode::Enter => {
+                let selected_branch = branches[selected].clone();
                 drop(raw_mode);
-                let selected_branch = &branches[selected];
-                switch_to_existing_branch(repo_root, selected_branch)?;
-
                 println!();
-                println!("switched to branch: \x1b[33m{}\x1b[0m", selected_branch);
-                println!();
-                return Ok(());
+                return Ok(selected_branch);
             }
             KeyCode::Char(' ') => {
                 page += 1;
@@ -487,26 +510,20 @@ pub(crate) fn run_branch_cd(repo_root: &str, cancel: Option<GitCancellation>) ->
                 load_branches(repo_root, &mut branches, page, cancel.clone())?;
 
                 if branches.len() == start_index {
-                    // No new branches loaded, reset page counter
                     page -= 1;
                 } else {
-                    // Move selection to the first newly loaded branch
                     selected = start_index;
                 }
             }
             KeyCode::Esc => {
                 drop(raw_mode);
                 println!();
-                println!("Branch selection cancelled.");
-                println!();
-                return Ok(());
+                bail!("Cancelled by user");
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 drop(raw_mode);
                 println!();
-                println!("Branch selection cancelled.");
-                println!();
-                return Ok(());
+                bail!("Cancelled by user");
             }
             _ => {}
         }
@@ -540,22 +557,22 @@ fn load_branches(
     Ok(())
 }
 
-fn render_branch_selection_ui(branches: &[String], selected: usize) -> Result<()> {
+fn render_branch_selection_ui(
+    branches: &[String],
+    selected: usize,
+    prompt: &BranchPickerPrompt,
+) -> Result<()> {
     let mut stdout = io::stdout();
     let (terminal_width, _) = size().context("failed to read terminal size")?;
 
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))
         .context("failed to render branch selection UI")?;
 
-    // Header
     queue!(
         stdout,
         MoveToColumn(0),
-        Print(format!(
-            "{}Press ENTER to choose, or SPACE to load another 5 branches: {}\r\n\r\n",
-            ANSI_YELLOW, ANSI_RESET
-        )),
-        Print("What branch would you like to cd into?\r\n\r\n")
+        Print(format!("{}\r\n\r\n", prompt.header_hint)),
+        Print(format!("{}\r\n\r\n", prompt.question))
     )
     .context("failed to queue branch selection header")?;
 
