@@ -40,7 +40,7 @@ use ratatui::{
 };
 use ratatui_comfy_toaster::{
     ToastBuilder, ToastEngine, ToastEngineBuilder, ToastInteraction, ToastMouseButton,
-    ToastProgressBarStyle, ToastShortcut, ToastTitleAlign, ToastTitleSeparator, ToastType,
+    ToastPreset, ToastProgressBarStyle, ToastShortcut, ToastType,
 };
 use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Input as ExplorerInput};
 use tokio::{
@@ -4229,7 +4229,7 @@ impl App {
     fn cancel_overview_bump_warning(&mut self) {
         self.overview_bump_warning_dialog = None;
         self.overview_bump_workflow_dialog = None;
-        self.status = StatusMessage::info("Tile bump action cancelled.");
+        self.status = bump_toast_status("Tile bump action cancelled.");
     }
 
     fn adjust_overview_pending_version(
@@ -4303,7 +4303,7 @@ impl App {
 
     fn cancel_overview_branch_bump(&mut self) {
         self.overview_branch_bump_dialog = None;
-        self.status = StatusMessage::info("Tile bump action cancelled.");
+        self.status = bump_toast_status("Tile bump action cancelled.");
     }
 
     fn are_we_on_main(&mut self, pending_action: PendingBumpAction) -> Result<bool> {
@@ -5804,8 +5804,9 @@ impl App {
 
         self.last_status_toast_id = self.status.id;
         let mut builder = ToastBuilder::new(self.status.text.clone().into());
-        if self.status.new_scope_toast_preview {
-            builder = apply_new_scope_error_toast_preview(builder);
+        if let (Some(preset), Some(title)) = (self.status.toast_preset, self.status.toast_title.clone())
+        {
+            builder = builder.preset(preset, title);
         } else if let Some(title) = self.status.toast_title.clone() {
             builder = builder.title(title);
         }
@@ -7288,56 +7289,12 @@ impl ScopeDraft {
     }
 }
 
-/// Added this to test multiple layouts for the branched
-/// project-edit "New Scope" validation error toast after comfy-toaster title update.
+/// Change this preset and rebuild to preview the branched project-edit
+/// "New Scope" validation error toast layout.
 #[cfg(test)]
-const NEW_SCOPE_ERROR_TOAST_PREVIEW: NewScopeErrorToastPreview =
-    NewScopeErrorToastPreview::CompactPlainStart;
+const NEW_SCOPE_ERROR_TOAST_PRESET: ToastPreset = ToastPreset::CompactHighlightStart;
 #[cfg(not(test))]
-const NEW_SCOPE_ERROR_TOAST_PREVIEW: NewScopeErrorToastPreview =
-    NewScopeErrorToastPreview::CompactPlainStart;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-enum NewScopeErrorToastPreview {
-    MessageOnly,
-    CompactPlainStart,
-    CompactHighlightStart,
-    CompactPlainCenter,
-    CompactHighlightCenter,
-    GappedDotStart,
-    GappedLineStart,
-    GappedEmptyStart,
-    GappedDotHighlightCenter,
-}
-
-fn apply_new_scope_error_toast_preview(builder: ToastBuilder) -> ToastBuilder {
-    match NEW_SCOPE_ERROR_TOAST_PREVIEW {
-        NewScopeErrorToastPreview::MessageOnly => builder,
-        NewScopeErrorToastPreview::CompactPlainStart => builder.title("New Scope:"),
-        NewScopeErrorToastPreview::CompactHighlightStart => {
-            builder.title("New Scope:").title_highlight()
-        }
-        NewScopeErrorToastPreview::CompactPlainCenter => builder
-            .title("New Scope:")
-            .title_align(ToastTitleAlign::Center),
-        NewScopeErrorToastPreview::CompactHighlightCenter => builder
-            .title("New Scope:")
-            .title_highlight()
-            .title_align(ToastTitleAlign::Center),
-        NewScopeErrorToastPreview::GappedDotStart => builder.title_gapped("New Scope:"),
-        NewScopeErrorToastPreview::GappedLineStart => builder
-            .title_gapped("New Scope:")
-            .title_separator(ToastTitleSeparator::Line),
-        NewScopeErrorToastPreview::GappedEmptyStart => builder
-            .title_gapped("New Scope:")
-            .title_separator(ToastTitleSeparator::Empty),
-        NewScopeErrorToastPreview::GappedDotHighlightCenter => builder
-            .title_gapped("New Scope:")
-            .title_highlight()
-            .title_align(ToastTitleAlign::Center),
-    }
-}
+const NEW_SCOPE_ERROR_TOAST_PRESET: ToastPreset = ToastPreset::MessageOnly;
 
 #[derive(Clone)]
 struct StatusMessage {
@@ -7345,7 +7302,7 @@ struct StatusMessage {
     kind: StatusKind,
     text: String,
     toast_title: Option<String>,
-    new_scope_toast_preview: bool,
+    toast_preset: Option<ToastPreset>,
 }
 
 impl StatusMessage {
@@ -7365,15 +7322,21 @@ impl StatusMessage {
         Self::new(StatusKind::Error, text)
     }
 
-    #[allow(dead_code)]
     fn with_toast_title(mut self, title: impl Into<String>) -> Self {
         let title = title.into();
         self.toast_title = (!title.trim().is_empty()).then_some(title);
         self
     }
 
+    fn with_toast_preset(mut self, preset: ToastPreset, title: impl Into<String>) -> Self {
+        self.toast_preset = Some(preset);
+        self.toast_title = Some(title.into());
+        self
+    }
+
     fn with_new_scope_toast_preview(mut self) -> Self {
-        self.new_scope_toast_preview = true;
+        self.toast_preset = Some(NEW_SCOPE_ERROR_TOAST_PRESET);
+        self.toast_title = Some("New Scope:".to_string());
         self
     }
 
@@ -7384,9 +7347,13 @@ impl StatusMessage {
             kind,
             text: text.into(),
             toast_title: None,
-            new_scope_toast_preview: false,
+            toast_preset: None,
         }
     }
+}
+
+fn bump_toast_status(text: impl Into<String>) -> StatusMessage {
+    StatusMessage::info(text).with_toast_preset(ToastPreset::GappedDotHighlightCenter, "Bump")
 }
 
 #[derive(Clone, Copy)]
@@ -10214,7 +10181,8 @@ mod tests {
         app.save_project_edit().expect("save should be handled");
 
         assert_eq!(app.status.text, "scope 'scope-2' target path cannot be empty");
-        assert!(app.status.new_scope_toast_preview);
+        assert_eq!(app.status.toast_preset, Some(NEW_SCOPE_ERROR_TOAST_PRESET));
+        assert_eq!(app.status.toast_title.as_deref(), Some("New Scope:"));
         assert!(app.project_edit_dialog.is_some());
     }
 

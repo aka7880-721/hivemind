@@ -982,7 +982,7 @@ pub(super) fn rotate_overview_bump_kind(app: &mut App, delta: isize) {
 
 pub(super) fn cancel_overview_bump_kind(app: &mut App) {
     app.overview_bump_kind_dialog = None;
-    app.status = StatusMessage::info("Tile bump action cancelled.");
+    app.status = bump_toast_status("Tile bump action cancelled.");
 }
 
 pub(super) fn confirm_overview_bump_kind(app: &mut App) -> Result<()> {
@@ -1034,8 +1034,9 @@ fn open_overview_bump_kind_dialog(
         current_version.to_string(),
         scope.scheme.supported_actions().to_vec(),
     ));
-    app.status =
-        StatusMessage::info("Choose a version bump first, then continue with the tile action.");
+    app.status = bump_toast_status(
+        "Choose a version bump first, then continue with the tile action.",
+    );
     Ok(())
 }
 
@@ -1113,7 +1114,7 @@ pub(super) fn cancel_overview_bump_workflow(app: &mut App) {
     app.overview_bump_kind_dialog = None;
     app.overview_bump_workflow_dialog = None;
     app.overview_branch_bump_dialog = None;
-    app.status = StatusMessage::info("Tile bump action cancelled.");
+    app.status = bump_toast_status("Tile bump action cancelled.");
 }
 
 pub(super) fn select_overview_bump_warning(app: &mut App, index: usize) {
@@ -1133,7 +1134,7 @@ pub(super) fn cancel_overview_bump_warning(app: &mut App) {
     app.overview_bump_warning_dialog = None;
     app.overview_branch_bump_dialog = None;
     app.overview_bump_workflow_dialog = None;
-    app.status = StatusMessage::info("Tile bump action cancelled.");
+    app.status = bump_toast_status("Tile bump action cancelled.");
 }
 
 pub(super) fn adjust_overview_pending_version(
