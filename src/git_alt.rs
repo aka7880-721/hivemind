@@ -99,24 +99,105 @@ pub(crate) fn run_new_alt(option_name: Option<&str>) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// When `current_branch` is an alt branch, returns the branch it should merge into.
-pub(crate) fn alt_merge_parent_branch(current_branch: &str) -> Option<String> {
+///
+/// When `existing_branches` is provided, prefers the first candidate that already exists
+/// locally (e.g. falls back from `v0.9.1-dev--or-this-way` to `v0.9.1-dev` when only the
+/// latter exists). When empty, returns the preferred (first) candidate.
+pub(crate) fn alt_merge_parent_branch(
+    current_branch: &str,
+    existing_branches: &[String],
+) -> Option<String> {
+    let candidates = alt_merge_parent_candidates(current_branch)?;
+    pick_existing_branch_candidate(&candidates, existing_branches)
+}
+
+/// Dev branch that this alt branch is an alternative for (`v0.1.5-dev-alt2` → `v0.1.5-dev`).
+pub(crate) fn alt_lineage_dev_base(branch: &str) -> Option<String> {
+    let (base, _) = split_specific_suffix(branch);
+    if let Some(dev_parent) = parse_numeric_alt_dev_parent(&base) {
+        return Some(dev_parent);
+    }
+
+    let (numeric_base, _) = parse_letter_alt_base(&base)?;
+    parse_numeric_alt_dev_parent(&numeric_base)
+}
+
+pub(crate) fn is_alt_branch(branch: &str) -> bool {
+    alt_lineage_dev_base(branch).is_some()
+}
+
+/// Other local alt branches exploring alternatives on the same dev branch.
+pub(crate) fn alt_sibling_branch_names(
+    current_branch: &str,
+    existing_branches: &[String],
+) -> Vec<String> {
+    let Some(dev_base) = alt_lineage_dev_base(current_branch) else {
+        return Vec::new();
+    };
+
+    let mut siblings = existing_branches
+        .iter()
+        .filter(|branch| {
+            !branch.eq_ignore_ascii_case(current_branch)
+                && is_alt_branch(branch)
+                && alt_lineage_dev_base(branch).as_deref() == Some(dev_base.as_str())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    siblings.sort_by_cached_key(|branch| branch.to_ascii_lowercase());
+    siblings
+}
+
+fn alt_merge_parent_candidates(current_branch: &str) -> Option<Vec<String>> {
     let (base, specific_suffix) = split_specific_suffix(current_branch);
+    let mut candidates = Vec::new();
 
     if let Some((numeric_base, _letter)) = parse_letter_alt_base(&base) {
-        return Some(join_with_specific_suffix(
+        candidates.push(join_with_specific_suffix(
             &numeric_base,
             specific_suffix.as_deref(),
         ));
-    }
-
-    if let Some(dev_parent) = parse_numeric_alt_dev_parent(&base) {
-        return Some(join_with_specific_suffix(
+        candidates.push(numeric_base.clone());
+        if let Some(dev_parent) = parse_numeric_alt_dev_parent(&numeric_base) {
+            candidates.push(join_with_specific_suffix(
+                &dev_parent,
+                specific_suffix.as_deref(),
+            ));
+            candidates.push(dev_parent);
+        }
+    } else if let Some(dev_parent) = parse_numeric_alt_dev_parent(&base) {
+        candidates.push(join_with_specific_suffix(
             &dev_parent,
             specific_suffix.as_deref(),
         ));
+        candidates.push(dev_parent);
+    } else {
+        return None;
     }
 
-    None
+    candidates.dedup();
+    Some(candidates)
+}
+
+fn pick_existing_branch_candidate(
+    candidates: &[String],
+    existing_branches: &[String],
+) -> Option<String> {
+    if existing_branches.is_empty() {
+        return candidates.first().cloned();
+    }
+
+    candidates
+        .iter()
+        .find(|candidate| branch_exists(existing_branches, candidate))
+        .cloned()
+        .or_else(|| candidates.last().cloned())
+}
+
+fn branch_exists(existing_branches: &[String], candidate: &str) -> bool {
+    existing_branches
+        .iter()
+        .any(|branch| branch.eq_ignore_ascii_case(candidate))
 }
 
 // ---------------------------------------------------------------------------
@@ -670,32 +751,58 @@ mod tests {
 
     #[test]
     fn alt_merge_parent_for_numeric_alt_returns_dev_branch() {
+        let existing = vec!["v0.1.5-dev".to_string()];
         assert_eq!(
-            alt_merge_parent_branch("v0.1.5-dev-alt2").as_deref(),
+            alt_merge_parent_branch("v0.1.5-dev-alt2", &existing).as_deref(),
             Some("v0.1.5-dev")
         );
         assert_eq!(
-            alt_merge_parent_branch("v0.1.5-dev-alt2--menu").as_deref(),
+            alt_merge_parent_branch("v0.1.5-dev-alt2--menu", &existing).as_deref(),
+            Some("v0.1.5-dev")
+        );
+    }
+
+    #[test]
+    fn alt_merge_parent_prefers_matching_dev_specific_branch_when_present() {
+        let existing = vec!["v0.1.5-dev".to_string(), "v0.1.5-dev--menu".to_string()];
+        assert_eq!(
+            alt_merge_parent_branch("v0.1.5-dev-alt2--menu", &existing).as_deref(),
             Some("v0.1.5-dev--menu")
         );
     }
 
     #[test]
     fn alt_merge_parent_for_letter_alt_returns_numeric_alt() {
+        let existing = vec!["v0.1.5-dev-alt2".to_string(), "v0.1.5-dev".to_string()];
         assert_eq!(
-            alt_merge_parent_branch("v0.1.5-dev-alt2B").as_deref(),
+            alt_merge_parent_branch("v0.1.5-dev-alt2B", &existing).as_deref(),
             Some("v0.1.5-dev-alt2")
         );
         assert_eq!(
-            alt_merge_parent_branch("v0.1.5-dev-alt2B--menu").as_deref(),
-            Some("v0.1.5-dev-alt2--menu")
+            alt_merge_parent_branch("v0.1.5-dev-alt2B--menu", &existing).as_deref(),
+            Some("v0.1.5-dev-alt2")
         );
     }
 
     #[test]
     fn alt_merge_parent_returns_none_for_non_alt_branch() {
-        assert_eq!(alt_merge_parent_branch("v0.1.5-dev"), None);
-        assert_eq!(alt_merge_parent_branch("main"), None);
+        assert_eq!(alt_merge_parent_branch("v0.1.5-dev", &[]), None);
+        assert_eq!(alt_merge_parent_branch("main", &[]), None);
+    }
+
+    #[test]
+    fn alt_sibling_branch_names_lists_other_alts_on_same_dev_branch() {
+        let existing = vec![
+            "v0.9.1-dev".to_string(),
+            "v0.9.1-dev-alt1".to_string(),
+            "v0.9.1-dev-alt2--or-this-way".to_string(),
+            "v0.9.1-dev-alt3".to_string(),
+        ];
+        let siblings = alt_sibling_branch_names("v0.9.1-dev-alt2--or-this-way", &existing);
+        assert_eq!(
+            siblings,
+            vec!["v0.9.1-dev-alt1".to_string(), "v0.9.1-dev-alt3".to_string(),]
+        );
     }
 
     #[test]
