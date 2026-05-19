@@ -325,7 +325,7 @@ pub(crate) fn fixed_branch_name_option_with_value(
     }
 }
 
-fn specific_suffix_branch_name_option(base: String) -> BranchNameOption {
+pub(crate) fn specific_suffix_branch_name_option(base: String) -> BranchNameOption {
     BranchNameOption {
         preview: format!("{}--specific", base),
         input_mode: BranchNameInputMode::SpecificSuffix,
@@ -333,9 +333,13 @@ fn specific_suffix_branch_name_option(base: String) -> BranchNameOption {
     }
 }
 
-fn custom_branch_name_option() -> BranchNameOption {
+pub(crate) fn custom_branch_name_option() -> BranchNameOption {
+    custom_branch_name_option_with_preview("custom")
+}
+
+pub(crate) fn custom_branch_name_option_with_preview(preview: &str) -> BranchNameOption {
     BranchNameOption {
-        preview: "custom".to_string(),
+        preview: preview.to_string(),
         input_mode: BranchNameInputMode::Custom,
         mode: BranchNameOptionMode::Custom,
     }
