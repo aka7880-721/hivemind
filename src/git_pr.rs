@@ -979,7 +979,13 @@ fn resolve_parent_branch_name_with_cancel(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<String> {
-    if let Some(parent_branch) = crate::git_alt::alt_merge_parent_branch(current_branch) {
+    let existing_branches = list_local_branch_refs_with_cancel(repo_root, cancel.clone())?
+        .into_iter()
+        .map(|branch| branch.name)
+        .collect::<Vec<_>>();
+    if let Some(parent_branch) =
+        crate::git_alt::alt_merge_parent_branch(current_branch, &existing_branches)
+    {
         return Ok(parent_branch);
     }
 
