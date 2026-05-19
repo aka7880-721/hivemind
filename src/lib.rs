@@ -18,6 +18,7 @@ mod git;
 mod git_alt;
 mod git_br;
 mod git_br_end;
+mod git_locmerge;
 mod git_mg;
 mod git_new;
 mod git_pr;
