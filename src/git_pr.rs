@@ -979,6 +979,10 @@ fn resolve_parent_branch_name_with_cancel(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<String> {
+    if let Some(parent_branch) = crate::git_alt::alt_merge_parent_branch(current_branch) {
+        return Ok(parent_branch);
+    }
+
     let lineage =
         load_branch_lineage_with_cancel(repo_root, current_branch, custom_main_branch, cancel)?
             .ok_or_else(|| anyhow::anyhow!("no local branches are available in this repository"))?;
