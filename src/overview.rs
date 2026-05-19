@@ -1034,9 +1034,8 @@ fn open_overview_bump_kind_dialog(
         current_version.to_string(),
         scope.scheme.supported_actions().to_vec(),
     ));
-    app.status = bump_toast_status(
-        "Choose a version bump first, then continue with the tile action.",
-    );
+    app.status =
+        bump_toast_status("Choose a version bump first, then continue with the tile action.");
     Ok(())
 }
 
