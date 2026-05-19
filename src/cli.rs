@@ -53,6 +53,7 @@ use crate::{
         run_branch_cd, suggest_branch_name_options,
     },
     git_br_end::run_branch_done,
+    git_locmerge::run_local_merge,
     git_mg::{run_merge, run_merge_for_pull_request},
     git_pr::run_pr,
     git_rrt::{RerootMode, run_reroot},
@@ -209,6 +210,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             run_branch_main()?;
             Ok(StartupMode::Handled)
         }
+        [command, action, local_action]
+            if is_branch_command(command)
+                && is_branch_done_action(action)
+                && is_local_merge_action(local_action) =>
+        {
+            run_local_merge_command()?;
+            Ok(StartupMode::Handled)
+        }
         [command, action] if is_branch_command(command) && is_branch_done_action(action) => {
             run_branch_done_command()?;
             Ok(StartupMode::Handled)
@@ -233,6 +242,12 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             with_cli_git_cancellation(|cancel| {
                 run_pr(&repo_root, true, custom_main_branch.as_deref(), cancel)
             })?;
+            Ok(StartupMode::Handled)
+        }
+        [command, local_action]
+            if is_merge_command(command) && is_local_merge_action(local_action) =>
+        {
+            run_local_merge_command()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_merge_command(command) => {
@@ -658,6 +673,10 @@ fn is_branch_cd_action(value: &str) -> bool {
     matches!(value, "cd")
 }
 
+fn is_local_merge_action(value: &str) -> bool {
+    matches!(value, "local" | "ll" | "loc" | "lcl")
+}
+
 fn is_pr_command(value: &str) -> bool {
     matches!(value, "pr")
 }
@@ -774,6 +793,9 @@ fn print_usage() {
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
     println!("  cg branch done             Create PR, merge it, switch to target, and sync");
+    println!(
+        "  cg branch done local       Merge the current branch into a chosen branch locally (no PR)"
+    );
     println!("  cg branch cd               Interactively choose and switch to a recent branch");
     println!(
         "  cg pr                      Generate a pull request title/body for the current branch"
@@ -782,6 +804,9 @@ fn print_usage() {
         "  cg pr --main | -main       Generate a pull request title/body against main/master/custom main"
     );
     println!("  cg merge                   Interactively choose and merge an open pull request");
+    println!(
+        "  cg merge local             Merge the current branch into a chosen branch locally (no PR)"
+    );
     println!("  cg merge #67               Merge open pull request #67 directly");
     println!(
         "  cg reroot                  Merge a selected source branch into the current non-main branch"
@@ -794,6 +819,7 @@ fn print_usage() {
     println!("            up: up | ..");
     println!("            main: main | ~");
     println!("            done: done | end | close | merge | mrg | mg");
+    println!("            local: local | ll | loc | lcl");
     println!("            merge: mg | mrg");
     println!("            reroot: rrt");
     println!("            rebase: rebase | force | rbs");
@@ -919,12 +945,20 @@ fn run_branch_done_command() -> Result<()> {
     })
 }
 
+fn run_local_merge_command() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    with_cli_git_cancellation(|cancel| {
+        run_local_merge(&context.repo_root, &context.project_name, cancel)
+    })
+}
+
 fn run_branch_cd_command() -> Result<()> {
     let context = load_active_branch_cli_context()?;
     with_cli_git_cancellation(|cancel| run_branch_cd(&context.repo_root, cancel))
 }
 
 struct ActiveBranchCliContext {
+    project_name: String,
     repo_root: String,
     main_branch_name: Option<String>,
     current_branch: String,
@@ -950,6 +984,7 @@ fn load_active_branch_cli_context() -> Result<ActiveBranchCliContext> {
     let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
 
     Ok(ActiveBranchCliContext {
+        project_name: project.name.clone(),
         repo_root: context.repo_root.clone(),
         main_branch_name: context.main_branch_name.clone(),
         current_branch,
@@ -4310,6 +4345,15 @@ mod tests {
         assert!(is_merge_command("mg"));
         assert!(is_merge_command("mrg"));
         assert!(!is_merge_command("mrg2"));
+    }
+
+    #[test]
+    fn is_local_merge_action_accepts_requested_synonyms() {
+        assert!(is_local_merge_action("local"));
+        assert!(is_local_merge_action("ll"));
+        assert!(is_local_merge_action("loc"));
+        assert!(is_local_merge_action("lcl"));
+        assert!(!is_local_merge_action("remote"));
     }
 
     #[test]
