@@ -39,8 +39,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use ratatui_comfy_toaster::{
-    ToastBuilder, ToastEngine, ToastEngineBuilder, ToastInteraction, ToastMouseButton,
-    ToastPreset, ToastProgressBarStyle, ToastShortcut, ToastType,
+    ToastBuilder, ToastEngine, ToastEngineBuilder, ToastInteraction, ToastMouseButton, ToastPreset,
+    ToastProgressBarStyle, ToastShortcut, ToastType,
 };
 use ratatui_explorer::{FileExplorer, FileExplorerBuilder, Input as ExplorerInput};
 use tokio::{
@@ -4612,8 +4612,8 @@ impl App {
     fn open_project_edit_dialog(&mut self) -> Result<()> {
         let project_index = self.selected_project;
         let project = self.selected_project()?;
-        let preferred_scope = (project.project_type == ProjectType::Branched)
-            .then_some(self.overview_focused_scope);
+        let preferred_scope =
+            (project.project_type == ProjectType::Branched).then_some(self.overview_focused_scope);
         let dialog = ProjectEditDialog::from_project(project_index, project, preferred_scope)?;
         let status = if project.project_type == ProjectType::Branched {
             "Amend the selected scope settings, then save or update scopes."
@@ -5007,7 +5007,8 @@ impl App {
                     return Ok(());
                 };
                 if dialog.scopes.len() == 1 {
-                    return self.request_scope_deletion(dialog.project_index, dialog.selected_scope);
+                    return self
+                        .request_scope_deletion(dialog.project_index, dialog.selected_scope);
                 }
                 let Some(dialog) = &mut self.project_edit_dialog else {
                     return Ok(());
@@ -5804,7 +5805,8 @@ impl App {
 
         self.last_status_toast_id = self.status.id;
         let mut builder = ToastBuilder::new(self.status.text.clone().into());
-        if let (Some(preset), Some(title)) = (self.status.toast_preset, self.status.toast_title.clone())
+        if let (Some(preset), Some(title)) =
+            (self.status.toast_preset, self.status.toast_title.clone())
         {
             builder = builder.preset(preset, title);
         } else if let Some(title) = self.status.toast_title.clone() {
@@ -7320,12 +7322,6 @@ impl StatusMessage {
 
     fn error(text: impl Into<String>) -> Self {
         Self::new(StatusKind::Error, text)
-    }
-
-    fn with_toast_title(mut self, title: impl Into<String>) -> Self {
-        let title = title.into();
-        self.toast_title = (!title.trim().is_empty()).then_some(title);
-        self
     }
 
     fn with_toast_preset(mut self, preset: ToastPreset, title: impl Into<String>) -> Self {
@@ -10180,7 +10176,10 @@ mod tests {
 
         app.save_project_edit().expect("save should be handled");
 
-        assert_eq!(app.status.text, "scope 'scope-2' target path cannot be empty");
+        assert_eq!(
+            app.status.text,
+            "scope 'scope-2' target path cannot be empty"
+        );
         assert_eq!(app.status.toast_preset, Some(NEW_SCOPE_ERROR_TOAST_PRESET));
         assert_eq!(app.status.toast_title.as_deref(), Some("New Scope:"));
         assert!(app.project_edit_dialog.is_some());

@@ -15,6 +15,7 @@ mod cli;
 mod config;
 mod dialogs;
 mod git;
+mod git_alt;
 mod git_br;
 mod git_br_end;
 mod git_mg;

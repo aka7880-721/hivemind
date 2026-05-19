@@ -86,7 +86,9 @@ impl ProjectEditDialog {
         };
 
         let (repo_root, remote_url) = if project.project_type == ProjectType::Branched {
-            let selected_repo = scopes.get(selected_scope).and_then(|scope| scope.repo.as_ref());
+            let selected_repo = scopes
+                .get(selected_scope)
+                .and_then(|scope| scope.repo.as_ref());
             (
                 selected_repo
                     .map(|repo| repo.local_root.clone())

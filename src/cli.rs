@@ -320,6 +320,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             crate::git_new::run_new(None, None)?;
             Ok(StartupMode::Handled)
         }
+        [command, action] if is_new_command(command) && action == "alt" => {
+            crate::git_alt::run_new_alt(None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, option] if is_new_command(command) && action == "alt" => {
+            crate::git_alt::run_new_alt(Some(option))?;
+            Ok(StartupMode::Handled)
+        }
         [command, action] if is_new_command(command) => {
             crate::git_new::run_new(Some(action), None)?;
             Ok(StartupMode::Handled)
@@ -2566,6 +2574,19 @@ fn load_branch_diagram_with_cancel(
                 name: display_branch_name(&branch.name),
                 state: BranchDiagramState::Merged,
             });
+            continue;
+        }
+
+        if crate::git_alt::is_alt_branch(current_branch)
+            && let Some(segment) = path
+                .iter()
+                .position(|segment| segment.branch.name.eq_ignore_ascii_case(current_branch))
+                .map(|index| &mut path[index])
+        {
+            segment.merged.push(BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state: BranchDiagramState::Open,
+            });
         }
     }
 
@@ -2653,12 +2674,25 @@ fn build_branch_tree_data_with_cancel(
     let merged_into_root =
         local_branch_names_merged_into_with_cancel(repo_root, &root_branch.refname, cancel)?;
 
+    let all_branch_names = branches
+        .iter()
+        .map(|branch| branch.name.clone())
+        .chain(std::iter::once(root_branch.name.clone()))
+        .chain(std::iter::once(current_ref.name.clone()))
+        .collect::<Vec<_>>();
+    let alt_sibling_lookups =
+        crate::git_alt::alt_sibling_branch_names(current_branch, &all_branch_names)
+            .into_iter()
+            .map(|branch| normalize_lookup(&branch))
+            .collect::<std::collections::HashSet<_>>();
+
     let family = branches
         .into_iter()
         .filter(|branch| {
             let branch_lookup = normalize_lookup(&branch.name);
-            merged_into_current.contains(&branch_lookup)
-                && !merged_into_root.contains(&branch_lookup)
+            (merged_into_current.contains(&branch_lookup)
+                && !merged_into_root.contains(&branch_lookup))
+                || alt_sibling_lookups.contains(&branch_lookup)
         })
         .collect::<Vec<_>>();
 
@@ -2674,6 +2708,21 @@ fn build_branch_tree_data_with_cancel(
     {
         path.push(current_ref);
     }
+
+    if crate::git_alt::is_alt_branch(current_branch)
+        && let Some(parent_name) =
+            crate::git_alt::alt_merge_parent_branch(current_branch, &all_branch_names)
+        && !root_branch.name.eq_ignore_ascii_case(&parent_name)
+        && path
+            .iter()
+            .all(|branch| !branch.name.eq_ignore_ascii_case(&parent_name))
+        && let Some(parent_ref) = list_local_branch_refs_with_cancel(repo_root, None)?
+            .into_iter()
+            .find(|branch| branch.name.eq_ignore_ascii_case(&parent_name))
+    {
+        path.insert(0, parent_ref);
+    }
+
     sort_branch_path(&mut path, current_branch);
 
     Ok(Some(BranchTreeData {
@@ -2759,6 +2808,16 @@ fn resolve_parent_branch_name_with_cancel(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<String> {
+    let existing_branches = list_local_branch_refs_with_cancel(repo_root, cancel.clone())?
+        .into_iter()
+        .map(|branch| branch.name)
+        .collect::<Vec<_>>();
+    if let Some(parent_branch) =
+        crate::git_alt::alt_merge_parent_branch(current_branch, &existing_branches)
+    {
+        return Ok(parent_branch);
+    }
+
     let lineage =
         load_branch_lineage_with_cancel(repo_root, current_branch, custom_main_branch, cancel)?
             .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
