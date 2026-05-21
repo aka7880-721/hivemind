@@ -58,43 +58,57 @@ Enjoy!
 
 ---
 
-<details><summary>👀 What's new in v0.26.0 - The first ever public release!</summary>
+<details><summary>👀 What's new in v0.27.7 ...</summary>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
 
 #### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
 - Now you can add, and edit your TP from TUI
-    - Assigned shortcut `P`
+- Assigned shortcut `P`
+- New modal with full MD support
 - Fully implemented keyboard shortcuts (ctrl+a/c/v)
-- Fully implemented mouse action shortcuts 
-    - rightClick to paste/copy, doubleClick to select word, click to position cursor, drag&hold to select
+- Fully implemented mouse action shortcuts (rightClick to paste/copy, doubleClick, click, drag&hold)
 
-#### **2. &nbsp;&nbsp;&nbsp;Auto-README changelog injection!**
-- You can now automatically inject an expandable one-liner with latest changes from the last release, amazing feature if you ask me...! 🤩
-- Make sure to check WIKI pages to understand it fully...
+#### **2. &nbsp;&nbsp;&nbsp;New ALT branch type!**
+- We all know the situation: 
+    - you "hit the wall", an obstacle to overcome to finish the feature in `dev` branch...
+    - you're on a junction, there are multiple possible approaches to take.
+- With the new `atl` type branch you can try them all
+- Fully implemented within ComfyGit eco-system
+    - easy to create via `cg new alt 1` (synced)
+    - or `cg new alt 2` (local-only)
+    - and even easier to merge via `cg br end`
+- To sum it up: ComfyGit now recognizes 4 type of branches:
+    - `x`
+    - `dev`
+    - `alt`
+    - `sub-alt`, that's right - sometimes there are obstactles within an obstacle :)
 
-#### **3. &nbsp;&nbsp;&nbsp;Misc**
-- Added support in Distro for "General" scripts
-    - Unlike Win/Arm/Amd/Mac, General is not required to produce any artifacts
-    - Useful for small projects (e.g. crates, plugins, etc)
-- Project reordering in Projects pane
-    - Now you can click&drag your projects to change their order
-    - Remember, you can do this for a while also with tiles within the project
-- Release Notes Editor in ReleaseNOW got enhanced
-    - added mouse and keyboard shortcuts
-- Fixed bug that termianted ReleaseNOW flow with auto-inject enabled
-- Several consolidation pre-release fixes
+#### **3. &nbsp;&nbsp;&nbsp;New `cg init` CLI command!**
+- adding a new project to ComfyGit have never been easier.
+- now it can be done from CLI via `cg init`!
+
+#### **4. &nbsp;&nbsp;&nbsp;New `cg merge local` CLI command!**
+- example synonyms: `cg mg ll`, `cg mrg loc`, `cg mg lcl`
+- there are use cases when local merge is needed, now it can be done via ComfyGit
+- `cg mg ll` starts an easy to navigate wizard where is hard to make any mistake
+
+#### **5. &nbsp;&nbsp;&nbsp;Misc**
+- fixed bad render within project tiles in Windows 11 terminals caused by win-specific unicode width.
+
 
 <sub>...  🎉 Enjoy!</sub>
 
-<br>
+<br><br>
+
 
 ---
-<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)</sup>
+<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://github.com/comfy-home/ComfyGit/releases/tag/v0.27.7)</sup>
 
 ---
 
 </details>
+
 
 
 ---
