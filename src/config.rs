@@ -919,6 +919,10 @@ impl ConfigStore {
         Ok(Self { path })
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     #[cfg(test)]
     pub fn with_path(path: PathBuf) -> Self {
         Self { path }
