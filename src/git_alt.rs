@@ -107,7 +107,7 @@ pub(crate) fn alt_merge_parent_branch(
     current_branch: &str,
     existing_branches: &[String],
 ) -> Option<String> {
-    let candidates = alt_merge_parent_candidates(current_branch)?;
+    let candidates = alt_merge_parent_candidates(current_branch, existing_branches)?;
     pick_existing_branch_candidate(&candidates, existing_branches)
 }
 
@@ -148,35 +148,92 @@ pub(crate) fn alt_sibling_branch_names(
     siblings
 }
 
-fn alt_merge_parent_candidates(current_branch: &str) -> Option<Vec<String>> {
+fn alt_merge_parent_candidates(
+    current_branch: &str,
+    existing_branches: &[String],
+) -> Option<Vec<String>> {
     let (base, specific_suffix) = split_specific_suffix(current_branch);
     let mut candidates = Vec::new();
 
     if let Some((numeric_base, _letter)) = parse_letter_alt_base(&base) {
-        candidates.push(join_with_specific_suffix(
+        push_parent_branch_candidates(
+            &mut candidates,
             &numeric_base,
             specific_suffix.as_deref(),
-        ));
-        candidates.push(numeric_base.clone());
+            existing_branches,
+        );
         if let Some(dev_parent) = parse_numeric_alt_dev_parent(&numeric_base) {
-            candidates.push(join_with_specific_suffix(
+            push_parent_branch_candidates(
+                &mut candidates,
                 &dev_parent,
                 specific_suffix.as_deref(),
-            ));
-            candidates.push(dev_parent);
+                existing_branches,
+            );
         }
     } else if let Some(dev_parent) = parse_numeric_alt_dev_parent(&base) {
-        candidates.push(join_with_specific_suffix(
+        push_parent_branch_candidates(
+            &mut candidates,
             &dev_parent,
             specific_suffix.as_deref(),
-        ));
-        candidates.push(dev_parent);
+            existing_branches,
+        );
     } else {
         return None;
     }
 
-    candidates.dedup();
-    Some(candidates)
+    dedup_branch_candidates(candidates)
+}
+
+fn push_parent_branch_candidates(
+    candidates: &mut Vec<String>,
+    parent_base: &str,
+    specific_suffix: Option<&str>,
+    existing_branches: &[String],
+) {
+    if let Some(suffix) = specific_suffix.filter(|value| !value.is_empty()) {
+        insert_candidate(
+            candidates,
+            join_with_specific_suffix(parent_base, Some(suffix)),
+        );
+    }
+
+    let mut matching_specific_branches = existing_branches
+        .iter()
+        .filter(|branch| is_parent_specific_branch(branch, parent_base))
+        .cloned()
+        .collect::<Vec<_>>();
+    matching_specific_branches.sort_by_cached_key(|branch| branch.to_ascii_lowercase());
+    for branch in matching_specific_branches {
+        insert_candidate(candidates, branch);
+    }
+
+    insert_candidate(candidates, parent_base.to_string());
+}
+
+fn is_parent_specific_branch(branch: &str, parent_base: &str) -> bool {
+    if branch.len() <= parent_base.len() + 2 {
+        return false;
+    }
+
+    branch[..parent_base.len()].eq_ignore_ascii_case(parent_base)
+        && branch[parent_base.len()..].starts_with("--")
+}
+
+fn insert_candidate(candidates: &mut Vec<String>, candidate: String) {
+    if !candidates
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&candidate))
+    {
+        candidates.push(candidate);
+    }
+}
+
+fn dedup_branch_candidates(candidates: Vec<String>) -> Option<Vec<String>> {
+    if candidates.is_empty() {
+        None
+    } else {
+        Some(candidates)
+    }
 }
 
 fn pick_existing_branch_candidate(
@@ -191,7 +248,6 @@ fn pick_existing_branch_candidate(
         .iter()
         .find(|candidate| branch_exists(existing_branches, candidate))
         .cloned()
-        .or_else(|| candidates.last().cloned())
 }
 
 fn branch_exists(existing_branches: &[String], candidate: &str) -> bool {
@@ -768,6 +824,34 @@ mod tests {
         assert_eq!(
             alt_merge_parent_branch("v0.1.5-dev-alt2--menu", &existing).as_deref(),
             Some("v0.1.5-dev--menu")
+        );
+    }
+
+    #[test]
+    fn alt_merge_parent_uses_only_existing_dev_specific_branch() {
+        let existing = vec![
+            "v0.9.4-dev--bubbly-talk-clipboard-abilities".to_string(),
+            "v0.9.4-dev-alt2--bubbly-talk-clipboard-abilities".to_string(),
+        ];
+        assert_eq!(
+            alt_merge_parent_branch(
+                "v0.9.4-dev-alt2--bubbly-talk-clipboard-abilities",
+                &existing
+            )
+            .as_deref(),
+            Some("v0.9.4-dev--bubbly-talk-clipboard-abilities")
+        );
+    }
+
+    #[test]
+    fn alt_merge_parent_discovers_dev_specific_when_alt_has_no_suffix() {
+        let existing = vec![
+            "v0.9.4-dev--bubbly-talk-clipboard-abilities".to_string(),
+            "v0.9.4-dev-alt2".to_string(),
+        ];
+        assert_eq!(
+            alt_merge_parent_branch("v0.9.4-dev-alt2", &existing).as_deref(),
+            Some("v0.9.4-dev--bubbly-talk-clipboard-abilities")
         );
     }
 
