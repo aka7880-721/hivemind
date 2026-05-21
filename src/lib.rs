@@ -12,6 +12,7 @@ mod changelog_tp;
 #[path = "chl_vrtr.rs"]
 mod chl_vrtr;
 mod cli;
+mod cli_init;
 mod config;
 mod dialogs;
 mod git;
