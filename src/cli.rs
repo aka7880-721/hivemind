@@ -53,6 +53,7 @@ use crate::{
         run_branch_cd, suggest_branch_name_options,
     },
     git_br_end::run_branch_done,
+    git_locmerge::run_local_merge,
     git_mg::{run_merge, run_merge_for_pull_request},
     git_pr::run_pr,
     git_rrt::{RerootMode, run_reroot},
@@ -181,6 +182,10 @@ fn normalize_cli_args_for_dispatch(args: &mut Vec<String>) {
 fn dispatch_args(args: &[String]) -> Result<StartupMode> {
     match args {
         [] => Ok(StartupMode::LaunchTui),
+        [command] if is_init_command(command) => {
+            crate::cli_init::run_init()?;
+            Ok(StartupMode::Handled)
+        }
         [command] if is_help(command) => {
             print_usage();
             Ok(StartupMode::Handled)
@@ -209,6 +214,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             run_branch_main()?;
             Ok(StartupMode::Handled)
         }
+        [command, action, local_action]
+            if is_branch_command(command)
+                && is_branch_done_action(action)
+                && is_local_merge_action(local_action) =>
+        {
+            run_local_merge_command()?;
+            Ok(StartupMode::Handled)
+        }
         [command, action] if is_branch_command(command) && is_branch_done_action(action) => {
             run_branch_done_command()?;
             Ok(StartupMode::Handled)
@@ -233,6 +246,12 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             with_cli_git_cancellation(|cancel| {
                 run_pr(&repo_root, true, custom_main_branch.as_deref(), cancel)
             })?;
+            Ok(StartupMode::Handled)
+        }
+        [command, local_action]
+            if is_merge_command(command) && is_local_merge_action(local_action) =>
+        {
+            run_local_merge_command()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_merge_command(command) => {
@@ -318,6 +337,14 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         }
         [command] if is_new_command(command) => {
             crate::git_new::run_new(None, None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_new_command(command) && action == "alt" => {
+            crate::git_alt::run_new_alt(None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, option] if is_new_command(command) && action == "alt" => {
+            crate::git_alt::run_new_alt(Some(option))?;
             Ok(StartupMode::Handled)
         }
         [command, action] if is_new_command(command) => {
@@ -602,6 +629,10 @@ fn is_uninstall_shell_command(value: &str) -> bool {
     )
 }
 
+fn is_init_command(value: &str) -> bool {
+    value == "init"
+}
+
 fn is_help(value: &str) -> bool {
     matches!(value, "help" | "-h" | "--help")
 }
@@ -648,6 +679,10 @@ fn is_branch_done_action(value: &str) -> bool {
 
 fn is_branch_cd_action(value: &str) -> bool {
     matches!(value, "cd")
+}
+
+fn is_local_merge_action(value: &str) -> bool {
+    matches!(value, "local" | "ll" | "loc" | "lcl")
 }
 
 fn is_pr_command(value: &str) -> bool {
@@ -762,10 +797,16 @@ fn print_usage() {
     println!(" ");
     println!("  BRANCHING COMMANDS:");
     println!(" ");
+    println!(
+        "  cg init                    Register the current directory as a new ComfyGit project"
+    );
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
     println!("  cg branch done             Create PR, merge it, switch to target, and sync");
+    println!(
+        "  cg branch done local       Merge the current branch into a chosen branch locally (no PR)"
+    );
     println!("  cg branch cd               Interactively choose and switch to a recent branch");
     println!(
         "  cg pr                      Generate a pull request title/body for the current branch"
@@ -774,6 +815,9 @@ fn print_usage() {
         "  cg pr --main | -main       Generate a pull request title/body against main/master/custom main"
     );
     println!("  cg merge                   Interactively choose and merge an open pull request");
+    println!(
+        "  cg merge local             Merge the current branch into a chosen branch locally (no PR)"
+    );
     println!("  cg merge #67               Merge open pull request #67 directly");
     println!(
         "  cg reroot                  Merge a selected source branch into the current non-main branch"
@@ -786,6 +830,7 @@ fn print_usage() {
     println!("            up: up | ..");
     println!("            main: main | ~");
     println!("            done: done | end | close | merge | mrg | mg");
+    println!("            local: local | ll | loc | lcl");
     println!("            merge: mg | mrg");
     println!("            reroot: rrt");
     println!("            rebase: rebase | force | rbs");
@@ -911,12 +956,20 @@ fn run_branch_done_command() -> Result<()> {
     })
 }
 
+fn run_local_merge_command() -> Result<()> {
+    let context = load_active_branch_cli_context()?;
+    with_cli_git_cancellation(|cancel| {
+        run_local_merge(&context.repo_root, &context.project_name, cancel)
+    })
+}
+
 fn run_branch_cd_command() -> Result<()> {
     let context = load_active_branch_cli_context()?;
     with_cli_git_cancellation(|cancel| run_branch_cd(&context.repo_root, cancel))
 }
 
 struct ActiveBranchCliContext {
+    project_name: String,
     repo_root: String,
     main_branch_name: Option<String>,
     current_branch: String,
@@ -942,6 +995,7 @@ fn load_active_branch_cli_context() -> Result<ActiveBranchCliContext> {
     let current_branch = current_branch_with_cancel(&context.repo_root, None)?;
 
     Ok(ActiveBranchCliContext {
+        project_name: project.name.clone(),
         repo_root: context.repo_root.clone(),
         main_branch_name: context.main_branch_name.clone(),
         current_branch,
@@ -2566,6 +2620,19 @@ fn load_branch_diagram_with_cancel(
                 name: display_branch_name(&branch.name),
                 state: BranchDiagramState::Merged,
             });
+            continue;
+        }
+
+        if crate::git_alt::is_alt_branch(current_branch)
+            && let Some(segment) = path
+                .iter()
+                .position(|segment| segment.branch.name.eq_ignore_ascii_case(current_branch))
+                .map(|index| &mut path[index])
+        {
+            segment.merged.push(BranchDiagramNode {
+                name: display_branch_name(&branch.name),
+                state: BranchDiagramState::Open,
+            });
         }
     }
 
@@ -2653,12 +2720,25 @@ fn build_branch_tree_data_with_cancel(
     let merged_into_root =
         local_branch_names_merged_into_with_cancel(repo_root, &root_branch.refname, cancel)?;
 
+    let all_branch_names = branches
+        .iter()
+        .map(|branch| branch.name.clone())
+        .chain(std::iter::once(root_branch.name.clone()))
+        .chain(std::iter::once(current_ref.name.clone()))
+        .collect::<Vec<_>>();
+    let alt_sibling_lookups =
+        crate::git_alt::alt_sibling_branch_names(current_branch, &all_branch_names)
+            .into_iter()
+            .map(|branch| normalize_lookup(&branch))
+            .collect::<std::collections::HashSet<_>>();
+
     let family = branches
         .into_iter()
         .filter(|branch| {
             let branch_lookup = normalize_lookup(&branch.name);
-            merged_into_current.contains(&branch_lookup)
-                && !merged_into_root.contains(&branch_lookup)
+            (merged_into_current.contains(&branch_lookup)
+                && !merged_into_root.contains(&branch_lookup))
+                || alt_sibling_lookups.contains(&branch_lookup)
         })
         .collect::<Vec<_>>();
 
@@ -2674,6 +2754,21 @@ fn build_branch_tree_data_with_cancel(
     {
         path.push(current_ref);
     }
+
+    if crate::git_alt::is_alt_branch(current_branch)
+        && let Some(parent_name) =
+            crate::git_alt::alt_merge_parent_branch(current_branch, &all_branch_names)
+        && !root_branch.name.eq_ignore_ascii_case(&parent_name)
+        && path
+            .iter()
+            .all(|branch| !branch.name.eq_ignore_ascii_case(&parent_name))
+        && let Some(parent_ref) = list_local_branch_refs_with_cancel(repo_root, None)?
+            .into_iter()
+            .find(|branch| branch.name.eq_ignore_ascii_case(&parent_name))
+    {
+        path.insert(0, parent_ref);
+    }
+
     sort_branch_path(&mut path, current_branch);
 
     Ok(Some(BranchTreeData {
@@ -2759,6 +2854,16 @@ fn resolve_parent_branch_name_with_cancel(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<String> {
+    let existing_branches = list_local_branch_refs_with_cancel(repo_root, cancel.clone())?
+        .into_iter()
+        .map(|branch| branch.name)
+        .collect::<Vec<_>>();
+    if let Some(parent_branch) =
+        crate::git_alt::alt_merge_parent_branch(current_branch, &existing_branches)
+    {
+        return Ok(parent_branch);
+    }
+
     let lineage =
         load_branch_lineage_with_cancel(repo_root, current_branch, custom_main_branch, cancel)?
             .ok_or_else(|| anyhow!("no local branches are available in this repository"))?;
@@ -3186,6 +3291,54 @@ pub(crate) fn find_project_for_cwd<'a>(
     Ok(matches[0].0)
 }
 
+/// Returns the index of the deepest configured project whose root strictly contains `cwd`.
+pub(crate) fn find_enclosing_project_index(
+    projects: &[ProjectConfig],
+    cwd: &Path,
+) -> Option<usize> {
+    let cwd = best_effort_canonicalize(cwd);
+    let mut matches = projects
+        .iter()
+        .enumerate()
+        .filter_map(|(index, project)| {
+            let root = project_root(project).ok()?;
+            let root = best_effort_canonicalize(&root);
+            if cwd.starts_with(&root) && cwd != root {
+                Some((index, path_depth(&root)))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if matches.is_empty() {
+        return None;
+    }
+
+    matches.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+    if matches.len() > 1 && matches[0].1 == matches[1].1 {
+        return None;
+    }
+
+    Some(matches[0].0)
+}
+
+pub(crate) fn registered_scope_covering_cwd<'a>(
+    project: &'a ProjectConfig,
+    cwd: &Path,
+) -> Option<&'a BranchConfig> {
+    if project.project_type != ProjectType::Branched {
+        return None;
+    }
+
+    let cwd = best_effort_canonicalize(cwd);
+    project.branches.iter().find(|branch| {
+        scope_root(project, branch)
+            .map(|root| best_effort_canonicalize(&root) == cwd)
+            .unwrap_or(false)
+    })
+}
+
 fn affected_scope_indexes(
     project: &ProjectConfig,
     resolved_project: &ProjectConfig,
@@ -3238,14 +3391,14 @@ fn find_scope_for_cwd(
     Ok(matches[0].0)
 }
 
-fn scope_root(project: &ProjectConfig, branch: &BranchConfig) -> Option<PathBuf> {
+pub(crate) fn scope_root(project: &ProjectConfig, branch: &BranchConfig) -> Option<PathBuf> {
     branch.repo.as_ref().map(repo_root_path).or_else(|| {
         let project_root = project.repo.as_ref().map(repo_root_path);
         target_root_from_specs(&branch.targets, project_root.as_deref())
     })
 }
 
-fn project_root(project: &ProjectConfig) -> Result<PathBuf> {
+pub(crate) fn project_root(project: &ProjectConfig) -> Result<PathBuf> {
     if let Some(repo) = project.repo.as_ref() {
         return Ok(repo_root_path(repo));
     }
@@ -3391,7 +3544,7 @@ fn ensure_action_supported(scheme: VersionScheme, action: BumpAction) -> Result<
     }
 }
 
-fn normalize_lookup(value: &str) -> String {
+pub(crate) fn normalize_lookup(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
@@ -4251,6 +4404,15 @@ mod tests {
         assert!(is_merge_command("mg"));
         assert!(is_merge_command("mrg"));
         assert!(!is_merge_command("mrg2"));
+    }
+
+    #[test]
+    fn is_local_merge_action_accepts_requested_synonyms() {
+        assert!(is_local_merge_action("local"));
+        assert!(is_local_merge_action("ll"));
+        assert!(is_local_merge_action("loc"));
+        assert!(is_local_merge_action("lcl"));
+        assert!(!is_local_merge_action("remote"));
     }
 
     #[test]
