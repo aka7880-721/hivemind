@@ -3291,6 +3291,54 @@ pub(crate) fn find_project_for_cwd<'a>(
     Ok(matches[0].0)
 }
 
+/// Returns the index of the deepest configured project whose root strictly contains `cwd`.
+pub(crate) fn find_enclosing_project_index(
+    projects: &[ProjectConfig],
+    cwd: &Path,
+) -> Option<usize> {
+    let cwd = best_effort_canonicalize(cwd);
+    let mut matches = projects
+        .iter()
+        .enumerate()
+        .filter_map(|(index, project)| {
+            let root = project_root(project).ok()?;
+            let root = best_effort_canonicalize(&root);
+            if cwd.starts_with(&root) && cwd != root {
+                Some((index, path_depth(&root)))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if matches.is_empty() {
+        return None;
+    }
+
+    matches.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+    if matches.len() > 1 && matches[0].1 == matches[1].1 {
+        return None;
+    }
+
+    Some(matches[0].0)
+}
+
+pub(crate) fn registered_scope_covering_cwd<'a>(
+    project: &'a ProjectConfig,
+    cwd: &Path,
+) -> Option<&'a BranchConfig> {
+    if project.project_type != ProjectType::Branched {
+        return None;
+    }
+
+    let cwd = best_effort_canonicalize(cwd);
+    project.branches.iter().find(|branch| {
+        scope_root(project, branch)
+            .map(|root| best_effort_canonicalize(&root) == cwd)
+            .unwrap_or(false)
+    })
+}
+
 fn affected_scope_indexes(
     project: &ProjectConfig,
     resolved_project: &ProjectConfig,
@@ -3343,7 +3391,7 @@ fn find_scope_for_cwd(
     Ok(matches[0].0)
 }
 
-fn scope_root(project: &ProjectConfig, branch: &BranchConfig) -> Option<PathBuf> {
+pub(crate) fn scope_root(project: &ProjectConfig, branch: &BranchConfig) -> Option<PathBuf> {
     branch.repo.as_ref().map(repo_root_path).or_else(|| {
         let project_root = project.repo.as_ref().map(repo_root_path);
         target_root_from_specs(&branch.targets, project_root.as_deref())
