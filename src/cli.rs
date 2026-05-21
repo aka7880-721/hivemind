@@ -182,6 +182,10 @@ fn normalize_cli_args_for_dispatch(args: &mut Vec<String>) {
 fn dispatch_args(args: &[String]) -> Result<StartupMode> {
     match args {
         [] => Ok(StartupMode::LaunchTui),
+        [command] if is_init_command(command) => {
+            crate::cli_init::run_init()?;
+            Ok(StartupMode::Handled)
+        }
         [command] if is_help(command) => {
             print_usage();
             Ok(StartupMode::Handled)
@@ -625,6 +629,10 @@ fn is_uninstall_shell_command(value: &str) -> bool {
     )
 }
 
+fn is_init_command(value: &str) -> bool {
+    value == "init"
+}
+
 fn is_help(value: &str) -> bool {
     matches!(value, "help" | "-h" | "--help")
 }
@@ -789,6 +797,9 @@ fn print_usage() {
     println!(" ");
     println!("  BRANCHING COMMANDS:");
     println!(" ");
+    println!(
+        "  cg init                    Register the current directory as a new ComfyGit project"
+    );
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
@@ -3339,7 +3350,7 @@ fn scope_root(project: &ProjectConfig, branch: &BranchConfig) -> Option<PathBuf>
     })
 }
 
-fn project_root(project: &ProjectConfig) -> Result<PathBuf> {
+pub(crate) fn project_root(project: &ProjectConfig) -> Result<PathBuf> {
     if let Some(repo) = project.repo.as_ref() {
         return Ok(repo_root_path(repo));
     }
@@ -3485,7 +3496,7 @@ fn ensure_action_supported(scheme: VersionScheme, action: BumpAction) -> Result<
     }
 }
 
-fn normalize_lookup(value: &str) -> String {
+pub(crate) fn normalize_lookup(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
