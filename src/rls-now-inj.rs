@@ -88,8 +88,29 @@ struct PreviousInjectEntry {
 
 fn strip_top_picks_heading(markdown: &str) -> String {
     let mut kept = Vec::new();
+    let mut skipping_intro = false;
+
     for line in markdown.lines() {
-        if line.trim().starts_with(TOP_PICKS_HEADING_PREFIX) {
+        let trimmed = line.trim();
+        if trimmed.starts_with(TOP_PICKS_HEADING_PREFIX) {
+            continue;
+        }
+        if trimmed.starts_with("<sup>💬 Intro:</sup>") {
+            skipping_intro = true;
+            continue;
+        }
+        if skipping_intro {
+            if trimmed.starts_with("#### **") {
+                skipping_intro = false;
+                kept.push(line);
+            } else if trimmed.starts_with("<sup>_") && trimmed.contains("</sup>") {
+                continue;
+            } else if trimmed.is_empty() {
+                continue;
+            } else {
+                skipping_intro = false;
+                kept.push(line);
+            }
             continue;
         }
         kept.push(line);
@@ -563,6 +584,21 @@ mod tests {
         );
         let stripped = strip_top_picks_heading(section);
         assert!(!stripped.contains("### 💥"));
+        assert!(stripped.contains("#### **1. Feature**"));
+    }
+
+    #[test]
+    fn strip_top_picks_heading_removes_intro_sup_lines() {
+        let section = concat!(
+            "### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n",
+            "<sup>💬 Intro:</sup>  \n",
+            "<sup>_Theme line_</sup>  \n",
+            "<sup>_- bullet_</sup>\n\n",
+            "#### **1. Feature**\n"
+        );
+        let stripped = strip_top_picks_heading(section);
+        assert!(!stripped.contains("💬 Intro"));
+        assert!(!stripped.contains("Theme line"));
         assert!(stripped.contains("#### **1. Feature**"));
     }
 
