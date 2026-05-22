@@ -694,12 +694,12 @@ fn is_archived_changelog_file(path: &Path, archive_dir: &Path) -> bool {
     }
 
     // Skip nested history/ entries when scanning the legacy flat .changelogs root.
-    if archive_dir.ends_with(CHANGELOGS_DIR_NAME) {
-        if path.parent().is_some_and(|parent| {
+    if archive_dir.ends_with(CHANGELOGS_DIR_NAME)
+        && path.parent().is_some_and(|parent| {
             parent.file_name().and_then(|name| name.to_str()) == Some(CHANGELOGS_HISTORY_SUBDIR)
-        }) {
-            return false;
-        }
+        })
+    {
+        return false;
     }
 
     true
@@ -960,13 +960,12 @@ fn display_version_from_history_label(label: &str) -> String {
     if trimmed.starts_with('v') || trimmed.starts_with('V') {
         return trimmed.to_string();
     }
-    if let Some(version) = trimmed.rsplit_once("-v").map(|(_, version)| version) {
-        if version
+    if let Some(version) = trimmed.rsplit_once("-v").map(|(_, version)| version)
+        && version
             .chars()
             .all(|character| character.is_ascii_digit() || character == '-')
-        {
-            return format!("v{}", version.replace('-', "."));
-        }
+    {
+        return format!("v{}", version.replace('-', "."));
     }
     if trimmed
         .chars()
