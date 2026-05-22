@@ -646,8 +646,49 @@ pub struct ReleaseNowSettings {
     pub readme_injection_enabled: bool,
     #[serde(default)]
     pub readme_inject_only_top_picks: bool,
+    #[serde(default)]
+    pub readme_inject_depth: ReadmeInjectDepth,
     pub readme_inject_at_row: u16,
     pub release_title_template: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadmeInjectDepth {
+    #[default]
+    CurrentOnly,
+    Last3,
+    Last5,
+    Last10,
+}
+
+impl ReadmeInjectDepth {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ReadmeInjectDepth::CurrentOnly => "Current-only",
+            ReadmeInjectDepth::Last3 => "Last 3",
+            ReadmeInjectDepth::Last5 => "Last 5",
+            ReadmeInjectDepth::Last10 => "Last 10",
+        }
+    }
+
+    pub fn previous_release_count(self) -> usize {
+        match self {
+            ReadmeInjectDepth::CurrentOnly => 0,
+            ReadmeInjectDepth::Last3 => 2,
+            ReadmeInjectDepth::Last5 => 4,
+            ReadmeInjectDepth::Last10 => 9,
+        }
+    }
+
+    pub fn all() -> [Self; 4] {
+        [
+            Self::CurrentOnly,
+            Self::Last3,
+            Self::Last5,
+            Self::Last10,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
