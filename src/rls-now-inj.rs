@@ -103,9 +103,9 @@ fn strip_top_picks_heading(markdown: &str) -> String {
             if trimmed.starts_with("#### **") {
                 skipping_intro = false;
                 kept.push(line);
-            } else if trimmed.starts_with("<sup>_") && trimmed.contains("</sup>") {
-                continue;
-            } else if trimmed.is_empty() {
+            } else if (trimmed.starts_with("<sup>_") && trimmed.contains("</sup>"))
+                || trimmed.is_empty()
+            {
                 continue;
             } else {
                 skipping_intro = false;
