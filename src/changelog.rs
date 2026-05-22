@@ -681,7 +681,8 @@ pub(crate) fn find_archived_changelog_markdown(
 }
 
 fn is_archived_changelog_file(path: &Path, archive_dir: &Path) -> bool {
-    if path.extension()
+    if path
+        .extension()
         .and_then(|value| value.to_str())
         .is_none_or(|value| !value.eq_ignore_ascii_case("md"))
     {
@@ -694,10 +695,9 @@ fn is_archived_changelog_file(path: &Path, archive_dir: &Path) -> bool {
 
     // Skip nested history/ entries when scanning the legacy flat .changelogs root.
     if archive_dir.ends_with(CHANGELOGS_DIR_NAME) {
-        if path
-            .parent()
-            .is_some_and(|parent| parent.file_name().and_then(|name| name.to_str()) == Some(CHANGELOGS_HISTORY_SUBDIR))
-        {
+        if path.parent().is_some_and(|parent| {
+            parent.file_name().and_then(|name| name.to_str()) == Some(CHANGELOGS_HISTORY_SUBDIR)
+        }) {
             return false;
         }
     }
@@ -961,7 +961,10 @@ fn display_version_from_history_label(label: &str) -> String {
         return trimmed.to_string();
     }
     if let Some(version) = trimmed.rsplit_once("-v").map(|(_, version)| version) {
-        if version.chars().all(|character| character.is_ascii_digit() || character == '-') {
+        if version
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '-')
+        {
             return format!("v{}", version.replace('-', "."));
         }
     }
@@ -2346,14 +2349,8 @@ mod tests {
 
     #[test]
     fn display_version_from_history_label_formats_semver_dashes() {
-        assert_eq!(
-            display_version_from_history_label("0-10-11"),
-            "v0.10.11"
-        );
-        assert_eq!(
-            display_version_from_history_label("core-v1-2-3"),
-            "v1.2.3"
-        );
+        assert_eq!(display_version_from_history_label("0-10-11"), "v0.10.11");
+        assert_eq!(display_version_from_history_label("core-v1-2-3"), "v1.2.3");
     }
 
     #[test]
@@ -2374,15 +2371,19 @@ mod tests {
         )
         .expect("archive should succeed");
 
-        assert!(archived.starts_with(
+        assert!(
+            archived.starts_with(
+                repo_root
+                    .join(CHANGELOGS_DIR_NAME)
+                    .join(CHANGELOGS_HISTORY_SUBDIR)
+            )
+        );
+        assert!(
             repo_root
                 .join(CHANGELOGS_DIR_NAME)
-                .join(CHANGELOGS_HISTORY_SUBDIR)
-        ));
-        assert!(repo_root
-            .join(CHANGELOGS_DIR_NAME)
-            .join(HISTORY_SUMMARY_FILE)
-            .is_file());
+                .join(HISTORY_SUMMARY_FILE)
+                .is_file()
+        );
 
         let _ = std::fs::remove_dir_all(repo_root);
     }
@@ -2659,7 +2660,11 @@ mod tests {
         .render_markdown();
 
         assert!(changelog.markdown.contains("<sup>💬 Intro:</sup>"));
-        assert!(changelog.markdown.contains("<sup>_This release focuses on:_</sup>"));
+        assert!(
+            changelog
+                .markdown
+                .contains("<sup>_This release focuses on:_</sup>")
+        );
         assert!(changelog.markdown.contains("<sup>_- render_</sup>"));
         assert!(changelog.markdown.contains("Rendering enhancements"));
     }

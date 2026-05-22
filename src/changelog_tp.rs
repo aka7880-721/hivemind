@@ -883,10 +883,8 @@ mod tests {
 
     #[test]
     fn merge_top_picks_with_edits_preserves_intro() {
-        let (merged, intro) = merge_top_picks_with_edits(
-            vec![],
-            "INTRO:\nRelease theme\n\n1. Manual only\n- bullet",
-        );
+        let (merged, intro) =
+            merge_top_picks_with_edits(vec![], "INTRO:\nRelease theme\n\n1. Manual only\n- bullet");
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].header, "Manual only");
         let intro = intro.expect("intro");

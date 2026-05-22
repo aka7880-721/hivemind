@@ -682,12 +682,7 @@ impl ReadmeInjectDepth {
     }
 
     pub fn all() -> [Self; 4] {
-        [
-            Self::CurrentOnly,
-            Self::Last3,
-            Self::Last5,
-            Self::Last10,
-        ]
+        [Self::CurrentOnly, Self::Last3, Self::Last5, Self::Last10]
     }
 }
 

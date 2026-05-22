@@ -1307,7 +1307,9 @@ fn render_inject_depth_row(
     scope_index: usize,
 ) {
     let inset = control_inset(area);
-    let selected = project.release_now_for_scope(scope_index).readme_inject_depth;
+    let selected = project
+        .release_now_for_scope(scope_index)
+        .readme_inject_depth;
     let row = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(FORM_LABEL_WIDTH), Constraint::Min(10)])

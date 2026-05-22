@@ -172,7 +172,8 @@ fn load_previous_injection_entries(
         if crate::changelog::archived_changelog_matches_tag(&archived.label, tag_name) {
             continue;
         }
-        let Some(body) = historical_injection_body(&archived.markdown, inject_only_top_picks) else {
+        let Some(body) = historical_injection_body(&archived.markdown, inject_only_top_picks)
+        else {
             continue;
         };
         entries.push(PreviousInjectEntry {
@@ -518,10 +519,8 @@ mod tests {
 
     #[test]
     fn inject_only_top_picks_uses_placeholder_when_section_missing() {
-        let repo_dir = std::env::temp_dir().join(format!(
-            "cg_rls_inj_only_tp_empty_{}",
-            std::process::id()
-        ));
+        let repo_dir =
+            std::env::temp_dir().join(format!("cg_rls_inj_only_tp_empty_{}", std::process::id()));
         fs::create_dir_all(&repo_dir).unwrap();
         fs::write(repo_dir.join("README.md"), "# crate\n\nbody\n").unwrap();
 
@@ -546,10 +545,8 @@ mod tests {
 
     #[test]
     fn inject_only_top_picks_still_injects_section_when_present() {
-        let repo_dir = std::env::temp_dir().join(format!(
-            "cg_rls_inj_only_tp_present_{}",
-            std::process::id()
-        ));
+        let repo_dir =
+            std::env::temp_dir().join(format!("cg_rls_inj_only_tp_present_{}", std::process::id()));
         fs::create_dir_all(&repo_dir).unwrap();
         fs::write(repo_dir.join("README.md"), "# crate\n\nbody\n").unwrap();
 
