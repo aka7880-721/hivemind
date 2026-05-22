@@ -20,6 +20,8 @@ use std::{fs, path::Path};
 
 use anyhow::{Context, Result, bail};
 
+use crate::config::ReadmeInjectDepth;
+
 const COMFYGIT_LINK: &str = "https://github.com/comfy-home/ComfyGit";
 const TOP_PICKS_HEADING_PREFIX: &str = "### 💥";
 const FOOTER_RULE: &str = "---";
@@ -79,6 +81,111 @@ fn extract_top_picks_section(markdown: &str) -> Option<String> {
     Some(section)
 }
 
+struct PreviousInjectEntry {
+    version_summary: String,
+    body: String,
+}
+
+fn strip_top_picks_heading(markdown: &str) -> String {
+    let mut kept = Vec::new();
+    let mut skipping_intro = false;
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(TOP_PICKS_HEADING_PREFIX) {
+            continue;
+        }
+        if trimmed.starts_with("<sup>💬 Intro:</sup>") {
+            skipping_intro = true;
+            continue;
+        }
+        if skipping_intro {
+            if trimmed.starts_with("#### **") {
+                skipping_intro = false;
+                kept.push(line);
+            } else if trimmed.starts_with("<sup>_") && trimmed.contains("</sup>") {
+                continue;
+            } else if trimmed.is_empty() {
+                continue;
+            } else {
+                skipping_intro = false;
+                kept.push(line);
+            }
+            continue;
+        }
+        kept.push(line);
+    }
+    let mut text = kept.join("\n");
+    while text.ends_with("\n\n") {
+        text.pop();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+    }
+    text.trim().to_string()
+}
+
+fn prepare_injection_body(markdown: &str, inject_only_top_picks: bool) -> (String, bool) {
+    let top_picks = extract_top_picks_section(markdown);
+    if inject_only_top_picks {
+        return match top_picks {
+            Some(section) => (section, true),
+            None => (String::new(), true),
+        };
+    }
+    match top_picks {
+        Some(section) => (section, true),
+        None => (markdown.to_string(), false),
+    }
+}
+
+fn historical_injection_body(markdown: &str, inject_only_top_picks: bool) -> Option<String> {
+    let (body, _) = prepare_injection_body(markdown, inject_only_top_picks);
+    if inject_only_top_picks && extract_top_picks_section(markdown).is_none() {
+        return None;
+    }
+    let body = if extract_top_picks_section(markdown).is_some() {
+        strip_top_picks_heading(&body)
+    } else {
+        strip_original_comfygit_footer(&body)
+    };
+    if body.trim().is_empty() {
+        None
+    } else {
+        Some(body)
+    }
+}
+
+fn load_previous_injection_entries(
+    repo_root: &str,
+    tag_name: &str,
+    inject_depth: ReadmeInjectDepth,
+    inject_only_top_picks: bool,
+) -> Result<Vec<PreviousInjectEntry>> {
+    let limit = inject_depth.previous_release_count();
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    for archived in crate::changelog::list_deduped_archived_changelogs_for_injection(repo_root)? {
+        if crate::changelog::archived_changelog_matches_tag(&archived.label, tag_name) {
+            continue;
+        }
+        let Some(body) = historical_injection_body(&archived.markdown, inject_only_top_picks) else {
+            continue;
+        };
+        entries.push(PreviousInjectEntry {
+            version_summary: archived.display_version,
+            body,
+        });
+        if entries.len() >= limit {
+            break;
+        }
+    }
+    Ok(entries)
+}
+
 /// Build the `<details>` block to inject.
 ///
 /// * `version` – bare version string, e.g. `"v0.3.1"`
@@ -91,6 +198,7 @@ fn build_details_block(
     body: &str,
     release_url: Option<&str>,
     top_picks_mode: bool,
+    previous: &[PreviousInjectEntry],
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut sanitized_body = strip_original_comfygit_footer(body);
@@ -105,6 +213,23 @@ fn build_details_block(
     lines.push(String::new());
     lines.push(sanitized_body);
     lines.push(String::new());
+
+    if !previous.is_empty() {
+        lines.push("<details><summary>👀 See previous changes...</summary>".to_string());
+        lines.push("<br>".to_string());
+        for entry in previous {
+            lines.push(format!(
+                "<details><summary>{} ...</summary>",
+                entry.version_summary
+            ));
+            lines.push(String::new());
+            lines.push(entry.body.clone());
+            lines.push("</details>".to_string());
+        }
+        lines.push("</details>".to_string());
+        lines.push("<br>".to_string());
+    }
+
     lines.push(String::new());
 
     lines.push(FOOTER_RULE.to_string());
@@ -211,6 +336,15 @@ fn inject_into_file(readme_path: &Path, inject_at_row: u16, block: &str) -> Resu
     Ok(())
 }
 
+fn no_top_picks_placeholder(release_url: Option<&str>) -> String {
+    match release_url {
+        Some(url) => format!(
+            "This release does not contain any highlighted features, [click here]({url}) to see detailed changes."
+        ),
+        None => "This release does not contain any highlighted features.".to_string(),
+    }
+}
+
 /// Parameters for README injection.
 pub(crate) struct ReadmeInjectionParams<'a> {
     /// Absolute path to the project repository root.
@@ -223,6 +357,10 @@ pub(crate) struct ReadmeInjectionParams<'a> {
     pub inject_at_row: u16,
     /// Remote URL (SSH or HTTPS) used to build the GitHub release link.
     pub remote_url: Option<&'a str>,
+    /// When true, inject only Top Picks (or a no-highlights placeholder), never the full changelog.
+    pub inject_only_top_picks: bool,
+    /// How many prior releases to include from `.changelogs/history`.
+    pub inject_depth: ReadmeInjectDepth,
 }
 
 /// Perform the README injection.
@@ -238,21 +376,29 @@ pub(crate) fn inject_whats_new(params: &ReadmeInjectionParams<'_>) -> Result<()>
         );
     }
 
-    let top_picks = extract_top_picks_section(params.changelog_markdown);
-    let (body, top_picks_mode) = match &top_picks {
-        Some(section) => (section.as_str(), true),
-        None => (params.changelog_markdown, false),
-    };
-
     let release_url = params
         .remote_url
         .and_then(|u| github_release_url(u, params.tag_name));
 
+    let (mut body, top_picks_mode) =
+        prepare_injection_body(params.changelog_markdown, params.inject_only_top_picks);
+    if params.inject_only_top_picks && body.trim().is_empty() {
+        body = no_top_picks_placeholder(release_url.as_deref());
+    }
+
+    let previous = load_previous_injection_entries(
+        params.repo_root,
+        params.tag_name,
+        params.inject_depth,
+        params.inject_only_top_picks,
+    )?;
+
     let block = build_details_block(
         params.tag_name,
-        body,
+        &body,
         release_url.as_deref(),
         top_picks_mode,
+        &previous,
     );
 
     inject_into_file(&readme_path, params.inject_at_row, &block)
@@ -333,6 +479,7 @@ mod tests {
             "## Changelog body\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)",
             None,
             false,
+            &[],
         );
         assert!(block.contains("<details><summary>👀 What's new in v0.3.1 ...</summary>"));
         assert!(block.contains("## Changelog body"));
@@ -350,6 +497,7 @@ mod tests {
             "### 💥 Top picks\n\n<sub>...  🎉 Enjoy!</sub>\n\n<br>",
             Some("https://github.com/owner/repo/releases/tag/v0.3.1"),
             true,
+            &[],
         );
         assert!(block.contains("CLICK HERE"));
         assert!(block.contains("releases/tag/v0.3.1"));
@@ -366,6 +514,119 @@ mod tests {
             url.as_deref(),
             Some("https://github.com/comfy-home/ComfyGit/releases/tag/v1.0.0")
         );
+    }
+
+    #[test]
+    fn inject_only_top_picks_uses_placeholder_when_section_missing() {
+        let repo_dir = std::env::temp_dir().join(format!(
+            "cg_rls_inj_only_tp_empty_{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&repo_dir).unwrap();
+        fs::write(repo_dir.join("README.md"), "# crate\n\nbody\n").unwrap();
+
+        let release_url = "https://github.com/owner/repo/releases/tag/v0.3.1";
+        inject_whats_new(&ReadmeInjectionParams {
+            repo_root: repo_dir.to_str().unwrap(),
+            tag_name: "v0.3.1",
+            changelog_markdown: "## Changelog\n\n### Refactor\n\n* Only standard items\n",
+            inject_at_row: 2,
+            remote_url: Some("git@github.com:owner/repo.git"),
+            inject_only_top_picks: true,
+            inject_depth: ReadmeInjectDepth::CurrentOnly,
+        })
+        .unwrap();
+
+        let result = fs::read_to_string(repo_dir.join("README.md")).unwrap();
+        let _ = fs::remove_dir_all(&repo_dir);
+        assert!(result.contains("does not contain any highlighted features"));
+        assert!(result.contains(&format!("[click here]({release_url})")));
+        assert!(!result.contains("Only standard items"));
+    }
+
+    #[test]
+    fn inject_only_top_picks_still_injects_section_when_present() {
+        let repo_dir = std::env::temp_dir().join(format!(
+            "cg_rls_inj_only_tp_present_{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&repo_dir).unwrap();
+        fs::write(repo_dir.join("README.md"), "# crate\n\nbody\n").unwrap();
+
+        let md = concat!(
+            "## Changelog\n\n",
+            "### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n",
+            "#### **1. Highlight**\n",
+            "- A benefit\n"
+        );
+        inject_whats_new(&ReadmeInjectionParams {
+            repo_root: repo_dir.to_str().unwrap(),
+            tag_name: "v0.3.1",
+            changelog_markdown: md,
+            inject_at_row: 2,
+            remote_url: None,
+            inject_only_top_picks: true,
+            inject_depth: ReadmeInjectDepth::CurrentOnly,
+        })
+        .unwrap();
+
+        let result = fs::read_to_string(repo_dir.join("README.md")).unwrap();
+        let _ = fs::remove_dir_all(&repo_dir);
+        assert!(result.contains("Highlight"));
+        assert!(!result.contains("does not contain any highlighted features"));
+    }
+
+    #[test]
+    fn strip_top_picks_heading_removes_banner_line() {
+        let section = concat!(
+            "### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n",
+            "#### **1. Feature**\n"
+        );
+        let stripped = strip_top_picks_heading(section);
+        assert!(!stripped.contains("### 💥"));
+        assert!(stripped.contains("#### **1. Feature**"));
+    }
+
+    #[test]
+    fn strip_top_picks_heading_removes_intro_sup_lines() {
+        let section = concat!(
+            "### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n",
+            "<sup>💬 Intro:</sup>  \n",
+            "<sup>_Theme line_</sup>  \n",
+            "<sup>_- bullet_</sup>\n\n",
+            "#### **1. Feature**\n"
+        );
+        let stripped = strip_top_picks_heading(section);
+        assert!(!stripped.contains("💬 Intro"));
+        assert!(!stripped.contains("Theme line"));
+        assert!(stripped.contains("#### **1. Feature**"));
+    }
+
+    #[test]
+    fn build_details_block_includes_previous_releases() {
+        let previous = vec![
+            PreviousInjectEntry {
+                version_summary: "v0.2.0".to_string(),
+                body: "#### **1. Older feature**\n".to_string(),
+            },
+            PreviousInjectEntry {
+                version_summary: "v0.1.0".to_string(),
+                body: "#### **1. Oldest feature**\n".to_string(),
+            },
+        ];
+        let block = build_details_block(
+            "v0.3.0",
+            "### 💥 Top picks\n\n#### **1. Current**",
+            Some("https://github.com/o/r/releases/tag/v0.3.0"),
+            true,
+            &previous,
+        );
+        assert!(block.contains("See previous changes"));
+        assert!(block.contains("<summary>v0.2.0 ...</summary>"));
+        assert!(block.contains("Older feature"));
+        assert!(!block.contains("### 💥 💥 💥"));
+        assert!(block.contains("What's new in v0.3.0"));
+        assert!(block.contains("### 💥 Top picks"));
     }
 
     #[test]

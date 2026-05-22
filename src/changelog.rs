@@ -14,8 +14,30 @@ use chrono::{Local, NaiveDate};
 
 const FOOTER: &str = "\n\n---\n... ✨ made with [ComfyGit](https://github.com/comfy-home/ComfyGit)";
 const TEMP_CHANGELOG_FILE: &str = "changelog_temp.md";
-const HISTORY_DIR_NAME: &str = ".changelogs";
+const CHANGELOGS_DIR_NAME: &str = ".changelogs";
+const CHANGELOGS_HISTORY_SUBDIR: &str = "history";
 const HISTORY_SUMMARY_FILE: &str = "README.md";
+
+fn changelogs_root(repo_root: &str) -> PathBuf {
+    Path::new(repo_root).join(CHANGELOGS_DIR_NAME)
+}
+
+fn changelogs_history_dir(repo_root: &str) -> PathBuf {
+    changelogs_root(repo_root).join(CHANGELOGS_HISTORY_SUBDIR)
+}
+
+fn changelogs_archive_dirs(repo_root: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let history_dir = changelogs_history_dir(repo_root);
+    if history_dir.is_dir() {
+        dirs.push(history_dir);
+    }
+    let root_dir = changelogs_root(repo_root);
+    if root_dir.is_dir() {
+        dirs.push(root_dir);
+    }
+    dirs
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Category {
@@ -345,22 +367,25 @@ impl ChangelogDocument {
         render_breaking_section(&mut lines, &visible_commits, self.mini_commit_hashes);
 
         // Extract and render Top Picks section (priority 825)
-        let top_picks = if self.include_top_picks {
+        let (top_picks, top_picks_intro) = if self.include_top_picks {
             let commit_top_picks = crate::changelog_tp::extract_top_picks(&visible_commits);
             if let Some(edits) = self.top_picks_edits.as_deref() {
                 crate::changelog_tp::merge_top_picks_with_edits(commit_top_picks, edits)
             } else {
-                commit_top_picks
+                (commit_top_picks, None)
             }
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
-        let has_top_picks = !top_picks.is_empty();
+        let has_top_picks = !top_picks.is_empty() || top_picks_intro.is_some();
 
         if has_top_picks {
             let mut sorted_picks = top_picks;
             crate::changelog_tp::sort_top_picks(&mut sorted_picks);
-            let top_picks_lines = crate::changelog_tp::render_top_picks_section(&sorted_picks);
+            let top_picks_lines = crate::changelog_tp::render_top_picks_section(
+                &sorted_picks,
+                top_picks_intro.as_ref(),
+            );
             lines.extend(top_picks_lines);
         }
 
@@ -539,10 +564,13 @@ pub(crate) fn custom_changelog_gen(
 }
 
 pub(crate) fn sum_changelog_gen(repo_root: &str) -> Result<PathBuf> {
-    let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
+    let root_dir = changelogs_root(repo_root);
+    let history_dir = changelogs_history_dir(repo_root);
+    fs::create_dir_all(&root_dir)
+        .with_context(|| format!("failed to create {}", root_dir.display()))?;
     fs::create_dir_all(&history_dir)
         .with_context(|| format!("failed to create {}", history_dir.display()))?;
-    write_history_summary_readme(&history_dir)
+    write_changelogs_summary_readme(repo_root)
 }
 
 pub(crate) fn write_changelog_markdown(
@@ -586,7 +614,10 @@ pub(crate) fn archive_changelog_markdown(
     label: &str,
     markdown: &str,
 ) -> Result<PathBuf> {
-    let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
+    let root_dir = changelogs_root(repo_root);
+    let history_dir = changelogs_history_dir(repo_root);
+    fs::create_dir_all(&root_dir)
+        .with_context(|| format!("failed to create {}", root_dir.display()))?;
     fs::create_dir_all(&history_dir)
         .with_context(|| format!("failed to create {}", history_dir.display()))?;
 
@@ -595,48 +626,43 @@ pub(crate) fn archive_changelog_markdown(
     let output_path = history_dir.join(file_name);
     fs::write(&output_path, markdown.trim_end())
         .with_context(|| format!("failed to write {}", output_path.display()))?;
-    write_history_summary_readme(&history_dir)?;
+    write_changelogs_summary_readme(repo_root)?;
     Ok(output_path)
 }
 
 pub(crate) fn rebuild_history_summary_readme(repo_root: &str) -> Result<Option<PathBuf>> {
-    let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
-    if !history_dir.is_dir() {
+    let root_dir = changelogs_root(repo_root);
+    if !root_dir.is_dir() {
         return Ok(None);
     }
 
-    write_history_summary_readme(&history_dir).map(Some)
+    write_changelogs_summary_readme(repo_root).map(Some)
 }
 
 pub(crate) fn find_archived_changelog_markdown(
     repo_root: &str,
     label: &str,
 ) -> Result<Option<String>> {
-    let history_dir = Path::new(repo_root).join(HISTORY_DIR_NAME);
-    if !history_dir.is_dir() {
-        return Ok(None);
-    }
-
     let candidates = history_label_candidates(label);
-    let mut matches = fs::read_dir(&history_dir)
-        .with_context(|| format!("failed to read {}", history_dir.display()))?
-        .filter_map(|entry| entry.ok().map(|item| item.path()))
-        .filter(|path| {
-            path.extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("md"))
-        })
-        .filter_map(|path| {
-            let stem = path.file_stem()?.to_str()?;
-            let parsed = parse_history_file_stem(stem)?;
-            Some((path, parsed))
-        })
-        .filter(|(_, parsed)| {
-            candidates
-                .iter()
-                .any(|candidate| candidate == &parsed.label)
-        })
-        .collect::<Vec<_>>();
+    let mut matches = Vec::new();
+
+    for history_dir in changelogs_archive_dirs(repo_root) {
+        let dir_matches = fs::read_dir(&history_dir)
+            .with_context(|| format!("failed to read {}", history_dir.display()))?
+            .filter_map(|entry| entry.ok().map(|item| item.path()))
+            .filter(|path| is_archived_changelog_file(path, &history_dir))
+            .filter_map(|path| {
+                let stem = path.file_stem()?.to_str()?;
+                let parsed = parse_history_file_stem(stem)?;
+                Some((path, parsed))
+            })
+            .filter(|(_, parsed)| {
+                candidates
+                    .iter()
+                    .any(|candidate| candidate == &parsed.label)
+            });
+        matches.extend(dir_matches);
+    }
 
     if matches.is_empty() {
         return Ok(None);
@@ -652,6 +678,31 @@ pub(crate) fn find_archived_changelog_markdown(
     Ok(Some(fs::read_to_string(&path).with_context(|| {
         format!("failed to read {}", path.display())
     })?))
+}
+
+fn is_archived_changelog_file(path: &Path, archive_dir: &Path) -> bool {
+    if path.extension()
+        .and_then(|value| value.to_str())
+        .is_none_or(|value| !value.eq_ignore_ascii_case("md"))
+    {
+        return false;
+    }
+
+    if path.file_name().and_then(|value| value.to_str()) == Some(HISTORY_SUMMARY_FILE) {
+        return false;
+    }
+
+    // Skip nested history/ entries when scanning the legacy flat .changelogs root.
+    if archive_dir.ends_with(CHANGELOGS_DIR_NAME) {
+        if path
+            .parent()
+            .is_some_and(|parent| parent.file_name().and_then(|name| name.to_str()) == Some(CHANGELOGS_HISTORY_SUBDIR))
+        {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn resolve_changelog_path(repo_root: &str, changelog_path: &str) -> PathBuf {
@@ -721,41 +772,39 @@ struct ParsedHistoryFileStem {
     label: String,
 }
 
-fn write_history_summary_readme(history_dir: &Path) -> Result<PathBuf> {
-    let entries = load_archived_changelog_entries(history_dir)?;
-    let summary_path = history_dir.join(HISTORY_SUMMARY_FILE);
+fn write_changelogs_summary_readme(repo_root: &str) -> Result<PathBuf> {
+    let entries = load_archived_changelog_entries(repo_root)?;
+    let summary_path = changelogs_root(repo_root).join(HISTORY_SUMMARY_FILE);
     let rendered = render_history_summary_markdown(&entries);
     fs::write(&summary_path, rendered.trim_end())
         .with_context(|| format!("failed to write {}", summary_path.display()))?;
     Ok(summary_path)
 }
 
-fn load_archived_changelog_entries(history_dir: &Path) -> Result<Vec<ArchivedChangelogEntry>> {
-    let mut entries = fs::read_dir(history_dir)
-        .with_context(|| format!("failed to read {}", history_dir.display()))?
-        .filter_map(|entry| entry.ok().map(|item| item.path()))
-        .filter(|path| {
-            path.extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("md"))
-        })
-        .filter(|path| {
-            path.file_name().and_then(|value| value.to_str()) != Some(HISTORY_SUMMARY_FILE)
-        })
-        .filter_map(|path| {
-            let stem = path.file_stem()?.to_str()?;
-            let parsed = parse_history_file_stem(stem)?;
-            Some((path, parsed))
-        })
-        .map(|(path, parsed)| {
-            Ok(ArchivedChangelogEntry {
-                timestamp: parsed.timestamp,
-                label: parsed.label,
-                markdown: fs::read_to_string(&path)
-                    .with_context(|| format!("failed to read {}", path.display()))?,
+fn load_archived_changelog_entries(repo_root: &str) -> Result<Vec<ArchivedChangelogEntry>> {
+    let mut entries = Vec::new();
+
+    for history_dir in changelogs_archive_dirs(repo_root) {
+        let dir_entries = fs::read_dir(&history_dir)
+            .with_context(|| format!("failed to read {}", history_dir.display()))?
+            .filter_map(|entry| entry.ok().map(|item| item.path()))
+            .filter(|path| is_archived_changelog_file(path, &history_dir))
+            .filter_map(|path| {
+                let stem = path.file_stem()?.to_str()?;
+                let parsed = parse_history_file_stem(stem)?;
+                Some((path, parsed))
             })
-        })
-        .collect::<Result<Vec<_>>>()?;
+            .map(|(path, parsed)| {
+                Ok(ArchivedChangelogEntry {
+                    timestamp: parsed.timestamp,
+                    label: parsed.label,
+                    markdown: fs::read_to_string(&path)
+                        .with_context(|| format!("failed to read {}", path.display()))?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        entries.extend(dir_entries);
+    }
 
     entries.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
     Ok(entries)
@@ -860,6 +909,69 @@ fn history_summary_key(label: &str) -> String {
     history_label_candidates(label)
         .pop()
         .unwrap_or_else(|| sanitize_history_label(label))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArchivedChangelogForInjection {
+    pub label: String,
+    pub display_version: String,
+    pub markdown: String,
+}
+
+pub(crate) fn list_deduped_archived_changelogs_for_injection(
+    repo_root: &str,
+) -> Result<Vec<ArchivedChangelogForInjection>> {
+    let entries = load_archived_changelog_entries(repo_root)?;
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+
+    for entry in entries {
+        let key = history_summary_key(&entry.label);
+        if !seen.insert(key) {
+            continue;
+        }
+        let markdown = strip_summary_footer(&entry.markdown);
+        if markdown.is_empty() {
+            continue;
+        }
+        result.push(ArchivedChangelogForInjection {
+            display_version: display_version_from_history_label(&entry.label),
+            label: entry.label,
+            markdown,
+        });
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn archived_changelog_matches_tag(label: &str, tag_name: &str) -> bool {
+    let label_key = history_summary_key(label);
+    history_label_candidates(tag_name)
+        .into_iter()
+        .map(|candidate| history_summary_key(&candidate))
+        .any(|candidate| candidate == label_key)
+}
+
+fn display_version_from_history_label(label: &str) -> String {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return "v?".to_string();
+    }
+    if trimmed.starts_with('v') || trimmed.starts_with('V') {
+        return trimmed.to_string();
+    }
+    if let Some(version) = trimmed.rsplit_once("-v").map(|(_, version)| version) {
+        if version.chars().all(|character| character.is_ascii_digit() || character == '-') {
+            return format!("v{}", version.replace('-', "."));
+        }
+    }
+    if trimmed
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '-')
+    {
+        return format!("v{}", trimmed.replace('-', "."));
+    }
+    format!("v{trimmed}")
 }
 
 fn strip_summary_footer(markdown: &str) -> String {
@@ -2233,6 +2345,49 @@ mod tests {
     }
 
     #[test]
+    fn display_version_from_history_label_formats_semver_dashes() {
+        assert_eq!(
+            display_version_from_history_label("0-10-11"),
+            "v0.10.11"
+        );
+        assert_eq!(
+            display_version_from_history_label("core-v1-2-3"),
+            "v1.2.3"
+        );
+    }
+
+    #[test]
+    fn archive_writes_to_changelogs_history_and_summary_to_root() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "cg-changelogs-layout-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&repo_root).expect("repo root should be created");
+
+        let archived = archive_changelog_markdown(
+            &repo_root.display().to_string(),
+            "v9.9.9",
+            "## Changelog v9.9.9\n\npayload\n",
+        )
+        .expect("archive should succeed");
+
+        assert!(archived.starts_with(
+            repo_root
+                .join(CHANGELOGS_DIR_NAME)
+                .join(CHANGELOGS_HISTORY_SUBDIR)
+        ));
+        assert!(repo_root
+            .join(CHANGELOGS_DIR_NAME)
+            .join(HISTORY_SUMMARY_FILE)
+            .is_file());
+
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
     fn archived_changelog_lookup_matches_tag_prefix_variants() {
         let repo_root = std::env::temp_dir().join(format!(
             "cg-history-changelog-{}",
@@ -2264,7 +2419,7 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ));
-        let history_dir = repo_root.join(HISTORY_DIR_NAME);
+        let history_dir = changelogs_history_dir(&repo_root.display().to_string());
         std::fs::create_dir_all(&history_dir).expect("history dir should be created");
 
         std::fs::write(
@@ -2489,5 +2644,23 @@ mod tests {
         assert!(changelog.markdown.contains("This Release's Top Picks"));
         assert!(changelog.markdown.contains("Manual highlight"));
         assert!(changelog.markdown.contains("Saved from editor"));
+    }
+
+    #[test]
+    fn top_picks_edits_intro_renders_in_changelog() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![ParsedCommit::parse("@feat: regular feature", "a1b2c3d")],
+        )
+        .with_top_picks_edits(
+            "INTRO:\nThis release focuses on:\n- render\n\n1. Rendering enhancements\n- bullet",
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        .render_markdown();
+
+        assert!(changelog.markdown.contains("<sup>💬 Intro:</sup>"));
+        assert!(changelog.markdown.contains("<sup>_This release focuses on:_</sup>"));
+        assert!(changelog.markdown.contains("<sup>_- render_</sup>"));
+        assert!(changelog.markdown.contains("Rendering enhancements"));
     }
 }

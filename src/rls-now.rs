@@ -125,6 +125,8 @@ fn stage_auto_injected_readme(
     changelog_markdown: &str,
     inject_at_row: u16,
     remote_url: Option<&str>,
+    inject_only_top_picks: bool,
+    inject_depth: crate::config::ReadmeInjectDepth,
 ) -> Result<()> {
     super::rls_now_inj::inject_whats_new(&super::rls_now_inj::ReadmeInjectionParams {
         repo_root,
@@ -132,6 +134,8 @@ fn stage_auto_injected_readme(
         changelog_markdown,
         inject_at_row,
         remote_url,
+        inject_only_top_picks,
+        inject_depth,
     })?;
     run_git_checked(repo_root, &["add", "README.md"])?;
     Ok(())
@@ -221,6 +225,8 @@ async fn prepush_auto_injected_readme_async(
     let inj_markdown = request.release_notes_markdown.clone().unwrap_or_default();
     let inj_row = request.readme_inject_at_row;
     let inj_remote = request.scope.remote_spec.clone();
+    let inj_only_top_picks = request.readme_inject_only_top_picks;
+    let inj_depth = request.readme_inject_depth;
     run_blocking_job(move || {
         stage_auto_injected_readme(
             &inj_repo_root,
@@ -228,6 +234,8 @@ async fn prepush_auto_injected_readme_async(
             &inj_markdown,
             inj_row,
             inj_remote.as_deref(),
+            inj_only_top_picks,
+            inj_depth,
         )
     })
     .await?;
@@ -365,6 +373,8 @@ pub(super) struct ReleaseNowDialog {
     pub(super) log_lines: Vec<String>,
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
     pub(super) readme_injection_enabled: bool,
+    pub(super) readme_inject_only_top_picks: bool,
+    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
     pub(super) readme_inject_at_row: u16,
     pub(super) release_title_template: String,
     pub(super) started_at: Option<Instant>,
@@ -411,6 +421,8 @@ impl ReleaseNowDialog {
             log_lines: Vec::new(),
             quick_downloads: validation.quick_downloads,
             readme_injection_enabled: validation.readme_injection_enabled,
+            readme_inject_only_top_picks: validation.readme_inject_only_top_picks,
+            readme_inject_depth: validation.readme_inject_depth,
             readme_inject_at_row: validation.readme_inject_at_row,
             release_title_template: validation.release_title_template,
             started_at: None,
@@ -906,6 +918,8 @@ pub(super) struct ReleaseNowValidation {
     pub(super) release_notes_markdown: String,
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
     pub(super) readme_injection_enabled: bool,
+    pub(super) readme_inject_only_top_picks: bool,
+    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
     pub(super) readme_inject_at_row: u16,
     pub(super) release_title_template: String,
 }
@@ -937,6 +951,8 @@ pub(super) struct ReleaseNowExecutionRequest {
     pub(super) release_notes_markdown: Option<String>,
     pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
     pub(super) readme_injection_enabled: bool,
+    pub(super) readme_inject_only_top_picks: bool,
+    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
     pub(super) readme_inject_at_row: u16,
 }
 
@@ -991,6 +1007,12 @@ pub(super) fn validate_release_now(
         readme_injection_enabled: project
             .release_now_for_scope(scope_index)
             .readme_injection_enabled,
+        readme_inject_only_top_picks: project
+            .release_now_for_scope(scope_index)
+            .readme_inject_only_top_picks,
+        readme_inject_depth: project
+            .release_now_for_scope(scope_index)
+            .readme_inject_depth,
         readme_inject_at_row: project
             .release_now_for_scope(scope_index)
             .readme_inject_at_row,
@@ -1025,6 +1047,8 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
             .filter(|notes| !notes.is_empty()),
         quick_downloads: dialog.quick_downloads.clone(),
         readme_injection_enabled: dialog.readme_injection_enabled,
+        readme_inject_only_top_picks: dialog.readme_inject_only_top_picks,
+        readme_inject_depth: dialog.readme_inject_depth,
         readme_inject_at_row: dialog.readme_inject_at_row,
     }
 }
@@ -2523,6 +2547,8 @@ mod tests {
             "## Changelog `v1.2.3`\n\n### ♻️ Refactor\n\n* Updated docs\n",
             2,
             Some("https://github.com/comfy-home/ComfyGit"),
+            false,
+            crate::config::ReadmeInjectDepth::CurrentOnly,
         )
         .expect("stage injected readme");
 

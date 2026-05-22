@@ -9,7 +9,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph},
@@ -22,7 +22,7 @@ use super::{
     visible_field_width,
 };
 use crate::{
-    config::{DEFAULT_CHANGELOG_PATH, ProjectConfig, ProjectType},
+    config::{DEFAULT_CHANGELOG_PATH, ProjectConfig, ProjectType, ReadmeInjectDepth},
     dialogs::TextInput,
     ui::center_vertically,
 };
@@ -71,7 +71,12 @@ pub(crate) enum ProjectSettingsFocus {
     QuickDownloadsPosition,
     QuickDownloadsFooter,
     ReadmeInjectionEnabled,
+    ReadmeInjectOnlyTopPicks,
     ReadmeInjectAtRow,
+    ReadmeInjectDepthCurrentOnly,
+    ReadmeInjectDepthLast3,
+    ReadmeInjectDepthLast5,
+    ReadmeInjectDepthLast10,
     ReleaseTitleTemplate,
 }
 
@@ -211,7 +216,14 @@ impl ProjectSettingsState {
                         .release_now_for_scope(scope_index)
                         .readme_injection_enabled
                     {
+                        fields.push(ProjectSettingsFocus::ReadmeInjectOnlyTopPicks);
                         fields.push(ProjectSettingsFocus::ReadmeInjectAtRow);
+                        fields.extend([
+                            ProjectSettingsFocus::ReadmeInjectDepthCurrentOnly,
+                            ProjectSettingsFocus::ReadmeInjectDepthLast3,
+                            ProjectSettingsFocus::ReadmeInjectDepthLast5,
+                            ProjectSettingsFocus::ReadmeInjectDepthLast10,
+                        ]);
                     }
                 }
                 fields
@@ -666,7 +678,7 @@ pub(crate) fn activate_project_settings_field(
     sync_project_settings_state(app);
     app.project_settings_state.focus = focus;
     app.project_settings_state.follow_focus = true;
-    if is_checkbox_field(focus) {
+    if is_checkbox_field(focus) || is_readme_inject_depth_field(focus) {
         return toggle_focused_project_settings_control(app);
     }
     Ok(())
@@ -692,6 +704,7 @@ enum ProjectSettingsRow {
     Checkbox(ProjectSettingsFocus),
     DualCheckbox(ProjectSettingsFocus, ProjectSettingsFocus),
     Path(ProjectSettingsFocus),
+    InjectDepth,
 }
 
 impl ProjectSettingsRow {
@@ -702,6 +715,7 @@ impl ProjectSettingsRow {
             Self::Checkbox(_) => 2,
             Self::DualCheckbox(_, _) => 2,
             Self::Path(_) => 3,
+            Self::InjectDepth => 2,
         }
     }
 
@@ -709,9 +723,33 @@ impl ProjectSettingsRow {
         match self {
             Self::Checkbox(field) | Self::Path(field) => Some(*field),
             Self::DualCheckbox(left, _) => Some(*left),
+            Self::InjectDepth => Some(ProjectSettingsFocus::ReadmeInjectDepthCurrentOnly),
             _ => None,
         }
     }
+}
+
+fn readme_inject_depth_from_focus(focus: ProjectSettingsFocus) -> Option<ReadmeInjectDepth> {
+    match focus {
+        ProjectSettingsFocus::ReadmeInjectDepthCurrentOnly => Some(ReadmeInjectDepth::CurrentOnly),
+        ProjectSettingsFocus::ReadmeInjectDepthLast3 => Some(ReadmeInjectDepth::Last3),
+        ProjectSettingsFocus::ReadmeInjectDepthLast5 => Some(ReadmeInjectDepth::Last5),
+        ProjectSettingsFocus::ReadmeInjectDepthLast10 => Some(ReadmeInjectDepth::Last10),
+        _ => None,
+    }
+}
+
+fn focus_for_readme_inject_depth(depth: ReadmeInjectDepth) -> ProjectSettingsFocus {
+    match depth {
+        ReadmeInjectDepth::CurrentOnly => ProjectSettingsFocus::ReadmeInjectDepthCurrentOnly,
+        ReadmeInjectDepth::Last3 => ProjectSettingsFocus::ReadmeInjectDepthLast3,
+        ReadmeInjectDepth::Last5 => ProjectSettingsFocus::ReadmeInjectDepthLast5,
+        ReadmeInjectDepth::Last10 => ProjectSettingsFocus::ReadmeInjectDepthLast10,
+    }
+}
+
+fn is_readme_inject_depth_field(field: ProjectSettingsFocus) -> bool {
+    readme_inject_depth_from_focus(field).is_some()
 }
 
 pub(crate) fn open_browser_for_project_settings_focus(app: &mut App) -> Result<()> {
@@ -962,6 +1000,9 @@ fn render_scrollable_rows(
                 let focused = *field == app.project_settings_state.focus;
                 render_path_row(app, frame, row_area, *field, focused);
             }
+            ProjectSettingsRow::InjectDepth if row_area.height >= 2 => {
+                render_inject_depth_row(app, frame, row_area, project, scope_index);
+            }
             _ => {}
         }
 
@@ -1052,9 +1093,13 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
             .release_now_for_scope(scope_index)
             .readme_injection_enabled
         {
+            rows.push(ProjectSettingsRow::Checkbox(
+                ProjectSettingsFocus::ReadmeInjectOnlyTopPicks,
+            ));
             rows.push(ProjectSettingsRow::Path(
                 ProjectSettingsFocus::ReadmeInjectAtRow,
             ));
+            rows.push(ProjectSettingsRow::InjectDepth);
         }
         rows.push(ProjectSettingsRow::Spacer(1));
     }
@@ -1180,7 +1225,10 @@ fn focused_row_bounds(
     let mut top = 0u16;
     for row in rows {
         let height = row.height();
-        if row.focus() == Some(focus) {
+        let row_focused = row.focus() == Some(focus)
+            || (matches!(row, ProjectSettingsRow::InjectDepth)
+                && is_readme_inject_depth_field(focus));
+        if row_focused {
             return Some((top, height));
         }
         top = top.saturating_add(height);
@@ -1223,6 +1271,11 @@ fn render_checkbox_row(
                 .release_now_for_scope(scope_index)
                 .readme_injection_enabled
         }
+        ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => {
+            project
+                .release_now_for_scope(scope_index)
+                .readme_inject_only_top_picks
+        }
         _ => false,
     };
     let checkbox = Checkbox::new(checkbox_label(field), enabled)
@@ -1244,6 +1297,70 @@ fn render_checkbox_row(
         inset,
         HitAction::SelectProjectSettingsField(field),
     ));
+}
+
+fn render_inject_depth_row(
+    app: &mut App,
+    frame: &mut Frame,
+    area: Rect,
+    project: &ProjectConfig,
+    scope_index: usize,
+) {
+    let inset = control_inset(area);
+    let selected = project.release_now_for_scope(scope_index).readme_inject_depth;
+    let row = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(FORM_LABEL_WIDTH), Constraint::Min(10)])
+        .split(inset);
+
+    let label_style = if is_readme_inject_depth_field(app.project_settings_state.focus) {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    frame.render_widget(
+        Paragraph::new("Inject:").style(label_style),
+        Rect {
+            height: 1,
+            ..row[0]
+        },
+    );
+
+    let options = ReadmeInjectDepth::all();
+    let option_areas = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(vec![Constraint::Ratio(1, 1); options.len()])
+        .flex(Flex::SpaceEvenly)
+        .split(row[1]);
+
+    for (depth, option_area) in options.iter().zip(option_areas.iter()) {
+        let focus = focus_for_readme_inject_depth(*depth);
+        let is_selected = *depth == selected;
+        let is_focused = app.project_settings_state.focus == focus;
+        let checkbox = Checkbox::new(depth.display_name(), is_selected)
+            .checked_symbol("✅ ")
+            .unchecked_symbol("❌ ")
+            .style(if is_focused {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::White)
+            })
+            .checkbox_style(Style::default().fg(if is_selected {
+                Color::Green
+            } else {
+                Color::Red
+            }))
+            .label_style(if is_focused {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::White)
+            });
+        frame.render_widget(checkbox, *option_area);
+        app.hit_targets.push(HitTarget::new(
+            *option_area,
+            HitAction::SelectProjectSettingsField(focus),
+        ));
+    }
 }
 
 fn render_dual_checkbox_row(
@@ -1461,6 +1578,7 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => "Mini commit hashes",
         ProjectSettingsFocus::ReadmeInjectionEnabled => "👀 What's new README injection enabled",
+        ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => "Inject only Top Picks",
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
         }
@@ -1634,6 +1752,27 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
             app.status = super::StatusMessage::success(format!(
                 "README injection {} for {}.",
                 if enabled { "enabled" } else { "disabled" },
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => {
+            let rls = active_project.release_now_for_scope_mut(scope_index);
+            rls.readme_inject_only_top_picks = !rls.readme_inject_only_top_picks;
+            let enabled = rls.readme_inject_only_top_picks;
+            app.status = super::StatusMessage::success(format!(
+                "Inject only Top Picks {} for {}.",
+                if enabled { "enabled" } else { "disabled" },
+                scope_name
+            ));
+        }
+        focus if readme_inject_depth_from_focus(focus).is_some() => {
+            let depth = readme_inject_depth_from_focus(focus).expect("depth focus checked");
+            let rls = active_project.release_now_for_scope_mut(scope_index);
+            rls.readme_inject_depth = depth;
+            app.project_settings_state.focus = focus_for_readme_inject_depth(depth);
+            app.status = super::StatusMessage::success(format!(
+                "README inject depth set to {} for {}.",
+                depth.display_name(),
                 scope_name
             ));
         }
