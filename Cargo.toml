@@ -32,10 +32,9 @@ exclude = ["src/components/comfy-toaster"]
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-crossterm = { version = "0.29", default-features = false }
+crossterm = { version = "0.29", default-features = false, features = ["bracketed-paste", "events"] }
 ctrlc = "3"
 directories = "6"
-document-features = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 ratatui = "0.30"
 # ratatui-comfy-toaster = "0.3.2"
@@ -57,3 +56,8 @@ unicode-width = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
+# crates.io 0.29.0 pulls document-features unconditionally, which breaks cross builds
+# (proc-macro crate unavailable for the target triple). Upstream fixed on master.
+[patch.crates-io]
+crossterm = { git = "https://github.com/crossterm-rs/crossterm", rev = "17192310472778bf94566b027ac1be0abdd05a7c" }
