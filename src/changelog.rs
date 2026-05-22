@@ -367,22 +367,25 @@ impl ChangelogDocument {
         render_breaking_section(&mut lines, &visible_commits, self.mini_commit_hashes);
 
         // Extract and render Top Picks section (priority 825)
-        let top_picks = if self.include_top_picks {
+        let (top_picks, top_picks_intro) = if self.include_top_picks {
             let commit_top_picks = crate::changelog_tp::extract_top_picks(&visible_commits);
             if let Some(edits) = self.top_picks_edits.as_deref() {
                 crate::changelog_tp::merge_top_picks_with_edits(commit_top_picks, edits)
             } else {
-                commit_top_picks
+                (commit_top_picks, None)
             }
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
-        let has_top_picks = !top_picks.is_empty();
+        let has_top_picks = !top_picks.is_empty() || top_picks_intro.is_some();
 
         if has_top_picks {
             let mut sorted_picks = top_picks;
             crate::changelog_tp::sort_top_picks(&mut sorted_picks);
-            let top_picks_lines = crate::changelog_tp::render_top_picks_section(&sorted_picks);
+            let top_picks_lines = crate::changelog_tp::render_top_picks_section(
+                &sorted_picks,
+                top_picks_intro.as_ref(),
+            );
             lines.extend(top_picks_lines);
         }
 
@@ -2641,5 +2644,23 @@ mod tests {
         assert!(changelog.markdown.contains("This Release's Top Picks"));
         assert!(changelog.markdown.contains("Manual highlight"));
         assert!(changelog.markdown.contains("Saved from editor"));
+    }
+
+    #[test]
+    fn top_picks_edits_intro_renders_in_changelog() {
+        let changelog = ChangelogDocument::new(
+            "v1.0.0",
+            vec![ParsedCommit::parse("@feat: regular feature", "a1b2c3d")],
+        )
+        .with_top_picks_edits(
+            "INTRO:\nThis release focuses on:\n- render\n\n1. Rendering enhancements\n- bullet",
+        )
+        .with_date(NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        .render_markdown();
+
+        assert!(changelog.markdown.contains("<sup>💬 Intro:</sup>"));
+        assert!(changelog.markdown.contains("<sup>_This release focuses on:_</sup>"));
+        assert!(changelog.markdown.contains("<sup>_- render_</sup>"));
+        assert!(changelog.markdown.contains("Rendering enhancements"));
     }
 }
