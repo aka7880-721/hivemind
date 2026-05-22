@@ -644,6 +644,8 @@ pub struct ReleaseNowSettings {
     pub macos_script: String,
     pub quick_downloads: ReleaseNowQuickDownloadsSettings,
     pub readme_injection_enabled: bool,
+    #[serde(default)]
+    pub readme_inject_only_top_picks: bool,
     pub readme_inject_at_row: u16,
     pub release_title_template: String,
 }

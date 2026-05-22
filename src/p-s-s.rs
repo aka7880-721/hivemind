@@ -71,6 +71,7 @@ pub(crate) enum ProjectSettingsFocus {
     QuickDownloadsPosition,
     QuickDownloadsFooter,
     ReadmeInjectionEnabled,
+    ReadmeInjectOnlyTopPicks,
     ReadmeInjectAtRow,
     ReleaseTitleTemplate,
 }
@@ -211,6 +212,7 @@ impl ProjectSettingsState {
                         .release_now_for_scope(scope_index)
                         .readme_injection_enabled
                     {
+                        fields.push(ProjectSettingsFocus::ReadmeInjectOnlyTopPicks);
                         fields.push(ProjectSettingsFocus::ReadmeInjectAtRow);
                     }
                 }
@@ -1052,6 +1054,9 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
             .release_now_for_scope(scope_index)
             .readme_injection_enabled
         {
+            rows.push(ProjectSettingsRow::Checkbox(
+                ProjectSettingsFocus::ReadmeInjectOnlyTopPicks,
+            ));
             rows.push(ProjectSettingsRow::Path(
                 ProjectSettingsFocus::ReadmeInjectAtRow,
             ));
@@ -1222,6 +1227,11 @@ fn render_checkbox_row(
             project
                 .release_now_for_scope(scope_index)
                 .readme_injection_enabled
+        }
+        ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => {
+            project
+                .release_now_for_scope(scope_index)
+                .readme_inject_only_top_picks
         }
         _ => false,
     };
@@ -1461,6 +1471,7 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => "Mini commit hashes",
         ProjectSettingsFocus::ReadmeInjectionEnabled => "👀 What's new README injection enabled",
+        ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => "Inject only Top Picks",
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
         }
@@ -1633,6 +1644,16 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
             let enabled = rls.readme_injection_enabled;
             app.status = super::StatusMessage::success(format!(
                 "README injection {} for {}.",
+                if enabled { "enabled" } else { "disabled" },
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => {
+            let rls = active_project.release_now_for_scope_mut(scope_index);
+            rls.readme_inject_only_top_picks = !rls.readme_inject_only_top_picks;
+            let enabled = rls.readme_inject_only_top_picks;
+            app.status = super::StatusMessage::success(format!(
+                "Inject only Top Picks {} for {}.",
                 if enabled { "enabled" } else { "disabled" },
                 scope_name
             ));

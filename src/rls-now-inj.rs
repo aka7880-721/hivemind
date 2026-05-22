@@ -211,6 +211,15 @@ fn inject_into_file(readme_path: &Path, inject_at_row: u16, block: &str) -> Resu
     Ok(())
 }
 
+fn no_top_picks_placeholder(release_url: Option<&str>) -> String {
+    match release_url {
+        Some(url) => format!(
+            "This release does not contain any highlighted features, [click here]({url}) to see detailed changes."
+        ),
+        None => "This release does not contain any highlighted features.".to_string(),
+    }
+}
+
 /// Parameters for README injection.
 pub(crate) struct ReadmeInjectionParams<'a> {
     /// Absolute path to the project repository root.
@@ -223,6 +232,8 @@ pub(crate) struct ReadmeInjectionParams<'a> {
     pub inject_at_row: u16,
     /// Remote URL (SSH or HTTPS) used to build the GitHub release link.
     pub remote_url: Option<&'a str>,
+    /// When true, inject only Top Picks (or a no-highlights placeholder), never the full changelog.
+    pub inject_only_top_picks: bool,
 }
 
 /// Perform the README injection.
@@ -238,15 +249,23 @@ pub(crate) fn inject_whats_new(params: &ReadmeInjectionParams<'_>) -> Result<()>
         );
     }
 
-    let top_picks = extract_top_picks_section(params.changelog_markdown);
-    let (body, top_picks_mode) = match &top_picks {
-        Some(section) => (section.as_str(), true),
-        None => (params.changelog_markdown, false),
-    };
-
     let release_url = params
         .remote_url
         .and_then(|u| github_release_url(u, params.tag_name));
+
+    let top_picks = extract_top_picks_section(params.changelog_markdown);
+    let (body, top_picks_mode): (String, bool) = if params.inject_only_top_picks {
+        match top_picks {
+            Some(section) => (section, true),
+            None => (no_top_picks_placeholder(release_url.as_deref()), true),
+        }
+    } else {
+        match top_picks {
+            Some(section) => (section, true),
+            None => (params.changelog_markdown.to_string(), false),
+        }
+    };
+    let body = body.as_str();
 
     let block = build_details_block(
         params.tag_name,
@@ -366,6 +385,64 @@ mod tests {
             url.as_deref(),
             Some("https://github.com/comfy-home/ComfyGit/releases/tag/v1.0.0")
         );
+    }
+
+    #[test]
+    fn inject_only_top_picks_uses_placeholder_when_section_missing() {
+        let repo_dir = std::env::temp_dir().join(format!(
+            "cg_rls_inj_only_tp_empty_{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&repo_dir).unwrap();
+        fs::write(repo_dir.join("README.md"), "# crate\n\nbody\n").unwrap();
+
+        let release_url = "https://github.com/owner/repo/releases/tag/v0.3.1";
+        inject_whats_new(&ReadmeInjectionParams {
+            repo_root: repo_dir.to_str().unwrap(),
+            tag_name: "v0.3.1",
+            changelog_markdown: "## Changelog\n\n### Refactor\n\n* Only standard items\n",
+            inject_at_row: 2,
+            remote_url: Some("git@github.com:owner/repo.git"),
+            inject_only_top_picks: true,
+        })
+        .unwrap();
+
+        let result = fs::read_to_string(repo_dir.join("README.md")).unwrap();
+        let _ = fs::remove_dir_all(&repo_dir);
+        assert!(result.contains("does not contain any highlighted features"));
+        assert!(result.contains(&format!("[click here]({release_url})")));
+        assert!(!result.contains("Only standard items"));
+    }
+
+    #[test]
+    fn inject_only_top_picks_still_injects_section_when_present() {
+        let repo_dir = std::env::temp_dir().join(format!(
+            "cg_rls_inj_only_tp_present_{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&repo_dir).unwrap();
+        fs::write(repo_dir.join("README.md"), "# crate\n\nbody\n").unwrap();
+
+        let md = concat!(
+            "## Changelog\n\n",
+            "### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥\n\n",
+            "#### **1. Highlight**\n",
+            "- A benefit\n"
+        );
+        inject_whats_new(&ReadmeInjectionParams {
+            repo_root: repo_dir.to_str().unwrap(),
+            tag_name: "v0.3.1",
+            changelog_markdown: md,
+            inject_at_row: 2,
+            remote_url: None,
+            inject_only_top_picks: true,
+        })
+        .unwrap();
+
+        let result = fs::read_to_string(repo_dir.join("README.md")).unwrap();
+        let _ = fs::remove_dir_all(&repo_dir);
+        assert!(result.contains("Highlight"));
+        assert!(!result.contains("does not contain any highlighted features"));
     }
 
     #[test]
