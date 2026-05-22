@@ -908,6 +908,69 @@ fn history_summary_key(label: &str) -> String {
         .unwrap_or_else(|| sanitize_history_label(label))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArchivedChangelogForInjection {
+    pub label: String,
+    pub display_version: String,
+    pub markdown: String,
+}
+
+pub(crate) fn list_deduped_archived_changelogs_for_injection(
+    repo_root: &str,
+) -> Result<Vec<ArchivedChangelogForInjection>> {
+    let entries = load_archived_changelog_entries(repo_root)?;
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+
+    for entry in entries {
+        let key = history_summary_key(&entry.label);
+        if !seen.insert(key) {
+            continue;
+        }
+        let markdown = strip_summary_footer(&entry.markdown);
+        if markdown.is_empty() {
+            continue;
+        }
+        result.push(ArchivedChangelogForInjection {
+            display_version: display_version_from_history_label(&entry.label),
+            label: entry.label,
+            markdown,
+        });
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn archived_changelog_matches_tag(label: &str, tag_name: &str) -> bool {
+    let label_key = history_summary_key(label);
+    history_label_candidates(tag_name)
+        .into_iter()
+        .map(|candidate| history_summary_key(&candidate))
+        .any(|candidate| candidate == label_key)
+}
+
+fn display_version_from_history_label(label: &str) -> String {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return "v?".to_string();
+    }
+    if trimmed.starts_with('v') || trimmed.starts_with('V') {
+        return trimmed.to_string();
+    }
+    if let Some(version) = trimmed.rsplit_once("-v").map(|(_, version)| version) {
+        if version.chars().all(|character| character.is_ascii_digit() || character == '-') {
+            return format!("v{}", version.replace('-', "."));
+        }
+    }
+    if trimmed
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '-')
+    {
+        return format!("v{}", trimmed.replace('-', "."));
+    }
+    format!("v{trimmed}")
+}
+
 fn strip_summary_footer(markdown: &str) -> String {
     markdown
         .trim()
@@ -2276,6 +2339,18 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn display_version_from_history_label_formats_semver_dashes() {
+        assert_eq!(
+            display_version_from_history_label("0-10-11"),
+            "v0.10.11"
+        );
+        assert_eq!(
+            display_version_from_history_label("core-v1-2-3"),
+            "v1.2.3"
+        );
     }
 
     #[test]
