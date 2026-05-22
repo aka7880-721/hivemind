@@ -58,9 +58,26 @@ Enjoy!
 
 ---
 
-<details><summary>👀 What's new in v0.27.7 ...</summary>
+<details><summary>👀 What's new in v0.28.4 ...</summary>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+
+<sup>💬 Intro:</sup>  
+<sup>_This release brings this "Intro" section, and..._</sup>  
+
+#### **1. &nbsp;&nbsp;&nbsp;Ability to inject historical Top Picks/changelogs into README!**
+#### **2. &nbsp;&nbsp;&nbsp;Ability to inject only Top Picks (no changelogs)**
+#### **3. &nbsp;&nbsp;&nbsp;Changes default folder of historical changelogs to `.changelogs/history`**
+- This has been done to declutter the `.changelogs` folder, so user does not need to scroll down on GitHub page to see README.md summarizing changelog within `.changelogs` folder
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br><br>
+
+<details><summary>👀 See previous changes...</summary>
+<br>
+<details><summary>v0-27-7 ...</summary>
 
 #### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
 - Now you can add, and edit your TP from TUI
@@ -99,15 +116,52 @@ Enjoy!
 
 <sub>...  🎉 Enjoy!</sub>
 
-<br><br>
+<br>
+</details>
+<details><summary>v0-26-0 ...</summary>
 
+## Changelog `v0.26.0` <sup><div align="end">🗓️ 2026-05-13</div></sup>
+
+### ✨ New in Auto-README 'What's new' inject!:
+
+#### 🧩 Features
+
+* Improve TopPicks section extraction and footer formatting in changelog markdown. Ensure proper handling of nested details.   _(a0deb22)_
 
 ---
-<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://github.com/comfy-home/ComfyGit/releases/tag/v0.27.7)</sup>
+
+## 💬 General Improvements & Fixes:
+
+### 🐛 Fix(es)
+
+* Update "click here" changelog summary formatting with nbsp   _(da18d36)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.26.0   _(cb8077c)_
+
+* Update ratatui-comfy-toaster to version 0.3.2 and add default progress bar settings in ToastEngine   _(e0aa8e8)_
+
+### ♻️ Refactor
+
+* Simplify file staging and commit logic for release process. Introduce dedicated functions for handling generated paths and staged changes, enhancing readability and maintainability. Add async support for README auto-injection confirmation.   _(a99b33c)_
+
+* Improve code readability by formatting multiline expressions and enhancing consistency in progress message handling.   _(d5731be)_
+
+### 📝 Other
+
+* Merge pull request #111 (via ComfyGit)   _(40f2e0b)_
+</details>
+</details>
+<br>
+
+---
+<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://github.com/comfy-home/ComfyGit/releases/tag/v0.28.4)</sup>
 
 ---
 
 </details>
+
 
 
 
