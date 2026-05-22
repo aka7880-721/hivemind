@@ -46,6 +46,19 @@ pub(crate) struct TopPickBullet {
     pub text: String,
 }
 
+/// Optional introduction block for the Top Picks section (editor `INTRO:` prefix).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TopPicksIntro {
+    pub lines: Vec<TopPicksIntroLine>,
+}
+
+/// A single line in the Top Picks introduction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TopPicksIntroLine {
+    Text(String),
+    Bullet(String),
+}
+
 /// Priority values for section ordering (documented for reference)
 #[allow(dead_code)]
 pub(crate) const PRIORITY_QUICK_DOWNLOADS_TOP: u16 = 950;
@@ -122,16 +135,21 @@ pub(crate) fn extract_top_picks(commits: &[&ParsedCommit]) -> Vec<TopPick> {
 pub(crate) fn merge_top_picks_with_edits(
     commit_picks: Vec<TopPick>,
     edits_content: &str,
-) -> Vec<TopPick> {
+) -> (Vec<TopPick>, Option<TopPicksIntro>) {
     if edits_content.trim().is_empty() {
-        return commit_picks;
+        return (commit_picks, None);
     }
 
+    let (intro, picks_text) = split_intro_and_picks_text(edits_content);
+
     // Parse the edits content into picks
-    let edited_picks = TopPicksEditorDialog::text_to_picks(edits_content);
+    let edited_picks = TopPicksEditorDialog::text_to_picks(&picks_text);
 
     if edited_picks.is_empty() {
-        return commit_picks;
+        if intro.is_some() {
+            return (commit_picks, intro);
+        }
+        return (commit_picks, None);
     }
 
     // Merge: edited picks take precedence by priority slot. Header matching is
@@ -158,7 +176,76 @@ pub(crate) fn merge_top_picks_with_edits(
 
     // Sort by priority
     sort_top_picks(&mut result);
-    result
+    (result, intro)
+}
+
+/// Split editor text into an optional `INTRO:` block and the remaining pick lines.
+pub(crate) fn split_intro_and_picks_text(text: &str) -> (Option<TopPicksIntro>, String) {
+    let mut intro_lines: Vec<TopPicksIntroLine> = Vec::new();
+    let mut pick_lines: Vec<String> = Vec::new();
+    let mut in_intro = false;
+    let mut intro_started = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            if !intro_started {
+                continue;
+            }
+            if in_intro {
+                continue;
+            }
+            pick_lines.push(line.to_string());
+            continue;
+        }
+
+        if !intro_started {
+            if let Some(rest) = intro_marker_body(trimmed) {
+                intro_started = true;
+                in_intro = true;
+                if !rest.is_empty() {
+                    intro_lines.push(TopPicksIntroLine::Text(rest.to_string()));
+                }
+                continue;
+            }
+        } else if in_intro {
+            if TopPicksEditorDialog::parse_header_line(trimmed).is_some() {
+                in_intro = false;
+                pick_lines.push(line.to_string());
+                continue;
+            }
+            if let Some(text) = trimmed.strip_prefix('-') {
+                let bullet = text.trim_start();
+                if !bullet.is_empty() {
+                    intro_lines.push(TopPicksIntroLine::Bullet(bullet.to_string()));
+                }
+                continue;
+            }
+            intro_lines.push(TopPicksIntroLine::Text(trimmed.to_string()));
+            continue;
+        }
+
+        pick_lines.push(line.to_string());
+    }
+
+    let intro = if intro_lines.is_empty() {
+        None
+    } else {
+        Some(TopPicksIntro { lines: intro_lines })
+    };
+    (intro, pick_lines.join("\n"))
+}
+
+fn intro_marker_body(trimmed: &str) -> Option<&str> {
+    let upper = trimmed.to_ascii_uppercase();
+    if upper == "INTRO:" {
+        return Some("");
+    }
+    if upper.starts_with("INTRO:") {
+        return Some(trimmed[6..].trim_start());
+    }
+    None
 }
 
 fn normalized_header_key(header: &str) -> String {
@@ -232,16 +319,23 @@ pub(crate) fn sort_top_picks(picks: &mut [TopPick]) {
 }
 
 /// Render Top Picks section as markdown
-pub(crate) fn render_top_picks_section(picks: &[TopPick]) -> Vec<String> {
+pub(crate) fn render_top_picks_section(
+    picks: &[TopPick],
+    intro: Option<&TopPicksIntro>,
+) -> Vec<String> {
     let mut lines = Vec::new();
 
-    if picks.is_empty() {
+    if picks.is_empty() && intro.is_none() {
         return lines;
     }
 
     // Header
     lines.push("### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥".to_string());
     lines.push(String::new());
+
+    if let Some(intro) = intro {
+        lines.extend(render_top_picks_intro(intro));
+    }
 
     // Numbered entries
     for (index, pick) in picks.iter().enumerate() {
@@ -262,6 +356,22 @@ pub(crate) fn render_top_picks_section(picks: &[TopPick]) -> Vec<String> {
     lines.push("<br>".to_string());
     lines.push(String::new());
 
+    lines
+}
+
+fn render_top_picks_intro(intro: &TopPicksIntro) -> Vec<String> {
+    let mut lines = vec!["<sup>💬 Intro:</sup>  ".to_string()];
+    for line in &intro.lines {
+        match line {
+            TopPicksIntroLine::Text(text) => {
+                lines.push(format!("<sup>_{}_</sup>  ", text));
+            }
+            TopPicksIntroLine::Bullet(text) => {
+                lines.push(format!("<sup>_- {}_</sup>", text));
+            }
+        }
+    }
+    lines.push(String::new());
     lines
 }
 
@@ -330,14 +440,14 @@ impl TopPicksEditorDialog {
     pub fn with_text(text: &str) -> Self {
         let editor_text = if text.trim().is_empty() {
             // Provide template for new users
-            "// Top Picks - highlight key features for this release\n\n1. First key feature or improvement\n- What this does for users\n- Why it matters\n  - Technical detail if needed\n\n2. Second highlight\n- Bullet describing the benefit\n\n// Lines starting with // are ignored\n// Use format: '1. Header' then '- Bullet' (indent with 4 spaces for nested)"
+            "// Top Picks - highlight key features for this release\n\nINTRO:\nThis release focuses on:\n- key theme one\n- key theme two\n\n1. First key feature or improvement\n- What this does for users\n- Why it matters\n  - Technical detail if needed\n\n2. Second highlight\n- Bullet describing the benefit\n\n// Lines starting with // are ignored\n// INTRO: block is optional; use '1. Header' then '- Bullet' (indent with 4 spaces for nested)"
                 .lines()
                 .collect::<Vec<_>>()
         } else {
             text.lines().collect::<Vec<_>>()
         };
         let mut editor = TuiTextArea::from(editor_text);
-        editor.set_placeholder_text("Define Top Picks using the format:\n1. Header text\n- Bullet point\n    - Nested bullet (4 spaces)\n\n2. Another header\n- Another bullet\n\n// Lines starting with // are ignored");
+        editor.set_placeholder_text("Define Top Picks using the format:\nINTRO:\nOptional intro line\n- Optional intro bullet\n\n1. Header text\n- Bullet point\n    - Nested bullet (4 spaces)\n\n2. Another header\n- Another bullet\n\n// Lines starting with // are ignored");
         editor.set_tab_length(2);
         editor.set_max_histories(100);
         Self {
@@ -612,7 +722,7 @@ mod tests {
             is_reference: false,
         }];
 
-        let lines = render_top_picks_section(&picks);
+        let lines = render_top_picks_section(&picks, None);
         let output = lines.join("\n");
 
         assert!(output.contains("This Release's Top Picks"));
@@ -635,7 +745,7 @@ mod tests {
             commit_hash: "abc".to_string(),
             is_reference: false,
         }];
-        let lines = render_top_picks_section(&picks);
+        let lines = render_top_picks_section(&picks, None);
         let h4 = lines
             .iter()
             .position(|l| l.starts_with("#### **1."))
@@ -674,11 +784,12 @@ mod tests {
             },
         ];
 
-        let merged = merge_top_picks_with_edits(
+        let (merged, intro) = merge_top_picks_with_edits(
             commit_picks,
             "1. Important improvement\n- Edited bullet\n\n2. Manual pick\n- Added from editor",
         );
 
+        assert!(intro.is_none());
         assert_eq!(merged.len(), 3);
         assert_eq!(merged[0].header, "Important improvement");
         assert_eq!(merged[0].bullets[0].text, "Edited bullet");
@@ -711,7 +822,7 @@ mod tests {
             },
         ];
 
-        let merged = merge_top_picks_with_edits(
+        let (merged, _) = merge_top_picks_with_edits(
             commit_picks,
             "1. TOP PICKS EDITOR! ⭐\n- Edited bullet\n\n2. Auto-README changelog injection!\n- Second item",
         );
@@ -729,5 +840,56 @@ mod tests {
         assert_eq!(picks.len(), 1);
         assert_eq!(picks[0].priority, Some(3));
         assert_eq!(picks[0].header, "Reordered item");
+    }
+
+    #[test]
+    fn split_intro_and_picks_text_parses_intro_block() {
+        let text = "INTRO:\nThis release focuses on these elements:\n- render\n- bugfixes\n\n1. Rendering enhancements\n- bullet";
+        let (intro, picks_text) = split_intro_and_picks_text(text);
+        let intro = intro.expect("intro");
+        assert_eq!(intro.lines.len(), 3);
+        assert!(matches!(intro.lines[0], TopPicksIntroLine::Text(_)));
+        assert!(matches!(intro.lines[1], TopPicksIntroLine::Bullet(_)));
+        assert!(matches!(intro.lines[2], TopPicksIntroLine::Bullet(_)));
+        let picks = TopPicksEditorDialog::text_to_picks(&picks_text);
+        assert_eq!(picks.len(), 1);
+        assert_eq!(picks[0].header, "Rendering enhancements");
+    }
+
+    #[test]
+    fn render_top_picks_section_includes_intro_sup_lines() {
+        let intro = TopPicksIntro {
+            lines: vec![
+                TopPicksIntroLine::Text("This release focuses on these elements:".to_string()),
+                TopPicksIntroLine::Bullet("render".to_string()),
+                TopPicksIntroLine::Bullet("bugfixes".to_string()),
+            ],
+        };
+        let picks = vec![TopPick {
+            priority: Some(1),
+            header: "Rendering enhancements".to_string(),
+            bullets: vec![],
+            commit_hash: String::new(),
+            is_reference: false,
+        }];
+        let output = render_top_picks_section(&picks, Some(&intro)).join("\n");
+        assert!(output.contains("<sup>💬 Intro:</sup>"));
+        assert!(output.contains("<sup>_This release focuses on these elements:_</sup>"));
+        assert!(output.contains("<sup>_- render_</sup>"));
+        assert!(output.contains("<sup>_- bugfixes_</sup>"));
+        assert!(output.contains("#### **1."));
+        assert!(output.contains("Rendering enhancements"));
+    }
+
+    #[test]
+    fn merge_top_picks_with_edits_preserves_intro() {
+        let (merged, intro) = merge_top_picks_with_edits(
+            vec![],
+            "INTRO:\nRelease theme\n\n1. Manual only\n- bullet",
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].header, "Manual only");
+        let intro = intro.expect("intro");
+        assert_eq!(intro.lines.len(), 1);
     }
 }

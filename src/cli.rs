@@ -3830,7 +3830,7 @@ fn run_toppicks() -> Result<()> {
 
     // Render and display
     println!("\n=== Top Picks ===\n");
-    let lines = render_top_picks_section(&picks);
+    let lines = render_top_picks_section(&picks, None);
     for line in lines {
         println!("{}", line);
     }
