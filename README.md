@@ -244,6 +244,14 @@ Enjoy!
 
 ---
 
+> [!IMPORTANT]  
+> **PREREQUISITES**  
+> ComfyGit expects you...
+> - are using a modern terminal app, e.g. `ptyxis`, `konsole`, `kitty`, `pwsh`, etc, or a built-in terminal in VSCode and similar IDE 
+> - have `git` and `gh` (Git CLI) installed and configured
+>
+> NOTE: There are no other requirements, no extra scripts, GitHub settings - nothing.
+
 ## Overview
 
 **ComfyGit** is a powerful Terminal User Interface (TUI) and CLI tool designed to streamline Git workflows, automate version management, and generate beautiful changelogs. Built with [Ratatui](https://github.com/ratatui/ratatui) in Rust, it provides an intuitive visual interface while maintaining full CLI accessibility.
