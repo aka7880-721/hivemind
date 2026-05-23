@@ -183,15 +183,19 @@ impl ProjectEditDialog {
     }
 
     pub(crate) fn focus_accepts_text(&self) -> bool {
+        self.field_accepts_text(self.focus)
+    }
+
+    pub(crate) fn field_accepts_text(&self, field: ProjectEditFocus) -> bool {
         matches!(
-            self.focus,
+            field,
             ProjectEditFocus::Name
                 | ProjectEditFocus::ScopeName
                 | ProjectEditFocus::TargetPath
                 | ProjectEditFocus::RepoRoot
                 | ProjectEditFocus::RemoteUrl
                 | ProjectEditFocus::TileRotationTiming
-        ) || (self.focus == ProjectEditFocus::TargetKey && self.target_key_accepts_text())
+        ) || (field == ProjectEditFocus::TargetKey && self.target_key_accepts_text())
     }
 
     fn visible_fields(&self) -> Vec<ProjectEditFocus> {

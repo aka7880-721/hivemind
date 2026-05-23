@@ -2358,6 +2358,80 @@ impl App {
             }
         }
 
+        if self.project_edit_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.scroll_project_edit_body(-1);
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll_project_edit_body(1);
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
+                    {
+                        let maybe_click_target = self.text_input_click_target(&action);
+                        let mut select_all = false;
+                        if let Some(target) = maybe_click_target {
+                            let now = Instant::now();
+                            if self.last_text_input_click_target == Some(target)
+                                && self
+                                    .last_text_input_click_at
+                                    .map(|previous| {
+                                        now.duration_since(previous) <= Duration::from_millis(400)
+                                    })
+                                    .unwrap_or(false)
+                            {
+                                select_all = true;
+                            }
+                            self.last_text_input_click_target = Some(target);
+                            self.last_text_input_click_at = Some(now);
+                        } else {
+                            self.last_text_input_click_target = None;
+                            self.last_text_input_click_at = None;
+                        }
+
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+
+                        if select_all {
+                            if let Some(input) = self.active_text_input_mut() {
+                                input.select_all();
+                            }
+                        } else if maybe_click_target.is_some() && rect.width > FORM_LABEL_WIDTH + 2
+                        {
+                            self.set_text_input_cursor_from_mouse(rect, mouse.column);
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
+                        && let Some(last_target) = self.last_text_input_click_target
+                        && last_target.same_field_action(&action)
+                    {
+                        self.update_text_input_drag_selection(rect, mouse.column);
+                    }
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    let selected_text = self
+                        .active_text_input_mut()
+                        .and_then(|input| input.selected_text().map(str::to_string));
+                    if let Some(selection) = selected_text {
+                        self.copy_text_to_clipboard(&selection);
+                    }
+                    return;
+                }
+                MouseEventKind::Up(MouseButton::Left) => return,
+                _ => return,
+            }
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 if self.project_edit_dialog.is_some() {
@@ -3009,6 +3083,7 @@ impl App {
                     dialog.focus = field;
                 }
             }
+            HitAction::FocusProjectEditDialog => {}
             HitAction::ProjectEditScopeAction(action) => {
                 return self.apply_project_edit_scope_action(action);
             }
@@ -3987,6 +4062,23 @@ impl App {
                     return None;
                 }
 
+                if self.project_edit_dialog.is_some()
+                    && !matches!(
+                        action,
+                        HitAction::EditProjectField(_)
+                            | HitAction::FocusProjectEditDialog
+                            | HitAction::ProjectEditScopeAction(_)
+                            | HitAction::SaveProjectEdit
+                            | HitAction::RemoveProject
+                            | HitAction::CancelProjectEdit
+                            | HitAction::BrowseProjectTargetPath
+                            | HitAction::BrowseProjectRepoRoot
+                            | HitAction::EnableProjectCustomTargetKey
+                    )
+                {
+                    return None;
+                }
+
                 Some((
                     target.rect.width as u32 * target.rect.height as u32,
                     usize::MAX - index,
@@ -4044,9 +4136,14 @@ impl App {
 
     fn set_text_input_cursor_from_mouse(&mut self, rect: Rect, column: u16) {
         let is_commit_rename = self.commit_rename_dialog.is_some();
+        let is_project_edit = self.project_edit_dialog.is_some();
         if let Some(input) = self.active_text_input_mut() {
             let (click_offset, field_width) = if is_commit_rename {
                 // Commit rename has borders but no label in the rect
+                let border_offset = column.saturating_sub(rect.x + 1) as usize;
+                let width = rect.width.saturating_sub(2) as usize;
+                (border_offset, width)
+            } else if is_project_edit {
                 let border_offset = column.saturating_sub(rect.x + 1) as usize;
                 let width = rect.width.saturating_sub(2) as usize;
                 (border_offset, width)
@@ -4062,9 +4159,14 @@ impl App {
 
     fn update_text_input_drag_selection(&mut self, rect: Rect, column: u16) {
         let is_commit_rename = self.commit_rename_dialog.is_some();
+        let is_project_edit = self.project_edit_dialog.is_some();
         if let Some(input) = self.active_text_input_mut() {
             let (click_offset, field_width) = if is_commit_rename {
                 // Commit rename has borders but no label in the rect
+                let border_offset = column.saturating_sub(rect.x + 1) as usize;
+                let width = rect.width.saturating_sub(2) as usize;
+                (border_offset, width)
+            } else if is_project_edit {
                 let border_offset = column.saturating_sub(rect.x + 1) as usize;
                 let width = rect.width.saturating_sub(2) as usize;
                 (border_offset, width)
@@ -5961,6 +6063,7 @@ pub(crate) enum HitAction {
     ResetOverviewPendingVersion(usize),
     OpenOverviewTagDialog(usize),
     EditProjectField(ProjectEditFocus),
+    FocusProjectEditDialog,
     ProjectEditScopeAction(ScopeAction),
     SaveProjectEdit,
     RemoveProject,
@@ -8745,6 +8848,11 @@ impl FormRowButton {
     fn new(label: &'static str, action: HitAction) -> Self {
         Self { label, action }
     }
+}
+
+pub(crate) struct FormRowRects {
+    pub(crate) field: Rect,
+    pub(crate) button: Option<Rect>,
 }
 
 struct TagAnnotationDialog {

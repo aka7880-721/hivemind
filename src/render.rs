@@ -1920,7 +1920,7 @@ impl App {
         );
 
         for (field, row) in field_rows {
-            let (label, action, side_button, focused, value) = {
+            let (label, action, side_button, focused, value, field_accepts_text) = {
                 let dialog = self
                     .project_edit_dialog
                     .as_ref()
@@ -1933,15 +1933,37 @@ impl App {
                     focused,
                     visible_field_width(row.width, side_button.is_some()),
                 );
-                (label, action, side_button, focused, value)
+                (
+                    label,
+                    action,
+                    side_button,
+                    focused,
+                    value,
+                    dialog.field_accepts_text(field),
+                )
             };
-            let button_rect =
+            let form_rects =
                 self.render_form_row(frame, row, label, value, focused, side_button.clone());
-            self.hit_targets.push(HitTarget::new(row, action));
-            if let (Some(rect), Some(button)) = (button_rect, side_button) {
+            if field_accepts_text {
+                let label_hit = Rect {
+                    x: row.x,
+                    y: row.y,
+                    width: FORM_LABEL_WIDTH.min(row.width),
+                    height: row.height,
+                };
+                self.hit_targets
+                    .push(HitTarget::new(label_hit, action.clone()));
+                self.hit_targets
+                    .push(HitTarget::new(form_rects.field, action));
+            } else {
+                self.hit_targets.push(HitTarget::new(row, action));
+            }
+            if let (Some(rect), Some(button)) = (form_rects.button, side_button) {
                 self.hit_targets.push(HitTarget::new(rect, button.action));
             }
         }
+        self.hit_targets
+            .push(HitTarget::new(popup, HitAction::FocusProjectEditDialog));
         render_vertical_overflow_indicators(frame, sections[1], show_above, show_below);
 
         let mut buttons = vec![DialogButton::new(
@@ -2476,10 +2498,10 @@ impl App {
                 focused,
                 visible_field_width(row.width, side_button.is_some()),
             );
-            let button_rect =
+            let form_rects =
                 self.render_form_row(frame, *row, label, value, focused, side_button.clone());
             self.hit_targets.push(HitTarget::new(*row, action));
-            if let (Some(rect), Some(button)) = (button_rect, side_button) {
+            if let (Some(rect), Some(button)) = (form_rects.button, side_button) {
                 self.hit_targets.push(HitTarget::new(rect, button.action));
             }
         }
@@ -2627,7 +2649,7 @@ impl App {
         value: Line,
         focused: bool,
         side_button: Option<FormRowButton>,
-    ) -> Option<Rect> {
+    ) -> FormRowRects {
         let label_area = center_vertically(
             Rect {
                 x: area.x,
@@ -2681,10 +2703,16 @@ impl App {
                     .block(Block::default().borders(Borders::ALL)),
                 button_area,
             );
-            return Some(button_area);
+            return FormRowRects {
+                field: field_area,
+                button: Some(button_area),
+            };
         }
 
-        None
+        FormRowRects {
+            field: field_area,
+            button: None,
+        }
     }
 
     fn render_button_row(&mut self, frame: &mut Frame, area: Rect, buttons: &[DialogButton]) {

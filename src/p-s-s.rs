@@ -30,6 +30,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectSettingsTab {
     General,
+    Changelogs,
     Distro,
     RlsQd,
 }
@@ -37,9 +38,9 @@ pub(crate) enum ProjectSettingsTab {
 impl ProjectSettingsTab {
     fn tab_strip(release_now_enabled: bool) -> &'static [ProjectSettingsTab] {
         if release_now_enabled {
-            &[Self::General, Self::Distro, Self::RlsQd]
+            &[Self::General, Self::Changelogs, Self::Distro, Self::RlsQd]
         } else {
-            &[Self::General, Self::Distro]
+            &[Self::General, Self::Changelogs, Self::Distro]
         }
     }
 
@@ -204,30 +205,9 @@ impl ProjectSettingsState {
                     }
                 }
                 fields.push(ProjectSettingsFocus::Alias);
-                fields.push(ProjectSettingsFocus::ChangelogEnabled);
-                if project.changelog_enabled_for_scope(scope_index) {
-                    fields.push(ProjectSettingsFocus::ChangelogPath);
-                    fields.push(ProjectSettingsFocus::ChangelogHidePrMessages);
-                    fields.push(ProjectSettingsFocus::ChangelogHideBumpMessages);
-                    fields.push(ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks);
-                    fields.push(ProjectSettingsFocus::ChangelogMiniCommitHashes);
-                    fields.push(ProjectSettingsFocus::ReadmeInjectionEnabled);
-                    if project
-                        .release_now_for_scope(scope_index)
-                        .readme_injection_enabled
-                    {
-                        fields.push(ProjectSettingsFocus::ReadmeInjectOnlyTopPicks);
-                        fields.push(ProjectSettingsFocus::ReadmeInjectAtRow);
-                        fields.extend([
-                            ProjectSettingsFocus::ReadmeInjectDepthCurrentOnly,
-                            ProjectSettingsFocus::ReadmeInjectDepthLast3,
-                            ProjectSettingsFocus::ReadmeInjectDepthLast5,
-                            ProjectSettingsFocus::ReadmeInjectDepthLast10,
-                        ]);
-                    }
-                }
                 fields
             }
+            ProjectSettingsTab::Changelogs => changelog_visible_fields(project, scope_index),
             ProjectSettingsTab::Distro => {
                 let mut fields = vec![ProjectSettingsFocus::ReleaseNowEnabled];
                 if project.release_now_for_scope(scope_index).enabled {
@@ -481,6 +461,9 @@ pub(crate) fn render_project_settings(app: &mut App, frame: &mut Frame, area: Re
     match app.project_settings_tab {
         ProjectSettingsTab::General => {
             render_general_settings(app, frame, sections[1], &project, scope_index)
+        }
+        ProjectSettingsTab::Changelogs => {
+            render_changelogs_settings(app, frame, sections[1], &project, scope_index)
         }
         ProjectSettingsTab::Distro => {
             render_distro_settings(app, frame, sections[1], &project, scope_index)
@@ -840,6 +823,7 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|t| match t {
             ProjectSettingsTab::General => "General",
+            ProjectSettingsTab::Changelogs => "Changelogs",
             ProjectSettingsTab::Distro => "Distro",
             ProjectSettingsTab::RlsQd => "RLS-QD",
         })
@@ -860,6 +844,7 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         .map(|tab| {
             Constraint::Length(match tab {
                 ProjectSettingsTab::General => 16,
+                ProjectSettingsTab::Changelogs => 20,
                 ProjectSettingsTab::Distro => 16,
                 ProjectSettingsTab::RlsQd => 18,
             })
@@ -1048,9 +1033,39 @@ fn build_rows(
 ) -> Vec<ProjectSettingsRow> {
     match tab {
         ProjectSettingsTab::General => build_general_rows(project, scope_index),
+        ProjectSettingsTab::Changelogs => build_changelogs_rows(project, scope_index),
         ProjectSettingsTab::Distro => build_distro_rows(project, scope_index),
         ProjectSettingsTab::RlsQd => build_rls_qd_rows(project, scope_index),
     }
+}
+
+fn changelog_visible_fields(
+    project: &ProjectConfig,
+    scope_index: usize,
+) -> Vec<ProjectSettingsFocus> {
+    let mut fields = vec![ProjectSettingsFocus::ChangelogEnabled];
+    if project.changelog_enabled_for_scope(scope_index) {
+        fields.push(ProjectSettingsFocus::ChangelogPath);
+        fields.push(ProjectSettingsFocus::ChangelogHidePrMessages);
+        fields.push(ProjectSettingsFocus::ChangelogHideBumpMessages);
+        fields.push(ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks);
+        fields.push(ProjectSettingsFocus::ChangelogMiniCommitHashes);
+        fields.push(ProjectSettingsFocus::ReadmeInjectionEnabled);
+        if project
+            .release_now_for_scope(scope_index)
+            .readme_injection_enabled
+        {
+            fields.push(ProjectSettingsFocus::ReadmeInjectOnlyTopPicks);
+            fields.push(ProjectSettingsFocus::ReadmeInjectAtRow);
+            fields.extend([
+                ProjectSettingsFocus::ReadmeInjectDepthCurrentOnly,
+                ProjectSettingsFocus::ReadmeInjectDepthLast3,
+                ProjectSettingsFocus::ReadmeInjectDepthLast5,
+                ProjectSettingsFocus::ReadmeInjectDepthLast10,
+            ]);
+        }
+    }
+    fields
 }
 
 fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
@@ -1069,8 +1084,28 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
     rows.extend([
         ProjectSettingsRow::Path(ProjectSettingsFocus::Alias),
         ProjectSettingsRow::Spacer(1),
-        ProjectSettingsRow::Checkbox(ProjectSettingsFocus::ChangelogEnabled),
+        ProjectSettingsRow::Text(Line::from(
+            "Press Space or Enter to toggle the selected checkbox. Ctrl+O opens Browse on path fields.",
+        )),
+        ProjectSettingsRow::Text(Line::from(
+            "Up/Down or Tab/Shift+Tab moves between fields. Mouse wheel scrolls when content overflows.",
+        )),
     ]);
+    rows
+}
+
+fn build_changelogs_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
+    let mut rows = vec![
+        ProjectSettingsRow::Text(
+            Line::from(format!(
+                "Scope: {}",
+                active_scope_name(project, scope_index)
+            ))
+            .bold(),
+        ),
+        ProjectSettingsRow::Spacer(1),
+        ProjectSettingsRow::Checkbox(ProjectSettingsFocus::ChangelogEnabled),
+    ];
     if project.changelog_enabled_for_scope(scope_index) {
         rows.push(ProjectSettingsRow::Path(
             ProjectSettingsFocus::ChangelogPath,
@@ -1104,16 +1139,36 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
         rows.push(ProjectSettingsRow::Spacer(1));
     }
     rows.extend([
-		ProjectSettingsRow::Text(Line::from("This toggle now lives at the scope level.".yellow())),
-		ProjectSettingsRow::Text(Line::from(if project.project_type == ProjectType::Branched {
-			"Use the focused overview tile or click another tile to switch scopes."
-		} else {
-			"All-in-one projects apply this setting to the single project scope."
-		})),
-		ProjectSettingsRow::Text(Line::from("Press Space or Enter to toggle the selected checkbox. Ctrl+O opens Browse on path fields.")),
-		ProjectSettingsRow::Text(Line::from("Up/Down or Tab/Shift+Tab moves between fields. Mouse wheel scrolls when content overflows.")),
-	]);
+        ProjectSettingsRow::Text(Line::from(if project.project_type == ProjectType::Branched {
+            "Use the focused overview tile or click another tile to switch scopes."
+        } else {
+            "All-in-one projects apply changelog settings to the single project scope."
+        })),
+        ProjectSettingsRow::Text(Line::from(
+            "Press Space or Enter to toggle the selected checkbox. Ctrl+O opens Browse on path fields.",
+        )),
+        ProjectSettingsRow::Text(Line::from(
+            "Up/Down or Tab/Shift+Tab moves between fields. Mouse wheel scrolls when content overflows.",
+        )),
+    ]);
     rows
+}
+
+fn render_changelogs_settings(
+    app: &mut App,
+    frame: &mut Frame,
+    area: Rect,
+    project: &ProjectConfig,
+    scope_index: usize,
+) {
+    render_scrollable_rows(
+        app,
+        frame,
+        area,
+        project,
+        scope_index,
+        &build_changelogs_rows(project, scope_index),
+    );
 }
 
 fn build_distro_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
@@ -1619,6 +1674,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks
             | ProjectSettingsFocus::ChangelogMiniCommitHashes
             | ProjectSettingsFocus::ReadmeInjectionEnabled
+            | ProjectSettingsFocus::ReadmeInjectOnlyTopPicks
             | ProjectSettingsFocus::ReleaseNowEnabled
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
