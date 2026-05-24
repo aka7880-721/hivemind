@@ -3963,8 +3963,16 @@ impl App {
                     Some(target.action.clone())
                 }?;
 
-                if self.browser_dialog.is_some() && !matches!(action, HitAction::BrowserSelect(_)) {
-                    return None;
+                if self.browser_dialog.is_some() {
+                    if !matches!(action, HitAction::BrowserSelect(_)) {
+                        return None;
+                    }
+                    return Some((
+                        target.rect.width as u32 * target.rect.height as u32,
+                        usize::MAX - index,
+                        action,
+                        target.rect,
+                    ));
                 }
 
                 if self.delete_confirmation_dialog.is_some()
@@ -4137,45 +4145,60 @@ impl App {
     fn set_text_input_cursor_from_mouse(&mut self, rect: Rect, column: u16) {
         let is_commit_rename = self.commit_rename_dialog.is_some();
         let is_project_edit = self.project_edit_dialog.is_some();
+        let is_project_settings = self.screen == Screen::Dashboard
+            && self.overview_tab == OverviewTab::ProjectSettings
+            && !is_project_edit;
         if let Some(input) = self.active_text_input_mut() {
-            let (click_offset, field_width) = if is_commit_rename {
+            let (click_offset, field_width) = if is_commit_rename || is_project_edit {
                 // Commit rename has borders but no label in the rect
                 let border_offset = column.saturating_sub(rect.x + 1) as usize;
                 let width = rect.width.saturating_sub(2) as usize;
                 (border_offset, width)
-            } else if is_project_edit {
-                let border_offset = column.saturating_sub(rect.x + 1) as usize;
-                let width = rect.width.saturating_sub(2) as usize;
-                (border_offset, width)
-            } else {
+            } else if is_project_settings
+                && rect.width > FORM_LABEL_WIDTH.saturating_add(6)
+                && column >= rect.x.saturating_add(FORM_LABEL_WIDTH)
+            {
                 let label_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
                 let width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
                 (label_offset, width)
+            } else {
+                let border_offset = column.saturating_sub(rect.x + 1) as usize;
+                let width = rect.width.saturating_sub(2) as usize;
+                (border_offset, width)
             };
             let cursor = input.cursor_position_at_click(click_offset, field_width, true);
-            input.begin_selection_at(cursor);
+            input.set_cursor_position(cursor);
+            input.clear_selection();
         }
     }
 
     fn update_text_input_drag_selection(&mut self, rect: Rect, column: u16) {
         let is_commit_rename = self.commit_rename_dialog.is_some();
         let is_project_edit = self.project_edit_dialog.is_some();
+        let is_project_settings = self.screen == Screen::Dashboard
+            && self.overview_tab == OverviewTab::ProjectSettings
+            && !is_project_edit;
         if let Some(input) = self.active_text_input_mut() {
-            let (click_offset, field_width) = if is_commit_rename {
-                // Commit rename has borders but no label in the rect
+            let (click_offset, field_width) = if is_commit_rename || is_project_edit {
                 let border_offset = column.saturating_sub(rect.x + 1) as usize;
                 let width = rect.width.saturating_sub(2) as usize;
                 (border_offset, width)
-            } else if is_project_edit {
-                let border_offset = column.saturating_sub(rect.x + 1) as usize;
-                let width = rect.width.saturating_sub(2) as usize;
-                (border_offset, width)
-            } else {
+            } else if is_project_settings
+                && rect.width > FORM_LABEL_WIDTH.saturating_add(6)
+                && column >= rect.x.saturating_add(FORM_LABEL_WIDTH)
+            {
                 let label_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
                 let width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
                 (label_offset, width)
+            } else {
+                let border_offset = column.saturating_sub(rect.x + 1) as usize;
+                let width = rect.width.saturating_sub(2) as usize;
+                (border_offset, width)
             };
             let cursor = input.cursor_position_at_click(click_offset, field_width, true);
+            if input.selection_anchor().is_none() {
+                input.begin_selection_at(cursor);
+            }
             input.set_cursor_position(cursor);
         }
     }
@@ -5571,12 +5594,22 @@ impl App {
         };
 
         let selected = directory.display().to_string();
-        match dialog.target {
+        let target = dialog.target;
+        match target {
             BrowseTarget::WizardRepoRoot => self.wizard.set_repo_root_from_browse(selected),
             BrowseTarget::ProjectEditRepoRoot => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.set_repo_root_from_browse(selected);
                 }
+            }
+            BrowseTarget::ProjectSettingsAliasDistPath
+            | BrowseTarget::ProjectSettingsAliasUiPath
+            | BrowseTarget::ProjectSettingsAliasCustomPath(_)
+                if p_s_s::apply_browser_selection(self, target, selected.clone())? =>
+            {
+                self.browser_dialog = None;
+                self.status = StatusMessage::success("Folder selection applied.");
+                return Ok(());
             }
             _ => {}
         }
