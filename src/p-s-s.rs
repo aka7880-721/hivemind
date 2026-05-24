@@ -674,6 +674,16 @@ pub(crate) fn try_handle_project_settings_key(app: &mut App, key: KeyEvent) -> R
             Ok(true)
         }
         KeyCode::Enter | KeyCode::Char(' ')
+            if matches!(
+                app.project_settings_state.focus,
+                ProjectSettingsFocus::AliasCustomAdd
+                    | ProjectSettingsFocus::AliasCustomDraftConfirm
+            ) =>
+        {
+            activate_project_settings_field(app, app.project_settings_state.focus)?;
+            Ok(true)
+        }
+        KeyCode::Enter | KeyCode::Char(' ')
             if app.project_settings_state.focus != ProjectSettingsFocus::QuickDownloadsPosition =>
         {
             toggle_focused_project_settings_control(app)?;
@@ -722,8 +732,16 @@ pub(crate) fn activate_project_settings_field(
     if focus == ProjectSettingsFocus::AliasCustomAdd {
         app.project_settings_state.alias_custom_draft_active = true;
         app.project_settings_state.focus = ProjectSettingsFocus::AliasCustomDraftName;
+        app.project_settings_state
+            .alias_custom_draft_name
+            .clear_selection();
         app.project_settings_state.follow_focus = true;
         return Ok(());
+    }
+    if focus == ProjectSettingsFocus::AliasCustomDraftName {
+        app.project_settings_state
+            .alias_custom_draft_name
+            .clear_selection();
     }
     if focus == ProjectSettingsFocus::AliasCustomDraftConfirm {
         if let Some(message) = confirm_alias_custom_draft(app) {
@@ -915,7 +933,6 @@ pub(crate) fn apply_browser_selection(
         }
         _ => return Ok(false),
     };
-    sync_project_settings_state(app);
     app.project_settings_state.focus = field;
     if matches!(
         field,
