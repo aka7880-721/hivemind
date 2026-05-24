@@ -1200,6 +1200,7 @@ mod tests {
                         key_path: "package.version".to_string(),
                         format: crate::config::TargetFormat::Toml,
                     }],
+                    advanced_alias: Default::default(),
                 }],
                 repo: Some(RepoConfig {
                     local_root: "C:/repo".to_string(),
@@ -1332,6 +1333,7 @@ mod tests {
                             key_path: "package.version".to_string(),
                             format: crate::config::TargetFormat::Toml,
                         }],
+                        advanced_alias: Default::default(),
                     },
                     BranchConfig {
                         name: "api".to_string(),
@@ -1356,6 +1358,7 @@ mod tests {
                             key_path: "package.version".to_string(),
                             format: crate::config::TargetFormat::Json,
                         }],
+                        advanced_alias: Default::default(),
                     },
                 ],
                 repo: None,
@@ -1417,6 +1420,7 @@ mod tests {
                         key_path: "package.version".to_string(),
                         format: crate::config::TargetFormat::Toml,
                     }],
+                    advanced_alias: Default::default(),
                 }],
                 repo: None,
                 changelog: ChangelogSettings::default(),

@@ -309,10 +309,16 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             }
             Ok(StartupMode::Handled)
         }
+        [command, lookup, sub] if command == "pwd" => {
+            let config = load_config()?;
+            let project = find_project_by_lookup(&config.projects, lookup)?;
+            println!("{}", resolve_project_cd_path(project, Some(sub))?.display());
+            Ok(StartupMode::Handled)
+        }
         [command, lookup] if command == "pwd" => {
             let config = load_config()?;
             let project = find_project_by_lookup(&config.projects, lookup)?;
-            println!("{}", project_root(project)?.display());
+            println!("{}", resolve_project_cd_path(project, None)?.display());
             Ok(StartupMode::Handled)
         }
         [command, action, commit_hash]
@@ -768,6 +774,9 @@ fn print_usage() {
     println!("  ---------------            --------------------------------------------------");
     println!(
         "  cg cd <alias>              Change the current directory to the configured project root path from anywhere!"
+    );
+    println!(
+        "  cg cd <alias> <sub>        With advanced alias: cd to dist/ui or a custom sub-path (e.g. cg cd cg ui)"
     );
     println!(
         "  cg install-shell           Install bash/zsh/fish integration (AppImage: also writes ~/.local/bin/ComfyGit)"
@@ -3398,6 +3407,78 @@ pub(crate) fn scope_root(project: &ProjectConfig, branch: &BranchConfig) -> Opti
     })
 }
 
+pub(crate) fn resolve_project_cd_path(
+    project: &ProjectConfig,
+    sub: Option<&str>,
+) -> Result<PathBuf> {
+    if let Some(sub) = sub {
+        return resolve_advanced_alias_subpath(project, sub);
+    }
+    project_root(project)
+}
+
+fn resolve_advanced_alias_subpath(project: &ProjectConfig, sub: &str) -> Result<PathBuf> {
+    let scope_index = advanced_alias_scope_index(project)?;
+    let settings = project.advanced_alias_for_scope(scope_index);
+    if !settings.enabled {
+        bail!(
+            "advanced alias is not enabled for project '{}'",
+            project.name
+        );
+    }
+    let path_spec = settings.path_for_sub(sub).with_context(|| {
+        format!(
+            "no advanced alias path configured for '{}' on project '{}'",
+            sub.trim(),
+            project.name
+        )
+    })?;
+    resolve_advanced_alias_path(project, scope_index, path_spec)
+}
+
+fn advanced_alias_scope_index(project: &ProjectConfig) -> Result<usize> {
+    use crate::config::{BranchScopeKind, ProjectType};
+
+    match project.project_type {
+        ProjectType::AllInOne => Ok(0),
+        ProjectType::Branched => project
+            .branches
+            .iter()
+            .position(|branch| branch.scope_kind == BranchScopeKind::Branch)
+            .context("project has no Core scope for advanced alias"),
+    }
+}
+
+fn resolve_advanced_alias_path(
+    project: &ProjectConfig,
+    scope_index: usize,
+    path_spec: &str,
+) -> Result<PathBuf> {
+    let path = Path::new(path_spec.trim());
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    let base = advanced_alias_base_root(project, scope_index)?;
+    Ok(base.join(path))
+}
+
+fn advanced_alias_base_root(project: &ProjectConfig, scope_index: usize) -> Result<PathBuf> {
+    use crate::config::ProjectType;
+
+    match project.project_type {
+        ProjectType::AllInOne => project_root(project),
+        ProjectType::Branched => {
+            let branch = project
+                .branches
+                .get(scope_index)
+                .context("invalid scope index for advanced alias")?;
+            scope_root(project, branch)
+                .or_else(|| project_root(project).ok())
+                .context("could not resolve base path for advanced alias")
+        }
+    }
+}
+
 pub(crate) fn project_root(project: &ProjectConfig) -> Result<PathBuf> {
     if let Some(repo) = project.repo.as_ref() {
         return Ok(repo_root_path(repo));
@@ -4650,6 +4731,7 @@ mod tests {
                 key_path: "package.version".to_string(),
                 format: TargetFormat::Toml,
             }],
+            advanced_alias: Default::default(),
         }];
 
         let mut project2 = sample_project("beta", "beta");
@@ -5147,6 +5229,7 @@ mod tests {
                 key_path: "package.version".to_string(),
                 format: TargetFormat::Toml,
             }],
+            advanced_alias: Default::default(),
         }];
 
         let root = scope_root(&project, &project.branches[0]).expect("scope root should resolve");

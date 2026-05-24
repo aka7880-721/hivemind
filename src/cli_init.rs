@@ -32,8 +32,8 @@ use crate::{
         registered_scope_covering_cwd,
     },
     config::{
-        AppConfig, BranchConfig, BranchScopeKind, ConfigStore, IntegrationMode, ProjectConfig,
-        ProjectType, ReleaseNowSettings, RepoConfig, TargetFormat,
+        AdvancedAliasSettings, AppConfig, BranchConfig, BranchScopeKind, ConfigStore,
+        IntegrationMode, ProjectConfig, ProjectType, ReleaseNowSettings, RepoConfig, TargetFormat,
     },
     git::github_owner_repo_from_remote_url,
     project_wizard::ProjectWizard,
@@ -388,6 +388,7 @@ fn add_scope_to_parent(parent: &mut ProjectConfig, branch: BranchConfig) -> Resu
             release_now: ReleaseNowSettings::default(),
             version_scheme,
             targets: vec![existing_target],
+            advanced_alias: AdvancedAliasSettings::default(),
         };
 
         parent.project_type = ProjectType::Branched;
@@ -1263,6 +1264,7 @@ mod tests {
                 key_path: "package.version".to_string(),
                 format: TargetFormat::Toml,
             }],
+            advanced_alias: Default::default(),
         };
 
         add_scope_to_parent(&mut parent, new_scope).expect("add scope");

@@ -6,8 +6,17 @@ if not exist "%CG_BIN%" set "CG_BIN=ComfyGit.exe"
 
 if /I "%~1"=="cd" (
     if "%~2"=="" (
-        echo usage: cg cd ^<alias^> 1>&2
+        echo usage: cg cd ^<alias^> [sub] 1>&2
         exit /b 2
+    )
+
+    if not "%~3"=="" (
+        for /f "usebackq delims=" %%I in (`""%CG_BIN%" pwd "%~2" "%~3""`) do (
+            endlocal
+            cd /d "%%~I"
+            exit /b 0
+        )
+        exit /b %errorlevel%
     )
 
     for /f "usebackq delims=" %%I in (`""%CG_BIN%" pwd "%~2""`) do (

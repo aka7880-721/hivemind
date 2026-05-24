@@ -21,10 +21,18 @@ use super::{
     App, BROWSE_BUTTON_WIDTH, BrowseTarget, FORM_LABEL_WIDTH, FormRowButton, HitAction, HitTarget,
     visible_field_width,
 };
+mod ps_alias;
+
 use crate::{
     config::{DEFAULT_CHANGELOG_PATH, ProjectConfig, ProjectType, ReadmeInjectDepth},
     dialogs::TextInput,
     ui::center_vertically,
+};
+
+use ps_alias::{
+    append_alias_visible_fields, append_general_alias_rows, confirm_alias_custom_draft,
+    delete_alias_custom, persist_alias_state_to_project, render_alias_row,
+    set_alias_path_from_browse, sync_alias_state_from_project,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +64,14 @@ pub(crate) enum ProjectSettingsFocus {
     CustomMainBranchEnabled,
     CustomMainBranchName,
     Alias,
+    AdvancedAliasEnabled,
+    AliasDistPath,
+    AliasUiPath,
+    AliasCustomAdd,
+    AliasCustomDraftName,
+    AliasCustomDraftConfirm,
+    AliasCustomPath(u16),
+    AliasCustomDelete(u16),
     ChangelogEnabled,
     ChangelogPath,
     ChangelogHidePrMessages,
@@ -90,6 +106,12 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) follow_focus: bool,
     pub(crate) custom_main_branch_name: TextInput,
     pub(crate) alias: TextInput,
+    pub(crate) advanced_alias_enabled: bool,
+    pub(crate) alias_dist_path: TextInput,
+    pub(crate) alias_ui_path: TextInput,
+    pub(crate) alias_custom: Vec<ps_alias::AliasCustomEntryState>,
+    pub(crate) alias_custom_draft_active: bool,
+    pub(crate) alias_custom_draft_name: TextInput,
     pub(crate) changelog_path: TextInput,
     pub(crate) changelog_hide_pr_messages: bool,
     pub(crate) changelog_hide_bump_messages: bool,
@@ -116,6 +138,12 @@ impl Default for ProjectSettingsState {
             follow_focus: true,
             custom_main_branch_name: TextInput::with_value(""),
             alias: TextInput::with_value(""),
+            advanced_alias_enabled: false,
+            alias_dist_path: TextInput::with_value(""),
+            alias_ui_path: TextInput::with_value(""),
+            alias_custom: Vec::new(),
+            alias_custom_draft_active: false,
+            alias_custom_draft_name: TextInput::with_value(""),
             changelog_path: TextInput::with_value(DEFAULT_CHANGELOG_PATH),
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
@@ -153,6 +181,7 @@ impl ProjectSettingsState {
         self.custom_main_branch_name
             .set_value(project.repo_custom_main_branch_value_for_scope(scope_index));
         self.alias.set_value(project.alias.clone());
+        sync_alias_state_from_project(self, project, scope_index);
         self.changelog_path
             .set_value(project.changelog_path_for_scope(scope_index).to_string());
         self.changelog_hide_pr_messages = project.changelog_hide_pr_messages_for_scope(scope_index);
@@ -205,6 +234,7 @@ impl ProjectSettingsState {
                     }
                 }
                 fields.push(ProjectSettingsFocus::Alias);
+                append_alias_visible_fields(&mut fields, project, scope_index, self);
                 fields
             }
             ProjectSettingsTab::Changelogs => changelog_visible_fields(project, scope_index),
@@ -287,6 +317,10 @@ impl ProjectSettingsState {
                 self.focus,
                 ProjectSettingsFocus::CustomMainBranchName
                     | ProjectSettingsFocus::Alias
+                    | ProjectSettingsFocus::AliasDistPath
+                    | ProjectSettingsFocus::AliasUiPath
+                    | ProjectSettingsFocus::AliasCustomPath(_)
+                    | ProjectSettingsFocus::AliasCustomDraftName
                     | ProjectSettingsFocus::ChangelogPath
                     | ProjectSettingsFocus::ReleaseNowGeneral
                     | ProjectSettingsFocus::ReleaseNowWindows
@@ -303,6 +337,13 @@ impl ProjectSettingsState {
         match self.focus {
             ProjectSettingsFocus::CustomMainBranchName => Some(&mut self.custom_main_branch_name),
             ProjectSettingsFocus::Alias => Some(&mut self.alias),
+            ProjectSettingsFocus::AliasDistPath => Some(&mut self.alias_dist_path),
+            ProjectSettingsFocus::AliasUiPath => Some(&mut self.alias_ui_path),
+            ProjectSettingsFocus::AliasCustomPath(index) => self
+                .alias_custom
+                .get_mut(index as usize)
+                .map(|entry| &mut entry.path),
+            ProjectSettingsFocus::AliasCustomDraftName => Some(&mut self.alias_custom_draft_name),
             ProjectSettingsFocus::ChangelogPath => Some(&mut self.changelog_path),
             ProjectSettingsFocus::ReleaseNowGeneral => Some(&mut self.release_now_general),
             ProjectSettingsFocus::ReleaseNowWindows => Some(&mut self.release_now_windows),
@@ -347,6 +388,20 @@ impl ProjectSettingsState {
                 .custom_main_branch_name
                 .display_line_with_width(focused, max_width),
             ProjectSettingsFocus::Alias => self.alias.display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::AliasDistPath => self
+                .alias_dist_path
+                .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::AliasUiPath => self
+                .alias_ui_path
+                .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::AliasCustomPath(index) => self
+                .alias_custom
+                .get(index as usize)
+                .map(|entry| entry.path.display_line_with_width(focused, max_width))
+                .unwrap_or_else(|| Line::from(String::new())),
+            ProjectSettingsFocus::AliasCustomDraftName => self
+                .alias_custom_draft_name
+                .display_line_with_width(focused, max_width),
             ProjectSettingsFocus::ChangelogPath => self
                 .changelog_path
                 .display_line_with_width(focused, max_width),
@@ -664,6 +719,24 @@ pub(crate) fn activate_project_settings_field(
     if is_checkbox_field(focus) || is_readme_inject_depth_field(focus) {
         return toggle_focused_project_settings_control(app);
     }
+    if focus == ProjectSettingsFocus::AliasCustomAdd {
+        app.project_settings_state.alias_custom_draft_active = true;
+        app.project_settings_state.focus = ProjectSettingsFocus::AliasCustomDraftName;
+        app.project_settings_state.follow_focus = true;
+        return Ok(());
+    }
+    if focus == ProjectSettingsFocus::AliasCustomDraftConfirm {
+        if let Some(message) = confirm_alias_custom_draft(app) {
+            app.status = super::StatusMessage::error(message);
+        } else {
+            let _ = persist_project_settings_inputs(app);
+        }
+        return Ok(());
+    }
+    if let ProjectSettingsFocus::AliasCustomDelete(index) = focus {
+        delete_alias_custom(app, index);
+        return persist_project_settings_inputs(app);
+    }
     Ok(())
 }
 
@@ -673,7 +746,12 @@ pub(crate) fn scroll_project_settings(app: &mut App, delta: isize) {
         return;
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
-    let rows = build_rows(app.project_settings_tab, &project, scope_index);
+    let rows = build_rows(
+        app.project_settings_tab,
+        &project,
+        scope_index,
+        &app.project_settings_state,
+    );
     let total_height = total_rows_height(&rows);
     let viewport_height = app.project_settings_state.viewport_height;
     app.project_settings_state
@@ -681,13 +759,16 @@ pub(crate) fn scroll_project_settings(app: &mut App, delta: isize) {
 }
 
 #[derive(Clone)]
-enum ProjectSettingsRow {
+pub(crate) enum ProjectSettingsRow {
     Text(Line<'static>),
     Spacer(u16),
     Checkbox(ProjectSettingsFocus),
     DualCheckbox(ProjectSettingsFocus, ProjectSettingsFocus),
     Path(ProjectSettingsFocus),
     InjectDepth,
+    AliasCustom { index: u16 },
+    AliasCustomDraft,
+    AliasAddButton,
 }
 
 impl ProjectSettingsRow {
@@ -699,6 +780,8 @@ impl ProjectSettingsRow {
             Self::DualCheckbox(_, _) => 2,
             Self::Path(_) => 3,
             Self::InjectDepth => 2,
+            Self::AliasCustom { .. } | Self::AliasCustomDraft => 3,
+            Self::AliasAddButton => 2,
         }
     }
 
@@ -707,6 +790,9 @@ impl ProjectSettingsRow {
             Self::Checkbox(field) | Self::Path(field) => Some(*field),
             Self::DualCheckbox(left, _) => Some(*left),
             Self::InjectDepth => Some(ProjectSettingsFocus::ReadmeInjectDepthCurrentOnly),
+            Self::AliasCustom { index } => Some(ProjectSettingsFocus::AliasCustomPath(*index)),
+            Self::AliasCustomDraft => Some(ProjectSettingsFocus::AliasCustomDraftName),
+            Self::AliasAddButton => Some(ProjectSettingsFocus::AliasCustomAdd),
             _ => None,
         }
     }
@@ -744,6 +830,11 @@ pub(crate) fn open_browser_for_project_settings_focus(app: &mut App) -> Result<(
         ProjectSettingsFocus::ReleaseNowLinuxArm => BrowseTarget::ProjectSettingsReleaseNowLinuxArm,
         ProjectSettingsFocus::ReleaseNowLinuxAmd => BrowseTarget::ProjectSettingsReleaseNowLinuxAmd,
         ProjectSettingsFocus::ReleaseNowMacOs => BrowseTarget::ProjectSettingsReleaseNowMacOs,
+        ProjectSettingsFocus::AliasDistPath => BrowseTarget::ProjectSettingsAliasDistPath,
+        ProjectSettingsFocus::AliasUiPath => BrowseTarget::ProjectSettingsAliasUiPath,
+        ProjectSettingsFocus::AliasCustomPath(index) => {
+            BrowseTarget::ProjectSettingsAliasCustomPath(index)
+        }
         _ => return Ok(()),
     };
     app.open_browser(target)
@@ -787,6 +878,20 @@ pub(crate) fn initial_browser_path(app: &App, target: BrowseTarget) -> Option<St
                 .value()
                 .to_string(),
         ),
+        BrowseTarget::ProjectSettingsAliasDistPath => Some(
+            app.project_settings_state
+                .alias_dist_path
+                .value()
+                .to_string(),
+        ),
+        BrowseTarget::ProjectSettingsAliasUiPath => {
+            Some(app.project_settings_state.alias_ui_path.value().to_string())
+        }
+        BrowseTarget::ProjectSettingsAliasCustomPath(index) => app
+            .project_settings_state
+            .alias_custom
+            .get(index as usize)
+            .map(|entry| entry.path.value().to_string()),
         _ => None,
     }
 }
@@ -803,12 +908,26 @@ pub(crate) fn apply_browser_selection(
         BrowseTarget::ProjectSettingsReleaseNowLinuxArm => ProjectSettingsFocus::ReleaseNowLinuxArm,
         BrowseTarget::ProjectSettingsReleaseNowLinuxAmd => ProjectSettingsFocus::ReleaseNowLinuxAmd,
         BrowseTarget::ProjectSettingsReleaseNowMacOs => ProjectSettingsFocus::ReleaseNowMacOs,
+        BrowseTarget::ProjectSettingsAliasDistPath => ProjectSettingsFocus::AliasDistPath,
+        BrowseTarget::ProjectSettingsAliasUiPath => ProjectSettingsFocus::AliasUiPath,
+        BrowseTarget::ProjectSettingsAliasCustomPath(index) => {
+            ProjectSettingsFocus::AliasCustomPath(index)
+        }
         _ => return Ok(false),
     };
     sync_project_settings_state(app);
     app.project_settings_state.focus = field;
-    app.project_settings_state
-        .set_value_from_browse(field, value);
+    if matches!(
+        field,
+        ProjectSettingsFocus::AliasDistPath
+            | ProjectSettingsFocus::AliasUiPath
+            | ProjectSettingsFocus::AliasCustomPath(_)
+    ) {
+        set_alias_path_from_browse(&mut app.project_settings_state, field, value);
+    } else {
+        app.project_settings_state
+            .set_value_from_browse(field, value);
+    }
     persist_project_settings_inputs(app)?;
     Ok(true)
 }
@@ -877,7 +996,7 @@ fn render_general_settings(
         area,
         project,
         scope_index,
-        &build_general_rows(project, scope_index),
+        &build_general_rows(project, scope_index, &app.project_settings_state),
     );
 }
 
@@ -988,6 +1107,11 @@ fn render_scrollable_rows(
             ProjectSettingsRow::InjectDepth if row_area.height >= 2 => {
                 render_inject_depth_row(app, frame, row_area, project, scope_index);
             }
+            row @ (ProjectSettingsRow::AliasCustom { .. }
+            | ProjectSettingsRow::AliasCustomDraft
+            | ProjectSettingsRow::AliasAddButton) => {
+                render_alias_row(app, frame, row_area, row, app.project_settings_state.focus);
+            }
             _ => {}
         }
 
@@ -1030,9 +1154,10 @@ fn build_rows(
     tab: ProjectSettingsTab,
     project: &ProjectConfig,
     scope_index: usize,
+    state: &ProjectSettingsState,
 ) -> Vec<ProjectSettingsRow> {
     match tab {
-        ProjectSettingsTab::General => build_general_rows(project, scope_index),
+        ProjectSettingsTab::General => build_general_rows(project, scope_index, state),
         ProjectSettingsTab::Changelogs => build_changelogs_rows(project, scope_index),
         ProjectSettingsTab::Distro => build_distro_rows(project, scope_index),
         ProjectSettingsTab::RlsQd => build_rls_qd_rows(project, scope_index),
@@ -1068,7 +1193,11 @@ fn changelog_visible_fields(
     fields
 }
 
-fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
+fn build_general_rows(
+    project: &ProjectConfig,
+    scope_index: usize,
+    state: &ProjectSettingsState,
+) -> Vec<ProjectSettingsRow> {
     let mut rows = Vec::new();
     if project.integration_mode.requires_repo() {
         if project.repo_has_custom_main_branch_for_scope(scope_index) {
@@ -1081,8 +1210,9 @@ fn build_general_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Projec
             ProjectSettingsFocus::CustomMainBranchEnabled,
         ));
     }
+    rows.push(ProjectSettingsRow::Path(ProjectSettingsFocus::Alias));
+    append_general_alias_rows(&mut rows, project, scope_index, state);
     rows.extend([
-        ProjectSettingsRow::Path(ProjectSettingsFocus::Alias),
         ProjectSettingsRow::Spacer(1),
         ProjectSettingsRow::Text(Line::from(
             "Press Space or Enter to toggle the selected checkbox. Ctrl+O opens Browse on path fields.",
@@ -1282,7 +1412,27 @@ fn focused_row_bounds(
         let height = row.height();
         let row_focused = row.focus() == Some(focus)
             || (matches!(row, ProjectSettingsRow::InjectDepth)
-                && is_readme_inject_depth_field(focus));
+                && is_readme_inject_depth_field(focus))
+            || matches!(
+                (row, focus),
+                (
+                    ProjectSettingsRow::AliasCustom { index },
+                    ProjectSettingsFocus::AliasCustomPath(path_index)
+                ) if *index == path_index
+            )
+            || matches!(
+                (row, focus),
+                (
+                    ProjectSettingsRow::AliasCustom { index },
+                    ProjectSettingsFocus::AliasCustomDelete(delete_index)
+                ) if *index == delete_index
+            )
+            || (matches!(row, ProjectSettingsRow::AliasCustomDraft)
+                && matches!(
+                    focus,
+                    ProjectSettingsFocus::AliasCustomDraftName
+                        | ProjectSettingsFocus::AliasCustomDraftConfirm
+                ));
         if row_focused {
             return Some((top, height));
         }
@@ -1325,6 +1475,9 @@ fn render_checkbox_row(
             project
                 .release_now_for_scope(scope_index)
                 .readme_injection_enabled
+        }
+        ProjectSettingsFocus::AdvancedAliasEnabled => {
+            app.project_settings_state.advanced_alias_enabled
         }
         ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => {
             project
@@ -1581,8 +1734,9 @@ fn render_path_row(
 ) {
     let inset = control_inset(area);
     let side_button = match field {
-        ProjectSettingsFocus::Alias | ProjectSettingsFocus::CustomMainBranchName => None,
-        ProjectSettingsFocus::QuickDownloadsPosition
+        ProjectSettingsFocus::Alias
+        | ProjectSettingsFocus::CustomMainBranchName
+        | ProjectSettingsFocus::QuickDownloadsPosition
         | ProjectSettingsFocus::QuickDownloadsFooter
         | ProjectSettingsFocus::ReadmeInjectAtRow
         | ProjectSettingsFocus::ReleaseTitleTemplate => None,
@@ -1640,6 +1794,7 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
             "Enable Release-NOW capabilities for this project/scope"
         }
         ProjectSettingsFocus::QuickDownloadsEnabled => "Quick-Downloads Enabled",
+        ProjectSettingsFocus::AdvancedAliasEnabled => "Advanced Alias functionality",
         _ => "",
     }
 }
@@ -1648,6 +1803,8 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
     match field {
         ProjectSettingsFocus::CustomMainBranchName => "Custom main branch",
         ProjectSettingsFocus::Alias => "Alias",
+        ProjectSettingsFocus::AliasDistPath => "Dist path",
+        ProjectSettingsFocus::AliasUiPath => "UI path",
         ProjectSettingsFocus::ChangelogPath => "Changelog path",
         ProjectSettingsFocus::ChangelogHidePrMessages => "Hide PR messages",
         ProjectSettingsFocus::ChangelogHideBumpMessages => "Hide bump messages",
@@ -1675,6 +1832,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ChangelogMiniCommitHashes
             | ProjectSettingsFocus::ReadmeInjectionEnabled
             | ProjectSettingsFocus::ReadmeInjectOnlyTopPicks
+            | ProjectSettingsFocus::AdvancedAliasEnabled
             | ProjectSettingsFocus::ReleaseNowEnabled
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
@@ -1813,6 +1971,21 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
                 scope_name
             ));
         }
+        ProjectSettingsFocus::AdvancedAliasEnabled => {
+            let next = !app.project_settings_state.advanced_alias_enabled;
+            app.project_settings_state.advanced_alias_enabled = next;
+            if !next {
+                app.project_settings_state.alias_custom_draft_active = false;
+            }
+            active_project
+                .advanced_alias_for_scope_mut(scope_index)
+                .enabled = next;
+            app.status = super::StatusMessage::success(format!(
+                "Advanced alias functionality {} for {}.",
+                if next { "enabled" } else { "disabled" },
+                scope_name
+            ));
+        }
         ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => {
             let rls = active_project.release_now_for_scope_mut(scope_index);
             rls.readme_inject_only_top_picks = !rls.readme_inject_only_top_picks;
@@ -1917,6 +2090,7 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
         )?;
     }
     active_project.alias = alias;
+    persist_alias_state_to_project(active_project, scope_index, &app.project_settings_state);
     active_project.set_changelog_path_for_scope(scope_index, changelog_path);
     let release_now = active_project.release_now_for_scope_mut(scope_index);
     release_now.general_script = general_script;

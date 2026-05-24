@@ -1973,6 +1973,7 @@ mod tests {
                     key_path: "package.version".to_string(),
                     format: TargetFormat::Toml,
                 }],
+                advanced_alias: Default::default(),
             }],
             repo: None,
             ..Default::default()
