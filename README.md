@@ -254,7 +254,7 @@ Enjoy!
 
 > [!NOTE]
 > In the current version, **ComfyGit** supports **Rust** and **NJS**.  
-> Do you want to see more supported programming languages? Request [HERE](#127)  
+> Do you want to see more supported programming languages? Request [HERE](https://github.com/comfy-home/ComfyGit/discussions/127)  
 
 ## Overview
 
