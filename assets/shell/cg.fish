@@ -40,12 +40,16 @@ function cg --wraps ComfyGit --description 'ComfyGit launcher (supports cg cd <a
 
     if set -q argv[1]
         and test "$argv[1]" = cd
-        if test (count $argv) -ne 2
-            echo "usage: cg cd <alias>" >&2
+        if test (count $argv) -eq 3
+            set -l target_dir ("$_exe" pwd $argv[2] $argv[3])
+            or return
+        else if test (count $argv) -eq 2
+            set -l target_dir ("$_exe" pwd $argv[2])
+            or return
+        else
+            echo "usage: cg cd <alias> [sub]" >&2
             return 2
         end
-        set -l target_dir ("$_exe" pwd $argv[2])
-        or return
         cd $target_dir
         or return
     else

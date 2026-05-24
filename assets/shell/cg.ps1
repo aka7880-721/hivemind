@@ -26,12 +26,16 @@ function Get-ComfyGitLauncher {
 $cgBin = Get-ComfyGitLauncher
 
 if ($Arguments.Count -gt 0 -and $Arguments[0] -eq 'cd') {
-    if ($Arguments.Count -ne 2) {
-        Write-Error 'usage: cg cd <alias>'
+    if ($Arguments.Count -lt 2 -or $Arguments.Count -gt 3) {
+        Write-Error 'usage: cg cd <alias> [sub]'
         exit 2
     }
 
-    $targetDir = & $cgBin pwd $Arguments[1]
+    if ($Arguments.Count -eq 3) {
+        $targetDir = & $cgBin pwd $Arguments[1] $Arguments[2]
+    } else {
+        $targetDir = & $cgBin pwd $Arguments[1]
+    }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
