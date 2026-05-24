@@ -58,6 +58,163 @@ Enjoy!
 
 ---
 
+<details><summary>👀 What's new in v0.29.5 ...</summary>
+
+### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+
+#### **1. &nbsp;&nbsp;&nbsp;Advanced Alias Functionality!**
+- Must be enabled in `Project Settings/General`
+- Allows `cg cd` command to `cd` into more than just a project root
+- For instance, for broject with alias `cg` you can define:
+    - `dist` folder path as `{PROJECT_ROOT}/dist/latest/linux/amd64` ==> then you can perform `cg cd cg dist` from anywhere to get in instantly!
+- Has pre-defined two sub-aliases: `dist` and `ui`
+- Allows creation of custom sub-aliases!
+
+#### **2. &nbsp;&nbsp;&nbsp;Changelog-related settings were moved**
+- They are now in a dedicated "Changelogs" tab within `Project Settings`
+
+#### **3. &nbsp;&nbsp;&nbsp;Project TILE visual change**
+- The first info line ("commits ahead since release") got its icon removed
+- Now the label displays as "Tag ==>> HEAD:"
+- Reasoning:
+    - Some terminals as `kitty` and `konsole` were having trouble rendering the tag (🏷)️ icon
+    - Only terminals with a full GPU engine were reliable
+    - The easiest and most reliable fix was to simplify the line
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br><br>
+
+<details><summary>👀 See previous changes...</summary>
+<br>
+<details><summary>v0-28-4 ...</summary>
+
+#### **1. &nbsp;&nbsp;&nbsp;Ability to inject historical Top Picks/changelogs into README!**
+#### **2. &nbsp;&nbsp;&nbsp;Ability to inject only Top Picks (no changelogs)**
+#### **3. &nbsp;&nbsp;&nbsp;Changes default folder of historical changelogs to `.changelogs/history`**
+- This has been done to declutter the `.changelogs` folder, so user does not need to scroll down on GitHub page to see README.md summarizing changelog within `.changelogs` folder
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+</details>
+<details><summary>v0-27-7 ...</summary>
+
+#### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
+- Now you can add, and edit your TP from TUI
+- Assigned shortcut `P`
+- New modal with full MD support
+- Fully implemented keyboard shortcuts (ctrl+a/c/v)
+- Fully implemented mouse action shortcuts (rightClick to paste/copy, doubleClick, click, drag&hold)
+
+#### **2. &nbsp;&nbsp;&nbsp;New ALT branch type!**
+- We all know the situation: 
+    - you "hit the wall", an obstacle to overcome to finish the feature in `dev` branch...
+    - you're on a junction, there are multiple possible approaches to take.
+- With the new `atl` type branch you can try them all
+- Fully implemented within ComfyGit eco-system
+    - easy to create via `cg new alt 1` (synced)
+    - or `cg new alt 2` (local-only)
+    - and even easier to merge via `cg br end`
+- To sum it up: ComfyGit now recognizes 4 type of branches:
+    - `x`
+    - `dev`
+    - `alt`
+    - `sub-alt`, that's right - sometimes there are obstactles within an obstacle :)
+
+#### **3. &nbsp;&nbsp;&nbsp;New `cg init` CLI command!**
+- adding a new project to ComfyGit have never been easier.
+- now it can be done from CLI via `cg init`!
+
+#### **4. &nbsp;&nbsp;&nbsp;New `cg merge local` CLI command!**
+- example synonyms: `cg mg ll`, `cg mrg loc`, `cg mg lcl`
+- there are use cases when local merge is needed, now it can be done via ComfyGit
+- `cg mg ll` starts an easy to navigate wizard where is hard to make any mistake
+
+#### **5. &nbsp;&nbsp;&nbsp;Misc**
+- fixed bad render within project tiles in Windows 11 terminals caused by win-specific unicode width.
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+</details>
+<details><summary>v0-25-4 ...</summary>
+
+#### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
+- Now you can add, and edit your TP from TUI
+    - Assigned shortcut `P`
+- Fully implemented keyboard shortcuts (ctrl+a/c/v)
+- Fully implemented mouse action shortcuts 
+    - rightClick to paste/copy, doubleClick to select word, click to position cursor, drag&hold to select
+
+#### **2. &nbsp;&nbsp;&nbsp;Auto-README changelog injection!**
+- You can now automatically inject an expandable one-liner with latest changes from the last release, amazing feature if you ask me...! 🤩
+- Make sure to check WIKI pages to understand it fully...
+
+#### **3. &nbsp;&nbsp;&nbsp;Misc**
+- Added support in Distro for "General" scripts
+    - Unlike Win/Arm/Amd/Mac, General is not required to produce any artifacts
+    - Useful for small projects (e.g. crates, plugins, etc)
+- Project reordering in Projects pane
+    - Now you can click&drag your projects to change their order
+    - Remember, you can do this for a while also with tiles within the project
+- Release Notes Editor in ReleaseNOW got enhanced
+    - added mouse and keyboard shortcuts
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+</details>
+<details><summary>v0-25-3 ...</summary>
+
+#### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR! ⭐**
+- Now you can add, and edit your TP from TUI
+    - Assigned shortcut `P`
+- New modal with full MD support
+- Fully implemented keyboard shortcuts (ctrl+a/c/v)
+- Fully implemented mouse action shortcuts 
+    - rightClick to paste/copy, doubleClick to select word, click to position cursor, drag&hold to select
+
+#### **2. &nbsp;&nbsp;&nbsp;Auto-README changelog injection!**
+    - You can now automatically inject an expandable one-liner with latest changes from the last release, amazing feature if you ask me...! 🤩
+    - Make sure to check WIKI pages to understand it fully...
+
+#### **3. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
+- Now you can add, and edit your TP from TUI
+- Assigned shortcut `P`
+- New modal with full MD support
+- Fully implemented keyboard shortcuts (ctrl+a/c/v)
+- Fully implemented mouse action shortcuts (rightClick to paste/copy, doubleClick, click, drag&hold)
+
+#### **4. &nbsp;&nbsp;&nbsp;Misc**
+- Added support in Distro for "General" scripts
+    - Unlike Win/Arm/Amd/Mac, General is not required to produce any artifacts
+    - Useful for small projects (e.g. crates, plugins, etc)
+- Project reordering in Projects pane
+    - Now you can click&drag your projects to change their order
+    - Remember, you can do this for a while also with tiles within the project
+- Release Notes Editor in ReleaseNOW got enhanced
+    - added mouse and keyboard shortcuts
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+</details>
+</details>
+<br>
+
+---
+<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://github.com/comfy-home/ComfyGit/releases/tag/v0.29.5)</sup>
+
+---
+
+</details>
+
 <details><summary>👀 What's new in v0.28.4 ...</summary>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
