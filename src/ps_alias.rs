@@ -25,6 +25,8 @@ use super::{
     ProjectSettingsRow, ProjectSettingsState, visible_field_width,
 };
 
+const ALIAS_ADD_BUTTON_WIDTH: u16 = 8;
+
 #[derive(Clone)]
 pub(crate) struct AliasCustomEntryState {
     pub name: String,
@@ -230,9 +232,11 @@ fn render_alias_custom_row(
 
     let delete_area = center_vertically(row[5], area.height.min(3));
     let delete_style = if delete_focused {
-        Style::default().fg(Color::Black).bg(Color::Red)
+        Style::default().fg(Color::White).bg(Color::Red)
     } else {
-        Style::default().fg(Color::Black).bg(Color::DarkGray)
+        Style::default()
+            .fg(Color::Rgb(255, 180, 180))
+            .bg(Color::Rgb(80, 20, 20))
     };
     frame.render_widget(
         Paragraph::new("Delete")
@@ -310,7 +314,9 @@ fn render_alias_custom_draft_row(
     let confirm_style = if confirm_focused {
         Style::default().fg(Color::Black).bg(Color::Green)
     } else {
-        Style::default().fg(Color::Black).bg(Color::DarkGray)
+        Style::default()
+            .fg(Color::Rgb(180, 255, 180))
+            .bg(Color::Rgb(20, 80, 20))
     };
     frame.render_widget(
         Paragraph::new("OK")
@@ -338,15 +344,24 @@ fn render_alias_add_button(
 ) {
     let focused = focused_field == ProjectSettingsFocus::AliasCustomAdd;
     let inset = control_inset(area);
-    let button_area = center_vertically(inset, area.height.min(3));
+    let row = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(ALIAS_ADD_BUTTON_WIDTH),
+            Constraint::Min(0),
+        ])
+        .split(inset);
+    let button_area = center_vertically(row[0], area.height.min(3));
     let style = if focused {
-        Style::default().fg(Color::Black).bg(Color::Cyan)
+        Style::default().fg(Color::Black).bg(Color::Green)
     } else {
-        Style::default().fg(Color::Black).bg(Color::DarkGray)
+        Style::default()
+            .fg(Color::Rgb(180, 255, 180))
+            .bg(Color::Rgb(20, 80, 20))
     };
     frame.render_widget(
         Paragraph::new("+")
-            .alignment(Alignment::Center)
+            .alignment(Alignment::Left)
             .style(style)
             .block(Block::default().borders(Borders::ALL)),
         button_area,

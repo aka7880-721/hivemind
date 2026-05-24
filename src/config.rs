@@ -1398,7 +1398,6 @@ format = "json"
                 name: "docs".to_string(),
                 path: "documentation".to_string(),
             }],
-            ..AdvancedAliasSettings::default()
         };
 
         assert_eq!(settings.path_for_sub("dist"), Some("dist/latest"));
