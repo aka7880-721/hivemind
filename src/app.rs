@@ -4772,6 +4772,7 @@ impl App {
             }
             return Err(error);
         }
+        ensure_project_repo_gitignore_defaults(&updated_project)?;
         self.config.projects[dialog.project_index] = updated_project;
         self.config_store.save(&self.config)?;
         self.invalidate_overview_cache();
@@ -5434,9 +5435,7 @@ impl App {
 
     fn save_wizard_project(&mut self) -> Result<()> {
         let project = self.wizard.build_project()?;
-        if let Some(repo) = project.repo.as_ref() {
-            ensure_gitignore_entry(&repo.local_root, ".comfygit/syncmem/stdchlg-local.json")?;
-        }
+        ensure_project_repo_gitignore_defaults(&project)?;
         self.config.projects.push(project);
         self.config_store.save(&self.config)?;
         self.selected_project = self.config.projects.len().saturating_sub(1);
@@ -8192,6 +8191,33 @@ fn ensure_std_changelog_memory_entry(
     }
 
     record_std_changelog_created(repo_root, tag_name, branch_name)
+}
+
+fn ensure_project_repo_gitignore_defaults(project: &crate::config::ProjectConfig) -> Result<()> {
+    use std::collections::HashSet;
+
+    let mut roots = HashSet::new();
+    if let Some(repo) = project.repo.as_ref() {
+        let root = repo.local_root.trim();
+        if !root.is_empty() {
+            roots.insert(root.to_string());
+        }
+    }
+    for branch in &project.branches {
+        if let Some(repo) = branch.repo.as_ref() {
+            let root = repo.local_root.trim();
+            if !root.is_empty() {
+                roots.insert(root.to_string());
+            }
+        }
+    }
+
+    for root in roots {
+        ensure_gitignore_entry(&root, "changelog_temp.md")?;
+        ensure_gitignore_entry(&root, ".comfygit/syncmem/stdchlg-local.json")?;
+    }
+
+    Ok(())
 }
 
 fn ensure_gitignore_entry(repo_root: &str, entry: &str) -> Result<()> {
