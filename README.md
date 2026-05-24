@@ -252,15 +252,16 @@ Enjoy!
 >
 > NOTE: There are no other requirements, no extra scripts, GitHub settings - nothing.
 
-> [!NOTE]
-> In the current version, **ComfyGit** supports **Rust** and **NJS**.  
-> Do you want to see more supported programming languages? Request [HERE](https://github.com/comfy-home/ComfyGit/discussions/127)  
 
 ## Overview
 
 **ComfyGit** is a powerful Terminal User Interface (TUI) and CLI tool designed to streamline Git workflows, automate version management, and generate beautiful changelogs. Built with [Ratatui](https://github.com/ratatui/ratatui) in Rust, it provides an intuitive visual interface while maintaining full CLI accessibility.
 
 Whether you're managing a simple single-package project or a complex multi-scope monorepo, ComfyGit adapts to your workflow with flexible project configurations and intelligent automation.
+
+> [!NOTE]
+> In the current version, **ComfyGit** supports **Rust** and **NJS**.  
+> Do you want to see more supported programming languages? Request [HERE](https://github.com/comfy-home/ComfyGit/discussions/127)  
 
 ---
 
