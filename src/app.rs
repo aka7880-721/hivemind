@@ -5472,7 +5472,10 @@ impl App {
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
-            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs
+            | BrowseTarget::ProjectSettingsAliasDistPath
+            | BrowseTarget::ProjectSettingsAliasUiPath
+            | BrowseTarget::ProjectSettingsAliasCustomPath(_) => {
                 p_s_s::initial_browser_path(self, target).unwrap_or_default()
             }
         }
@@ -5533,7 +5536,10 @@ impl App {
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
-            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs
+            | BrowseTarget::ProjectSettingsAliasDistPath
+            | BrowseTarget::ProjectSettingsAliasUiPath
+            | BrowseTarget::ProjectSettingsAliasCustomPath(_) => {
                 if p_s_s::apply_browser_selection(self, target, selected)? {
                     self.browser_dialog = None;
                     self.status = StatusMessage::success("Selection applied.");
@@ -7390,6 +7396,7 @@ impl ScopeDraft {
                 key_path: target_key.to_string(),
                 format,
             }],
+            advanced_alias: crate::config::AdvancedAliasSettings::default(),
         })
     }
 }
@@ -8919,6 +8926,9 @@ enum BrowseTarget {
     ProjectSettingsReleaseNowLinuxArm,
     ProjectSettingsReleaseNowLinuxAmd,
     ProjectSettingsReleaseNowMacOs,
+    ProjectSettingsAliasDistPath,
+    ProjectSettingsAliasUiPath,
+    ProjectSettingsAliasCustomPath(u16),
 }
 
 struct FileBrowserDialog {
@@ -8932,7 +8942,11 @@ impl FileBrowserDialog {
     fn new(target: BrowseTarget, initial_path: String) -> Result<Self> {
         let select_directories = matches!(
             target,
-            BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot
+            BrowseTarget::WizardRepoRoot
+                | BrowseTarget::ProjectEditRepoRoot
+                | BrowseTarget::ProjectSettingsAliasDistPath
+                | BrowseTarget::ProjectSettingsAliasUiPath
+                | BrowseTarget::ProjectSettingsAliasCustomPath(_)
         );
         let explorer = configure_file_explorer(
             FileExplorerBuilder::default(),
@@ -10072,6 +10086,7 @@ mod tests {
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
+                    advanced_alias: Default::default(),
                 },
                 BranchConfig {
                     name: "api".to_string(),
@@ -10087,6 +10102,7 @@ mod tests {
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
+                    advanced_alias: Default::default(),
                 },
             ],
             repo: None,
@@ -10144,6 +10160,7 @@ mod tests {
                         key_path: "package.version".to_string(),
                         format: TargetFormat::Toml,
                     }],
+                    advanced_alias: Default::default(),
                 },
                 BranchConfig {
                     name: "api".to_string(),
@@ -10168,6 +10185,7 @@ mod tests {
                         key_path: "package.version".to_string(),
                         format: TargetFormat::Json,
                     }],
+                    advanced_alias: Default::default(),
                 },
             ],
             repo: None,
@@ -10221,6 +10239,7 @@ mod tests {
                     key_path: "package.version".to_string(),
                     format: TargetFormat::Toml,
                 }],
+                advanced_alias: Default::default(),
             }],
             repo: None,
             ..Default::default()
@@ -10271,6 +10290,7 @@ mod tests {
                     key_path: "package.version".to_string(),
                     format: TargetFormat::Toml,
                 }],
+                advanced_alias: Default::default(),
             }],
             repo: None,
             ..Default::default()
