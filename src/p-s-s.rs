@@ -799,7 +799,7 @@ impl ProjectSettingsRow {
             Self::Path(_) => 3,
             Self::InjectDepth => 2,
             Self::AliasCustom { .. } | Self::AliasCustomDraft => 3,
-            Self::AliasAddButton => 2,
+            Self::AliasAddButton => 3,
         }
     }
 
@@ -1125,9 +1125,17 @@ fn render_scrollable_rows(
                 render_inject_depth_row(app, frame, row_area, project, scope_index);
             }
             row @ (ProjectSettingsRow::AliasCustom { .. }
-            | ProjectSettingsRow::AliasCustomDraft
-            | ProjectSettingsRow::AliasAddButton) => {
+            | ProjectSettingsRow::AliasCustomDraft) => {
                 render_alias_row(app, frame, row_area, row, app.project_settings_state.focus);
+            }
+            ProjectSettingsRow::AliasAddButton if row_area.height >= 3 => {
+                render_alias_row(
+                    app,
+                    frame,
+                    row_area,
+                    &ProjectSettingsRow::AliasAddButton,
+                    app.project_settings_state.focus,
+                );
             }
             _ => {}
         }
