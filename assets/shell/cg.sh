@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
+# Bash/zsh integration: source this file from ~/.bashrc or ~/.zshrc (see `cg install-shell`).
+# Fish users: do not source this file — use ~/.config/fish/conf.d/comfygit.fish instead.
 
 # Many distros omit ~/.local/bin from the default PATH; AppImage `install-shell` installs wrappers there.
 if [ -n "${HOME:-}" ] && [ -d "$HOME/.local/bin" ]; then
