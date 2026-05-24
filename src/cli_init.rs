@@ -424,6 +424,7 @@ fn confirm_and_save_scope(
         .find(|branch| branch.name == scope_name)
         .and_then(|branch| branch.repo.as_ref())
     {
+        ensure_gitignore_entry(&repo.local_root, "changelog_temp.md")?;
         ensure_gitignore_entry(&repo.local_root, ".comfygit/syncmem/stdchlg-local.json")?;
     }
 
@@ -958,7 +959,14 @@ fn confirm_and_save_project(
     }
 
     if let Some(repo) = project.repo.as_ref() {
+        ensure_gitignore_entry(&repo.local_root, "changelog_temp.md")?;
         ensure_gitignore_entry(&repo.local_root, ".comfygit/syncmem/stdchlg-local.json")?;
+    }
+    for branch in &project.branches {
+        if let Some(repo) = branch.repo.as_ref() {
+            ensure_gitignore_entry(&repo.local_root, "changelog_temp.md")?;
+            ensure_gitignore_entry(&repo.local_root, ".comfygit/syncmem/stdchlg-local.json")?;
+        }
     }
 
     config.projects.push(project);
