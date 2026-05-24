@@ -64,7 +64,7 @@ install_fish_config_fallback() {
   fi
   {
     printf '\n%s\n' "$marker"
-    printf '%s\n' "test -f \"$config_home/fish/conf.d/comfygit.fish\"; and source \"$config_home/fish/conf.d/comfygit.fish\""
+    printf '%s\n' "test -f \"$target_dir/cg.fish\"; and source \"$target_dir/cg.fish\""
   } >>"$fish_config"
 }
 
@@ -115,9 +115,8 @@ install_pwsh_user_profile() {
   escaped_path=$(printf '%s' "$ps1_path" | sed "s/'/''/g")
   {
     printf '\n%s\n' "$marker"
-    printf '%s\n' "if (Get-Module -ListAvailable -Name ComfyGit) {"
-    printf '%s\n' "  Import-Module ComfyGit -ErrorAction SilentlyContinue"
-    printf '%s\n' "} elseif (-not (Get-Command cg -ErrorAction SilentlyContinue)) {"
+    printf '%s\n' "Import-Module ComfyGit -ErrorAction SilentlyContinue"
+    printf '%s\n' "if (-not (Get-Command cg -ErrorAction SilentlyContinue)) {"
     printf '%s\n' "  function cg {"
     printf "%s\n" "    & '$escaped_path' @args"
     printf '%s\n' "  }"
@@ -129,6 +128,7 @@ install_fish_integration() {
   fish_conf_d="$config_home/fish/conf.d"
   mkdir -p "$fish_conf_d"
   cp "$shell_asset_dir/cg.fish" "$fish_conf_d/comfygit.fish"
+  cp "$shell_asset_dir/cg.fish" "$target_dir/cg.fish"
 
   if mkdir -p /usr/share/fish/vendor_conf.d 2>/dev/null; then
     cp "$shell_asset_dir/cg.fish" /usr/share/fish/vendor_conf.d/comfygit.fish 2>/dev/null || true
@@ -151,7 +151,7 @@ install_user_shell_integration() {
   install_pwsh_user_profile
 
   printf '%s\n' "Installed ComfyGit shell integration to $target_file"
-  printf '%s\n' "Installed fish integration to $config_home/fish/conf.d/comfygit.fish (and config.fish fallback if needed)"
+  printf '%s\n' "Installed fish integration to $config_home/fish/conf.d/comfygit.fish and $target_dir/cg.fish (source that file in fish, not cg.sh)"
   printf '%s\n' "Installed PATH hooks in ~/.profile and ~/.zprofile (login shells / tools that skip .zshrc)"
   printf '%s\n' "Installed the cg launcher wrapper to $bin_dir/cg"
   printf '%s\n' "Installed the comfygit launcher wrapper to $bin_dir/comfygit"

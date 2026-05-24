@@ -2,10 +2,19 @@ function Get-ComfyGitExecutable {
     if ($env:COMFYGIT_EXE -and (Test-Path -LiteralPath $env:COMFYGIT_EXE)) {
         return $env:COMFYGIT_EXE
     }
-    $localLauncher = Join-Path $HOME '.local/bin/ComfyGit'
-    if (Test-Path -LiteralPath $localLauncher) {
-        return $localLauncher
+
+    $candidates = @(
+        (Join-Path $HOME '.local/bin/ComfyGit')
+        '/usr/local/bin/ComfyGit'
+        '/usr/bin/ComfyGit'
+        '/usr/local/sbin/ComfyGit'
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return $candidate
+        }
     }
+
     $moduleDir = $PSScriptRoot
     if ($moduleDir) {
         $nextToModule = Join-Path $moduleDir 'ComfyGit'
@@ -17,10 +26,13 @@ function Get-ComfyGitExecutable {
             return $nextToModuleExe
         }
     }
-    $cmd = Get-Command ComfyGit -CommandType Application -ErrorAction SilentlyContinue
+
+    $cmd = Get-Command ComfyGit -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
     if ($cmd) {
         return $cmd.Source
     }
+
     return 'ComfyGit'
 }
 

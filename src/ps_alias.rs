@@ -353,17 +353,20 @@ fn render_alias_add_button(
         ])
         .split(inset);
     let button_area = center_vertically(row[0], area.height.min(3));
-    let style = if focused {
-        Style::default().fg(Color::Black).bg(Color::Green)
+    let (fg, bg) = if focused {
+        (Color::Black, Color::Green)
     } else {
-        Style::default()
-            .fg(Color::Rgb(180, 255, 180))
-            .bg(Color::Rgb(20, 80, 20))
+        (Color::Rgb(180, 255, 180), Color::Rgb(20, 80, 20))
     };
+    let fill = Style::default().fg(fg).bg(bg);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(fill)
+        .style(fill);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(ALIAS_ADD_BUTTON_LABEL, style)))
-            .alignment(Alignment::Left)
-            .block(Block::default().borders(Borders::ALL)),
+        Paragraph::new(Line::from(Span::styled(ALIAS_ADD_BUTTON_LABEL, fill)))
+            .alignment(Alignment::Center)
+            .block(block),
         button_area,
     );
     app.hit_targets.push(HitTarget::new(
