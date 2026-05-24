@@ -8,9 +8,65 @@ if [ ! -x "$cg_bin" ]; then
   cg_bin="ComfyGit"
 fi
 
+comfygit_cli_exe() {
+  if [ -n "${COMFYGIT_EXE:-}" ] && [ -x "${COMFYGIT_EXE}" ]; then
+    printf '%s\n' "${COMFYGIT_EXE}"
+    return 0
+  fi
+  if command -v ComfyGit >/dev/null 2>&1; then
+    command -v ComfyGit
+    return 0
+  fi
+  if [ -n "${HOME:-}" ] && [ -x "${HOME}/.local/bin/ComfyGit" ]; then
+    printf '%s\n' "${HOME}/.local/bin/ComfyGit"
+    return 0
+  fi
+  if [ -x /usr/local/bin/ComfyGit ]; then
+    printf '%s\n' /usr/local/bin/ComfyGit
+    return 0
+  fi
+  return 1
+}
+
 if [ "$#" -gt 0 ] && [ "$1" = "cd" ]; then
-  printf '%s\n' "ComfyGit shell integration is not active in this shell. Open a new shell or run the install-shell-integration script." >&2
-  exit 1
+  comfygit_exe="$(comfygit_cli_exe)" || {
+    printf '%s\n' "ComfyGit executable not found. Run 'cg install-shell' or set COMFYGIT_EXE." >&2
+    exit 127
+  }
+
+  if [ "$#" -eq 3 ]; then
+    target_dir="$("$comfygit_exe" pwd "$2" "$3")" || exit $?
+  elif [ "$#" -eq 2 ]; then
+    target_dir="$("$comfygit_exe" pwd "$2")" || exit $?
+  else
+    printf '%s\n' "usage: cg cd <alias> [sub]" >&2
+    exit 2
+  fi
+
+  # When this launcher is invoked as an external command (pwsh/fish without integration),
+  # cd in a child process cannot change the parent shell. Detect common cases and guide the user.
+  parent_comm=$(ps -o comm= -p "${PPID:-0}" 2>/dev/null | tr -d ' ' || true)
+  case "$parent_comm" in
+    pwsh|pwsh-*|powershell|powershell-*)
+      printf '%s\n' \
+        "ComfyGit shell integration is not active in PowerShell." \
+        "Run 'cg install-shell', then restart pwsh, or add to your profile:" \
+        "  Import-Module ComfyGit" >&2
+      printf '%s\n' "Resolved path: $target_dir" >&2
+      exit 1
+      ;;
+    fish|fish-*)
+      printf '%s\n' \
+        "ComfyGit fish integration is not active (use the cg function, not the PATH stub)." \
+        "Run 'cg install-shell', restart fish, or use:" \
+        "  cd ($comfygit_exe pwd $2${3:+ $3})" >&2
+      printf '%s\n' "Resolved path: $target_dir" >&2
+      exit 1
+      ;;
+  esac
+
+  cd "$target_dir" || exit $?
+  exit 0
 fi
 
 exec "$cg_bin" "$@"

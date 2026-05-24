@@ -2358,6 +2358,80 @@ impl App {
             }
         }
 
+        if self.project_edit_dialog.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.scroll_project_edit_body(-1);
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll_project_edit_body(1);
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
+                    {
+                        let maybe_click_target = self.text_input_click_target(&action);
+                        let mut select_all = false;
+                        if let Some(target) = maybe_click_target {
+                            let now = Instant::now();
+                            if self.last_text_input_click_target == Some(target)
+                                && self
+                                    .last_text_input_click_at
+                                    .map(|previous| {
+                                        now.duration_since(previous) <= Duration::from_millis(400)
+                                    })
+                                    .unwrap_or(false)
+                            {
+                                select_all = true;
+                            }
+                            self.last_text_input_click_target = Some(target);
+                            self.last_text_input_click_at = Some(now);
+                        } else {
+                            self.last_text_input_click_target = None;
+                            self.last_text_input_click_at = None;
+                        }
+
+                        if let Err(error) = self.handle_hit_action(action) {
+                            self.status = StatusMessage::error(error.to_string());
+                        }
+
+                        if select_all {
+                            if let Some(input) = self.active_text_input_mut() {
+                                input.select_all();
+                            }
+                        } else if maybe_click_target.is_some() && rect.width > FORM_LABEL_WIDTH + 2
+                        {
+                            self.set_text_input_cursor_from_mouse(rect, mouse.column);
+                        }
+                    }
+                    return;
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((action, rect)) =
+                        self.resolve_hit_target(mouse.column, mouse.row, false)
+                        && let Some(last_target) = self.last_text_input_click_target
+                        && last_target.same_field_action(&action)
+                    {
+                        self.update_text_input_drag_selection(rect, mouse.column);
+                    }
+                    return;
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    let selected_text = self
+                        .active_text_input_mut()
+                        .and_then(|input| input.selected_text().map(str::to_string));
+                    if let Some(selection) = selected_text {
+                        self.copy_text_to_clipboard(&selection);
+                    }
+                    return;
+                }
+                MouseEventKind::Up(MouseButton::Left) => return,
+                _ => return,
+            }
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 if self.project_edit_dialog.is_some() {
@@ -3009,6 +3083,7 @@ impl App {
                     dialog.focus = field;
                 }
             }
+            HitAction::FocusProjectEditDialog => {}
             HitAction::ProjectEditScopeAction(action) => {
                 return self.apply_project_edit_scope_action(action);
             }
@@ -3888,8 +3963,16 @@ impl App {
                     Some(target.action.clone())
                 }?;
 
-                if self.browser_dialog.is_some() && !matches!(action, HitAction::BrowserSelect(_)) {
-                    return None;
+                if self.browser_dialog.is_some() {
+                    if !matches!(action, HitAction::BrowserSelect(_)) {
+                        return None;
+                    }
+                    return Some((
+                        target.rect.width as u32 * target.rect.height as u32,
+                        usize::MAX - index,
+                        action,
+                        target.rect,
+                    ));
                 }
 
                 if self.delete_confirmation_dialog.is_some()
@@ -3987,6 +4070,23 @@ impl App {
                     return None;
                 }
 
+                if self.project_edit_dialog.is_some()
+                    && !matches!(
+                        action,
+                        HitAction::EditProjectField(_)
+                            | HitAction::FocusProjectEditDialog
+                            | HitAction::ProjectEditScopeAction(_)
+                            | HitAction::SaveProjectEdit
+                            | HitAction::RemoveProject
+                            | HitAction::CancelProjectEdit
+                            | HitAction::BrowseProjectTargetPath
+                            | HitAction::BrowseProjectRepoRoot
+                            | HitAction::EnableProjectCustomTargetKey
+                    )
+                {
+                    return None;
+                }
+
                 Some((
                     target.rect.width as u32 * target.rect.height as u32,
                     usize::MAX - index,
@@ -4044,36 +4144,61 @@ impl App {
 
     fn set_text_input_cursor_from_mouse(&mut self, rect: Rect, column: u16) {
         let is_commit_rename = self.commit_rename_dialog.is_some();
+        let is_project_edit = self.project_edit_dialog.is_some();
+        let is_project_settings = self.screen == Screen::Dashboard
+            && self.overview_tab == OverviewTab::ProjectSettings
+            && !is_project_edit;
         if let Some(input) = self.active_text_input_mut() {
-            let (click_offset, field_width) = if is_commit_rename {
+            let (click_offset, field_width) = if is_commit_rename || is_project_edit {
                 // Commit rename has borders but no label in the rect
                 let border_offset = column.saturating_sub(rect.x + 1) as usize;
                 let width = rect.width.saturating_sub(2) as usize;
                 (border_offset, width)
-            } else {
+            } else if is_project_settings
+                && rect.width > FORM_LABEL_WIDTH.saturating_add(6)
+                && column >= rect.x.saturating_add(FORM_LABEL_WIDTH)
+            {
                 let label_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
                 let width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
                 (label_offset, width)
+            } else {
+                let border_offset = column.saturating_sub(rect.x + 1) as usize;
+                let width = rect.width.saturating_sub(2) as usize;
+                (border_offset, width)
             };
             let cursor = input.cursor_position_at_click(click_offset, field_width, true);
-            input.begin_selection_at(cursor);
+            input.set_cursor_position(cursor);
+            input.clear_selection();
         }
     }
 
     fn update_text_input_drag_selection(&mut self, rect: Rect, column: u16) {
         let is_commit_rename = self.commit_rename_dialog.is_some();
+        let is_project_edit = self.project_edit_dialog.is_some();
+        let is_project_settings = self.screen == Screen::Dashboard
+            && self.overview_tab == OverviewTab::ProjectSettings
+            && !is_project_edit;
         if let Some(input) = self.active_text_input_mut() {
-            let (click_offset, field_width) = if is_commit_rename {
-                // Commit rename has borders but no label in the rect
+            let (click_offset, field_width) = if is_commit_rename || is_project_edit {
                 let border_offset = column.saturating_sub(rect.x + 1) as usize;
                 let width = rect.width.saturating_sub(2) as usize;
                 (border_offset, width)
-            } else {
+            } else if is_project_settings
+                && rect.width > FORM_LABEL_WIDTH.saturating_add(6)
+                && column >= rect.x.saturating_add(FORM_LABEL_WIDTH)
+            {
                 let label_offset = column.saturating_sub(rect.x + FORM_LABEL_WIDTH) as usize;
                 let width = rect.width.saturating_sub(FORM_LABEL_WIDTH) as usize;
                 (label_offset, width)
+            } else {
+                let border_offset = column.saturating_sub(rect.x + 1) as usize;
+                let width = rect.width.saturating_sub(2) as usize;
+                (border_offset, width)
             };
             let cursor = input.cursor_position_at_click(click_offset, field_width, true);
+            if input.selection_anchor().is_none() {
+                input.begin_selection_at(cursor);
+            }
             input.set_cursor_position(cursor);
         }
     }
@@ -4647,6 +4772,7 @@ impl App {
             }
             return Err(error);
         }
+        ensure_project_repo_gitignore_defaults(&updated_project)?;
         self.config.projects[dialog.project_index] = updated_project;
         self.config_store.save(&self.config)?;
         self.invalidate_overview_cache();
@@ -5309,9 +5435,7 @@ impl App {
 
     fn save_wizard_project(&mut self) -> Result<()> {
         let project = self.wizard.build_project()?;
-        if let Some(repo) = project.repo.as_ref() {
-            ensure_gitignore_entry(&repo.local_root, ".comfygit/syncmem/stdchlg-local.json")?;
-        }
+        ensure_project_repo_gitignore_defaults(&project)?;
         self.config.projects.push(project);
         self.config_store.save(&self.config)?;
         self.selected_project = self.config.projects.len().saturating_sub(1);
@@ -5370,7 +5494,10 @@ impl App {
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
-            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs
+            | BrowseTarget::ProjectSettingsAliasDistPath
+            | BrowseTarget::ProjectSettingsAliasUiPath
+            | BrowseTarget::ProjectSettingsAliasCustomPath(_) => {
                 p_s_s::initial_browser_path(self, target).unwrap_or_default()
             }
         }
@@ -5431,7 +5558,10 @@ impl App {
             | BrowseTarget::ProjectSettingsReleaseNowWindows
             | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
             | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
-            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs
+            | BrowseTarget::ProjectSettingsAliasDistPath
+            | BrowseTarget::ProjectSettingsAliasUiPath
+            | BrowseTarget::ProjectSettingsAliasCustomPath(_) => {
                 if p_s_s::apply_browser_selection(self, target, selected)? {
                     self.browser_dialog = None;
                     self.status = StatusMessage::success("Selection applied.");
@@ -5463,12 +5593,22 @@ impl App {
         };
 
         let selected = directory.display().to_string();
-        match dialog.target {
+        let target = dialog.target;
+        match target {
             BrowseTarget::WizardRepoRoot => self.wizard.set_repo_root_from_browse(selected),
             BrowseTarget::ProjectEditRepoRoot => {
                 if let Some(dialog) = &mut self.project_edit_dialog {
                     dialog.set_repo_root_from_browse(selected);
                 }
+            }
+            BrowseTarget::ProjectSettingsAliasDistPath
+            | BrowseTarget::ProjectSettingsAliasUiPath
+            | BrowseTarget::ProjectSettingsAliasCustomPath(_)
+                if p_s_s::apply_browser_selection(self, target, selected.clone())? =>
+            {
+                self.browser_dialog = None;
+                self.status = StatusMessage::success("Folder selection applied.");
+                return Ok(());
             }
             _ => {}
         }
@@ -5961,6 +6101,7 @@ pub(crate) enum HitAction {
     ResetOverviewPendingVersion(usize),
     OpenOverviewTagDialog(usize),
     EditProjectField(ProjectEditFocus),
+    FocusProjectEditDialog,
     ProjectEditScopeAction(ScopeAction),
     SaveProjectEdit,
     RemoveProject,
@@ -7287,6 +7428,7 @@ impl ScopeDraft {
                 key_path: target_key.to_string(),
                 format,
             }],
+            advanced_alias: crate::config::AdvancedAliasSettings::default(),
         })
     }
 }
@@ -8051,6 +8193,33 @@ fn ensure_std_changelog_memory_entry(
     record_std_changelog_created(repo_root, tag_name, branch_name)
 }
 
+fn ensure_project_repo_gitignore_defaults(project: &crate::config::ProjectConfig) -> Result<()> {
+    use std::collections::HashSet;
+
+    let mut roots = HashSet::new();
+    if let Some(repo) = project.repo.as_ref() {
+        let root = repo.local_root.trim();
+        if !root.is_empty() {
+            roots.insert(root.to_string());
+        }
+    }
+    for branch in &project.branches {
+        if let Some(repo) = branch.repo.as_ref() {
+            let root = repo.local_root.trim();
+            if !root.is_empty() {
+                roots.insert(root.to_string());
+            }
+        }
+    }
+
+    for root in roots {
+        ensure_gitignore_entry(&root, "changelog_temp.md")?;
+        ensure_gitignore_entry(&root, ".comfygit/syncmem/stdchlg-local.json")?;
+    }
+
+    Ok(())
+}
+
 fn ensure_gitignore_entry(repo_root: &str, entry: &str) -> Result<()> {
     let gitignore_path = Path::new(repo_root).join(".gitignore");
     let mut lines = if gitignore_path.exists() {
@@ -8747,6 +8916,11 @@ impl FormRowButton {
     }
 }
 
+pub(crate) struct FormRowRects {
+    pub(crate) field: Rect,
+    pub(crate) button: Option<Rect>,
+}
+
 struct TagAnnotationDialog {
     editor: TuiTextArea<'static>,
     placeholder: String,
@@ -8811,6 +8985,9 @@ enum BrowseTarget {
     ProjectSettingsReleaseNowLinuxArm,
     ProjectSettingsReleaseNowLinuxAmd,
     ProjectSettingsReleaseNowMacOs,
+    ProjectSettingsAliasDistPath,
+    ProjectSettingsAliasUiPath,
+    ProjectSettingsAliasCustomPath(u16),
 }
 
 struct FileBrowserDialog {
@@ -8824,7 +9001,11 @@ impl FileBrowserDialog {
     fn new(target: BrowseTarget, initial_path: String) -> Result<Self> {
         let select_directories = matches!(
             target,
-            BrowseTarget::WizardRepoRoot | BrowseTarget::ProjectEditRepoRoot
+            BrowseTarget::WizardRepoRoot
+                | BrowseTarget::ProjectEditRepoRoot
+                | BrowseTarget::ProjectSettingsAliasDistPath
+                | BrowseTarget::ProjectSettingsAliasUiPath
+                | BrowseTarget::ProjectSettingsAliasCustomPath(_)
         );
         let explorer = configure_file_explorer(
             FileExplorerBuilder::default(),
@@ -9964,6 +10145,7 @@ mod tests {
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
+                    advanced_alias: Default::default(),
                 },
                 BranchConfig {
                     name: "api".to_string(),
@@ -9979,6 +10161,7 @@ mod tests {
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
                     targets: Vec::new(),
+                    advanced_alias: Default::default(),
                 },
             ],
             repo: None,
@@ -10036,6 +10219,7 @@ mod tests {
                         key_path: "package.version".to_string(),
                         format: TargetFormat::Toml,
                     }],
+                    advanced_alias: Default::default(),
                 },
                 BranchConfig {
                     name: "api".to_string(),
@@ -10060,6 +10244,7 @@ mod tests {
                         key_path: "package.version".to_string(),
                         format: TargetFormat::Json,
                     }],
+                    advanced_alias: Default::default(),
                 },
             ],
             repo: None,
@@ -10113,6 +10298,7 @@ mod tests {
                     key_path: "package.version".to_string(),
                     format: TargetFormat::Toml,
                 }],
+                advanced_alias: Default::default(),
             }],
             repo: None,
             ..Default::default()
@@ -10163,6 +10349,7 @@ mod tests {
                     key_path: "package.version".to_string(),
                     format: TargetFormat::Toml,
                 }],
+                advanced_alias: Default::default(),
             }],
             repo: None,
             ..Default::default()

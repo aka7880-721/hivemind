@@ -111,6 +111,8 @@ pub struct ProjectConfig {
     pub variator_storage: crate::chl_vrtr::VariatorStorage,
     #[serde(default)]
     pub manual_top_picks: Vec<crate::changelog_tp::TopPick>,
+    #[serde(default)]
+    pub advanced_alias: AdvancedAliasSettings,
 }
 
 impl ProjectConfig {
@@ -814,8 +816,9 @@ impl IntegrationMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BranchConfig {
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub label: String,
@@ -837,9 +840,106 @@ pub struct BranchConfig {
     pub changelog_wrap_detailed_if_top_picks: bool,
     #[serde(default)]
     pub release_now: ReleaseNowSettings,
+    #[serde(default)]
     pub version_scheme: VersionScheme,
     #[serde(default)]
     pub targets: Vec<TargetSpec>,
+    #[serde(default)]
+    pub advanced_alias: AdvancedAliasSettings,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AdvancedAliasSettings {
+    pub enabled: bool,
+    pub dist_path: String,
+    pub ui_path: String,
+    pub custom: Vec<CustomAliasEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomAliasEntry {
+    pub name: String,
+    pub path: String,
+}
+
+impl AdvancedAliasSettings {
+    pub const BUILTIN_DIST: &'static str = "dist";
+    pub const BUILTIN_UI: &'static str = "ui";
+
+    pub fn path_for_sub(&self, sub: &str) -> Option<&str> {
+        let key = sub.trim();
+        if key.is_empty() {
+            return None;
+        }
+        if key.eq_ignore_ascii_case(Self::BUILTIN_DIST) {
+            return non_empty_path(&self.dist_path);
+        }
+        if key.eq_ignore_ascii_case(Self::BUILTIN_UI) {
+            return non_empty_path(&self.ui_path);
+        }
+        self.custom.iter().find_map(|entry| {
+            if entry.name.eq_ignore_ascii_case(key) {
+                non_empty_path(&entry.path)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn is_reserved_name(name: &str) -> bool {
+        let trimmed = name.trim();
+        trimmed.eq_ignore_ascii_case(Self::BUILTIN_DIST)
+            || trimmed.eq_ignore_ascii_case(Self::BUILTIN_UI)
+    }
+}
+
+fn non_empty_path(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+impl ProjectConfig {
+    pub fn supports_advanced_alias_for_scope(&self, scope_index: usize) -> bool {
+        match self.project_type {
+            ProjectType::AllInOne => true,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .is_some_and(|branch| branch.scope_kind == BranchScopeKind::Branch),
+        }
+    }
+
+    pub fn advanced_alias_for_scope(&self, scope_index: usize) -> &AdvancedAliasSettings {
+        match self.project_type {
+            ProjectType::AllInOne => &self.advanced_alias,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .map(|branch| &branch.advanced_alias)
+                .unwrap_or(&self.advanced_alias),
+        }
+    }
+
+    pub fn advanced_alias_for_scope_mut(
+        &mut self,
+        scope_index: usize,
+    ) -> &mut AdvancedAliasSettings {
+        match self.project_type {
+            ProjectType::AllInOne => &mut self.advanced_alias,
+            ProjectType::Branched => {
+                if let Some(branch) = self.branches.get_mut(scope_index) {
+                    &mut branch.advanced_alias
+                } else {
+                    &mut self.advanced_alias
+                }
+            }
+        }
+    }
 }
 
 impl BranchConfig {
@@ -1035,6 +1135,7 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
                 release_now: project.release_now.clone(),
                 version_scheme: project.version_scheme,
                 targets,
+                advanced_alias: AdvancedAliasSettings::default(),
             });
             changed = true;
         }
@@ -1081,6 +1182,7 @@ mod tests {
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
             targets: Vec::new(),
+            advanced_alias: Default::default(),
         };
 
         assert_eq!(branch.display_name(), "core");
@@ -1235,6 +1337,7 @@ format = "json"
                 release_now: ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
                 targets: Vec::new(),
+                advanced_alias: Default::default(),
             }],
             repo: None,
             ..Default::default()
@@ -1261,6 +1364,7 @@ format = "json"
                     release_now: ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::CalVerYearMonthMicro,
                     targets: Vec::new(),
+                    advanced_alias: Default::default(),
                 },
             ],
             ..semver_project.clone()
@@ -1282,5 +1386,24 @@ format = "json"
         };
 
         assert_eq!(settings.effective_path(), DEFAULT_CHANGELOG_PATH);
+    }
+
+    #[test]
+    fn advanced_alias_path_for_sub_resolves_builtin_and_custom() {
+        let settings = AdvancedAliasSettings {
+            enabled: true,
+            dist_path: "dist/latest".to_string(),
+            ui_path: "ui".to_string(),
+            custom: vec![CustomAliasEntry {
+                name: "docs".to_string(),
+                path: "documentation".to_string(),
+            }],
+        };
+
+        assert_eq!(settings.path_for_sub("dist"), Some("dist/latest"));
+        assert_eq!(settings.path_for_sub("UI"), Some("ui"));
+        assert_eq!(settings.path_for_sub("docs"), Some("documentation"));
+        assert!(settings.path_for_sub("missing").is_none());
+        assert!(AdvancedAliasSettings::is_reserved_name("dist"));
     }
 }

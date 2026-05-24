@@ -64,7 +64,7 @@ install_fish_config_fallback() {
   fi
   {
     printf '\n%s\n' "$marker"
-    printf '%s\n' "test -f \"$config_home/fish/conf.d/comfygit.fish\"; and source \"$config_home/fish/conf.d/comfygit.fish\""
+    printf '%s\n' "test -f \"$target_dir/cg.fish\"; and source \"$target_dir/cg.fish\""
   } >>"$fish_config"
 }
 
@@ -80,8 +80,23 @@ copy_launchers() {
   fi
 }
 
-# pwsh on Linux/macOS: register cg in CurrentUserAllHosts (profile.ps1), which loads before host-specific profiles.
+install_pwsh_module() {
+  if [ ! -f "$shell_asset_dir/ComfyGit.psm1" ]; then
+    return 0
+  fi
+  for module_root in \
+    "$HOME/.local/share/powershell/Modules" \
+    "$config_home/powershell/Modules" \
+    "$HOME/Documents/PowerShell/Modules"; do
+    module_dir="$module_root/ComfyGit"
+    mkdir -p "$module_dir"
+    cp "$shell_asset_dir/ComfyGit.psm1" "$module_dir/ComfyGit.psm1"
+  done
+}
+
+# pwsh on Linux/macOS/Windows: Import-Module ComfyGit (cg cd) from profile.ps1.
 install_pwsh_user_profile() {
+  install_pwsh_module
   if [ ! -f "$bin_dir/cg.ps1" ]; then
     return 0
   fi
@@ -100,10 +115,24 @@ install_pwsh_user_profile() {
   escaped_path=$(printf '%s' "$ps1_path" | sed "s/'/''/g")
   {
     printf '\n%s\n' "$marker"
-    printf '%s\n' "function cg {"
-    printf "%s\n" "  & '$escaped_path' @args"
+    printf '%s\n' "Import-Module ComfyGit -ErrorAction SilentlyContinue"
+    printf '%s\n' "if (-not (Get-Command cg -ErrorAction SilentlyContinue)) {"
+    printf '%s\n' "  function cg {"
+    printf "%s\n" "    & '$escaped_path' @args"
+    printf '%s\n' "  }"
     printf '%s\n' "}"
   } >>"$pwsh_profile"
+}
+
+install_fish_integration() {
+  fish_conf_d="$config_home/fish/conf.d"
+  mkdir -p "$fish_conf_d"
+  cp "$shell_asset_dir/cg.fish" "$fish_conf_d/comfygit.fish"
+  cp "$shell_asset_dir/cg.fish" "$target_dir/cg.fish"
+
+  if mkdir -p /usr/share/fish/vendor_conf.d 2>/dev/null; then
+    cp "$shell_asset_dir/cg.fish" /usr/share/fish/vendor_conf.d/comfygit.fish 2>/dev/null || true
+  fi
 }
 
 install_user_shell_integration() {
@@ -111,9 +140,7 @@ install_user_shell_integration() {
   copy_launchers
   cp "$shell_asset_dir/cg.sh" "$target_file"
 
-  fish_conf_d="$config_home/fish/conf.d"
-  mkdir -p "$fish_conf_d"
-  cp "$shell_asset_dir/cg.fish" "$fish_conf_d/comfygit.fish"
+  install_fish_integration
 
   append_path_hook "$HOME/.profile"
   append_path_hook "$HOME/.zprofile"
@@ -124,12 +151,12 @@ install_user_shell_integration() {
   install_pwsh_user_profile
 
   printf '%s\n' "Installed ComfyGit shell integration to $target_file"
-  printf '%s\n' "Installed fish integration to $fish_conf_d/comfygit.fish (and config.fish fallback if needed)"
+  printf '%s\n' "Installed fish integration to $config_home/fish/conf.d/comfygit.fish and $target_dir/cg.fish (source that file in fish, not cg.sh)"
   printf '%s\n' "Installed PATH hooks in ~/.profile and ~/.zprofile (login shells / tools that skip .zshrc)"
   printf '%s\n' "Installed the cg launcher wrapper to $bin_dir/cg"
   printf '%s\n' "Installed the comfygit launcher wrapper to $bin_dir/comfygit"
   if [ -f "$bin_dir/cg.ps1" ]; then
-    printf '%s\n' "Installed cg.ps1 for PowerShell and updated $config_home/powershell/profile.ps1 (if needed)."
+    printf '%s\n' "Installed cg.ps1, ComfyGit.psm1, and updated $config_home/powershell/profile.ps1 (if needed)."
   fi
   printf '%s\n' "Open a new bash, zsh, fish, or pwsh session so 'cg' and 'cg cd <alias>' are available."
 }
@@ -145,6 +172,10 @@ install_global_shell_integration() {
   if mkdir -p "$fish_global_conf_d" 2>/dev/null; then
     cp "$shell_asset_dir/cg.fish" "$fish_global_conf_d/comfygit.fish"
     chmod 0644 "$fish_global_conf_d/comfygit.fish"
+  fi
+  if mkdir -p /usr/share/fish/vendor_conf.d 2>/dev/null; then
+    cp "$shell_asset_dir/cg.fish" /usr/share/fish/vendor_conf.d/comfygit.fish
+    chmod 0644 /usr/share/fish/vendor_conf.d/comfygit.fish
   fi
 
   source_line=". \"$global_target_file\""

@@ -1087,6 +1087,14 @@ impl TextInput {
         self.selection_anchor = Some(self.cursor);
     }
 
+    pub(crate) fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    pub(crate) fn selection_anchor(&self) -> Option<usize> {
+        self.selection_anchor
+    }
+
     pub(crate) fn handle_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {

@@ -108,7 +108,7 @@ fn render_semver_tile(
         format!(
             "║{:^5}│{}║",
             parts[0],
-            format_tile_tag_row("🏷️", &tile.commits_since_tag_label, right_width)
+            format_tile_tag_row(&tile.commits_since_tag_label, right_width)
         ),
         format!(
             "║{:^5}│{}║",
@@ -191,7 +191,7 @@ fn render_calver_tile(
         format!("║{}║", dot_fill(content_width)),
         format!(
             "║{}│{:^action_width$}║",
-            format_tile_tag_row("🏷️", &tile.commits_since_tag_label, detail_width),
+            format_tile_tag_row(&tile.commits_since_tag_label, detail_width),
             "bump",
             action_width = CALVER_ACTION_WIDTH
         ),
@@ -375,15 +375,26 @@ fn border_bottom_semver(right_width: usize) -> String {
 }
 
 fn format_tile_info_row(icon: &str, label: &str, value: &str, total_width: usize) -> String {
-    center_to_width(&format!("{icon} {label}: {value}"), total_width)
+    center_to_width(
+        &format!("{} {label}: {value}", normalize_tile_icon(icon)),
+        total_width,
+    )
 }
 
 fn format_tile_dev_info_row(icon: &str, label: &str, value: &str, total_width: usize) -> String {
-    center_to_width(&format!("{icon} last {label}: {value}"), total_width)
+    center_to_width(
+        &format!("{} last {label}: {value}", normalize_tile_icon(icon)),
+        total_width,
+    )
 }
 
-fn format_tile_tag_row(icon: &str, value: &str, total_width: usize) -> String {
-    center_to_width(&format!("{icon}..HEAD: {value}"), total_width)
+fn format_tile_tag_row(value: &str, total_width: usize) -> String {
+    center_to_width(&format!("Tag ==>> HEAD: {value}"), total_width)
+}
+
+/// Drop U+FE0F so emoji render as a single terminal cell cluster before ASCII suffixes.
+fn normalize_tile_icon(icon: &str) -> String {
+    icon.chars().filter(|&ch| ch != '\u{FE0F}').collect()
 }
 
 fn center_to_width(value: &str, width: usize) -> String {
@@ -545,11 +556,11 @@ mod tests {
     }
 
     #[test]
-    fn format_tile_tag_row_centers_unicode_prefix_without_overflow() {
-        let formatted = format_tile_tag_row("🏷️️", "11c ahead", 22);
+    fn format_tile_tag_row_centers_label_without_overflow() {
+        let formatted = format_tile_tag_row("11c ahead", 28);
 
-        assert_eq!(display_width(formatted.as_str()), 22);
-        assert!(formatted.contains("🏷️️..HEAD: 11c ahead"));
+        assert_eq!(display_width(formatted.as_str()), 28);
+        assert!(formatted.contains("Tag ==>> HEAD: 11c ahead"));
         assert!(formatted.starts_with(' '));
         assert!(formatted.ends_with(' '));
     }

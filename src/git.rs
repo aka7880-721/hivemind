@@ -1120,6 +1120,7 @@ mod tests {
                         key_path: "package.version".to_string(),
                         format: TargetFormat::Toml,
                     }],
+                    advanced_alias: Default::default(),
                 },
                 BranchConfig {
                     name: "api".to_string(),
@@ -1140,6 +1141,7 @@ mod tests {
                         key_path: "version".to_string(),
                         format: TargetFormat::Json,
                     }],
+                    advanced_alias: Default::default(),
                 },
             ],
             repo: Some(RepoConfig {
@@ -1200,6 +1202,7 @@ mod tests {
                         key_path: "package.version".to_string(),
                         format: TargetFormat::Toml,
                     }],
+                    advanced_alias: Default::default(),
                 },
                 BranchConfig {
                     name: "api".to_string(),
@@ -1224,6 +1227,7 @@ mod tests {
                         key_path: "version".to_string(),
                         format: TargetFormat::Json,
                     }],
+                    advanced_alias: Default::default(),
                 },
             ],
             repo: None,
@@ -1291,6 +1295,7 @@ mod tests {
                     key_path: "package.version".to_string(),
                     format: TargetFormat::Toml,
                 }],
+                advanced_alias: Default::default(),
             }],
             repo: Some(RepoConfig {
                 local_root: "C:/repo".to_string(),

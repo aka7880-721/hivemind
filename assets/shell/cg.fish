@@ -1,4 +1,4 @@
-# ComfyGit shell integration for fish — wrap `cg` so `cg cd <alias>` changes directory.
+# ComfyGit shell integration for fish — wrap `cg` so `cg cd <alias> [sub]` changes directory.
 
 # fish often does not put ~/.local/bin on PATH (unlike typical bash setups). AppImage
 # `install-shell` places the cg / ComfyGit wrappers there, so prepend it for this session.
@@ -30,25 +30,35 @@ function __comfygit_cli --description 'Resolve ComfyGit executable (PATH, ~/.loc
     return 1
 end
 
-function cg --wraps ComfyGit --description 'ComfyGit launcher (supports cg cd <alias>)'
-    set -l _exe (__comfygit_cli)
-    if test $status -ne 0
-        or test -z "$_exe"
+function cg --description 'ComfyGit launcher (supports cg cd <alias> [sub])'
+    set -l _exe
+    if not set -l _exe (__comfygit_cli)
         echo "ComfyGit executable not found. Run 'cg install-shell' (AppImage) or add ~/.local/bin to fish PATH (or set COMFYGIT_EXE)." >&2
         return 127
     end
 
-    if set -q argv[1]
-        and test "$argv[1]" = cd
-        if test (count $argv) -ne 2
-            echo "usage: cg cd <alias>" >&2
-            return 2
+    if set -q argv[1]; and test "$argv[1]" = cd
+        set -l argc (count $argv)
+        set -l target_dir
+        switch $argc
+            case 2
+                set target_dir ("$_exe" pwd $argv[2])
+            case 3
+                set target_dir ("$_exe" pwd $argv[2] $argv[3])
+            case '*'
+                echo "usage: cg cd <alias> [sub]" >&2
+                return 2
         end
-        set -l target_dir ("$_exe" pwd $argv[2])
         or return
-        cd $target_dir
+
+        set target_dir (string trim -- $target_dir)
+        if test -z "$target_dir"
+            echo "ComfyGit pwd returned an empty path." >&2
+            return 1
+        end
+        cd -- $target_dir
         or return
     else
-        "$_exe" $argv
+        command "$_exe" $argv
     end
 end

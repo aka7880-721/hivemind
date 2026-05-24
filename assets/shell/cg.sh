@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
+# Bash/zsh integration: source this file from ~/.bashrc or ~/.zshrc (see `cg install-shell`).
+# Fish users: do not source this file — use ~/.config/fish/conf.d/comfygit.fish instead.
 
 # Many distros omit ~/.local/bin from the default PATH; AppImage `install-shell` installs wrappers there.
 if [ -n "${HOME:-}" ] && [ -d "$HOME/.local/bin" ]; then
@@ -36,12 +38,15 @@ cg() {
   }
 
   if [ "$#" -gt 0 ] && [ "$1" = "cd" ]; then
-    if [ "$#" -ne 2 ]; then
-      printf '%s\n' "usage: cg cd <alias>" >&2
+    if [ "$#" -eq 3 ]; then
+      target_dir="$("$comfygit_exe" pwd "$2" "$3")" || return $?
+    elif [ "$#" -eq 2 ]; then
+      target_dir="$("$comfygit_exe" pwd "$2")" || return $?
+    else
+      printf '%s\n' "usage: cg cd <alias> [sub]" >&2
       return 2
     fi
 
-    target_dir="$("$comfygit_exe" pwd "$2")" || return $?
     cd "$target_dir" || return $?
     return 0
   fi
