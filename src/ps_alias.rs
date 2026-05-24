@@ -25,7 +25,8 @@ use super::{
     ProjectSettingsRow, ProjectSettingsState, visible_field_width,
 };
 
-const ALIAS_ADD_BUTTON_WIDTH: u16 = 8;
+const ALIAS_ADD_BUTTON_WIDTH: u16 = 22;
+const ALIAS_ADD_BUTTON_LABEL: &str = "Add Custom Sub-ALIAS";
 
 #[derive(Clone)]
 pub(crate) struct AliasCustomEntryState {
@@ -360,9 +361,8 @@ fn render_alias_add_button(
             .bg(Color::Rgb(20, 80, 20))
     };
     frame.render_widget(
-        Paragraph::new("+")
+        Paragraph::new(Line::from(Span::styled(ALIAS_ADD_BUTTON_LABEL, style)))
             .alignment(Alignment::Left)
-            .style(style)
             .block(Block::default().borders(Borders::ALL)),
         button_area,
     );
