@@ -1,5 +1,32 @@
+function Get-ComfyGitExecutable {
+    if ($env:COMFYGIT_EXE -and (Test-Path -LiteralPath $env:COMFYGIT_EXE)) {
+        return $env:COMFYGIT_EXE
+    }
+    $localLauncher = Join-Path $HOME '.local/bin/ComfyGit'
+    if (Test-Path -LiteralPath $localLauncher) {
+        return $localLauncher
+    }
+    $moduleDir = $PSScriptRoot
+    if ($moduleDir) {
+        $nextToModule = Join-Path $moduleDir 'ComfyGit'
+        if (Test-Path -LiteralPath $nextToModule) {
+            return $nextToModule
+        }
+        $nextToModuleExe = Join-Path $moduleDir 'ComfyGit.exe'
+        if (Test-Path -LiteralPath $nextToModuleExe) {
+            return $nextToModuleExe
+        }
+    }
+    $cmd = Get-Command ComfyGit -CommandType Application -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+    return 'ComfyGit'
+}
+
 function cg {
     $Arguments = $args
+    $comfygitExe = Get-ComfyGitExecutable
 
     if ($Arguments.Count -gt 0 -and $Arguments[0] -eq 'cd') {
         if ($Arguments.Count -lt 2 -or $Arguments.Count -gt 3) {
@@ -8,9 +35,9 @@ function cg {
         }
 
         if ($Arguments.Count -eq 3) {
-            $targetDir = & ComfyGit pwd $Arguments[1] $Arguments[2]
+            $targetDir = & $comfygitExe pwd $Arguments[1] $Arguments[2]
         } else {
-            $targetDir = & ComfyGit pwd $Arguments[1]
+            $targetDir = & $comfygitExe pwd $Arguments[1]
         }
         if ($LASTEXITCODE -ne 0) {
             return
@@ -20,7 +47,7 @@ function cg {
         return
     }
 
-    & ComfyGit @Arguments
+    & $comfygitExe @Arguments
 }
 
 Export-ModuleMember -Function cg
