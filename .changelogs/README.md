@@ -2,6 +2,140 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog `v0.29.5` <sup><div align="end">🗓️ 2026-05-24</div></sup>
+
+### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+
+#### **1. &nbsp;&nbsp;&nbsp;Advanced Alias Functionality!**
+- Must be enabled in `Project Settings/General`
+- Allows `cg cd` command to `cd` into more than just a project root
+- For instance, for broject with alias `cg` you can define:
+    - `dist` folder path as `{PROJECT_ROOT}/dist/latest/linux/amd64` ==> then you can perform `cg cd cg dist` from anywhere to get in instantly!
+- Has pre-defined two sub-aliases: `dist` and `ui`
+- Allows creation of custom sub-aliases!
+
+#### **2. &nbsp;&nbsp;&nbsp;Changelog-related settings were moved**
+- They are now in a dedicated "Changelogs" tab within `Project Settings`
+
+#### **3. &nbsp;&nbsp;&nbsp;Project TILE visual change**
+- The first info line ("commits ahead since release") got its icon removed
+- Now the label displays as "Tag ==>> HEAD:"
+- Reasoning:
+    - Some terminals as `kitty` and `konsole` were having trouble rendering the tag (🏷)️ icon
+    - Only terminals with a full GPU engine were reliable
+    - The easiest and most reliable fix was to simplify the line
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+
+### ✨ New Feature: Sub-ALIAS
+
+* implement advanced alias settings UI in project settings   _(2f44475)_
+
+* add default advanced alias settings to project configuration   _(b982e24)_
+
+* extend project settings with alias management features and UI updates   _(7a63ec6)_
+
+* add default advanced alias to project settings configuration   _(1dbceed)_
+
+* add default advanced alias to multiple branch configurations   _(b43e669)_
+
+* enhance advanced alias settings with custom entry support and path resolution   _(9eef3ae)_
+
+* implement 'pwd' command with sub-path support for advanced aliases   _(1e9b5d5)_
+
+* initialize advanced alias settings in project configuration and tests   _(f32dc41)_
+
+* update BrowseTarget and FileBrowserDialog to include new alias paths   _(0252131)_
+
+* enhance 'cd' command to support optional sub-alias argument   _(91044ae)_
+
+---
+
+## 💬 General Improvements & Fixes:
+
+### 🧩 Features
+
+* add Changelogs tab to project settings with associated fields and rendering logic   _(170da88)_
+
+* add methods to clear selection and retrieve selection anchor in TextInput   _(42d1677)_
+
+* enhance project settings handling by adding Enter/Space key functionality for custom alias actions   _(5269e94)_
+
+* improve alias button styling and layout in project settings   _(40cdbaa)_
+
+* update alias add button width and label in project settings   _(0524c55)_
+
+* enhance ComfyGit shell integration with improved executable resolution and error handling for 'cd' command   _(ca58dbb)_
+
+* add ensure_project_repo_gitignore_defaults function to manage .gitignore entries for project repositories   _(deefa34)_
+
+* ensure 'changelog_temp.md' is added to .gitignore for project and branch repositories   _(3f22bcc)_
+
+* enhance ComfyGit executable resolution in PowerShell and shell scripts with multiple candidate paths   _(820e9f9)_
+
+### 🐛 Fix(es)
+
+* enhance project edit dialog interactions with mouse events and selection handling   _(1913d6e)_
+
+* improve browser dialog handling and text input cursor logic in App   _(1e7028a)_
+
+* update AliasAddButton height handling in project settings rendering   _(675f0b0)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.29.0   _(870e731)_
+
+* CG app version bump to v0.29.1   _(4140499)_
+
+* CG app version bump to v0.29.2   _(19f9704)_
+
+* CG app version bump to v0.29.3   _(3ce845a)_
+
+* CG app version bump to v0.29.4   _(bec9b6d)_
+
+* CG app version bump to v0.29.5   _(cfec537)_
+
+### ℹ️ Documentation
+
+* prerequsites info   _(c8c7c6f)_
+
+* added lang support request   _(a81efcc)_
+
+* position fix   _(057f784)_
+
+### ♻️ Refactor
+
+* removed unicode icon from the "commits ahead" row within tile due to render inconsistency between terminals eg `ptyxis` vs `kitty`/`konsole`   _(b8f6097)_
+
+* simplify focus text acceptance logic in ProjectEditDialog   _(4834ab4)_
+
+* enhance form rendering logic to include text acceptance state in ProjectEditDialog   _(cd4f49e)_
+
+* simplify alias add button styling and improve alignment in project settings   _(aa85d47)_
+
+### 🗑️ Removed
+
+* remove default advanced alias settings from configuration test   _(eb01a53)_
+
+### 📝 Other
+
+* Merge pull request #125 (via ComfyGit)   _(4a3ece4)_
+
+* Merge pull request #126 (via ComfyGit)   _(de6746c)_
+
+* Merge pull request #128 (via ComfyGit)   _(a101d15)_
+
+* Merge pull request #129 (via ComfyGit)   _(00dade6)_
+
+* Merge pull request #130 (via ComfyGit)   _(7bb4e59)_
+
+* Merge pull request #131 (via ComfyGit)   _(ee98aad)_
+
+---
+
 ## Changelog `v0.28.4` <sup><div align="end">🗓️ 2026-05-22</div></sup>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
