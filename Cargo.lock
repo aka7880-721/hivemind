@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "comfygit"
-version = "0.29.4"
+version = "0.29.5"
 dependencies = [
  "anyhow",
  "arboard",
