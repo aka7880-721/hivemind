@@ -773,6 +773,9 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
         ("Cargo.toml", TargetFormat::Toml, "package.version"),
         ("pyproject.toml", TargetFormat::Toml, "project.version"),
         ("package.json", TargetFormat::Json, "version"),
+        ("go.mod", TargetFormat::GoMod, "comment"),
+        ("pubspec.yaml", TargetFormat::Yaml, "version"),
+        ("Gemfile", TargetFormat::Ruby, "version"),
         ("setup.cfg", TargetFormat::Ini, "metadata.version"),
         ("pom.xml", TargetFormat::Xml, "project.version"),
         ("Chart.yaml", TargetFormat::Yaml, "version"),
@@ -792,6 +795,34 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
             });
         }
     }
+
+    for entry in fs::read_dir(cwd).with_context(|| format!("failed to read {}", cwd.display()))? {
+        let entry = entry.context("failed to read directory entry")?;
+        let file_type = entry.file_type().context("failed to read file type")?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        let lower = file_name.to_ascii_lowercase();
+        if lower.ends_with(".csproj") {
+            manifests.push(DetectedManifest {
+                relative_path: file_name.to_string(),
+                format: TargetFormat::Xml,
+                default_key: "PropertyGroup.Version".to_string(),
+            });
+        } else if lower.ends_with(".gemspec") {
+            manifests.push(DetectedManifest {
+                relative_path: file_name.to_string(),
+                format: TargetFormat::Ruby,
+                default_key: "version".to_string(),
+            });
+        }
+    }
+
+    manifests.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(manifests)
 }
 
