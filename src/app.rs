@@ -9493,6 +9493,21 @@ pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
     if file_name == "configure.ac" {
         return &["AC_INIT"];
     }
+    if file_name == "meson.build" {
+        return &["project", "version"];
+    }
+    if file_name.ends_with(".nimble") {
+        return &["version"];
+    }
+    if file_name.ends_with(".rockspec") {
+        return &["version"];
+    }
+    if file_name == "composer.json" || file_name == "deno.json" || file_name == "meta.json" {
+        return &["version", "package.version"];
+    }
+    if file_name == "package.yaml" || file_name == "shard.yml" {
+        return &["version"];
+    }
     let extension = std::path::Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
