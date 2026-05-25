@@ -181,11 +181,8 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::Gradle => {
-            let updated = crate::target_custom::write_gradle_value(
-                &content,
-                &target.key_path,
-                new_version,
-            )?;
+            let updated =
+                crate::target_custom::write_gradle_value(&content, &target.key_path, new_version)?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
@@ -215,11 +212,8 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::Clojure => {
-            let updated = crate::target_custom::write_clojure_value(
-                &content,
-                &target.key_path,
-                new_version,
-            )?;
+            let updated =
+                crate::target_custom::write_clojure_value(&content, &target.key_path, new_version)?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
@@ -344,8 +338,12 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
         TargetFormat::SwiftPackage => {
             crate::target_custom::extract_swift_package_value(&content, key_path)?
         }
-        TargetFormat::ElixirMix => crate::target_custom::extract_elixir_mix_value(&content, key_path)?,
-        TargetFormat::ScalaSbt => crate::target_custom::extract_scala_sbt_value(&content, key_path)?,
+        TargetFormat::ElixirMix => {
+            crate::target_custom::extract_elixir_mix_value(&content, key_path)?
+        }
+        TargetFormat::ScalaSbt => {
+            crate::target_custom::extract_scala_sbt_value(&content, key_path)?
+        }
         TargetFormat::Cabal => crate::target_custom::extract_cabal_value(&content, key_path)?,
         TargetFormat::Autoconf => crate::target_custom::extract_autoconf_value(&content, key_path)?,
         TargetFormat::Meson => crate::target_custom::extract_meson_value(&content, key_path)?,
@@ -518,8 +516,11 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
                 Ok(TargetFormat::Makefile)
             } else if crate::target_custom::extract_gradle_value(content, "version").is_ok() {
                 Ok(TargetFormat::Gradle)
-            } else if crate::target_custom::extract_plist_value(content, "CFBundleShortVersionString")
-                .is_ok()
+            } else if crate::target_custom::extract_plist_value(
+                content,
+                "CFBundleShortVersionString",
+            )
+            .is_ok()
             {
                 Ok(TargetFormat::Plist)
             } else if crate::target_custom::extract_clojure_value(content, "defproject").is_ok() {
@@ -610,7 +611,8 @@ fn parse_gomod_comment_line(line: &str) -> Option<String> {
         return None;
     }
     let rest = trimmed[2..].trim();
-    let (keyword, version) = rest.split_once(|character: char| character == ':' || character.is_whitespace())?;
+    let (keyword, version) =
+        rest.split_once(|character: char| character == ':' || character.is_whitespace())?;
     if !keyword.eq_ignore_ascii_case("version") {
         return None;
     }
@@ -665,7 +667,8 @@ fn extract_gomod_require_version(content: &str, module: &str) -> Result<String> 
         let trimmed = line.trim();
         if trimmed.starts_with("require ") && !trimmed.starts_with("require (") {
             if let Some(require_line) = trimmed.strip_prefix("require ")
-                && let Some((entry_module, version)) = split_gomod_require_entry(require_line.trim())
+                && let Some((entry_module, version)) =
+                    split_gomod_require_entry(require_line.trim())
                 && entry_module == module
             {
                 return Ok(version.to_string());
@@ -750,11 +753,7 @@ fn extract_ruby_value(path: &str, content: &str, key_path: &str) -> Result<Strin
         }
         return extract_ruby_gem_version(content, gem_name);
     }
-    if !key_path.is_empty()
-        && key_path != "version"
-        && key_path != "@"
-        && key_path != "."
-    {
+    if !key_path.is_empty() && key_path != "version" && key_path != "@" && key_path != "." {
         bail!("Ruby key path must be 'version' or 'gem.<name>'");
     }
     if path.to_ascii_lowercase().ends_with(".gemspec") {
@@ -852,7 +851,9 @@ fn write_gemfile_version(content: &str, new_value: &str) -> Result<String> {
         }
         Ok(updated)
     } else {
-        Err(anyhow!("Gemfile does not contain VERSION = '...' or version = '...'"))
+        Err(anyhow!(
+            "Gemfile does not contain VERSION = '...' or version = '...'"
+        ))
     }
 }
 
@@ -864,7 +865,9 @@ fn parse_ruby_assignment_version(line: &str, name: &str) -> Option<String> {
 
 fn parse_ruby_quoted_value(token: &str) -> Option<String> {
     let token = token.trim();
-    if (token.starts_with('\'') && token.ends_with('\'')) || (token.starts_with('"') && token.ends_with('"')) {
+    if (token.starts_with('\'') && token.ends_with('\''))
+        || (token.starts_with('"') && token.ends_with('"'))
+    {
         let inner = &token[1..token.len() - 1];
         if inner.is_empty() {
             return None;
@@ -1402,7 +1405,8 @@ edition = "2024"
         let read = extract_gomod_value(content, "comment").expect("read");
         assert_eq!(read, "1.2.3");
 
-        write_gomod_value(path.to_str().expect("path"), content, "comment", "2.0.0").expect("write");
+        write_gomod_value(path.to_str().expect("path"), content, "comment", "2.0.0")
+            .expect("write");
         let updated = fs::read_to_string(&path).expect("read back");
         assert!(updated.contains("// version 2.0.0"));
 
@@ -1411,7 +1415,8 @@ edition = "2024"
 
     #[test]
     fn gemspec_version_round_trip() {
-        let content = "Gem::Specification.new do |s|\n  s.name = 'demo'\n  s.version = '1.2.3'\nend\n";
+        let content =
+            "Gem::Specification.new do |s|\n  s.name = 'demo'\n  s.version = '1.2.3'\nend\n";
         let dir = std::env::temp_dir().join(format!("comfygit-gemspec-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
