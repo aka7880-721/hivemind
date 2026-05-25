@@ -9508,6 +9508,12 @@ pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
     if file_name == "package.yaml" || file_name == "shard.yml" {
         return &["version"];
     }
+    if file_name.eq_ignore_ascii_case("makefile.pl") {
+        return &["VERSION", "version"];
+    }
+    if file_name.eq_ignore_ascii_case("module.bazel") {
+        return &["module", "version"];
+    }
     let extension = std::path::Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
