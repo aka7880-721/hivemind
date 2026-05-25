@@ -224,6 +224,53 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
+        TargetFormat::SwiftPackage => {
+            let updated = crate::target_custom::write_swift_package_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::ElixirMix => {
+            let updated = crate::target_custom::write_elixir_mix_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::ScalaSbt => {
+            let updated = crate::target_custom::write_scala_sbt_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Cabal => {
+            let updated =
+                crate::target_custom::write_cabal_value(&content, &target.key_path, new_version)?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Autoconf => {
+            let updated = crate::target_custom::write_autoconf_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
         TargetFormat::Auto => bail!("cannot write target with unresolved format"),
     }
 }
@@ -253,6 +300,13 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
         TargetFormat::Makefile => crate::target_custom::extract_makefile_value(&content, key_path)?,
         TargetFormat::Plist => crate::target_custom::extract_plist_value(&content, key_path)?,
         TargetFormat::Clojure => crate::target_custom::extract_clojure_value(&content, key_path)?,
+        TargetFormat::SwiftPackage => {
+            crate::target_custom::extract_swift_package_value(&content, key_path)?
+        }
+        TargetFormat::ElixirMix => crate::target_custom::extract_elixir_mix_value(&content, key_path)?,
+        TargetFormat::ScalaSbt => crate::target_custom::extract_scala_sbt_value(&content, key_path)?,
+        TargetFormat::Cabal => crate::target_custom::extract_cabal_value(&content, key_path)?,
+        TargetFormat::Autoconf => crate::target_custom::extract_autoconf_value(&content, key_path)?,
         TargetFormat::Auto => unreachable!(),
     };
 
@@ -351,6 +405,21 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
     if crate::target_custom::is_project_clj_filename(path) {
         return Ok(TargetFormat::Clojure);
     }
+    if crate::target_custom::is_package_swift_filename(path) {
+        return Ok(TargetFormat::SwiftPackage);
+    }
+    if crate::target_custom::is_mix_exs_filename(path) {
+        return Ok(TargetFormat::ElixirMix);
+    }
+    if crate::target_custom::is_build_sbt_filename(path) {
+        return Ok(TargetFormat::ScalaSbt);
+    }
+    if crate::target_custom::is_cabal_filename(path) {
+        return Ok(TargetFormat::Cabal);
+    }
+    if crate::target_custom::is_configure_ac_filename(path) {
+        return Ok(TargetFormat::Autoconf);
+    }
 
     let extension = Path::new(path)
         .extension()
@@ -392,11 +461,23 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
                 Ok(TargetFormat::Plist)
             } else if crate::target_custom::extract_clojure_value(content, "defproject").is_ok() {
                 Ok(TargetFormat::Clojure)
+            } else if crate::target_custom::extract_swift_package_value(content, "version").is_ok()
+                || crate::target_custom::extract_swift_package_value(content, "comment").is_ok()
+            {
+                Ok(TargetFormat::SwiftPackage)
+            } else if crate::target_custom::extract_elixir_mix_value(content, "version").is_ok() {
+                Ok(TargetFormat::ElixirMix)
+            } else if crate::target_custom::extract_scala_sbt_value(content, "version").is_ok() {
+                Ok(TargetFormat::ScalaSbt)
+            } else if crate::target_custom::extract_cabal_value(content, "version").is_ok() {
+                Ok(TargetFormat::Cabal)
+            } else if crate::target_custom::extract_autoconf_value(content, "AC_INIT").is_ok() {
+                Ok(TargetFormat::Autoconf)
             } else if extract_plain_value(content, "").is_ok() {
                 Ok(TargetFormat::Plain)
             } else {
                 Err(anyhow!(
-                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, plain version file)"
+                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, Swift, Elixir, Scala, Cabal, Autoconf, plain version file)"
                 ))
             }
         }

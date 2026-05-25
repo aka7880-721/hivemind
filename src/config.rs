@@ -1046,6 +1046,14 @@ pub enum TargetFormat {
     Makefile,
     Plist,
     Clojure,
+    #[serde(rename = "swift_package")]
+    SwiftPackage,
+    #[serde(rename = "elixir_mix")]
+    ElixirMix,
+    #[serde(rename = "scala_sbt")]
+    ScalaSbt,
+    Cabal,
+    Autoconf,
 }
 
 impl TargetFormat {
@@ -1066,6 +1074,11 @@ impl TargetFormat {
             TargetFormat::Makefile => "Makefile",
             TargetFormat::Plist => "Property list (plist)",
             TargetFormat::Clojure => "Clojure (project.clj)",
+            TargetFormat::SwiftPackage => "Swift (Package.swift)",
+            TargetFormat::ElixirMix => "Elixir (mix.exs)",
+            TargetFormat::ScalaSbt => "Scala (build.sbt)",
+            TargetFormat::Cabal => "Haskell (Cabal)",
+            TargetFormat::Autoconf => "Autoconf (configure.ac)",
         }
     }
 }

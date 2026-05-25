@@ -783,6 +783,10 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
         ("build.gradle", TargetFormat::Gradle, "version"),
         ("build.gradle.kts", TargetFormat::Gradle, "version"),
         ("project.clj", TargetFormat::Clojure, "defproject"),
+        ("Package.swift", TargetFormat::SwiftPackage, "version"),
+        ("mix.exs", TargetFormat::ElixirMix, "version"),
+        ("build.sbt", TargetFormat::ScalaSbt, "version"),
+        ("configure.ac", TargetFormat::Autoconf, "AC_INIT"),
         ("setup.cfg", TargetFormat::Ini, "metadata.version"),
         ("pom.xml", TargetFormat::Xml, "project.version"),
         ("Chart.yaml", TargetFormat::Yaml, "version"),
@@ -831,6 +835,12 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
                 relative_path: file_name.to_string(),
                 format: TargetFormat::Plist,
                 default_key: "CFBundleShortVersionString".to_string(),
+            });
+        } else if lower.ends_with(".cabal") {
+            manifests.push(DetectedManifest {
+                relative_path: file_name.to_string(),
+                format: TargetFormat::Cabal,
+                default_key: "version".to_string(),
             });
         }
     }
