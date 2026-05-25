@@ -269,10 +269,10 @@ Enjoy!
 > [!IMPORTANT]  
 > **PREREQUISITES**  
 > ComfyGit expects you...
-> - are using a modern terminal app, e.g. `ptyxis`, `konsole`, `kitty`, `pwsh`, etc, or a built-in terminal in VSCode and similar IDE 
-> - have `git` and `gh` (Git CLI) installed and configured
+> - ...are using a modern terminal app, e.g. `ptyxis`, `konsole`, `kitty`, `pwsh`, etc (or a built-in terminal in VSCode and similar IDE)  
+> - ...have `git` and `gh` (Git CLI) installed and configured
 >
-> NOTE: There are no other requirements, no extra scripts, GitHub settings - nothing.
+> NOTE: There are no other requirements, no extra scripts, GitHub settings/actions - nothing.
 
 
 ## Overview
@@ -283,7 +283,7 @@ Whether you're managing a simple single-package project or a complex multi-scope
 
 > [!NOTE]
 > **ComfyGit** supports **20+ version manifest formats** across Rust, Node/TypeScript, Python, Go, Java, .NET, mobile, and many others — not only Rust and Node.  
-> See the wiki: [Supported languages & version files](wiki/supported-lang-and-ver-files.md) for the full list, key paths, and limitations.  
+> See the wiki: [Supported languages & version files](https://github.com/comfy-home/ComfyGit/wiki/Supported-Eco‐Systems-and-Version-File-Formats) for the full list, key paths, and limitations.  
 > Want another ecosystem? Request it [here](https://github.com/comfy-home/ComfyGit/discussions/127).
 
 ---
@@ -293,7 +293,7 @@ Whether you're managing a simple single-package project or a complex multi-scope
 ### 🎯 Core Capabilities
 
 - **🖥️ Interactive TUI** — Beautiful terminal interface with mouse support, keyboard navigation, and real-time previews
-- **📦 Version Management** — Automated SemVer/CalVer bumping with updates to JSON, TOML, YAML, XML, Gradle, CMake, `go.mod`, `mix.exs`, `Package.swift`, Cabal, and more (see [supported manifests](wiki/supported-lang-and-ver-files.md))
+- **📦 Version Management** — Automated SemVer/CalVer bumping with updates to JSON, TOML, YAML, XML, Gradle, CMake, `go.mod`, `mix.exs`, `Package.swift`, Cabal, and more (see [supported manifests](https://github.com/comfy-home/ComfyGit/wiki/Supported-Eco‐Systems-and-Version-File-Formats))
 - **🌳 Smart Branching** — Visual branch trees, parent/child navigation, and guided merge workflows
 - **📝 Changelog Generation** — Multiple formats: Standard, ReleaseNOW (with QuickDownloads), and Top Picks
 - **🔧 GitHub Integration** — PR creation, merge management, and release automation
@@ -323,7 +323,7 @@ ComfyGit can **read, bump, and auto-detect** version fields in many ecosystems. 
 | Native formats      | `DESCRIPTION` (R), `*.cabal`, `Gemfile` / `*.gemspec`, `CMakeLists.txt`, `Makefile`, `Makefile.PL`, `MODULE.bazel`, `*.plist`, `*.nimble`, `*.rockspec`, `META.json` |
 | Universal           | `VERSION` / plain version files                                                                                                                                      |
 
-Run **`cg init`** in a repo root to scan for manifests (including common monorepo paths like `electron/package.json` and `packages/*/package.json`). Use **`format: auto`** or pick a specific format in project settings. Full reference: [wiki/supported-lang-and-ver-files.md](wiki/supported-lang-and-ver-files.md).
+Run **`cg init`** in a repo root to scan for manifests (including common monorepo paths like `electron/package.json` and `packages/*/package.json`). Use **`format: auto`** or pick a specific format in project settings. Full reference: [wiki/supported-lang-and-ver-files.md](https://github.com/comfy-home/ComfyGit/wiki/Supported-Eco‐Systems-and-Version-File-Formats).
 
 >[!TIP]
 > Make sure to visit [ComfyGit's WIKI](https://github.com/comfy-home/ComfyGit/wiki)
