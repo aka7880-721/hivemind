@@ -715,10 +715,7 @@ mod tests {
     #[test]
     fn removes_all_stale_auto_injected_blocks_before_inserting_new_one() {
         let mut path = std::env::temp_dir();
-        path.push(format!(
-            "cg_rls_inj_strip_all_test_{}",
-            std::process::id()
-        ));
+        path.push(format!("cg_rls_inj_strip_all_test_{}", std::process::id()));
         fs::write(
             &path,
             concat!(
