@@ -1298,6 +1298,240 @@ fn parse_assignment_line(line: &str, field: &str) -> Option<String> {
     parse_quoted_assignment_value(value.trim())
 }
 
+// --- Part 6: Perl Makefile.PL, Bazel MODULE.bazel ---
+
+pub(crate) fn is_makefile_pl_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("Makefile.PL"))
+}
+
+pub(crate) fn is_bazel_module_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("MODULE.bazel"))
+}
+
+pub(crate) fn extract_makefile_pl_value(content: &str, key_path: &str) -> Result<String> {
+    let field = normalize_makefile_pl_field(key_path)?;
+    for line in content.lines() {
+        if let Some(version) = parse_makefile_pl_version_line(line, field) {
+            return Ok(version);
+        }
+    }
+    if field != "VERSION" {
+        for line in content.lines() {
+            if let Some(version) = parse_makefile_pl_version_line(line, "VERSION") {
+                return Ok(version);
+            }
+        }
+    }
+    Err(anyhow!(
+        "Makefile.PL does not define a version (try key 'VERSION' or 'version')"
+    ))
+}
+
+pub(crate) fn write_makefile_pl_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    let field = normalize_makefile_pl_field(key_path)?;
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced {
+            if let Some(old) = parse_makefile_pl_version_line(line, field) {
+                updated.push_str(&replace_makefile_pl_version_line(line, &old, new_value));
+                replaced = true;
+                continue;
+            }
+        }
+        updated.push_str(line);
+    }
+    if !replaced && field != "VERSION" {
+        let mut fallback = String::new();
+        let mut replaced = false;
+        for line in content.lines() {
+            if !fallback.is_empty() {
+                fallback.push('\n');
+            }
+            if !replaced {
+                if let Some(old) = parse_makefile_pl_version_line(line, "VERSION") {
+                    fallback.push_str(&replace_makefile_pl_version_line(line, &old, new_value));
+                    replaced = true;
+                    continue;
+                }
+            }
+            fallback.push_str(line);
+        }
+        if replaced {
+            if content.ends_with('\n') {
+                fallback.push('\n');
+            }
+            return Ok(fallback);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("Makefile.PL does not define a version field to update"))
+    }
+}
+
+fn normalize_makefile_pl_field(key_path: &str) -> Result<&'static str> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "VERSION" {
+        return Ok("VERSION");
+    }
+    if key_path.eq_ignore_ascii_case("version") {
+        return Ok("version");
+    }
+    bail!("Makefile.PL key path must be 'VERSION' or 'version'");
+}
+
+fn parse_makefile_pl_version_line(line: &str, field: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    if field.eq_ignore_ascii_case("VERSION") {
+        if let Some(value) = parse_perl_hash_version_line(trimmed, "VERSION") {
+            return Some(value);
+        }
+        return parse_perl_scalar_version_line(trimmed);
+    }
+    if field == "version" {
+        if let Some(value) = parse_perl_hash_version_line(trimmed, "version") {
+            return Some(value);
+        }
+        return parse_perl_scalar_version_line(trimmed);
+    }
+    None
+}
+
+fn parse_perl_hash_version_line(line: &str, field: &str) -> Option<String> {
+    let marker = format!("{field} =>");
+    let marker_alt = format!("{field}=>");
+    let lower = line.to_ascii_lowercase();
+    let marker_lower = marker.to_ascii_lowercase();
+    let marker_alt_lower = marker_alt.to_ascii_lowercase();
+    if !lower.contains(&marker_lower) && !lower.contains(&marker_alt_lower) {
+        return None;
+    }
+    let index = lower
+        .find(&marker_lower)
+        .or_else(|| lower.find(&marker_alt_lower))?;
+    let after = line[index + field.len()..].trim_start();
+    let after = after.strip_prefix("=>")?.trim_start();
+    parse_quoted_assignment_value(after)
+}
+
+fn parse_perl_scalar_version_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.contains("$version") {
+        return None;
+    }
+    let index = lower.find("$version")?;
+    let after = trimmed[index + "$version".len()..].trim_start();
+    let after = after.strip_prefix('=')?.trim_start();
+    parse_quoted_assignment_value(after)
+}
+
+fn replace_makefile_pl_version_line(line: &str, old_value: &str, new_value: &str) -> String {
+    if line.contains(&format!("'{old_value}'")) {
+        return line.replace(&format!("'{old_value}'"), &format!("'{new_value}'"));
+    }
+    if line.contains(&format!("\"{old_value}\"")) {
+        return line.replace(&format!("\"{old_value}\""), &format!("\"{new_value}\""));
+    }
+    line.replace(old_value, new_value)
+}
+
+pub(crate) fn extract_bazel_value(content: &str, key_path: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case("module")
+        || key_path.eq_ignore_ascii_case("version")
+    {
+        for line in content.lines() {
+            if let Some(version) = parse_bazel_version_line(line) {
+                return Ok(version);
+            }
+        }
+        return Err(anyhow!(
+            "MODULE.bazel does not contain module(..., version = \"…\") — use key 'module' or 'version'"
+        ));
+    }
+    Err(anyhow!("MODULE.bazel key path must be 'module' or 'version'"))
+}
+
+pub(crate) fn write_bazel_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if !(key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case("module")
+        || key_path.eq_ignore_ascii_case("version"))
+    {
+        bail!("MODULE.bazel key path must be 'module' or 'version'");
+    }
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced {
+            if let Some(old) = parse_bazel_version_line(line) {
+                updated.push_str(&replace_bazel_version_line(line, &old, new_value));
+                replaced = true;
+                continue;
+            }
+        }
+        updated.push_str(line);
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("MODULE.bazel does not contain a version field"))
+    }
+}
+
+fn parse_bazel_version_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("version") {
+        return None;
+    }
+    let after_keyword = trimmed["version".len()..].trim_start();
+    let after_equals = after_keyword.strip_prefix('=')?.trim_start();
+    parse_quoted_assignment_value(after_equals)
+}
+
+fn replace_bazel_version_line(line: &str, old_value: &str, new_value: &str) -> String {
+    if line.contains(&format!("'{old_value}'")) {
+        return line.replace(&format!("'{old_value}'"), &format!("'{new_value}'"));
+    }
+    if line.contains(&format!("\"{old_value}\"")) {
+        return line.replace(&format!("\"{old_value}\""), &format!("\"{new_value}\""));
+    }
+    line.replace(old_value, new_value)
+}
+
 fn parse_quoted_assignment_value(token: &str) -> Option<String> {
     let trimmed = token.trim();
     if trimmed.is_empty() {
@@ -1458,6 +1692,24 @@ mod tests {
         let read = extract_rockspec_value(content, "version").expect("read");
         assert_eq!(read, "1.2.3-1");
         let updated = write_rockspec_value(content, "version", "2.0.0").expect("write");
+        assert!(updated.contains("version = \"2.0.0\""));
+    }
+
+    #[test]
+    fn makefile_pl_version_round_trip() {
+        let content = "use ExtUtils::MakeMaker;\nWriteMakefile(\n    VERSION => '1.2.3',\n);\n";
+        let read = extract_makefile_pl_value(content, "VERSION").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_makefile_pl_value(content, "VERSION", "2.0.0").expect("write");
+        assert!(updated.contains("VERSION => '2.0.0'"));
+    }
+
+    #[test]
+    fn bazel_module_version_round_trip() {
+        let content = "module(\n    name = \"demo\",\n    version = \"1.2.3\",\n)\n";
+        let read = extract_bazel_value(content, "module").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_bazel_value(content, "module", "2.0.0").expect("write");
         assert!(updated.contains("version = \"2.0.0\""));
     }
 }
