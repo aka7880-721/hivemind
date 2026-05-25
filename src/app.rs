@@ -91,7 +91,8 @@ use crate::{
     },
     git_br::{BranchNameOption, semver_dev_branch_canonical_label},
     mmr::{
-        load_merged_std_changelog_memory, load_top_picks_edits, record_std_changelog_created,
+        load_merged_std_changelog_memory, load_top_picks_edits, load_top_picks_edits_with_baseline,
+        record_std_changelog_created, resolve_top_picks_baseline_tag,
         record_std_changelog_error, record_std_changelog_generated, record_std_changelog_postponed,
         save_top_picks_edits,
     },
@@ -3381,12 +3382,12 @@ impl App {
         // Get the repo root for the active release/dashboard scope.
         let repo_root = scope.repo_root.as_str();
 
-        // First, check if there's a memory file with edits
-        let memory_content = load_top_picks_edits(repo_root);
-        let has_memory_edits = !memory_content.trim().is_empty();
+        let current_baseline = resolve_top_picks_baseline_tag(repo_root);
+        let (saved_baseline, memory_content) = load_top_picks_edits_with_baseline(repo_root);
+        let memory_matches_baseline = saved_baseline.as_deref() == current_baseline.as_deref();
+        let has_memory_edits = !memory_content.trim().is_empty() && memory_matches_baseline;
 
         if has_memory_edits {
-            // Use the memory file content directly
             self.top_picks_editor_dialog = Some(changelog_tp::TopPicksEditorDialog::with_text(
                 &memory_content,
             ));
@@ -3394,6 +3395,9 @@ impl App {
                 "Top Picks editor opened with saved edits. These will be applied during release.",
             );
         } else {
+            if !memory_content.trim().is_empty() && !memory_matches_baseline {
+                let _ = crate::mmr::clear_top_picks_edits(repo_root);
+            }
             // No memory edits, extract from commits as before
             let mut existing_picks = project.manual_top_picks.clone();
 
@@ -3427,10 +3431,9 @@ impl App {
     ) -> Result<Vec<changelog_tp::TopPick>> {
         let repo_root = &scope.repo_root;
 
-        // Get the latest tag to determine commits since last release
-        let revision_range = match latest_local_tag_with_cancel(repo_root, None)? {
+        let revision_range = match resolve_top_picks_baseline_tag(repo_root) {
             Some(tag) => format!("{}..HEAD", tag),
-            None => "HEAD".to_string(), // No tags yet, use all commits
+            None => return Ok(Vec::new()),
         };
 
         let pathspecs = scope.git_pathspecs();
