@@ -1057,6 +1057,9 @@ pub enum TargetFormat {
     Meson,
     Nimble,
     Rockspec,
+    #[serde(rename = "makefile_pl")]
+    MakefilePl,
+    Bazel,
 }
 
 impl TargetFormat {
@@ -1085,6 +1088,8 @@ impl TargetFormat {
             TargetFormat::Meson => "Meson (meson.build)",
             TargetFormat::Nimble => "Nim (.nimble)",
             TargetFormat::Rockspec => "LuaRocks (.rockspec)",
+            TargetFormat::MakefilePl => "Perl (Makefile.PL)",
+            TargetFormat::Bazel => "Bazel (MODULE.bazel)",
         }
     }
 }
