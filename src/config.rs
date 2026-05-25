@@ -1039,6 +1039,13 @@ pub enum TargetFormat {
     #[serde(rename = "go_mod")]
     GoMod,
     Ruby,
+    #[serde(rename = "r_description")]
+    RDescription,
+    Gradle,
+    CMake,
+    Makefile,
+    Plist,
+    Clojure,
 }
 
 impl TargetFormat {
@@ -1053,6 +1060,12 @@ impl TargetFormat {
             TargetFormat::Plain => "Plain version file",
             TargetFormat::GoMod => "Go module (go.mod)",
             TargetFormat::Ruby => "Ruby (Gemfile / gemspec)",
+            TargetFormat::RDescription => "R DESCRIPTION",
+            TargetFormat::Gradle => "Gradle",
+            TargetFormat::CMake => "CMake",
+            TargetFormat::Makefile => "Makefile",
+            TargetFormat::Plist => "Property list (plist)",
+            TargetFormat::Clojure => "Clojure (project.clj)",
         }
     }
 }
