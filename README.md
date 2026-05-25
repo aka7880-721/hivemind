@@ -356,18 +356,18 @@ Run **`cg init`** in a repo root to scan for manifests (including common monorep
 
 ```bash
 # Download (replace <> with actual version and architecture)
-wget https://github.com/comfy-home/ComfyGit/releases/latest/ComfyGit-<version>-<architecture>.rpm
-chmod +x ComfyGit-<version>-<architecture>.rpm
-sudo dnf install ./ComfyGit-<version>-<architecture>.rpm
+wget https://github.com/comfy-home/ComfyGit/releases/latest/download/ComfyGit-<version>-<OS>-<architecture>.rpm
+chmod +x ComfyGit-<version>-<OS>-<architecture>.rpm
+sudo dnf install ./ComfyGit-<version>-<OS>-<architecture>.rpm
 ```
 
 #### DEB (Ubuntu, Debian, etc.)
 
 ```bash
 # Download (replace <> with actual version and architecture)
-wget https://github.com/comfy-home/ComfyGit/releases/latest/ComfyGit-<version>-<architecture>.deb
-chmod +x ComfyGit-<version>-<architecture>.deb
-sudo apt install ./ComfyGit-<version>-<architecture>.deb
+wget https://github.com/comfy-home/ComfyGit/releases/latest/download/ComfyGit-<version>-<OS>-<architecture>.deb
+chmod +x ComfyGit-<version>-<OS>-<architecture>.deb
+sudo apt install ./ComfyGit-<version>-<OS>-<architecture>.deb
 ```
 
 #### AppImage
@@ -379,14 +379,14 @@ sudo apt install ./ComfyGit-<version>-<architecture>.deb
 
 ```bash
 # Download (replace <> with actual version and architecture)
-wget https://github.com/comfy-home/ComfyGit/releases/latest/ComfyGit-<version>-<architecture>.AppImage
-chmod +x ComfyGit-<version>-<architecture>.AppImage
+wget https://github.com/comfy-home/ComfyGit/releases/latest/download/ComfyGit-<version>-<OS>-<architecture>.AppImage
+chmod +x ComfyGit-<version>-<OS>-<architecture>.AppImage
 
 # Install shell integration
-./ComfyGit-<version>-<architecture>.AppImage install-shell
+./ComfyGit-<version>-<OS>-<architecture>.AppImage install-shell
 
 # Or run directly
-./ComfyGit-<version>-<architecture>.AppImage
+./ComfyGit-<version>-<OS>-<architecture>.AppImage
 ```
 
 #### Cargo Install
