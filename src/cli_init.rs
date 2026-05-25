@@ -910,7 +910,8 @@ const NESTED_APP_DIRS: &[&str] = &[
 ];
 
 /// Workspace roots whose immediate child directories may contain manifests.
-const NESTED_WORKSPACE_DIRS: &[&str] = &["packages", "apps", "libs", "crates", "modules", "services"];
+const NESTED_WORKSPACE_DIRS: &[&str] =
+    &["packages", "apps", "libs", "crates", "modules", "services"];
 
 fn detect_nested_manifests(cwd: &Path, manifests: &mut Vec<DetectedManifest>) -> Result<()> {
     for dir_name in NESTED_APP_DIRS {
@@ -1611,10 +1612,7 @@ mod tests {
 
     #[test]
     fn detect_manifests_finds_nested_electron_package_json() {
-        let dir = std::env::temp_dir().join(format!(
-            "comfygit-init-nested-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("comfygit-init-nested-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("electron")).expect("create electron dir");
         fs::write(
@@ -1635,10 +1633,8 @@ mod tests {
 
     #[test]
     fn detect_manifests_finds_workspace_package_manifest() {
-        let dir = std::env::temp_dir().join(format!(
-            "comfygit-init-workspace-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("comfygit-init-workspace-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("packages/web")).expect("create packages/web");
         fs::write(
@@ -1659,10 +1655,8 @@ mod tests {
 
     #[test]
     fn detect_manifests_finds_makefile_pl_and_module_bazel() {
-        let dir = std::env::temp_dir().join(format!(
-            "comfygit-init-perl-bazel-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("comfygit-init-perl-bazel-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         fs::write(
