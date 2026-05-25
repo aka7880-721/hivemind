@@ -210,6 +210,7 @@ Enjoy!
     - [Windows](#windows)
   - [Alternatively via CLI](#alternatively-via-cli)
     - [RPM (Fedora, SUSE, etc.)](#rpm-fedora-suse-etc)
+      - [Example video](#example-video)
     - [DEB (Ubuntu, Debian, etc.)](#deb-ubuntu-debian-etc)
     - [AppImage](#appimage)
     - [Cargo Install](#cargo-install)
@@ -353,6 +354,9 @@ Run **`cg init`** in a repo root to scan for manifests (including common monorep
 ### Alternatively via CLI
 
 #### RPM (Fedora, SUSE, etc.)
+
+##### Example video
+<img src="video-manuals/01-installation.gif" width="640" alt="ComfyGit Header">
 
 ```bash
 # Download (replace <> with actual version, OS, and architecture)
