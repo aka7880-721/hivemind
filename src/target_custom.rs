@@ -636,6 +636,472 @@ fn first_quoted_string(input: &str) -> Option<String> {
     Some(value.to_string())
 }
 
+// --- Part 4: Swift, Elixir, Scala, Cabal, Autoconf ---
+
+pub(crate) fn is_package_swift_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("Package.swift"))
+}
+
+pub(crate) fn is_mix_exs_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("mix.exs"))
+}
+
+pub(crate) fn is_build_sbt_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("build.sbt"))
+}
+
+pub(crate) fn is_cabal_filename(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("cabal"))
+}
+
+pub(crate) fn is_configure_ac_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("configure.ac"))
+}
+
+pub(crate) fn extract_swift_package_value(content: &str, key_path: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "comment" {
+        return extract_swift_comment_version(content);
+    }
+    if key_path == "version" || key_path == "packageVersion" {
+        return extract_swift_let_version(content, key_path);
+    }
+    bail!("Package.swift key path must be 'version', 'packageVersion', or 'comment'");
+}
+
+pub(crate) fn write_swift_package_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "comment" {
+        return write_swift_comment_version(content, new_value);
+    }
+    if key_path == "version" || key_path == "packageVersion" {
+        return write_swift_let_version(content, key_path, new_value);
+    }
+    bail!("Package.swift key path must be 'version', 'packageVersion', or 'comment'");
+}
+
+fn extract_swift_comment_version(content: &str) -> Result<String> {
+    content
+        .lines()
+        .find_map(parse_swift_comment_line)
+        .ok_or_else(|| anyhow!("Package.swift has no // version comment"))
+}
+
+fn parse_swift_comment_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("//") {
+        return None;
+    }
+    let rest = trimmed[2..].trim();
+    let (keyword, version) = rest.split_once(|c: char| c == ':' || c.is_whitespace())?;
+    if !keyword.eq_ignore_ascii_case("version") {
+        return None;
+    }
+    let version = version.trim();
+    if version.is_empty() {
+        return None;
+    }
+    Some(version.to_string())
+}
+
+fn write_swift_comment_version(content: &str, new_value: &str) -> Result<String> {
+    let mut lines: Vec<String> = content.lines().map(ToOwned::to_owned).collect();
+    let had_trailing_newline = content.ends_with('\n');
+    for line in &mut lines {
+        if parse_swift_comment_line(line).is_some() {
+            *line = format!("// version: {new_value}");
+            return join_lines(lines, had_trailing_newline);
+        }
+    }
+    lines.insert(0, format!("// version: {new_value}"));
+    join_lines(lines, had_trailing_newline)
+}
+
+fn extract_swift_let_version(content: &str, variable: &str) -> Result<String> {
+    for line in content.lines() {
+        if let Some(version) = parse_swift_let_line(line, variable) {
+            return Ok(version);
+        }
+    }
+    Err(anyhow!("Package.swift does not define let {variable} = \"...\""))
+}
+
+fn parse_swift_let_line(line: &str, variable: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let prefix = format!("let {variable}");
+    if !trimmed.starts_with(&prefix) {
+        return None;
+    }
+    let rest = trimmed[prefix.len()..].trim().strip_prefix('=')?.trim();
+    parse_quoted_or_bare_token(rest)
+}
+
+fn write_swift_let_version(content: &str, variable: &str, new_value: &str) -> Result<String> {
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_swift_let_line(line, variable).is_some() {
+            let indent: String = line.chars().take_while(|ch| ch.is_whitespace()).collect();
+            updated.push_str(&format!("{indent}let {variable} = \"{new_value}\""));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("Package.swift does not define let {variable} = \"...\""))
+    }
+}
+
+pub(crate) fn extract_elixir_mix_value(content: &str, key_path: &str) -> Result<String> {
+    let field = normalize_elixir_field(key_path)?;
+    for line in content.lines() {
+        if let Some(value) = parse_elixir_field_line(line, field) {
+            return Ok(value);
+        }
+    }
+    Err(anyhow!("mix.exs does not contain {}: \"...\"", field))
+}
+
+pub(crate) fn write_elixir_mix_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    let field = normalize_elixir_field(key_path)?;
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced
+            && let Some(old) = parse_elixir_field_line(line, field)
+        {
+            updated.push_str(&line.replace(&format!("\"{old}\""), &format!("\"{new_value}\"")));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("mix.exs does not contain {}: \"...\"", field))
+    }
+}
+
+fn normalize_elixir_field(key_path: &str) -> Result<&'static str> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "version" {
+        return Ok("version");
+    }
+    bail!("mix.exs key path must be 'version' (package version)");
+}
+
+fn parse_elixir_field_line(line: &str, field: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let marker = format!("{field}:");
+    let index = trimmed.find(&marker)?;
+    let rest = trimmed[index + marker.len()..]
+        .trim()
+        .trim_start_matches(',')
+        .trim()
+        .trim_end_matches([',', ']']);
+    first_quoted_string(rest).or_else(|| parse_quoted_or_bare_token(rest))
+}
+
+pub(crate) fn extract_scala_sbt_value(content: &str, key_path: &str) -> Result<String> {
+    let key = normalize_sbt_key(key_path)?;
+    for line in content.lines() {
+        if let Some(value) = parse_sbt_version_line(line, key) {
+            return Ok(value);
+        }
+    }
+    Err(anyhow!("build.sbt does not contain {}", key))
+}
+
+pub(crate) fn write_scala_sbt_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    let key = normalize_sbt_key(key_path)?;
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_sbt_version_line(line, key).is_some() {
+            updated.push_str(&replace_sbt_version_line(line, key, new_value));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("build.sbt does not contain {}", key))
+    }
+}
+
+fn normalize_sbt_key(key_path: &str) -> Result<&'static str> {
+    let key_path = key_path.trim();
+    if key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path == "version"
+    {
+        return Ok("version");
+    }
+    if key_path == "ThisBuild / version" || key_path == "ThisBuild/version" {
+        return Ok("ThisBuild / version");
+    }
+    bail!("build.sbt key path must be 'version' or 'ThisBuild / version'");
+}
+
+fn parse_sbt_version_line(line: &str, key: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("//") {
+        return None;
+    }
+    let prefix = if key == "ThisBuild / version" {
+        "ThisBuild / version"
+    } else {
+        "version"
+    };
+    if !trimmed.starts_with(prefix) {
+        return None;
+    }
+    let rest = trimmed[prefix.len()..].trim();
+    let rest = rest.strip_prefix(":=")?.trim();
+    parse_quoted_or_bare_token(rest)
+}
+
+fn replace_sbt_version_line(line: &str, key: &str, new_value: &str) -> String {
+    let indent: String = line.chars().take_while(|ch| ch.is_whitespace()).collect();
+    if key == "ThisBuild / version" {
+        format!("{indent}ThisBuild / version := \"{new_value}\"")
+    } else {
+        format!("{indent}version := \"{new_value}\"")
+    }
+}
+
+pub(crate) fn extract_cabal_value(content: &str, key_path: &str) -> Result<String> {
+    let field = normalize_cabal_field(key_path)?;
+    for line in content.lines() {
+        if let Some(value) = parse_cabal_field_line(line, field) {
+            return Ok(value);
+        }
+    }
+    Err(anyhow!("cabal file does not contain field '{}'", field))
+}
+
+pub(crate) fn write_cabal_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    let field = normalize_cabal_field(key_path)?;
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_cabal_field_line(line, field).is_some() {
+            updated.push_str(&format!("{field}: {new_value}"));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("cabal file does not contain field '{}'", field))
+    }
+}
+
+fn normalize_cabal_field(key_path: &str) -> Result<&'static str> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "version" {
+        return Ok("version");
+    }
+    if key_path == "name" {
+        return Ok("name");
+    }
+    bail!("cabal key path must be 'version' (package version)");
+}
+
+fn parse_cabal_field_line(line: &str, field: &str) -> Option<String> {
+    if line.starts_with(char::is_whitespace) || line.trim_start().starts_with("--") {
+        return None;
+    }
+    let (name, value) = line.split_once(':')?;
+    if name.trim() != field {
+        return None;
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+pub(crate) fn extract_autoconf_value(content: &str, key_path: &str) -> Result<String> {
+    let macro_name = normalize_autoconf_macro(key_path)?;
+    for line in content.lines() {
+        if let Some(version) = parse_ac_init_version(line, macro_name) {
+            return Ok(version);
+        }
+    }
+    Err(anyhow!("configure.ac does not contain {} with a version argument", macro_name))
+}
+
+pub(crate) fn write_autoconf_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    let macro_name = normalize_autoconf_macro(key_path)?;
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_ac_init_version(line, macro_name).is_some() {
+            updated.push_str(&replace_ac_init_version(line, new_value));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("configure.ac does not contain {} with a version argument", macro_name))
+    }
+}
+
+fn normalize_autoconf_macro(key_path: &str) -> Result<&'static str> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "AC_INIT" {
+        return Ok("AC_INIT");
+    }
+    if key_path == "AC_INIT" {
+        return Ok("AC_INIT");
+    }
+    bail!("configure.ac key path must be 'AC_INIT'");
+}
+
+fn parse_ac_init_version(line: &str, macro_name: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with(macro_name) {
+        return None;
+    }
+    let args = trimmed
+        .strip_prefix(macro_name)?
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim();
+    ac_init_argument(args, 1)
+}
+
+fn ac_init_argument(args: &str, index: usize) -> Option<String> {
+    let tokens = tokenize_ac_init_args(args);
+    tokens.get(index).cloned()
+}
+
+fn tokenize_ac_init_args(args: &str) -> Vec<String> {
+    if args.contains('[') {
+        let mut tokens = Vec::new();
+        let mut rest = args;
+        while let Some(start) = rest.find('[') {
+            if let Some(end) = rest[start + 1..].find(']') {
+                let end = start + 1 + end;
+                tokens.push(rest[start + 1..end].trim().to_string());
+                rest = &rest[end + 1..];
+            } else {
+                break;
+            }
+        }
+        if !tokens.is_empty() {
+            return tokens;
+        }
+    }
+    args.split(',')
+        .map(|token| token.trim().trim_matches(|ch| ch == '"' || ch == '\'').to_string())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn ac_init_args_from_line(trimmed: &str) -> &str {
+    trimmed
+        .strip_prefix("AC_INIT")
+        .unwrap_or(trimmed)
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim()
+}
+
+fn replace_ac_init_version(line: &str, new_value: &str) -> String {
+    let trimmed = line.trim();
+    let indent: String = line.chars().take_while(|ch| ch.is_whitespace()).collect();
+    let args = ac_init_args_from_line(trimmed);
+    if trimmed.contains('[')
+        && let Some(package) = ac_init_argument(args, 0)
+    {
+        if let Some(email) = ac_init_argument(args, 2) {
+            return format!("{indent}AC_INIT([{package}], [{new_value}], [{email}])");
+        }
+        return format!("{indent}AC_INIT([{package}], [{new_value}])");
+    }
+    let tokens = tokenize_ac_init_args(args);
+    if tokens.len() >= 3 {
+        format!(
+            "{indent}AC_INIT({}, {}, {})",
+            tokens[0], new_value, tokens[2]
+        )
+    } else if tokens.len() == 2 {
+        format!("{indent}AC_INIT({}, {})", tokens[0], new_value)
+    } else {
+        format!("{indent}AC_INIT([project], [{new_value}])")
+    }
+}
+
+fn join_lines(lines: Vec<String>, had_trailing_newline: bool) -> Result<String> {
+    let mut rendered = lines.join("\n");
+    if had_trailing_newline {
+        rendered.push('\n');
+    }
+    Ok(rendered)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,5 +1165,51 @@ mod tests {
         assert_eq!(read, "1.2.3");
         let updated = write_clojure_value(content, "defproject", "2.0.0").expect("write");
         assert!(updated.contains("\"2.0.0\""));
+    }
+
+    #[test]
+    fn swift_package_version_round_trip() {
+        let content = "// swift-tools-version:5.9\nlet version = \"1.2.3\"\n";
+        let read = extract_swift_package_value(content, "version").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_swift_package_value(content, "version", "2.0.0").expect("write");
+        assert!(updated.contains("let version = \"2.0.0\""));
+    }
+
+    #[test]
+    fn elixir_mix_version_round_trip() {
+        let content = "def project do\n  [app: :demo, version: \"1.2.3\"]\nend\n";
+        let read = extract_elixir_mix_value(content, "version").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_elixir_mix_value(content, "version", "2.0.0").expect("write");
+        assert!(updated.contains("version: \"2.0.0\""));
+    }
+
+    #[test]
+    fn scala_sbt_version_round_trip() {
+        let content = "ThisBuild / version := \"1.2.3\"\n";
+        let read = extract_scala_sbt_value(content, "ThisBuild / version").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated =
+            write_scala_sbt_value(content, "ThisBuild / version", "2.0.0").expect("write");
+        assert!(updated.contains("ThisBuild / version := \"2.0.0\""));
+    }
+
+    #[test]
+    fn cabal_version_round_trip() {
+        let content = "cabal-version: 2.2\nname: demo\nversion: 1.2.3\n";
+        let read = extract_cabal_value(content, "version").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_cabal_value(content, "version", "2.0.0").expect("write");
+        assert!(updated.contains("version: 2.0.0"));
+    }
+
+    #[test]
+    fn autoconf_ac_init_round_trip() {
+        let content = "AC_INIT([myapp], [1.2.3], [bug@example.com])\n";
+        let read = extract_autoconf_value(content, "AC_INIT").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_autoconf_value(content, "AC_INIT", "2.0.0").expect("write");
+        assert!(updated.contains("[2.0.0]"));
     }
 }
