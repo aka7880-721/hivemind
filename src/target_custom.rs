@@ -73,7 +73,11 @@ pub(crate) fn extract_description_value(content: &str, key_path: &str) -> Result
     Err(anyhow!("missing DESCRIPTION field '{}'", field))
 }
 
-pub(crate) fn write_description_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+pub(crate) fn write_description_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
     let field = normalize_description_field(key_path)?;
     let mut updated = String::new();
     let mut replaced = false;
@@ -100,7 +104,11 @@ pub(crate) fn write_description_value(content: &str, key_path: &str, new_value: 
 
 fn normalize_description_field(key_path: &str) -> Result<&'static str> {
     let key_path = key_path.trim();
-    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path.eq_ignore_ascii_case("version") {
+    if key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case("version")
+    {
         return Ok("Version");
     }
     if key_path == "Version" {
@@ -172,7 +180,9 @@ fn write_cmake_project_version(content: &str, new_value: &str) -> Result<String>
         }
         Ok(updated)
     } else {
-        Err(anyhow!("CMakeLists.txt does not contain project(... VERSION ...)"))
+        Err(anyhow!(
+            "CMakeLists.txt does not contain project(... VERSION ...)"
+        ))
     }
 }
 
@@ -258,7 +268,11 @@ pub(crate) fn extract_makefile_value(content: &str, key_path: &str) -> Result<St
     Err(anyhow!("Makefile does not define {}", variable))
 }
 
-pub(crate) fn write_makefile_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+pub(crate) fn write_makefile_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
     let variable = normalize_makefile_variable(key_path)?;
     let mut updated = String::new();
     let mut replaced = false;
@@ -290,7 +304,11 @@ pub(crate) fn write_makefile_value(content: &str, key_path: &str, new_value: &st
 
 fn normalize_makefile_variable(key_path: &str) -> Result<&'static str> {
     let key_path = key_path.trim();
-    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path.eq_ignore_ascii_case("version") {
+    if key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case("version")
+    {
         return Ok("VERSION");
     }
     if key_path == "VERSION" || key_path == "version" {
@@ -415,7 +433,9 @@ fn replace_gradle_assignment_line(line: &str, key: &str, new_value: &str) -> Str
 
 fn parse_quoted_or_bare_token(token: &str) -> Option<String> {
     let token = token.trim().trim_end_matches(',');
-    if (token.starts_with('"') && token.ends_with('"')) || (token.starts_with('\'') && token.ends_with('\'')) {
+    if (token.starts_with('"') && token.ends_with('"'))
+        || (token.starts_with('\'') && token.ends_with('\''))
+    {
         return Some(token[1..token.len() - 1].to_string());
     }
     if token.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
@@ -499,7 +519,9 @@ fn plist_value_for_key(content: &str, key: &str) -> Option<String> {
 
 fn parse_plist_string_line(line: &str) -> Option<String> {
     let trimmed = line.trim();
-    let inner = trimmed.strip_prefix("<string>")?.strip_suffix("</string>")?;
+    let inner = trimmed
+        .strip_prefix("<string>")?
+        .strip_suffix("</string>")?;
     if inner.is_empty() {
         return None;
     }
@@ -517,7 +539,11 @@ pub(crate) fn extract_clojure_value(content: &str, key_path: &str) -> Result<Str
     bail!("project.clj key path must be 'defproject' or 'version'");
 }
 
-pub(crate) fn write_clojure_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+pub(crate) fn write_clojure_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
     let key_path = key_path.trim();
     if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "defproject" {
         return write_clojure_defproject_version(content, new_value);
@@ -537,7 +563,9 @@ fn extract_clojure_defproject_version(content: &str) -> Result<String> {
             return Ok(version);
         }
     }
-    Err(anyhow!("project.clj does not contain (defproject name \"version\" ...)"))
+    Err(anyhow!(
+        "project.clj does not contain (defproject name \"version\" ...)"
+    ))
 }
 
 fn write_clojure_defproject_version(content: &str, new_value: &str) -> Result<String> {
@@ -564,7 +592,9 @@ fn write_clojure_defproject_version(content: &str, new_value: &str) -> Result<St
         }
         Ok(updated)
     } else {
-        Err(anyhow!("project.clj does not contain (defproject name \"version\" ...)"))
+        Err(anyhow!(
+            "project.clj does not contain (defproject name \"version\" ...)"
+        ))
     }
 }
 
@@ -617,7 +647,10 @@ fn defproject_version_string(input: &str) -> Option<String> {
     while let Some(value) = first_quoted_string(rest) {
         quoted.push(value);
         let marker = format!("\"{}\"", quoted.last()?);
-        rest = rest.split_once(&marker).map(|(_, remainder)| remainder).unwrap_or("");
+        rest = rest
+            .split_once(&marker)
+            .map(|(_, remainder)| remainder)
+            .unwrap_or("");
     }
     if quoted.len() >= 2 {
         quoted.pop()
@@ -684,7 +717,11 @@ pub(crate) fn extract_swift_package_value(content: &str, key_path: &str) -> Resu
     bail!("Package.swift key path must be 'version', 'packageVersion', or 'comment'");
 }
 
-pub(crate) fn write_swift_package_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+pub(crate) fn write_swift_package_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
     let key_path = key_path.trim();
     if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "comment" {
         return write_swift_comment_version(content, new_value);
@@ -738,7 +775,9 @@ fn extract_swift_let_version(content: &str, variable: &str) -> Result<String> {
             return Ok(version);
         }
     }
-    Err(anyhow!("Package.swift does not define let {variable} = \"...\""))
+    Err(anyhow!(
+        "Package.swift does not define let {variable} = \"...\""
+    ))
 }
 
 fn parse_swift_let_line(line: &str, variable: &str) -> Option<String> {
@@ -772,7 +811,9 @@ fn write_swift_let_version(content: &str, variable: &str, new_value: &str) -> Re
         }
         Ok(updated)
     } else {
-        Err(anyhow!("Package.swift does not define let {variable} = \"...\""))
+        Err(anyhow!(
+            "Package.swift does not define let {variable} = \"...\""
+        ))
     }
 }
 
@@ -786,7 +827,11 @@ pub(crate) fn extract_elixir_mix_value(content: &str, key_path: &str) -> Result<
     Err(anyhow!("mix.exs does not contain {}: \"...\"", field))
 }
 
-pub(crate) fn write_elixir_mix_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+pub(crate) fn write_elixir_mix_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
     let field = normalize_elixir_field(key_path)?;
     let mut updated = String::new();
     let mut replaced = false;
@@ -794,9 +839,7 @@ pub(crate) fn write_elixir_mix_value(content: &str, key_path: &str, new_value: &
         if !updated.is_empty() {
             updated.push('\n');
         }
-        if !replaced
-            && let Some(old) = parse_elixir_field_line(line, field)
-        {
+        if !replaced && let Some(old) = parse_elixir_field_line(line, field) {
             updated.push_str(&line.replace(&format!("\"{old}\""), &format!("\"{new_value}\"")));
             replaced = true;
         } else {
@@ -843,7 +886,11 @@ pub(crate) fn extract_scala_sbt_value(content: &str, key_path: &str) -> Result<S
     Err(anyhow!("build.sbt does not contain {}", key))
 }
 
-pub(crate) fn write_scala_sbt_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+pub(crate) fn write_scala_sbt_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
     let key = normalize_sbt_key(key_path)?;
     let mut updated = String::new();
     let mut replaced = false;
@@ -870,11 +917,7 @@ pub(crate) fn write_scala_sbt_value(content: &str, key_path: &str, new_value: &s
 
 fn normalize_sbt_key(key_path: &str) -> Result<&'static str> {
     let key_path = key_path.trim();
-    if key_path.is_empty()
-        || key_path == "@"
-        || key_path == "."
-        || key_path == "version"
-    {
+    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "version" {
         return Ok("version");
     }
     if key_path == "ThisBuild / version" || key_path == "ThisBuild/version" {
@@ -978,10 +1021,17 @@ pub(crate) fn extract_autoconf_value(content: &str, key_path: &str) -> Result<St
             return Ok(version);
         }
     }
-    Err(anyhow!("configure.ac does not contain {} with a version argument", macro_name))
+    Err(anyhow!(
+        "configure.ac does not contain {} with a version argument",
+        macro_name
+    ))
 }
 
-pub(crate) fn write_autoconf_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+pub(crate) fn write_autoconf_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
     let macro_name = normalize_autoconf_macro(key_path)?;
     let mut updated = String::new();
     let mut replaced = false;
@@ -1002,7 +1052,10 @@ pub(crate) fn write_autoconf_value(content: &str, key_path: &str, new_value: &st
         }
         Ok(updated)
     } else {
-        Err(anyhow!("configure.ac does not contain {} with a version argument", macro_name))
+        Err(anyhow!(
+            "configure.ac does not contain {} with a version argument",
+            macro_name
+        ))
     }
 }
 
@@ -1054,7 +1107,12 @@ fn tokenize_ac_init_args(args: &str) -> Vec<String> {
         }
     }
     args.split(',')
-        .map(|token| token.trim().trim_matches(|ch| ch == '"' || ch == '\'').to_string())
+        .map(|token| {
+            token
+                .trim()
+                .trim_matches(|ch| ch == '"' || ch == '\'')
+                .to_string()
+        })
         .filter(|token| !token.is_empty())
         .collect()
 }
@@ -1144,7 +1202,9 @@ pub(crate) fn extract_meson_value(content: &str, key_path: &str) -> Result<Strin
             "meson.build does not contain project(..., version: '…') — use key 'project' or 'version'"
         ));
     }
-    Err(anyhow!("meson.build key path must be 'project' or 'version'"))
+    Err(anyhow!(
+        "meson.build key path must be 'project' or 'version'"
+    ))
 }
 
 pub(crate) fn write_meson_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
@@ -1163,12 +1223,10 @@ pub(crate) fn write_meson_value(content: &str, key_path: &str, new_value: &str) 
         if !updated.is_empty() {
             updated.push('\n');
         }
-        if !replaced {
-            if let Some(old) = parse_meson_version_line(line) {
-                updated.push_str(&replace_meson_version_line(line, &old, new_value));
-                replaced = true;
-                continue;
-            }
+        if !replaced && let Some(old) = parse_meson_version_line(line) {
+            updated.push_str(&replace_meson_version_line(line, &old, new_value));
+            replaced = true;
+            continue;
         }
         updated.push_str(line);
     }
@@ -1220,8 +1278,18 @@ pub(crate) fn extract_rockspec_value(content: &str, key_path: &str) -> Result<St
     extract_assignment_value(content, key_path, "version", "LuaRocks .rockspec")
 }
 
-pub(crate) fn write_rockspec_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
-    write_assignment_value(content, key_path, "version", new_value, "LuaRocks .rockspec")
+pub(crate) fn write_rockspec_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
+    write_assignment_value(
+        content,
+        key_path,
+        "version",
+        new_value,
+        "LuaRocks .rockspec",
+    )
 }
 
 fn extract_assignment_value(
@@ -1333,7 +1401,11 @@ pub(crate) fn extract_makefile_pl_value(content: &str, key_path: &str) -> Result
     ))
 }
 
-pub(crate) fn write_makefile_pl_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+pub(crate) fn write_makefile_pl_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
     let field = normalize_makefile_pl_field(key_path)?;
     let mut updated = String::new();
     let mut replaced = false;
@@ -1341,12 +1413,10 @@ pub(crate) fn write_makefile_pl_value(content: &str, key_path: &str, new_value: 
         if !updated.is_empty() {
             updated.push('\n');
         }
-        if !replaced {
-            if let Some(old) = parse_makefile_pl_version_line(line, field) {
-                updated.push_str(&replace_makefile_pl_version_line(line, &old, new_value));
-                replaced = true;
-                continue;
-            }
+        if !replaced && let Some(old) = parse_makefile_pl_version_line(line, field) {
+            updated.push_str(&replace_makefile_pl_version_line(line, &old, new_value));
+            replaced = true;
+            continue;
         }
         updated.push_str(line);
     }
@@ -1357,12 +1427,10 @@ pub(crate) fn write_makefile_pl_value(content: &str, key_path: &str, new_value: 
             if !fallback.is_empty() {
                 fallback.push('\n');
             }
-            if !replaced {
-                if let Some(old) = parse_makefile_pl_version_line(line, "VERSION") {
-                    fallback.push_str(&replace_makefile_pl_version_line(line, &old, new_value));
-                    replaced = true;
-                    continue;
-                }
+            if !replaced && let Some(old) = parse_makefile_pl_version_line(line, "VERSION") {
+                fallback.push_str(&replace_makefile_pl_version_line(line, &old, new_value));
+                replaced = true;
+                continue;
             }
             fallback.push_str(line);
         }
@@ -1379,7 +1447,9 @@ pub(crate) fn write_makefile_pl_value(content: &str, key_path: &str, new_value: 
         }
         Ok(updated)
     } else {
-        Err(anyhow!("Makefile.PL does not define a version field to update"))
+        Err(anyhow!(
+            "Makefile.PL does not define a version field to update"
+        ))
     }
 }
 
@@ -1470,7 +1540,9 @@ pub(crate) fn extract_bazel_value(content: &str, key_path: &str) -> Result<Strin
             "MODULE.bazel does not contain module(..., version = \"…\") — use key 'module' or 'version'"
         ));
     }
-    Err(anyhow!("MODULE.bazel key path must be 'module' or 'version'"))
+    Err(anyhow!(
+        "MODULE.bazel key path must be 'module' or 'version'"
+    ))
 }
 
 pub(crate) fn write_bazel_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
@@ -1489,12 +1561,10 @@ pub(crate) fn write_bazel_value(content: &str, key_path: &str, new_value: &str) 
         if !updated.is_empty() {
             updated.push('\n');
         }
-        if !replaced {
-            if let Some(old) = parse_bazel_version_line(line) {
-                updated.push_str(&replace_bazel_version_line(line, &old, new_value));
-                replaced = true;
-                continue;
-            }
+        if !replaced && let Some(old) = parse_bazel_version_line(line) {
+            updated.push_str(&replace_bazel_version_line(line, &old, new_value));
+            replaced = true;
+            continue;
         }
         updated.push_str(line);
     }
