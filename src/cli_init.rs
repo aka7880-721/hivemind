@@ -777,6 +777,8 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
         ("composer.json", TargetFormat::Json, "version"),
         ("deno.json", TargetFormat::Json, "version"),
         ("META.json", TargetFormat::Json, "version"),
+        ("Makefile.PL", TargetFormat::MakefilePl, "VERSION"),
+        ("MODULE.bazel", TargetFormat::Bazel, "module"),
         ("go.mod", TargetFormat::GoMod, "comment"),
         ("pubspec.yaml", TargetFormat::Yaml, "version"),
         ("package.yaml", TargetFormat::Yaml, "version"),
@@ -863,8 +865,149 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
         }
     }
 
+    detect_nested_manifests(cwd, &mut manifests)?;
+
     manifests.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(manifests)
+}
+
+const MAX_NESTED_MANIFESTS: usize = 48;
+
+const NESTED_MANIFEST_CANDIDATES: &[(&str, TargetFormat, &str)] = &[
+    ("package.json", TargetFormat::Json, "version"),
+    ("Cargo.toml", TargetFormat::Toml, "package.version"),
+    ("pyproject.toml", TargetFormat::Toml, "project.version"),
+    ("go.mod", TargetFormat::GoMod, "comment"),
+    ("composer.json", TargetFormat::Json, "version"),
+    ("pubspec.yaml", TargetFormat::Yaml, "version"),
+    ("build.gradle", TargetFormat::Gradle, "version"),
+    ("build.gradle.kts", TargetFormat::Gradle, "version"),
+];
+
+/// Single-segment app folders (Electron, monorepo packages, etc.).
+const NESTED_APP_DIRS: &[&str] = &[
+    "app",
+    "apps",
+    "electron",
+    "desktop",
+    "frontend",
+    "backend",
+    "web",
+    "client",
+    "mobile",
+    "ui",
+    "server",
+    "api",
+    "packages",
+    "pkg",
+    "libs",
+    "lib",
+    "crates",
+    "modules",
+    "services",
+    "workspace",
+    "workspaces",
+];
+
+/// Workspace roots whose immediate child directories may contain manifests.
+const NESTED_WORKSPACE_DIRS: &[&str] = &["packages", "apps", "libs", "crates", "modules", "services"];
+
+fn detect_nested_manifests(cwd: &Path, manifests: &mut Vec<DetectedManifest>) -> Result<()> {
+    for dir_name in NESTED_APP_DIRS {
+        for (manifest_name, format, default_key) in NESTED_MANIFEST_CANDIDATES {
+            let relative_path = format!("{dir_name}/{manifest_name}");
+            try_push_manifest(cwd, manifests, &relative_path, *format, default_key);
+        }
+    }
+
+    for workspace_dir in NESTED_WORKSPACE_DIRS {
+        let workspace_path = cwd.join(workspace_dir);
+        if !workspace_path.is_dir() {
+            continue;
+        }
+        let entries = match fs::read_dir(&workspace_path) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let child_name = entry.file_name();
+            let Some(child_name) = child_name.to_str() else {
+                continue;
+            };
+            if should_skip_nested_dir(child_name) {
+                continue;
+            }
+            for (manifest_name, format, default_key) in NESTED_MANIFEST_CANDIDATES {
+                let relative_path = format!("{workspace_dir}/{child_name}/{manifest_name}");
+                try_push_manifest(cwd, manifests, &relative_path, *format, default_key);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn should_skip_nested_dir(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | ".git"
+            | "vendor"
+            | "__pycache__"
+            | ".venv"
+            | "venv"
+            | "coverage"
+            | ".cargo"
+            | "out"
+            | ".next"
+            | ".nuxt"
+            | ".output"
+            | ".turbo"
+            | ".cache"
+            | "tmp"
+            | "temp"
+    ) || lower.starts_with('.')
+}
+
+fn try_push_manifest(
+    cwd: &Path,
+    manifests: &mut Vec<DetectedManifest>,
+    relative_path: &str,
+    format: TargetFormat,
+    default_key: &str,
+) {
+    if manifests.len() >= MAX_NESTED_MANIFESTS {
+        return;
+    }
+    if manifests
+        .iter()
+        .any(|manifest| manifest.relative_path == relative_path)
+    {
+        return;
+    }
+    if !cwd.join(relative_path).is_file() {
+        return;
+    }
+    manifests.push(DetectedManifest {
+        relative_path: relative_path.to_string(),
+        format,
+        default_key: default_key.to_string(),
+    });
 }
 
 fn build_project_from_detection(
@@ -1462,6 +1605,88 @@ mod tests {
                 .any(|m| m.relative_path == "pyproject.toml")
         );
         assert!(manifests.iter().any(|m| m.relative_path == "VERSION"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_manifests_finds_nested_electron_package_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "comfygit-init-nested-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("electron")).expect("create electron dir");
+        fs::write(
+            dir.join("electron/package.json"),
+            r#"{"name":"app","version":"1.2.3"}"#,
+        )
+        .expect("write package.json");
+
+        let manifests = detect_manifests(&dir).expect("detect manifests");
+        assert!(
+            manifests
+                .iter()
+                .any(|manifest| manifest.relative_path == "electron/package.json")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_manifests_finds_workspace_package_manifest() {
+        let dir = std::env::temp_dir().join(format!(
+            "comfygit-init-workspace-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("packages/web")).expect("create packages/web");
+        fs::write(
+            dir.join("packages/web/package.json"),
+            r#"{"name":"web","version":"0.5.0"}"#,
+        )
+        .expect("write package.json");
+
+        let manifests = detect_manifests(&dir).expect("detect manifests");
+        assert!(
+            manifests
+                .iter()
+                .any(|manifest| manifest.relative_path == "packages/web/package.json")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_manifests_finds_makefile_pl_and_module_bazel() {
+        let dir = std::env::temp_dir().join(format!(
+            "comfygit-init-perl-bazel-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::write(
+            dir.join("Makefile.PL"),
+            "WriteMakefile(\n    VERSION => '1.0.0',\n);\n",
+        )
+        .expect("write Makefile.PL");
+        fs::write(
+            dir.join("MODULE.bazel"),
+            "module(name = \"demo\", version = \"1.0.0\")\n",
+        )
+        .expect("write MODULE.bazel");
+
+        let manifests = detect_manifests(&dir).expect("detect manifests");
+        assert!(
+            manifests
+                .iter()
+                .any(|manifest| manifest.relative_path == "Makefile.PL")
+        );
+        assert!(
+            manifests
+                .iter()
+                .any(|manifest| manifest.relative_path == "MODULE.bazel")
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
