@@ -30,6 +30,7 @@ mod mmr;
 mod overview_pg;
 mod project_edit;
 mod project_wizard;
+mod target_custom;
 mod targets;
 mod tiles;
 mod ui;
