@@ -744,7 +744,7 @@ impl ProjectEditDialog {
             }
 
             let target_key = self.target_key.value.trim();
-            if target_key.is_empty() {
+            if target_key.is_empty() && !crate::targets::is_plain_version_filename(target_path) {
                 bail!("target key cannot be empty");
             }
 

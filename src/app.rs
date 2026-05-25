@@ -7387,7 +7387,7 @@ impl ScopeDraft {
         }
 
         let target_key = self.target_key.value.trim();
-        if target_key.is_empty() {
+        if target_key.is_empty() && !crate::targets::is_plain_version_filename(target_path) {
             bail!("scope '{}' target key cannot be empty", name);
         }
 
@@ -9425,11 +9425,25 @@ pub(crate) fn rotate_scope_kind(scope_kind: BranchScopeKind, delta: i32) -> Bran
     }
 }
 
-fn target_key_presets(path: &str) -> [&'static str; 3] {
-    if path.trim().to_ascii_lowercase().ends_with(".toml") {
-        ["package.version", "workspace.package.version", "version"]
-    } else {
-        ["version", "package.version", "workspace.package.version"]
+pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
+    let path_lower = path.trim().to_ascii_lowercase();
+    if crate::targets::is_plain_version_filename(path) {
+        return &["", ".", "@"];
+    }
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase());
+    match extension.as_deref() {
+        Some("toml") if path_lower.contains("pyproject") => {
+            &["project.version", "tool.poetry.version", "version"]
+        }
+        Some("toml") => &["package.version", "workspace.package.version", "version"],
+        Some("json") => &["version", "package.version", "workspace.package.version"],
+        Some("yaml") | Some("yml") => &["version", "appVersion", "chart.version"],
+        Some("xml") => &["project.version", "version"],
+        Some("cfg") => &["metadata.version", "version"],
+        _ => &["version", "package.version", "workspace.package.version"],
     }
 }
 
@@ -9439,8 +9453,8 @@ pub(crate) fn default_target_key_for_path(path: &str) -> &'static str {
 
 pub(crate) fn target_key_is_custom(path: &str, value: &str) -> bool {
     !target_key_presets(path)
-        .into_iter()
-        .any(|preset| preset == value.trim())
+        .iter()
+        .any(|preset| preset == &value.trim())
 }
 
 pub(crate) fn cycle_target_key_preset(path: &str, current: &str, delta: i32) -> String {

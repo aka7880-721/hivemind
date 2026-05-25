@@ -26,7 +26,7 @@ use crossterm::{
 };
 
 use crate::{
-    app::{ScopeDraft, default_target_key_for_path, target_key_is_custom},
+    app::{ScopeDraft, target_key_is_custom},
     cli::{
         best_effort_canonicalize, find_enclosing_project_index, normalize_lookup, project_root,
         registered_scope_covering_cwd,
@@ -645,7 +645,7 @@ fn detect_project_layout(cwd: &Path) -> Result<ProjectDetection> {
     let manifests = detect_manifests(cwd)?;
     if manifests.is_empty() {
         bail!(
-            "no Cargo.toml or package.json was found in {}; add a version manifest first or use manual setup in the TUI",
+            "no supported version manifest was found in {}; add a version file first or use manual setup in the TUI",
             cwd.display()
         );
     }
@@ -769,18 +769,26 @@ fn read_git_remote_url(cwd: &Path) -> Option<String> {
 }
 
 fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
+    const CANDIDATES: &[(&str, TargetFormat, &str)] = &[
+        ("Cargo.toml", TargetFormat::Toml, "package.version"),
+        ("pyproject.toml", TargetFormat::Toml, "project.version"),
+        ("package.json", TargetFormat::Json, "version"),
+        ("setup.cfg", TargetFormat::Ini, "metadata.version"),
+        ("pom.xml", TargetFormat::Xml, "project.version"),
+        ("Chart.yaml", TargetFormat::Yaml, "version"),
+        ("Chart.yml", TargetFormat::Yaml, "version"),
+        ("VERSION", TargetFormat::Plain, ""),
+        ("version", TargetFormat::Plain, ""),
+    ];
+
     let mut manifests = Vec::new();
-    for file_name in ["Cargo.toml", "package.json"] {
+    for (file_name, format, default_key) in CANDIDATES {
         let path = cwd.join(file_name);
         if path.is_file() {
             manifests.push(DetectedManifest {
                 relative_path: file_name.to_string(),
-                format: if file_name.ends_with(".toml") {
-                    TargetFormat::Toml
-                } else {
-                    TargetFormat::Json
-                },
-                default_key: default_target_key_for_path(file_name).to_string(),
+                format: *format,
+                default_key: default_key.to_string(),
             });
         }
     }
@@ -1358,18 +1366,30 @@ mod tests {
     }
 
     #[test]
-    fn detect_manifests_finds_cargo_and_package_json() {
+    fn detect_manifests_finds_common_version_files() {
         let dir =
             std::env::temp_dir().join(format!("comfygit-init-manifests-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         fs::write(dir.join("Cargo.toml"), "[package]\nversion = \"0.1.0\"\n").expect("write cargo");
         fs::write(dir.join("package.json"), "{\"version\":\"0.1.0\"}").expect("write package");
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[project]\nversion = \"0.1.0\"\n",
+        )
+        .expect("write pyproject");
+        fs::write(dir.join("VERSION"), "0.1.0\n").expect("write version");
 
         let manifests = detect_manifests(&dir).expect("detect manifests");
-        assert_eq!(manifests.len(), 2);
+        assert_eq!(manifests.len(), 4);
         assert!(manifests.iter().any(|m| m.relative_path == "Cargo.toml"));
         assert!(manifests.iter().any(|m| m.relative_path == "package.json"));
+        assert!(
+            manifests
+                .iter()
+                .any(|m| m.relative_path == "pyproject.toml")
+        );
+        assert!(manifests.iter().any(|m| m.relative_path == "VERSION"));
 
         let _ = fs::remove_dir_all(&dir);
     }
