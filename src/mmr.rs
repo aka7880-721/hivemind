@@ -21,6 +21,7 @@ const MEM_DIR: &str = "mem";
 const STD_CHANGELOG_FILE: &str = "stdchlg.json";
 const STD_CHANGELOG_LOCAL_FILE: &str = "stdchlg-local.json";
 const TOP_PICKS_EDITS_FILE: &str = ".tp_edits.md";
+const TOP_PICKS_BASELINE_PREFIX: &str = "// cg-tp-baseline:";
 
 pub(crate) fn syncmem_dir_path(repo_root: &str) -> PathBuf {
     Path::new(repo_root).join(COMFYGIT_DIR).join(SYNCMEM_DIR)
@@ -54,21 +55,68 @@ pub(crate) fn top_picks_edits_path(repo_root: &str) -> PathBuf {
     mem_dir_path(repo_root).join(TOP_PICKS_EDITS_FILE)
 }
 
-/// Load Top Picks edits from memory file (returns empty string if not exists)
+/// Load Top Picks edits from memory file (returns empty string if not exists).
+/// Strips the optional baseline marker line used to detect stale edits.
 pub(crate) fn load_top_picks_edits(repo_root: &str) -> String {
     let path = top_picks_edits_path(repo_root);
     if !path.is_file() {
         return String::new();
     }
-    fs::read_to_string(&path).unwrap_or_default()
+    let content = fs::read_to_string(&path).unwrap_or_default();
+    split_top_picks_edits_baseline(&content).1
 }
 
-/// Save Top Picks edits to memory file
+pub(crate) fn load_top_picks_edits_with_baseline(repo_root: &str) -> (Option<String>, String) {
+    let path = top_picks_edits_path(repo_root);
+    if !path.is_file() {
+        return (None, String::new());
+    }
+    let content = fs::read_to_string(&path).unwrap_or_default();
+    split_top_picks_edits_baseline(&content)
+}
+
+pub(crate) fn split_top_picks_edits_baseline(content: &str) -> (Option<String>, String) {
+    let mut lines = content.lines();
+    let Some(first) = lines.next() else {
+        return (None, String::new());
+    };
+    if let Some(tag) = first.strip_prefix(TOP_PICKS_BASELINE_PREFIX) {
+        let tag = tag.trim().to_string();
+        let body = lines.collect::<Vec<_>>().join("\n");
+        return ((!tag.is_empty()).then_some(tag), body);
+    }
+    (None, content.to_string())
+}
+
+/// Save Top Picks edits to memory file, tagging them with the current release baseline.
 pub(crate) fn save_top_picks_edits(repo_root: &str, content: &str) -> Result<()> {
     ensure_mem_dir(repo_root)?;
     let path = top_picks_edits_path(repo_root);
-    fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
+    let baseline = resolve_top_picks_baseline_tag(repo_root);
+    let mut rendered = String::new();
+    if let Some(tag) = baseline.filter(|tag| !tag.trim().is_empty()) {
+        rendered.push_str(TOP_PICKS_BASELINE_PREFIX);
+        rendered.push(' ');
+        rendered.push_str(tag.trim());
+        rendered.push('\n');
+    }
+    rendered.push_str(content);
+    fs::write(&path, rendered).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+/// Baseline tag for unreleased commits (last public release, else latest local tag).
+pub(crate) fn resolve_top_picks_baseline_tag(repo_root: &str) -> Option<String> {
+    crate::git_stt::last_rls_version(repo_root, None)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            crate::git_stt::latest_local_tag_with_cancel(repo_root, None)
+                .ok()
+                .flatten()
+        })
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
 }
 
 /// Clear Top Picks edits memory file (truncate to empty)

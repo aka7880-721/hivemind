@@ -215,133 +215,18 @@ Enjoy!
 
 </details>
 
-<details><summary>👀 What's new in v0.28.4 ...</summary>
-
-### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
-
-<sup>💬 Intro:</sup>  
-<sup>_This release brings this "Intro" section, and..._</sup>  
-
-#### **1. &nbsp;&nbsp;&nbsp;Ability to inject historical Top Picks/changelogs into README!**
-#### **2. &nbsp;&nbsp;&nbsp;Ability to inject only Top Picks (no changelogs)**
-#### **3. &nbsp;&nbsp;&nbsp;Changes default folder of historical changelogs to `.changelogs/history`**
-- This has been done to declutter the `.changelogs` folder, so user does not need to scroll down on GitHub page to see README.md summarizing changelog within `.changelogs` folder
-
-
-<sub>...  🎉 Enjoy!</sub>
-
-<br><br>
-
-<details><summary>👀 See previous changes...</summary>
-<br>
-<details><summary>v0-27-7 ...</summary>
-
-#### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
-- Now you can add, and edit your TP from TUI
-- Assigned shortcut `P`
-- New modal with full MD support
-- Fully implemented keyboard shortcuts (ctrl+a/c/v)
-- Fully implemented mouse action shortcuts (rightClick to paste/copy, doubleClick, click, drag&hold)
-
-#### **2. &nbsp;&nbsp;&nbsp;New ALT branch type!**
-- We all know the situation: 
-    - you "hit the wall", an obstacle to overcome to finish the feature in `dev` branch...
-    - you're on a junction, there are multiple possible approaches to take.
-- With the new `atl` type branch you can try them all
-- Fully implemented within ComfyGit eco-system
-    - easy to create via `cg new alt 1` (synced)
-    - or `cg new alt 2` (local-only)
-    - and even easier to merge via `cg br end`
-- To sum it up: ComfyGit now recognizes 4 type of branches:
-    - `x`
-    - `dev`
-    - `alt`
-    - `sub-alt`, that's right - sometimes there are obstactles within an obstacle :)
-
-#### **3. &nbsp;&nbsp;&nbsp;New `cg init` CLI command!**
-- adding a new project to ComfyGit have never been easier.
-- now it can be done from CLI via `cg init`!
-
-#### **4. &nbsp;&nbsp;&nbsp;New `cg merge local` CLI command!**
-- example synonyms: `cg mg ll`, `cg mrg loc`, `cg mg lcl`
-- there are use cases when local merge is needed, now it can be done via ComfyGit
-- `cg mg ll` starts an easy to navigate wizard where is hard to make any mistake
-
-#### **5. &nbsp;&nbsp;&nbsp;Misc**
-- fixed bad render within project tiles in Windows 11 terminals caused by win-specific unicode width.
-
-
-<sub>...  🎉 Enjoy!</sub>
-
-<br>
-</details>
-<details><summary>v0-26-0 ...</summary>
-
-## Changelog `v0.26.0` <sup><div align="end">🗓️ 2026-05-13</div></sup>
-
-### ✨ New in Auto-README 'What's new' inject!:
-
-#### 🧩 Features
-
-* Improve TopPicks section extraction and footer formatting in changelog markdown. Ensure proper handling of nested details.   _(a0deb22)_
-
----
-
-## 💬 General Improvements & Fixes:
-
-### 🐛 Fix(es)
-
-* Update "click here" changelog summary formatting with nbsp   _(da18d36)_
-
-### 🔧 Maintenance
-
-* CG app version bump to v0.26.0   _(cb8077c)_
-
-* Update ratatui-comfy-toaster to version 0.3.2 and add default progress bar settings in ToastEngine   _(e0aa8e8)_
-
-### ♻️ Refactor
-
-* Simplify file staging and commit logic for release process. Introduce dedicated functions for handling generated paths and staged changes, enhancing readability and maintainability. Add async support for README auto-injection confirmation.   _(a99b33c)_
-
-* Improve code readability by formatting multiline expressions and enhancing consistency in progress message handling.   _(d5731be)_
-
-### 📝 Other
-
-* Merge pull request #111 (via ComfyGit)   _(40f2e0b)_
-</details>
-</details>
-<br>
-
----
-<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://github.com/comfy-home/ComfyGit/releases/tag/v0.28.4)</sup>
-
----
-
-</details>
-
-
-
-
-
 ---
 
 <details><summary>📜 Table of Contents</summary>
   
 ## Table of Contents
 
-- [Changelog `v0.26.0` 🗓️ 2026-05-13](#changelog-v0260-️-2026-05-13)
-  - [✨ New in Auto-README 'What's new' inject!:](#-new-in-auto-readme-whats-new-inject)
-    - [🧩 Features](#-features)
-- [💬 General Improvements \& Fixes:](#-general-improvements--fixes)
-  - [🐛 Fix(es)](#-fixes)
-  - [🔧 Maintenance](#-maintenance)
-  - [♻️ Refactor](#️-refactor)
-  - [📝 Other](#-other)
 - [Table of Contents](#table-of-contents)
 - [Overview](#overview)
 - [Features](#features)
   - [🎯 Core Capabilities](#-core-capabilities)
   - [🚀 Advanced Features](#-advanced-features)
+  - [🌍 Multi-Language Version Targets (v0.30+)](#-multi-language-version-targets-v030)
 - [Installation](#installation)
   - [From Release Page (Recommended)](#from-release-page-recommended)
     - [Windows](#windows)
@@ -367,6 +252,7 @@ Enjoy!
   - [Dashboard](#dashboard)
   - [Project Settings](#project-settings)
     - [General Tab](#general-tab)
+    - [Changelogs Tab](#changelogs-tab)
     - [Distro Tab](#distro-tab)
     - [RlsQd Tab (Release QuickDownloads)](#rlsqd-tab-release-quickdownloads)
   - [Branch Workflows](#branch-workflows)
@@ -380,6 +266,7 @@ Enjoy!
   - [Standard Changelog](#standard-changelog)
   - [ReleaseNOW Changelog](#releasenow-changelog)
   - [Top Picks](#top-picks)
+  - [README “What’s new” injection](#readme-whats-new-injection)
 - [Branching Workflows](#branching-workflows)
   - [Branch Tree Visualization](#branch-tree-visualization)
   - [Workflow: Start New Feature](#workflow-start-new-feature)
@@ -417,8 +304,9 @@ Enjoy!
 Whether you're managing a simple single-package project or a complex multi-scope monorepo, ComfyGit adapts to your workflow with flexible project configurations and intelligent automation.
 
 > [!NOTE]
-> In the current version, **ComfyGit** supports **Rust** and **NJS**.  
-> Do you want to see more supported programming languages? Request [HERE](https://github.com/comfy-home/ComfyGit/discussions/127)  
+> **ComfyGit** supports **20+ version manifest formats** across Rust, Node/TypeScript, Python, Go, Java, .NET, mobile, and many others — not only Rust and Node.  
+> See the wiki: [Supported languages & version files](wiki/supported-lang-and-ver-files.md) for the full list, key paths, and limitations.  
+> Want another ecosystem? Request it [here](https://github.com/comfy-home/ComfyGit/discussions/127).
 
 ---
 
@@ -427,7 +315,7 @@ Whether you're managing a simple single-package project or a complex multi-scope
 ### 🎯 Core Capabilities
 
 - **🖥️ Interactive TUI** — Beautiful terminal interface with mouse support, keyboard navigation, and real-time previews
-- **📦 Version Management** — Automated SemVer/CalVer bumping with target file updates (Cargo.toml, package.json, etc.)
+- **📦 Version Management** — Automated SemVer/CalVer bumping with updates to JSON, TOML, YAML, XML, Gradle, CMake, `go.mod`, `mix.exs`, `Package.swift`, Cabal, and more (see [supported manifests](wiki/supported-lang-and-ver-files.md))
 - **🌳 Smart Branching** — Visual branch trees, parent/child navigation, and guided merge workflows
 - **📝 Changelog Generation** — Multiple formats: Standard, ReleaseNOW (with QuickDownloads), and Top Picks
 - **🔧 GitHub Integration** — PR creation, merge management, and release automation
@@ -437,10 +325,27 @@ Whether you're managing a simple single-package project or a complex multi-scope
 
 - **Multi-Scope Projects** — Manage branched projects with different version schemes per scope
 - **Shell Integration** — `cg cd <alias>` command to jump to any project from anywhere
+- **Advanced Alias** — Optional sub-aliases (e.g. `cg cd myapp dist`) for paths beyond the project root; enable in **Project Settings → General**
+- **`cg init`** — Register a new project from the CLI with automatic manifest detection
 - **Commit Management** — Rename and safely delete commits with revert automation
 - **Variator Storage** — Custom key-value storage per project for automation scripts
 - **ReleaseNOW** — Generate release-ready changelogs with QuickDownloads integration
 - **Top Picks** — Highlight significant improvements in a dedicated release summary section
+- **Top Picks Editor** — Edit Top Picks in the TUI (`P`); edits persist until the next release
+- **README auto-injection** — Inject expandable “What’s new” blocks into `README.md` (Top Picks only, historical releases, nested previous changes)
+
+### 🌍 Multi-Language Version Targets (v0.30+)
+
+ComfyGit can **read, bump, and auto-detect** version fields in many ecosystems. Highlights:
+
+| Category            | Examples                                                                                                                                                             |
+| ---------------------| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Structured config   | `Cargo.toml`, `package.json`, `composer.json`, `deno.json`, `pyproject.toml`, `package.yaml`, `pubspec.yaml`, `shard.yml`, `pom.xml`, `*.csproj`                     |
+| DSL / build scripts | `go.mod`, `build.gradle(.kts)`, `build.sbt`, `mix.exs`, `Package.swift`, `project.clj`, `configure.ac`, `meson.build`                                                |
+| Native formats      | `DESCRIPTION` (R), `*.cabal`, `Gemfile` / `*.gemspec`, `CMakeLists.txt`, `Makefile`, `Makefile.PL`, `MODULE.bazel`, `*.plist`, `*.nimble`, `*.rockspec`, `META.json` |
+| Universal           | `VERSION` / plain version files                                                                                                                                      |
+
+Run **`cg init`** in a repo root to scan for manifests (including common monorepo paths like `electron/package.json` and `packages/*/package.json`). Use **`format: auto`** or pick a specific format in project settings. Full reference: [wiki/supported-lang-and-ver-files.md](wiki/supported-lang-and-ver-files.md).
 
 >[!TIP]
 > Make sure to visit [ComfyGit's WIKI](https://github.com/comfy-home/ComfyGit/wiki)
@@ -558,7 +463,15 @@ comfygit
 
 ### 2. Add Your First Project
 
-In the TUI:
+**From the CLI** (in your repository root):
+
+```bash
+cg init
+```
+
+ComfyGit scans for common version manifests (`Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`, and many more) and walks you through setup.
+
+**From the TUI:**
 1. Navigate to **Projects** tab
 2. Press `n` or click **New Project**
 3. Follow the wizard to configure your project
@@ -594,10 +507,12 @@ In the TUI Overview, select your project and press `C` to **Generate Changelog**
 | Command | Description |
 |---------|-------------|
 | `cg` / `comfygit` | Launch interactive TUI |
+| `cg init` | Register the current directory as a ComfyGit project (detects version manifests) |
 | `cg -v` / `--version` | Show version and GitHub update status |
 | `cg pwd <alias>` | Print configured project root path |
 | `cg pwd -all` | Print all configured repo roots |
 | `cg cd <alias>` | Change directory to project root (requires shell integration) |
+| `cg cd <alias> <sub>` | Jump to a configured advanced sub-alias path (e.g. `cg cd myapp dist`) |
 | `cg install-shell` | Install bash/zsh/fish/pwsh integration |
 | `cg uninstall-shell` | Remove shell integration |
 | `cg v <alias>` | Show project version, last bump, and release info |
@@ -674,7 +589,13 @@ Access via **Projects** → **Project Settings** (or press `i` on a project).
 
 #### General Tab
 - **Alias** — Short name for `cg cd <alias>`
+- **Advanced alias** — Optional sub-aliases (`dist`, `ui`, or custom paths) for `cg cd <alias> <sub>`
 - **Custom Main Branch** — Override default main branch name
+
+#### Changelogs Tab
+- Standard / ReleaseNOW changelog options
+- **README injection** — enable row, historical depth, inject Top Picks only
+- Wrap detailed changelog when Top Picks are present
 - **Changelog Settings** — Enable/configure changelog generation
 - **Mini Commit Hashes** — Compact hash display in changelogs
 
@@ -816,6 +737,8 @@ Extended changelog format for GitHub releases with optional QuickDownloads integ
 
 A dedicated section for highlighting the most significant improvements in a release.
 
+**Top Picks Editor (TUI):** Press **`P`** on the dashboard to open the editor. Define headers and bullets in a simple markdown-like format; saves to `.comfygit/mem/.tp_edits.md` until the next ReleaseNOW run. The editor seeds from **unreleased** `top` commits since the last public release (not stale picks from older releases).
+
 **Syntax in commit messages:**
 ```bash
 # Priority 1-20 (top1 = highest position)
@@ -849,6 +772,15 @@ git commit -m "feat: New feature; top: *Another important improvement"
 ```
 
 **Important:** Top Picks configuration commits don't appear in the standard changelog—only in the Top Picks section.
+
+### README “What’s new” injection
+
+Optional **ReleaseNOW** step that injects a collapsible HTML `<details>` block into `README.md` (configure row, depth, and Top-Picks-only mode in **Project Settings → Changelogs**).
+
+- Injects current release Top Picks and/or changelog content
+- Can embed **previous releases** in a nested “See previous changes” section
+- **Replaces** older ComfyGit auto-injected blocks so duplicate “What’s new” sections do not accumulate
+- Commits and pushes the updated README when ReleaseNOW completes
 
 ---
 

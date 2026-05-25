@@ -91,7 +91,8 @@ use crate::{
     },
     git_br::{BranchNameOption, semver_dev_branch_canonical_label},
     mmr::{
-        load_merged_std_changelog_memory, load_top_picks_edits, record_std_changelog_created,
+        load_merged_std_changelog_memory, load_top_picks_edits, load_top_picks_edits_with_baseline,
+        record_std_changelog_created, resolve_top_picks_baseline_tag,
         record_std_changelog_error, record_std_changelog_generated, record_std_changelog_postponed,
         save_top_picks_edits,
     },
@@ -3381,12 +3382,12 @@ impl App {
         // Get the repo root for the active release/dashboard scope.
         let repo_root = scope.repo_root.as_str();
 
-        // First, check if there's a memory file with edits
-        let memory_content = load_top_picks_edits(repo_root);
-        let has_memory_edits = !memory_content.trim().is_empty();
+        let current_baseline = resolve_top_picks_baseline_tag(repo_root);
+        let (saved_baseline, memory_content) = load_top_picks_edits_with_baseline(repo_root);
+        let memory_matches_baseline = saved_baseline.as_deref() == current_baseline.as_deref();
+        let has_memory_edits = !memory_content.trim().is_empty() && memory_matches_baseline;
 
         if has_memory_edits {
-            // Use the memory file content directly
             self.top_picks_editor_dialog = Some(changelog_tp::TopPicksEditorDialog::with_text(
                 &memory_content,
             ));
@@ -3394,6 +3395,9 @@ impl App {
                 "Top Picks editor opened with saved edits. These will be applied during release.",
             );
         } else {
+            if !memory_content.trim().is_empty() && !memory_matches_baseline {
+                let _ = crate::mmr::clear_top_picks_edits(repo_root);
+            }
             // No memory edits, extract from commits as before
             let mut existing_picks = project.manual_top_picks.clone();
 
@@ -3427,10 +3431,9 @@ impl App {
     ) -> Result<Vec<changelog_tp::TopPick>> {
         let repo_root = &scope.repo_root;
 
-        // Get the latest tag to determine commits since last release
-        let revision_range = match latest_local_tag_with_cancel(repo_root, None)? {
+        let revision_range = match resolve_top_picks_baseline_tag(repo_root) {
             Some(tag) => format!("{}..HEAD", tag),
-            None => "HEAD".to_string(), // No tags yet, use all commits
+            None => return Ok(Vec::new()),
         };
 
         let pathspecs = scope.git_pathspecs();
@@ -7387,7 +7390,7 @@ impl ScopeDraft {
         }
 
         let target_key = self.target_key.value.trim();
-        if target_key.is_empty() {
+        if target_key.is_empty() && !crate::targets::is_plain_version_filename(target_path) {
             bail!("scope '{}' target key cannot be empty", name);
         }
 
@@ -9425,11 +9428,109 @@ pub(crate) fn rotate_scope_kind(scope_kind: BranchScopeKind, delta: i32) -> Bran
     }
 }
 
-fn target_key_presets(path: &str) -> [&'static str; 3] {
-    if path.trim().to_ascii_lowercase().ends_with(".toml") {
-        ["package.version", "workspace.package.version", "version"]
-    } else {
-        ["version", "package.version", "workspace.package.version"]
+pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
+    let path_lower = path.trim().to_ascii_lowercase();
+    let file_name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    if crate::targets::is_plain_version_filename(path) {
+        return &["", ".", "@"];
+    }
+    if crate::targets::is_gomod_filename(path) {
+        return &["comment", "require."];
+    }
+    if file_name == "gemfile" {
+        return &["version", "gem."];
+    }
+    if file_name.ends_with(".gemspec") {
+        return &["version", "gem."];
+    }
+    if file_name.ends_with(".csproj") {
+        return &[
+            "PropertyGroup.Version",
+            "PropertyGroup.PackageVersion",
+            "Version",
+        ];
+    }
+    if file_name == "pubspec.yaml" {
+        return &["version", "appVersion"];
+    }
+    if file_name == "project.toml" {
+        return &["project.version", "version"];
+    }
+    if file_name == "description" {
+        return &["Version"];
+    }
+    if file_name == "cmakelists.txt" {
+        return &["project", "VERSION", "PROJECT_VERSION"];
+    }
+    if file_name == "makefile" || file_name == "gnumakefile" {
+        return &["VERSION", "version"];
+    }
+    if file_name == "build.gradle" || file_name == "build.gradle.kts" {
+        return &["version", "versionName", "versionCode"];
+    }
+    if file_name == "project.clj" {
+        return &["defproject", "version"];
+    }
+    if file_name.ends_with(".plist") {
+        return &["CFBundleShortVersionString", "CFBundleVersion"];
+    }
+    if file_name == "package.swift" {
+        return &["version", "packageVersion", "comment"];
+    }
+    if file_name == "mix.exs" {
+        return &["version"];
+    }
+    if file_name == "build.sbt" {
+        return &["version", "ThisBuild / version"];
+    }
+    if file_name.ends_with(".cabal") {
+        return &["version", "name"];
+    }
+    if file_name == "configure.ac" {
+        return &["AC_INIT"];
+    }
+    if file_name == "meson.build" {
+        return &["project", "version"];
+    }
+    if file_name.ends_with(".nimble") {
+        return &["version"];
+    }
+    if file_name.ends_with(".rockspec") {
+        return &["version"];
+    }
+    if file_name == "composer.json" || file_name == "deno.json" || file_name == "meta.json" {
+        return &["version", "package.version"];
+    }
+    if file_name == "package.yaml" || file_name == "shard.yml" {
+        return &["version"];
+    }
+    if file_name.eq_ignore_ascii_case("makefile.pl") {
+        return &["VERSION", "version"];
+    }
+    if file_name.eq_ignore_ascii_case("module.bazel") {
+        return &["module", "version"];
+    }
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase());
+    match extension.as_deref() {
+        Some("toml") if path_lower.contains("pyproject") => {
+            &["project.version", "tool.poetry.version", "version"]
+        }
+        Some("toml") if path_lower.ends_with("project.toml") => {
+            &["project.version", "version"]
+        }
+        Some("toml") => &["package.version", "workspace.package.version", "version"],
+        Some("json") => &["version", "package.version", "workspace.package.version"],
+        Some("yaml") | Some("yml") => &["version", "appVersion", "chart.version"],
+        Some("xml") => &["project.version", "version"],
+        Some("cfg") => &["metadata.version", "version"],
+        _ => &["version", "package.version", "workspace.package.version"],
     }
 }
 
@@ -9439,8 +9540,8 @@ pub(crate) fn default_target_key_for_path(path: &str) -> &'static str {
 
 pub(crate) fn target_key_is_custom(path: &str, value: &str) -> bool {
     !target_key_presets(path)
-        .into_iter()
-        .any(|preset| preset == value.trim())
+        .iter()
+        .any(|preset| preset == &value.trim())
 }
 
 pub(crate) fn cycle_target_key_preset(path: &str, current: &str, delta: i32) -> String {

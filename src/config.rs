@@ -1032,6 +1032,34 @@ pub enum TargetFormat {
     Auto,
     Json,
     Toml,
+    Yaml,
+    Xml,
+    Ini,
+    Plain,
+    #[serde(rename = "go_mod")]
+    GoMod,
+    Ruby,
+    #[serde(rename = "r_description")]
+    RDescription,
+    Gradle,
+    CMake,
+    Makefile,
+    Plist,
+    Clojure,
+    #[serde(rename = "swift_package")]
+    SwiftPackage,
+    #[serde(rename = "elixir_mix")]
+    ElixirMix,
+    #[serde(rename = "scala_sbt")]
+    ScalaSbt,
+    Cabal,
+    Autoconf,
+    Meson,
+    Nimble,
+    Rockspec,
+    #[serde(rename = "makefile_pl")]
+    MakefilePl,
+    Bazel,
 }
 
 impl TargetFormat {
@@ -1040,6 +1068,28 @@ impl TargetFormat {
             TargetFormat::Auto => "Auto",
             TargetFormat::Json => "JSON",
             TargetFormat::Toml => "TOML",
+            TargetFormat::Yaml => "YAML",
+            TargetFormat::Xml => "XML",
+            TargetFormat::Ini => "INI",
+            TargetFormat::Plain => "Plain version file",
+            TargetFormat::GoMod => "Go module (go.mod)",
+            TargetFormat::Ruby => "Ruby (Gemfile / gemspec)",
+            TargetFormat::RDescription => "R DESCRIPTION",
+            TargetFormat::Gradle => "Gradle",
+            TargetFormat::CMake => "CMake",
+            TargetFormat::Makefile => "Makefile",
+            TargetFormat::Plist => "Property list (plist)",
+            TargetFormat::Clojure => "Clojure (project.clj)",
+            TargetFormat::SwiftPackage => "Swift (Package.swift)",
+            TargetFormat::ElixirMix => "Elixir (mix.exs)",
+            TargetFormat::ScalaSbt => "Scala (build.sbt)",
+            TargetFormat::Cabal => "Haskell (Cabal)",
+            TargetFormat::Autoconf => "Autoconf (configure.ac)",
+            TargetFormat::Meson => "Meson (meson.build)",
+            TargetFormat::Nimble => "Nim (.nimble)",
+            TargetFormat::Rockspec => "LuaRocks (.rockspec)",
+            TargetFormat::MakefilePl => "Perl (Makefile.PL)",
+            TargetFormat::Bazel => "Bazel (MODULE.bazel)",
         }
     }
 }
