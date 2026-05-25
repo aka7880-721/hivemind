@@ -2,6 +2,153 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog `v0.30.7` <sup><div align="end">🗓️ 2026-05-25</div></sup>
+
+### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+
+<sup>💬 Intro:</sup>  
+<sup>_This release brings some bugfixes and most importantly enhances ComfyGit with support for over 20 eco-systems_</sup>  
+
+#### **1. &nbsp;&nbsp;&nbsp;Added support for most mainstream programming languages / eco-systems.**
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+
+### 🧩 Features
+
+* extend manifest detection to support additional version files and improve error messaging   _(0d449d6)_
+
+* add support for additional target formats including Yaml, Xml, Ini, and Plain   _(d7e6c63)_
+
+* implement support for reading and writing INI and YAML target formats, enhancing version file handling   _(d7e75aa)_
+
+* enhance target key presets to support additional file types including Gemfile, .gemspec, .csproj, and pubspec.yaml   _(0df9a5f)_
+
+* extend manifest detection to include .csproj and .gemspec files, and add support for go.mod and pubspec.yaml   _(1bd9a78)_
+
+* add support for Go module and Ruby target formats in configuration   _(4a6bf83)_
+
+* implement reading and writing for Go module and Ruby target formats, enhancing version file handling   _(bbe10ce)_
+
+* enhance target key presets to support additional file types including project.toml, description, cmakelists.txt, makefile, build.gradle, project.clj, and plist   _(2a399a1)_
+
+* expand manifest detection to include additional file types such as Project.toml, DESCRIPTION, CMakeLists.txt, Makefile, build.gradle, and plist   _(c2caf98)_
+
+* add support for additional target formats including R DESCRIPTION, Gradle, CMake, Makefile, Plist, and Clojure   _(fa76c64)_
+
+* add target_custom module to support custom target configurations   _(f2457c7)_
+
+* implement custom parsers for various build manifest formats including DESCRIPTION, CMake, Makefile, Gradle, Plist, and project.clj   _(afcf585)_
+
+* enhance target handling by adding support for RDescription, Gradle, CMake, Makefile, Plist, and Clojure formats   _(3a4ec9f)_
+
+* enhance target key presets to support additional build manifest formats including package.swift, mix.exs, build.sbt, cabal, and configure.ac   _(46ae493)_
+
+* extend manifest detection to include support for Cabal, Swift Package, Elixir Mix, Scala SBT, and Autoconf formats   _(d7e811d)_
+
+* add support for Swift Package, Elixir Mix, Scala SBT, Cabal, and Autoconf formats in target detection   _(5d9de1a)_
+
+* implement functions for extracting and writing values in Swift Package, Elixir Mix, and Scala SBT formats   _(ea8a638)_
+
+* add support for reading and writing values in Cabal, Autoconf, Swift Package, Elixir Mix, and Scala SBT formats   _(ed38d1d)_
+
+* enhance top picks editing by introducing baseline resolution and improved memory handling   _(7bad47f)_
+
+* add baseline tagging and improved loading/saving for Top Picks edits   _(66d0fed)_
+
+* implement function to remove all top-level auto-injected `<details>` blocks from README before inserting new content   _(2646e6e)_
+
+* extend target_key_presets function to support additional file formats for version retrieval   _(01feb32)_
+
+* add support for additional manifest file formats in version detection   _(e5a56a1)_
+
+* add new target formats Meson, Nimble, and Rockspec for enhanced version detection   _(4d2d206)_
+
+* implement functions for handling Meson, Nimble, and Rockspec file formats, including version extraction and writing capabilities   _(b5fb9b8)_
+
+* enhance target handling by adding support for Meson, Nimble, and Rockspec formats in version writing and detection   _(c083c6f)_
+
+* extend target_key_presets function to support Makefile and Bazel module formats for version retrieval   _(365c648)_
+
+* implement nested manifest detection for Electron and workspace directories, adding support for Makefile.PL and MODULE.bazel formats   _(7f7491c)_
+
+* add Makefile.PL and Bazel formats to TargetFormat enum for enhanced version handling   _(48d3135)_
+
+* implement functions for handling Makefile.PL and MODULE.bazel formats, including version extraction and writing capabilities   _(3ec17af)_
+
+* add support for Makefile.PL and Bazel formats in version reading and writing functions   _(538c8f7)_
+
+### 🐛 Fix(es)
+
+* enhance target key validation and improve target key presets for various file types   _(7149201)_
+
+* improve target key validation to ensure it is not empty for non-plain version filenames   _(5e01c0f)_
+
+* refine target key validation logic to require non-empty key for non-plain version filenames   _(ab8aae0)_
+
+* downgrade log crate version from 0.4.30 to 0.4.29 to resolve compatibility issues   _(3a9acd8)_
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.30.0   _(20a4850)_
+
+* CG app version bump to v0.30.1   _(5dcdb03)_
+
+* CG app version bump to v0.30.2   _(e6f9bc2)_
+
+* CG app version bump to v0.30.3   _(48fedd0)_
+
+* CG app version bump to v0.30.4   _(3a45174)_
+
+* CG app version bump to v0.30.5   _(9cbc977)_
+
+* CG app version bump to v0.30.6   _(83c93cf)_
+
+* CG app version bump to v0.30.7   _(76cb441)_
+
+### ℹ️ Documentation
+
+* README update   _(85964f9)_
+
+* update README to include additional file formats for structured config, DSL scripts, and native formats   _(90b5923)_
+
+* update README to reflect new native formats and clarify manifest scanning for monorepos   _(6afab9a)_
+
+### 🎨 Visuals
+
+* format code for improved readability in cli_init.rs, adjusting line breaks and spacing   _(f9d40e3)_
+
+* simplify path formatting in test case for improved readability   _(8533919)_
+
+* improve code formatting for better readability in target_custom.rs by adjusting line breaks and spacing in function definitions and error messages   _(d0250b8)_
+
+* enhance code readability by adjusting line breaks and formatting in targets.rs   _(c7ce7d9)_
+
+### ♻️ Refactor
+
+* streamline imports and simplify target_key_presets function for toml file handling   _(50980e7)_
+
+### 📝 Other
+
+* Merge pull request #132 (via ComfyGit)   _(73672a8)_
+
+* Merge pull request #133 (via ComfyGit)   _(eef7bec)_
+
+* Merge pull request #134 (via ComfyGit)   _(7f357cd)_
+
+* Merge pull request #135 (via ComfyGit)   _(2faba19)_
+
+* Merge pull request #136 (via ComfyGit)   _(71157c1)_
+
+* Merge pull request #137 (via ComfyGit)   _(63325d5)_
+
+* Merge pull request #138 (via ComfyGit)   _(e7be830)_
+
+* Merge pull request #139 (via ComfyGit)   _(79f89f4)_
+
+---
+
 ## Changelog `v0.29.5` <sup><div align="end">🗓️ 2026-05-24</div></sup>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
