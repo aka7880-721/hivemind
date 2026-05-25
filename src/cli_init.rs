@@ -774,11 +774,17 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
         ("Project.toml", TargetFormat::Toml, "project.version"),
         ("pyproject.toml", TargetFormat::Toml, "project.version"),
         ("package.json", TargetFormat::Json, "version"),
+        ("composer.json", TargetFormat::Json, "version"),
+        ("deno.json", TargetFormat::Json, "version"),
+        ("META.json", TargetFormat::Json, "version"),
         ("go.mod", TargetFormat::GoMod, "comment"),
         ("pubspec.yaml", TargetFormat::Yaml, "version"),
+        ("package.yaml", TargetFormat::Yaml, "version"),
+        ("shard.yml", TargetFormat::Yaml, "version"),
         ("Gemfile", TargetFormat::Ruby, "version"),
         ("DESCRIPTION", TargetFormat::RDescription, "Version"),
         ("CMakeLists.txt", TargetFormat::CMake, "project"),
+        ("meson.build", TargetFormat::Meson, "project"),
         ("Makefile", TargetFormat::Makefile, "VERSION"),
         ("build.gradle", TargetFormat::Gradle, "version"),
         ("build.gradle.kts", TargetFormat::Gradle, "version"),
@@ -840,6 +846,18 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
             manifests.push(DetectedManifest {
                 relative_path: file_name.to_string(),
                 format: TargetFormat::Cabal,
+                default_key: "version".to_string(),
+            });
+        } else if lower.ends_with(".nimble") {
+            manifests.push(DetectedManifest {
+                relative_path: file_name.to_string(),
+                format: TargetFormat::Nimble,
+                default_key: "version".to_string(),
+            });
+        } else if lower.ends_with(".rockspec") {
+            manifests.push(DetectedManifest {
+                relative_path: file_name.to_string(),
+                format: TargetFormat::Rockspec,
                 default_key: "version".to_string(),
             });
         }

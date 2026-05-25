@@ -1102,6 +1102,227 @@ fn join_lines(lines: Vec<String>, had_trailing_newline: bool) -> Result<String> 
     Ok(rendered)
 }
 
+// --- Part 5: Meson, Nimble, LuaRocks rockspec ---
+
+pub(crate) fn is_meson_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("meson.build"))
+}
+
+pub(crate) fn is_nimble_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase().ends_with(".nimble"))
+        .unwrap_or(false)
+}
+
+pub(crate) fn is_rockspec_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase().ends_with(".rockspec"))
+        .unwrap_or(false)
+}
+
+pub(crate) fn extract_meson_value(content: &str, key_path: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case("project")
+        || key_path.eq_ignore_ascii_case("version")
+    {
+        for line in content.lines() {
+            if let Some(version) = parse_meson_version_line(line) {
+                return Ok(version);
+            }
+        }
+        return Err(anyhow!(
+            "meson.build does not contain project(..., version: '…') — use key 'project' or 'version'"
+        ));
+    }
+    Err(anyhow!("meson.build key path must be 'project' or 'version'"))
+}
+
+pub(crate) fn write_meson_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if !(key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case("project")
+        || key_path.eq_ignore_ascii_case("version"))
+    {
+        bail!("meson.build key path must be 'project' or 'version'");
+    }
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced {
+            if let Some(old) = parse_meson_version_line(line) {
+                updated.push_str(&replace_meson_version_line(line, &old, new_value));
+                replaced = true;
+                continue;
+            }
+        }
+        updated.push_str(line);
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("meson.build does not contain a version field"))
+    }
+}
+
+fn parse_meson_version_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let keyword_index = lower.find("version")?;
+    let before = trimmed[..keyword_index].trim();
+    if !before.is_empty() && !before.ends_with(',') && !before.ends_with('(') {
+        return None;
+    }
+    let after_keyword = trimmed[keyword_index + "version".len()..].trim_start();
+    let after_colon = after_keyword.strip_prefix(':')?.trim_start();
+    parse_quoted_assignment_value(after_colon)
+}
+
+fn replace_meson_version_line(line: &str, old_value: &str, new_value: &str) -> String {
+    if line.contains(&format!("'{old_value}'")) {
+        return line.replace(&format!("'{old_value}'"), &format!("'{new_value}'"));
+    }
+    if line.contains(&format!("\"{old_value}\"")) {
+        return line.replace(&format!("\"{old_value}\""), &format!("\"{new_value}\""));
+    }
+    line.replace(old_value, new_value)
+}
+
+pub(crate) fn extract_nimble_value(content: &str, key_path: &str) -> Result<String> {
+    extract_assignment_value(content, key_path, "version", "Nim .nimble")
+}
+
+pub(crate) fn write_nimble_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    write_assignment_value(content, key_path, "version", new_value, "Nim .nimble")
+}
+
+pub(crate) fn extract_rockspec_value(content: &str, key_path: &str) -> Result<String> {
+    extract_assignment_value(content, key_path, "version", "LuaRocks .rockspec")
+}
+
+pub(crate) fn write_rockspec_value(content: &str, key_path: &str, new_value: &str) -> Result<String> {
+    write_assignment_value(content, key_path, "version", new_value, "LuaRocks .rockspec")
+}
+
+fn extract_assignment_value(
+    content: &str,
+    key_path: &str,
+    default_field: &str,
+    manifest_label: &str,
+) -> Result<String> {
+    let field = normalize_assignment_field(key_path, default_field)?;
+    for line in content.lines() {
+        if let Some(value) = parse_assignment_line(line, field) {
+            return Ok(value);
+        }
+    }
+    Err(anyhow!("{manifest_label} does not define {field}"))
+}
+
+fn write_assignment_value(
+    content: &str,
+    key_path: &str,
+    default_field: &str,
+    new_value: &str,
+    manifest_label: &str,
+) -> Result<String> {
+    let field = normalize_assignment_field(key_path, default_field)?;
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_assignment_line(line, field).is_some() {
+            let indent: String = line.chars().take_while(|ch| ch.is_whitespace()).collect();
+            updated.push_str(&format!("{indent}{field} = \"{new_value}\""));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("{manifest_label} does not define {field}"))
+    }
+}
+
+fn normalize_assignment_field<'a>(key_path: &str, default_field: &'a str) -> Result<&'a str> {
+    let key_path = key_path.trim();
+    if key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case(default_field)
+    {
+        return Ok(default_field);
+    }
+    if key_path == default_field {
+        return Ok(default_field);
+    }
+    bail!("key path must be '{}'", default_field);
+}
+
+fn parse_assignment_line(line: &str, field: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let (name, value) = trimmed.split_once('=')?;
+    if name.trim() != field {
+        return None;
+    }
+    parse_quoted_assignment_value(value.trim())
+}
+
+fn parse_quoted_assignment_value(token: &str) -> Option<String> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let trimmed = trimmed.trim_end_matches(',').trim();
+    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+    {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if inner.is_empty() {
+            return None;
+        }
+        return Some(inner.to_string());
+    }
+    let end = trimmed
+        .find(|character: char| character.is_whitespace() || character == ',')
+        .unwrap_or(trimmed.len());
+    let bare = trimmed[..end].trim();
+    if bare.is_empty() {
+        return None;
+    }
+    Some(bare.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1211,5 +1432,32 @@ mod tests {
         assert_eq!(read, "1.2.3");
         let updated = write_autoconf_value(content, "AC_INIT", "2.0.0").expect("write");
         assert!(updated.contains("[2.0.0]"));
+    }
+
+    #[test]
+    fn meson_project_version_round_trip() {
+        let content = "project('demo', 'c',\n  version : '1.2.3',\n)\n";
+        let read = extract_meson_value(content, "project").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_meson_value(content, "project", "2.0.0").expect("write");
+        assert!(updated.contains("'2.0.0'"));
+    }
+
+    #[test]
+    fn nimble_version_round_trip() {
+        let content = "version = \"1.2.3\"\nauthor = \"demo\"\n";
+        let read = extract_nimble_value(content, "version").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_nimble_value(content, "version", "2.0.0").expect("write");
+        assert!(updated.contains("version = \"2.0.0\""));
+    }
+
+    #[test]
+    fn rockspec_version_round_trip() {
+        let content = "package = \"demo\"\nversion = \"1.2.3-1\"\n";
+        let read = extract_rockspec_value(content, "version").expect("read");
+        assert_eq!(read, "1.2.3-1");
+        let updated = write_rockspec_value(content, "version", "2.0.0").expect("write");
+        assert!(updated.contains("version = \"2.0.0\""));
     }
 }
