@@ -1054,6 +1054,9 @@ pub enum TargetFormat {
     ScalaSbt,
     Cabal,
     Autoconf,
+    Meson,
+    Nimble,
+    Rockspec,
 }
 
 impl TargetFormat {
@@ -1079,6 +1082,9 @@ impl TargetFormat {
             TargetFormat::ScalaSbt => "Scala (build.sbt)",
             TargetFormat::Cabal => "Haskell (Cabal)",
             TargetFormat::Autoconf => "Autoconf (configure.ac)",
+            TargetFormat::Meson => "Meson (meson.build)",
+            TargetFormat::Nimble => "Nim (.nimble)",
+            TargetFormat::Rockspec => "LuaRocks (.rockspec)",
         }
     }
 }
