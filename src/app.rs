@@ -9454,6 +9454,27 @@ pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
     if file_name == "pubspec.yaml" {
         return &["version", "appVersion"];
     }
+    if file_name == "project.toml" {
+        return &["project.version", "version"];
+    }
+    if file_name == "description" {
+        return &["Version"];
+    }
+    if file_name == "cmakelists.txt" {
+        return &["project", "VERSION", "PROJECT_VERSION"];
+    }
+    if file_name == "makefile" || file_name == "gnumakefile" {
+        return &["VERSION", "version"];
+    }
+    if file_name == "build.gradle" || file_name == "build.gradle.kts" {
+        return &["version", "versionName", "versionCode"];
+    }
+    if file_name == "project.clj" {
+        return &["defproject", "version"];
+    }
+    if file_name.ends_with(".plist") {
+        return &["CFBundleShortVersionString", "CFBundleVersion"];
+    }
     let extension = std::path::Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -9461,6 +9482,9 @@ pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
     match extension.as_deref() {
         Some("toml") if path_lower.contains("pyproject") => {
             &["project.version", "tool.poetry.version", "version"]
+        }
+        Some("toml") if path_lower.ends_with("project.toml") => {
+            &["project.version", "version"]
         }
         Some("toml") => &["package.version", "workspace.package.version", "version"],
         Some("json") => &["version", "package.version", "workspace.package.version"],
