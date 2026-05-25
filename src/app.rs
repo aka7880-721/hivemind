@@ -9427,8 +9427,32 @@ pub(crate) fn rotate_scope_kind(scope_kind: BranchScopeKind, delta: i32) -> Bran
 
 pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
     let path_lower = path.trim().to_ascii_lowercase();
+    let file_name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_ascii_lowercase();
     if crate::targets::is_plain_version_filename(path) {
         return &["", ".", "@"];
+    }
+    if crate::targets::is_gomod_filename(path) {
+        return &["comment", "require."];
+    }
+    if file_name == "gemfile" {
+        return &["version", "gem."];
+    }
+    if file_name.ends_with(".gemspec") {
+        return &["version", "gem."];
+    }
+    if file_name.ends_with(".csproj") {
+        return &[
+            "PropertyGroup.Version",
+            "PropertyGroup.PackageVersion",
+            "Version",
+        ];
+    }
+    if file_name == "pubspec.yaml" {
+        return &["version", "appVersion"];
     }
     let extension = std::path::Path::new(path)
         .extension()

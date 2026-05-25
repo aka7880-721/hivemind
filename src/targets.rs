@@ -164,6 +164,12 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
         TargetFormat::Xml => write_xml_value(&target.path, &content, &target.key_path, new_version),
         TargetFormat::Ini => write_ini_value(&target.path, &content, &target.key_path, new_version),
         TargetFormat::Plain => write_plain_value(&target.path, &content, new_version),
+        TargetFormat::GoMod => {
+            write_gomod_value(&target.path, &content, &target.key_path, new_version)
+        }
+        TargetFormat::Ruby => {
+            write_ruby_value(&target.path, &content, &target.key_path, new_version)
+        }
         TargetFormat::Auto => bail!("cannot write target with unresolved format"),
     }
 }
@@ -183,6 +189,8 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
         TargetFormat::Xml => extract_xml_value(&content, key_path)?,
         TargetFormat::Ini => extract_ini_value(&content, key_path)?,
         TargetFormat::Plain => extract_plain_value(&content, key_path)?,
+        TargetFormat::GoMod => extract_gomod_value(&content, key_path)?,
+        TargetFormat::Ruby => extract_ruby_value(path, &content, key_path)?,
         TargetFormat::Auto => unreachable!(),
     };
 
@@ -225,6 +233,22 @@ fn build_bump_scope(
     })
 }
 
+pub(crate) fn is_gomod_filename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("go.mod"))
+}
+
+pub(crate) fn is_ruby_manifest_filename(path: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path);
+    file_name.eq_ignore_ascii_case("Gemfile")
+        || file_name.to_ascii_lowercase().ends_with(".gemspec")
+}
+
 pub(crate) fn is_plain_version_filename(path: &str) -> bool {
     let file_name = Path::new(path)
         .file_name()
@@ -240,6 +264,12 @@ pub(crate) fn is_plain_version_filename(path: &str) -> bool {
 fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
     if is_plain_version_filename(path) {
         return Ok(TargetFormat::Plain);
+    }
+    if is_gomod_filename(path) {
+        return Ok(TargetFormat::GoMod);
+    }
+    if is_ruby_manifest_filename(path) {
+        return Ok(TargetFormat::Ruby);
     }
 
     let extension = Path::new(path)
@@ -264,14 +294,416 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
                 Ok(TargetFormat::Xml)
             } else if load_ini(content).is_ok() {
                 Ok(TargetFormat::Ini)
+            } else if extract_gomod_value(content, "comment").is_ok() {
+                Ok(TargetFormat::GoMod)
+            } else if extract_ruby_value(path, content, "version").is_ok() {
+                Ok(TargetFormat::Ruby)
             } else if extract_plain_value(content, "").is_ok() {
                 Ok(TargetFormat::Plain)
             } else {
                 Err(anyhow!(
-                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, plain version file)"
+                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, plain version file)"
                 ))
             }
         }
+    }
+}
+
+enum GoModKey<'a> {
+    Comment,
+    Require(&'a str),
+}
+
+fn parse_gomod_key_path(key_path: &str) -> Result<GoModKey<'_>> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() || key_path == "@" || key_path == "." || key_path == "comment" {
+        return Ok(GoModKey::Comment);
+    }
+    if let Some(module) = key_path.strip_prefix("require.") {
+        let module = module.trim();
+        if module.is_empty() {
+            bail!("go.mod require key path must be require.<module path>");
+        }
+        return Ok(GoModKey::Require(module));
+    }
+    bail!("go.mod key path must be 'comment' or 'require.<module path>'");
+}
+
+fn extract_gomod_value(content: &str, key_path: &str) -> Result<String> {
+    match parse_gomod_key_path(key_path)? {
+        GoModKey::Comment => extract_gomod_comment_version(content),
+        GoModKey::Require(module) => extract_gomod_require_version(content, module),
+    }
+}
+
+fn write_gomod_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
+    let updated = match parse_gomod_key_path(key_path)? {
+        GoModKey::Comment => write_gomod_comment_version(content, new_value)?,
+        GoModKey::Require(module) => write_gomod_require_version(content, module, new_value)?,
+    };
+    fs::write(path, updated).with_context(|| format!("failed to write {}", path))?;
+    Ok(())
+}
+
+fn extract_gomod_comment_version(content: &str) -> Result<String> {
+    content
+        .lines()
+        .find_map(parse_gomod_comment_line)
+        .ok_or_else(|| {
+            anyhow!(
+                "go.mod has no // version comment; add '// version 1.2.3' after the module line or use require.<module>"
+            )
+        })
+}
+
+fn parse_gomod_comment_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("//") {
+        return None;
+    }
+    let rest = trimmed[2..].trim();
+    let (keyword, version) = rest.split_once(|character: char| character == ':' || character.is_whitespace())?;
+    if !keyword.eq_ignore_ascii_case("version") {
+        return None;
+    }
+    let version = version.trim();
+    if version.is_empty() {
+        return None;
+    }
+    Some(version.to_string())
+}
+
+fn write_gomod_comment_version(content: &str, new_value: &str) -> Result<String> {
+    let mut lines: Vec<String> = content.lines().map(ToOwned::to_owned).collect();
+    let had_trailing_newline = content.ends_with('\n');
+    for line in &mut lines {
+        if parse_gomod_comment_line(line).is_some() {
+            *line = format!("// version {new_value}");
+            return join_gomod_lines(lines, had_trailing_newline);
+        }
+    }
+
+    let insert_at = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("module "))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    lines.insert(insert_at, format!("// version {new_value}"));
+    join_gomod_lines(lines, had_trailing_newline)
+}
+
+fn join_gomod_lines(lines: Vec<String>, had_trailing_newline: bool) -> Result<String> {
+    let mut rendered = lines.join("\n");
+    if had_trailing_newline {
+        rendered.push('\n');
+    }
+    Ok(rendered)
+}
+
+fn split_gomod_require_entry(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim().trim_end_matches(',');
+    if trimmed.is_empty() || trimmed.starts_with("//") {
+        return None;
+    }
+    let mut parts = trimmed.split_whitespace();
+    let module = parts.next()?;
+    let version = parts.next()?;
+    Some((module, version))
+}
+
+fn extract_gomod_require_version(content: &str, module: &str) -> Result<String> {
+    let mut in_block = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("require ") && !trimmed.starts_with("require (") {
+            if let Some(require_line) = trimmed.strip_prefix("require ")
+                && let Some((entry_module, version)) = split_gomod_require_entry(require_line.trim())
+                && entry_module == module
+            {
+                return Ok(version.to_string());
+            }
+            continue;
+        }
+        if trimmed == "require (" {
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            if trimmed == ")" {
+                in_block = false;
+                continue;
+            }
+            if let Some((entry_module, version)) = split_gomod_require_entry(trimmed)
+                && entry_module == module
+            {
+                return Ok(version.to_string());
+            }
+        }
+    }
+    Err(anyhow!("missing require entry for module '{}'", module))
+}
+
+fn write_gomod_require_version(content: &str, module: &str, new_value: &str) -> Result<String> {
+    let mut updated = String::new();
+    let mut in_block = false;
+    let mut replaced = false;
+
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        let trimmed = line.trim();
+        if trimmed.starts_with("require ")
+            && !trimmed.starts_with("require (")
+            && let Some((entry_module, version)) =
+                split_gomod_require_entry(trimmed.strip_prefix("require ").unwrap_or("").trim())
+            && entry_module == module
+        {
+            updated.push_str(&line.replace(version, new_value));
+            replaced = true;
+            continue;
+        }
+        if trimmed == "require (" {
+            in_block = true;
+            updated.push_str(line);
+            continue;
+        }
+        if in_block {
+            if let Some((entry_module, version)) = split_gomod_require_entry(trimmed)
+                && entry_module == module
+            {
+                updated.push_str(&line.replace(version, new_value));
+                replaced = true;
+                continue;
+            }
+            if trimmed == ")" {
+                in_block = false;
+            }
+        }
+        updated.push_str(line);
+    }
+
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("missing require entry for module '{}'", module))
+    }
+}
+
+fn extract_ruby_value(path: &str, content: &str, key_path: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if let Some(gem_name) = key_path.strip_prefix("gem.") {
+        let gem_name = gem_name.trim();
+        if gem_name.is_empty() {
+            bail!("Ruby gem key path must be gem.<name>");
+        }
+        return extract_ruby_gem_version(content, gem_name);
+    }
+    if !key_path.is_empty()
+        && key_path != "version"
+        && key_path != "@"
+        && key_path != "."
+    {
+        bail!("Ruby key path must be 'version' or 'gem.<name>'");
+    }
+    if path.to_ascii_lowercase().ends_with(".gemspec") {
+        extract_gemspec_version(content)
+    } else {
+        extract_gemfile_version(content)
+    }
+}
+
+fn write_ruby_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
+    let updated = if let Some(gem_name) = key_path.trim().strip_prefix("gem.") {
+        let gem_name = gem_name.trim();
+        if gem_name.is_empty() {
+            bail!("Ruby gem key path must be gem.<name>");
+        }
+        write_ruby_gem_version(content, gem_name, new_value)?
+    } else if path.to_ascii_lowercase().ends_with(".gemspec") {
+        write_gemspec_version(content, new_value)?
+    } else {
+        write_gemfile_version(content, new_value)?
+    };
+    fs::write(path, updated).with_context(|| format!("failed to write {}", path))?;
+    Ok(())
+}
+
+fn extract_gemspec_version(content: &str) -> Result<String> {
+    for line in content.lines() {
+        if let Some(version) = parse_gemspec_version_line(line) {
+            return Ok(version);
+        }
+    }
+    Err(anyhow!("gemspec does not contain s.version = '...'"))
+}
+
+fn write_gemspec_version(content: &str, new_value: &str) -> Result<String> {
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_gemspec_version_line(line).is_some() {
+            updated.push_str(&replace_gemspec_version_line(line, new_value));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("gemspec does not contain s.version = '...'"))
+    }
+}
+
+fn extract_gemfile_version(content: &str) -> Result<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(version) = parse_ruby_assignment_version(trimmed, "VERSION") {
+            return Ok(version);
+        }
+        if let Some(version) = parse_ruby_assignment_version(trimmed, "version") {
+            return Ok(version);
+        }
+    }
+    Err(anyhow!(
+        "Gemfile does not contain VERSION = '...' or version = '...'; use a .gemspec target or gem.<name>"
+    ))
+}
+
+fn write_gemfile_version(content: &str, new_value: &str) -> Result<String> {
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        let trimmed = line.trim();
+        if !replaced && parse_ruby_assignment_version(trimmed, "VERSION").is_some() {
+            updated.push_str(&replace_ruby_assignment_version(line, "VERSION", new_value));
+            replaced = true;
+        } else if !replaced && parse_ruby_assignment_version(trimmed, "version").is_some() {
+            updated.push_str(&replace_ruby_assignment_version(line, "version", new_value));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("Gemfile does not contain VERSION = '...' or version = '...'"))
+    }
+}
+
+fn parse_ruby_assignment_version(line: &str, name: &str) -> Option<String> {
+    let rest = line.strip_prefix(name)?.trim();
+    let rest = rest.strip_prefix('=')?.trim();
+    parse_ruby_quoted_value(rest)
+}
+
+fn parse_ruby_quoted_value(token: &str) -> Option<String> {
+    let token = token.trim();
+    if (token.starts_with('\'') && token.ends_with('\'')) || (token.starts_with('"') && token.ends_with('"')) {
+        let inner = &token[1..token.len() - 1];
+        if inner.is_empty() {
+            return None;
+        }
+        return Some(inner.to_string());
+    }
+    None
+}
+
+fn replace_ruby_assignment_version(line: &str, name: &str, new_value: &str) -> String {
+    if line.contains('\'') {
+        return format!("  {name} = '{new_value}'");
+    }
+    format!("  {name} = \"{new_value}\"")
+}
+
+fn extract_ruby_gem_version(content: &str, gem_name: &str) -> Result<String> {
+    for line in content.lines() {
+        if let Some(version) = parse_ruby_gem_line_version(line, gem_name) {
+            return Ok(version);
+        }
+    }
+    Err(anyhow!("missing gem entry for '{}'", gem_name))
+}
+
+fn parse_gemspec_version_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let marker = ".version";
+    let idx = trimmed.find(marker)?;
+    let rest = trimmed[idx + marker.len()..].trim();
+    let rest = rest.strip_prefix('=')?.trim();
+    parse_ruby_quoted_value(rest)
+}
+
+fn replace_gemspec_version_line(line: &str, new_value: &str) -> String {
+    let indent: String = line.chars().take_while(|ch| ch.is_whitespace()).collect();
+    let quote = if line.contains('\'') { '\'' } else { '"' };
+    format!("{indent}s.version = {quote}{new_value}{quote}")
+}
+
+fn parse_ruby_quoted_value_with_remainder(input: &str) -> Option<(String, &str)> {
+    let input = input.trim();
+    let quote = input.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let end = input[1..].find(quote)?;
+    let value = input[1..1 + end].to_string();
+    Some((value, input[1 + end + 1..].trim_start()))
+}
+
+fn parse_ruby_gem_line_version(line: &str, gem_name: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("gem ") {
+        return None;
+    }
+    let rest = trimmed.strip_prefix("gem ")?.trim();
+    let (name, remainder) = parse_ruby_quoted_value_with_remainder(rest)?;
+    if name != gem_name {
+        return None;
+    }
+    let remainder = remainder.strip_prefix(',').unwrap_or(remainder).trim();
+    parse_ruby_quoted_value(remainder)
+}
+
+fn write_ruby_gem_version(content: &str, gem_name: &str, new_value: &str) -> Result<String> {
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_ruby_gem_line_version(line, gem_name).is_some() {
+            let quote = if line.contains('\'') { '\'' } else { '"' };
+            updated.push_str(&format!("gem '{gem_name}', {quote}{new_value}{quote}"));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("missing gem entry for '{}'", gem_name))
     }
 }
 
@@ -706,6 +1138,74 @@ edition = "2024"
         .expect("write");
         let updated = fs::read_to_string(&path).expect("read back");
         assert!(updated.contains("version=2.0.0"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gomod_comment_version_round_trip() {
+        let content = "module example.com/demo\n\ngo 1.22\n// version 1.2.3\n";
+        let dir = std::env::temp_dir().join(format!("comfygit-gomod-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("go.mod");
+        fs::write(&path, content).expect("write go.mod");
+
+        let read = extract_gomod_value(content, "comment").expect("read");
+        assert_eq!(read, "1.2.3");
+
+        write_gomod_value(path.to_str().expect("path"), content, "comment", "2.0.0").expect("write");
+        let updated = fs::read_to_string(&path).expect("read back");
+        assert!(updated.contains("// version 2.0.0"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gemspec_version_round_trip() {
+        let content = "Gem::Specification.new do |s|\n  s.name = 'demo'\n  s.version = '1.2.3'\nend\n";
+        let dir = std::env::temp_dir().join(format!("comfygit-gemspec-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("demo.gemspec");
+        fs::write(&path, content).expect("write gemspec");
+
+        let read = extract_ruby_value("demo.gemspec", content, "version").expect("read");
+        assert_eq!(read, "1.2.3");
+
+        write_ruby_value(path.to_str().expect("path"), content, "version", "2.0.0").expect("write");
+        let updated = fs::read_to_string(&path).expect("read back");
+        assert!(updated.contains("s.version = '2.0.0'"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn csproj_version_round_trip() {
+        let content = r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>1.2.3</Version>
+  </PropertyGroup>
+</Project>
+"#;
+        let dir = std::env::temp_dir().join(format!("comfygit-csproj-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("App.csproj");
+        fs::write(&path, content).expect("write csproj");
+
+        let read = extract_xml_value(content, "PropertyGroup.Version").expect("read");
+        assert_eq!(read, "1.2.3");
+
+        write_xml_value(
+            path.to_str().expect("path"),
+            content,
+            "PropertyGroup.Version",
+            "2.0.0",
+        )
+        .expect("write");
+        let updated = fs::read_to_string(&path).expect("read back");
+        assert!(updated.contains(">2.0.0<"));
 
         let _ = fs::remove_dir_all(&dir);
     }
