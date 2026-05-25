@@ -771,11 +771,18 @@ fn read_git_remote_url(cwd: &Path) -> Option<String> {
 fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
     const CANDIDATES: &[(&str, TargetFormat, &str)] = &[
         ("Cargo.toml", TargetFormat::Toml, "package.version"),
+        ("Project.toml", TargetFormat::Toml, "project.version"),
         ("pyproject.toml", TargetFormat::Toml, "project.version"),
         ("package.json", TargetFormat::Json, "version"),
         ("go.mod", TargetFormat::GoMod, "comment"),
         ("pubspec.yaml", TargetFormat::Yaml, "version"),
         ("Gemfile", TargetFormat::Ruby, "version"),
+        ("DESCRIPTION", TargetFormat::RDescription, "Version"),
+        ("CMakeLists.txt", TargetFormat::CMake, "project"),
+        ("Makefile", TargetFormat::Makefile, "VERSION"),
+        ("build.gradle", TargetFormat::Gradle, "version"),
+        ("build.gradle.kts", TargetFormat::Gradle, "version"),
+        ("project.clj", TargetFormat::Clojure, "defproject"),
         ("setup.cfg", TargetFormat::Ini, "metadata.version"),
         ("pom.xml", TargetFormat::Xml, "project.version"),
         ("Chart.yaml", TargetFormat::Yaml, "version"),
@@ -818,6 +825,12 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
                 relative_path: file_name.to_string(),
                 format: TargetFormat::Ruby,
                 default_key: "version".to_string(),
+            });
+        } else if lower.ends_with(".plist") {
+            manifests.push(DetectedManifest {
+                relative_path: file_name.to_string(),
+                format: TargetFormat::Plist,
+                default_key: "CFBundleShortVersionString".to_string(),
             });
         }
     }
