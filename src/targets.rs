@@ -1,14 +1,17 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PSLicense
 //
 // For details, see the LICENSE file in the repository root.
 
 use std::{borrow::Cow, fs, path::Path};
 
 use anyhow::{Context, Result, anyhow, bail};
+use configparser::ini::Ini;
+use roxmltree::Document;
 use serde_json::Value as JsonValue;
+use serde_yaml::Value as YamlValue;
 use toml_edit::{DocumentMut, Item, Value, value};
 
 use crate::{
@@ -73,10 +76,9 @@ pub(crate) fn probe_target(
     if path.is_empty() {
         bail!("target path is empty");
     }
-    if key_path.is_empty() {
+    if key_path.trim().is_empty() && !is_plain_version_filename(path) {
         bail!("target key is empty");
     }
-
     let target = read_target_value(path, key_path, TargetFormat::Auto)?;
     let format = target.format;
     let version = target.version;
@@ -156,6 +158,12 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
         TargetFormat::Toml => {
             write_toml_value(&target.path, &content, &target.key_path, new_version)
         }
+        TargetFormat::Yaml => {
+            write_yaml_value(&target.path, &content, &target.key_path, new_version)
+        }
+        TargetFormat::Xml => write_xml_value(&target.path, &content, &target.key_path, new_version),
+        TargetFormat::Ini => write_ini_value(&target.path, &content, &target.key_path, new_version),
+        TargetFormat::Plain => write_plain_value(&target.path, &content, new_version),
         TargetFormat::Auto => bail!("cannot write target with unresolved format"),
     }
 }
@@ -171,6 +179,10 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
     let version = match format {
         TargetFormat::Json => extract_json_value(&content, key_path)?,
         TargetFormat::Toml => extract_toml_value(&content, key_path)?,
+        TargetFormat::Yaml => extract_yaml_value(&content, key_path)?,
+        TargetFormat::Xml => extract_xml_value(&content, key_path)?,
+        TargetFormat::Ini => extract_ini_value(&content, key_path)?,
+        TargetFormat::Plain => extract_plain_value(&content, key_path)?,
         TargetFormat::Auto => unreachable!(),
     };
 
@@ -213,7 +225,23 @@ fn build_bump_scope(
     })
 }
 
+pub(crate) fn is_plain_version_filename(path: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    matches!(
+        file_name.as_str(),
+        "version" | "version.txt" | ".version" | "version.md" | "VERSION"
+    )
+}
+
 fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
+    if is_plain_version_filename(path) {
+        return Ok(TargetFormat::Plain);
+    }
+
     let extension = Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -222,18 +250,230 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
     match extension.as_deref() {
         Some("json") => Ok(TargetFormat::Json),
         Some("toml") => Ok(TargetFormat::Toml),
+        Some("yaml") | Some("yml") => Ok(TargetFormat::Yaml),
+        Some("xml") => Ok(TargetFormat::Xml),
+        Some("cfg") => Ok(TargetFormat::Ini),
         _ => {
             if serde_json::from_str::<JsonValue>(content).is_ok() {
                 Ok(TargetFormat::Json)
             } else if toml::from_str::<toml::Value>(content).is_ok() {
                 Ok(TargetFormat::Toml)
+            } else if serde_yaml::from_str::<YamlValue>(content).is_ok() {
+                Ok(TargetFormat::Yaml)
+            } else if Document::parse(content).is_ok() {
+                Ok(TargetFormat::Xml)
+            } else if load_ini(content).is_ok() {
+                Ok(TargetFormat::Ini)
+            } else if extract_plain_value(content, "").is_ok() {
+                Ok(TargetFormat::Plain)
             } else {
                 Err(anyhow!(
-                    "unable to detect JSON or TOML format from target file"
+                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, plain version file)"
                 ))
             }
         }
     }
+}
+
+fn plain_key_path(key_path: &str) -> Result<()> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() || key_path == "." || key_path == "@" {
+        return Ok(());
+    }
+    bail!("plain version files do not use key paths (leave the key empty)");
+}
+
+fn extract_plain_value(content: &str, key_path: &str) -> Result<String> {
+    plain_key_path(key_path)?;
+    parse_plain_version(content)
+}
+
+fn write_plain_value(path: &str, content: &str, new_version: &str) -> Result<()> {
+    let had_trailing_newline = content.ends_with('\n');
+    let mut rendered = new_version.to_string();
+    if had_trailing_newline {
+        rendered.push('\n');
+    }
+    fs::write(path, rendered).with_context(|| format!("failed to write {}", path))?;
+    Ok(())
+}
+
+fn parse_plain_version(content: &str) -> Result<String> {
+    let line = content
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    if line.is_empty() {
+        bail!("plain version file is empty");
+    }
+    let version = line
+        .trim_matches(|character: char| character == '"' || character == '\'')
+        .trim()
+        .to_string();
+    if version.is_empty() {
+        bail!("plain version file does not contain a version value");
+    }
+    Ok(version)
+}
+
+fn parse_ini_key_path(key_path: &str) -> Result<(&str, &str)> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() {
+        bail!("INI targets require a section.key path (for example metadata.version)");
+    }
+    let (section, key) = key_path.split_once('.').ok_or_else(|| {
+        anyhow!("INI key path must use section.key format (for example metadata.version)")
+    })?;
+    if section.is_empty() || key.is_empty() {
+        bail!("INI key path must use section.key format (for example metadata.version)");
+    }
+    Ok((section, key))
+}
+
+fn load_ini(content: &str) -> Result<Ini> {
+    let mut ini = Ini::new();
+    ini.read(content.to_string())
+        .map_err(|error| anyhow!("invalid INI target: {error}"))?;
+    Ok(ini)
+}
+
+fn extract_ini_value(content: &str, key_path: &str) -> Result<String> {
+    let (section, key) = parse_ini_key_path(key_path)?;
+    let ini = load_ini(content)?;
+    ini.get(section, key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("missing key '{}'", key_path))
+}
+
+fn write_ini_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
+    let (section, key) = parse_ini_key_path(key_path)?;
+    let mut ini = load_ini(content)?;
+    ini.setstr(section, key, Some(new_value));
+    ini.write(path)
+        .with_context(|| format!("failed to write {}", path))?;
+    Ok(())
+}
+
+fn extract_yaml_value(content: &str, key_path: &str) -> Result<String> {
+    let value = serde_yaml::from_str::<YamlValue>(content).context("invalid YAML target")?;
+    let located = locate_yaml_value(&value, key_path)?;
+    yaml_value_as_string(located, key_path)
+}
+
+fn write_yaml_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
+    let mut value = serde_yaml::from_str::<YamlValue>(content).context("invalid YAML target")?;
+    let located = locate_yaml_value_mut(&mut value, key_path)?;
+    *located = YamlValue::String(new_value.to_string());
+    let rendered = serde_yaml::to_string(&value).context("failed to serialize YAML target")?;
+    fs::write(path, rendered).with_context(|| format!("failed to write {}", path))?;
+    Ok(())
+}
+
+fn locate_yaml_value<'a>(value: &'a YamlValue, key_path: &str) -> Result<&'a YamlValue> {
+    let mut current = value;
+    for segment in key_path.split('.') {
+        current = current
+            .get(segment)
+            .ok_or_else(|| anyhow!("missing key '{}'", key_path))?;
+    }
+    Ok(current)
+}
+
+fn locate_yaml_value_mut<'a>(
+    value: &'a mut YamlValue,
+    key_path: &str,
+) -> Result<&'a mut YamlValue> {
+    let mut current = value;
+    for segment in key_path.split('.') {
+        current = current
+            .get_mut(segment)
+            .ok_or_else(|| anyhow!("missing key '{}'", key_path))?;
+    }
+    Ok(current)
+}
+
+fn yaml_value_as_string(value: &YamlValue, key_path: &str) -> Result<String> {
+    match value {
+        YamlValue::String(text) => Ok(text.clone()),
+        YamlValue::Number(number) => Ok(number.to_string()),
+        YamlValue::Bool(flag) => Ok(flag.to_string()),
+        _ => bail!(
+            "key '{}' is present, but its value is not a string",
+            key_path
+        ),
+    }
+}
+
+fn extract_xml_value(content: &str, key_path: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() {
+        bail!("XML targets require a dotted element path (for example project.version)");
+    }
+    let document = Document::parse(content).context("invalid XML target")?;
+    let mut node = document.root_element();
+    let mut segments: Vec<&str> = key_path.split('.').collect();
+    if segments
+        .first()
+        .is_some_and(|segment| node.tag_name().name() == *segment)
+    {
+        segments.remove(0);
+    }
+    for segment in segments {
+        node = node
+            .children()
+            .find(|child| child.is_element() && child.tag_name().name() == segment)
+            .ok_or_else(|| anyhow!("missing XML element '{}'", key_path))?;
+    }
+    node.text()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            anyhow!(
+                "XML element '{}' is present, but it does not contain text",
+                key_path
+            )
+        })
+}
+
+fn write_xml_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
+    let key_path = key_path.trim();
+    if key_path.is_empty() {
+        bail!("XML targets require a dotted element path (for example project.version)");
+    }
+    let old = extract_xml_value(content, key_path)?;
+    if old == new_value {
+        return Ok(());
+    }
+    let tag = key_path.rsplit('.').next().unwrap_or(key_path);
+    let updated = replace_xml_tag_text(content, tag, &old, new_value)
+        .ok_or_else(|| anyhow!("XML element '{}' does not contain editable text", key_path))?;
+    fs::write(path, updated).with_context(|| format!("failed to write {}", path))?;
+    Ok(())
+}
+
+fn replace_xml_tag_text(content: &str, tag: &str, old: &str, new: &str) -> Option<String> {
+    let open_prefix = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut cursor = 0usize;
+    while let Some(open_start) = content[cursor..].find(&open_prefix) {
+        let abs_open = cursor + open_start;
+        let after_open = content[abs_open..].find('>')? + abs_open + 1;
+        let close_rel = content[after_open..].find(&close)?;
+        let text_end = after_open + close_rel;
+        if content[after_open..text_end].trim() == old {
+            let mut updated =
+                String::with_capacity(content.len() + new.len().saturating_sub(old.len()));
+            updated.push_str(&content[..after_open]);
+            updated.push_str(new);
+            updated.push_str(&content[text_end..]);
+            return Some(updated);
+        }
+        cursor = text_end + close.len();
+    }
+    None
 }
 
 fn write_json_value(path: &str, content: &str, key_path: &str, new_value: &str) -> Result<()> {
@@ -370,6 +610,104 @@ edition = "2024"
         let resolved =
             extract_toml_value(content, "version").expect("should resolve package.version");
         assert_eq!(resolved, "0.1.0");
+    }
+
+    #[test]
+    fn yaml_version_round_trip() {
+        let dir = std::env::temp_dir().join(format!("comfygit-yaml-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("Chart.yaml");
+        fs::write(&path, "apiVersion: v2\nversion: 1.2.3\n").expect("write yaml");
+
+        let read = extract_yaml_value("apiVersion: v2\nversion: 1.2.3\n", "version").expect("read");
+        assert_eq!(read, "1.2.3");
+
+        write_yaml_value(
+            path.to_str().expect("path"),
+            "apiVersion: v2\nversion: 1.2.3\n",
+            "version",
+            "2.0.0",
+        )
+        .expect("write");
+        let updated = fs::read_to_string(&path).expect("read back");
+        assert!(updated.contains("2.0.0"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn xml_maven_version_round_trip() {
+        let content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <version>1.2.3</version>
+</project>
+"#;
+        let dir = std::env::temp_dir().join(format!("comfygit-xml-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("pom.xml");
+        fs::write(&path, content).expect("write xml");
+
+        let read = extract_xml_value(content, "project.version").expect("read");
+        assert_eq!(read, "1.2.3");
+
+        write_xml_value(
+            path.to_str().expect("path"),
+            content,
+            "project.version",
+            "2.0.0",
+        )
+        .expect("write");
+        let updated = fs::read_to_string(&path).expect("read back");
+        assert!(updated.contains(">2.0.0<"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plain_version_file_round_trip() {
+        let dir = std::env::temp_dir().join(format!("comfygit-plain-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("VERSION");
+        fs::write(&path, "1.2.3\n").expect("write version");
+
+        let read = extract_plain_value("1.2.3\n", "").expect("read");
+        assert_eq!(read, "1.2.3");
+
+        write_plain_value(path.to_str().expect("path"), "1.2.3\n", "2.0.0").expect("write");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read back").trim(),
+            "2.0.0"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ini_setup_cfg_version_round_trip() {
+        let content = "[metadata]\nname = demo\nversion = 1.2.3\n";
+        let dir = std::env::temp_dir().join(format!("comfygit-ini-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("setup.cfg");
+        fs::write(&path, content).expect("write ini");
+
+        let read = extract_ini_value(content, "metadata.version").expect("read");
+        assert_eq!(read, "1.2.3");
+
+        write_ini_value(
+            path.to_str().expect("path"),
+            content,
+            "metadata.version",
+            "2.0.0",
+        )
+        .expect("write");
+        let updated = fs::read_to_string(&path).expect("read back");
+        assert!(updated.contains("version=2.0.0"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
