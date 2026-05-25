@@ -1032,6 +1032,10 @@ pub enum TargetFormat {
     Auto,
     Json,
     Toml,
+    Yaml,
+    Xml,
+    Ini,
+    Plain,
 }
 
 impl TargetFormat {
@@ -1040,6 +1044,10 @@ impl TargetFormat {
             TargetFormat::Auto => "Auto",
             TargetFormat::Json => "JSON",
             TargetFormat::Toml => "TOML",
+            TargetFormat::Yaml => "YAML",
+            TargetFormat::Xml => "XML",
+            TargetFormat::Ini => "INI",
+            TargetFormat::Plain => "Plain version file",
         }
     }
 }
