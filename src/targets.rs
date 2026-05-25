@@ -271,6 +271,30 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
+        TargetFormat::Meson => {
+            let updated =
+                crate::target_custom::write_meson_value(&content, &target.key_path, new_version)?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Nimble => {
+            let updated =
+                crate::target_custom::write_nimble_value(&content, &target.key_path, new_version)?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Rockspec => {
+            let updated = crate::target_custom::write_rockspec_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
         TargetFormat::Auto => bail!("cannot write target with unresolved format"),
     }
 }
@@ -307,6 +331,9 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
         TargetFormat::ScalaSbt => crate::target_custom::extract_scala_sbt_value(&content, key_path)?,
         TargetFormat::Cabal => crate::target_custom::extract_cabal_value(&content, key_path)?,
         TargetFormat::Autoconf => crate::target_custom::extract_autoconf_value(&content, key_path)?,
+        TargetFormat::Meson => crate::target_custom::extract_meson_value(&content, key_path)?,
+        TargetFormat::Nimble => crate::target_custom::extract_nimble_value(&content, key_path)?,
+        TargetFormat::Rockspec => crate::target_custom::extract_rockspec_value(&content, key_path)?,
         TargetFormat::Auto => unreachable!(),
     };
 
@@ -420,6 +447,15 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
     if crate::target_custom::is_configure_ac_filename(path) {
         return Ok(TargetFormat::Autoconf);
     }
+    if crate::target_custom::is_meson_filename(path) {
+        return Ok(TargetFormat::Meson);
+    }
+    if crate::target_custom::is_nimble_filename(path) {
+        return Ok(TargetFormat::Nimble);
+    }
+    if crate::target_custom::is_rockspec_filename(path) {
+        return Ok(TargetFormat::Rockspec);
+    }
 
     let extension = Path::new(path)
         .extension()
@@ -473,11 +509,17 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
                 Ok(TargetFormat::Cabal)
             } else if crate::target_custom::extract_autoconf_value(content, "AC_INIT").is_ok() {
                 Ok(TargetFormat::Autoconf)
+            } else if crate::target_custom::extract_meson_value(content, "project").is_ok() {
+                Ok(TargetFormat::Meson)
+            } else if crate::target_custom::extract_nimble_value(content, "version").is_ok() {
+                Ok(TargetFormat::Nimble)
+            } else if crate::target_custom::extract_rockspec_value(content, "version").is_ok() {
+                Ok(TargetFormat::Rockspec)
             } else if extract_plain_value(content, "").is_ok() {
                 Ok(TargetFormat::Plain)
             } else {
                 Err(anyhow!(
-                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, Swift, Elixir, Scala, Cabal, Autoconf, plain version file)"
+                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, Swift, Elixir, Scala, Cabal, Autoconf, Meson, Nimble, LuaRocks rockspec, plain version file)"
                 ))
             }
         }
