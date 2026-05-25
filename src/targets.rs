@@ -295,6 +295,23 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
+        TargetFormat::MakefilePl => {
+            let updated = crate::target_custom::write_makefile_pl_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Bazel => {
+            let updated =
+                crate::target_custom::write_bazel_value(&content, &target.key_path, new_version)?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
         TargetFormat::Auto => bail!("cannot write target with unresolved format"),
     }
 }
@@ -334,6 +351,10 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
         TargetFormat::Meson => crate::target_custom::extract_meson_value(&content, key_path)?,
         TargetFormat::Nimble => crate::target_custom::extract_nimble_value(&content, key_path)?,
         TargetFormat::Rockspec => crate::target_custom::extract_rockspec_value(&content, key_path)?,
+        TargetFormat::MakefilePl => {
+            crate::target_custom::extract_makefile_pl_value(&content, key_path)?
+        }
+        TargetFormat::Bazel => crate::target_custom::extract_bazel_value(&content, key_path)?,
         TargetFormat::Auto => unreachable!(),
     };
 
@@ -456,6 +477,12 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
     if crate::target_custom::is_rockspec_filename(path) {
         return Ok(TargetFormat::Rockspec);
     }
+    if crate::target_custom::is_makefile_pl_filename(path) {
+        return Ok(TargetFormat::MakefilePl);
+    }
+    if crate::target_custom::is_bazel_module_filename(path) {
+        return Ok(TargetFormat::Bazel);
+    }
 
     let extension = Path::new(path)
         .extension()
@@ -515,11 +542,15 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
                 Ok(TargetFormat::Nimble)
             } else if crate::target_custom::extract_rockspec_value(content, "version").is_ok() {
                 Ok(TargetFormat::Rockspec)
+            } else if crate::target_custom::extract_makefile_pl_value(content, "VERSION").is_ok() {
+                Ok(TargetFormat::MakefilePl)
+            } else if crate::target_custom::extract_bazel_value(content, "module").is_ok() {
+                Ok(TargetFormat::Bazel)
             } else if extract_plain_value(content, "").is_ok() {
                 Ok(TargetFormat::Plain)
             } else {
                 Err(anyhow!(
-                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, Swift, Elixir, Scala, Cabal, Autoconf, Meson, Nimble, LuaRocks rockspec, plain version file)"
+                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, Swift, Elixir, Scala, Cabal, Autoconf, Meson, Nimble, LuaRocks rockspec, Makefile.PL, Bazel MODULE.bazel, plain version file)"
                 ))
             }
         }
