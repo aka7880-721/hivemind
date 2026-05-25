@@ -92,9 +92,8 @@ use crate::{
     git_br::{BranchNameOption, semver_dev_branch_canonical_label},
     mmr::{
         load_merged_std_changelog_memory, load_top_picks_edits, load_top_picks_edits_with_baseline,
-        record_std_changelog_created, resolve_top_picks_baseline_tag,
-        record_std_changelog_error, record_std_changelog_generated, record_std_changelog_postponed,
-        save_top_picks_edits,
+        record_std_changelog_created, record_std_changelog_error, record_std_changelog_generated,
+        record_std_changelog_postponed, resolve_top_picks_baseline_tag, save_top_picks_edits,
     },
     overview_pg::{OverviewTab, overview_tab_rects, overview_tabs, render_overview_tabs},
     project_edit::{ProjectEditDialog, ProjectEditFocus},
@@ -9522,9 +9521,7 @@ pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
         Some("toml") if path_lower.contains("pyproject") => {
             &["project.version", "tool.poetry.version", "version"]
         }
-        Some("toml") if path_lower.ends_with("project.toml") => {
-            &["project.version", "version"]
-        }
+        Some("toml") if path_lower.ends_with("project.toml") => &["project.version", "version"],
         Some("toml") => &["package.version", "workspace.package.version", "version"],
         Some("json") => &["version", "package.version", "workspace.package.version"],
         Some("yaml") | Some("yml") => &["version", "appVersion", "chart.version"],
