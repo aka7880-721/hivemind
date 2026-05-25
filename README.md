@@ -338,14 +338,14 @@ Whether you're managing a simple single-package project or a complex multi-scope
 
 ComfyGit can **read, bump, and auto-detect** version fields in many ecosystems. Highlights:
 
-| Category | Examples |
-|----------|----------|
-| Structured config | `Cargo.toml`, `package.json`, `composer.json`, `deno.json`, `pyproject.toml`, `package.yaml`, `pubspec.yaml`, `shard.yml`, `pom.xml`, `*.csproj` |
-| DSL / build scripts | `go.mod`, `build.gradle(.kts)`, `build.sbt`, `mix.exs`, `Package.swift`, `project.clj`, `configure.ac`, `meson.build` |
-| Native formats | `DESCRIPTION` (R), `*.cabal`, `Gemfile` / `*.gemspec`, `CMakeLists.txt`, `Makefile`, `*.plist`, `*.nimble`, `*.rockspec`, `META.json` |
-| Universal | `VERSION` / plain version files |
+| Category            | Examples                                                                                                                                                             |
+| ---------------------| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Structured config   | `Cargo.toml`, `package.json`, `composer.json`, `deno.json`, `pyproject.toml`, `package.yaml`, `pubspec.yaml`, `shard.yml`, `pom.xml`, `*.csproj`                     |
+| DSL / build scripts | `go.mod`, `build.gradle(.kts)`, `build.sbt`, `mix.exs`, `Package.swift`, `project.clj`, `configure.ac`, `meson.build`                                                |
+| Native formats      | `DESCRIPTION` (R), `*.cabal`, `Gemfile` / `*.gemspec`, `CMakeLists.txt`, `Makefile`, `Makefile.PL`, `MODULE.bazel`, `*.plist`, `*.nimble`, `*.rockspec`, `META.json` |
+| Universal           | `VERSION` / plain version files                                                                                                                                      |
 
-Run **`cg init`** in a repo root to scan for manifests. Use **`format: auto`** or pick a specific format in project settings. Full reference: [wiki/supported-lang-and-ver-files.md](wiki/supported-lang-and-ver-files.md).
+Run **`cg init`** in a repo root to scan for manifests (including common monorepo paths like `electron/package.json` and `packages/*/package.json`). Use **`format: auto`** or pick a specific format in project settings. Full reference: [wiki/supported-lang-and-ver-files.md](wiki/supported-lang-and-ver-files.md).
 
 >[!TIP]
 > Make sure to visit [ComfyGit's WIKI](https://github.com/comfy-home/ComfyGit/wiki)
