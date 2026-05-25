@@ -647,7 +647,9 @@ impl ProjectWizard {
             if self.target_path.value.trim().is_empty() {
                 bail!("target path is required");
             }
-            if self.target_key.value.trim().is_empty() {
+            if self.target_key.value.trim().is_empty()
+                && !crate::targets::is_plain_version_filename(self.target_path.value())
+            {
                 bail!("target key is required");
             }
             match &self.last_probe {
