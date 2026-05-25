@@ -1036,6 +1036,9 @@ pub enum TargetFormat {
     Xml,
     Ini,
     Plain,
+    #[serde(rename = "go_mod")]
+    GoMod,
+    Ruby,
 }
 
 impl TargetFormat {
@@ -1048,6 +1051,8 @@ impl TargetFormat {
             TargetFormat::Xml => "XML",
             TargetFormat::Ini => "INI",
             TargetFormat::Plain => "Plain version file",
+            TargetFormat::GoMod => "Go module (go.mod)",
+            TargetFormat::Ruby => "Ruby (Gemfile / gemspec)",
         }
     }
 }
