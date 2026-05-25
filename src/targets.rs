@@ -170,6 +170,60 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
         TargetFormat::Ruby => {
             write_ruby_value(&target.path, &content, &target.key_path, new_version)
         }
+        TargetFormat::RDescription => {
+            let updated = crate::target_custom::write_description_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Gradle => {
+            let updated = crate::target_custom::write_gradle_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::CMake => {
+            let updated =
+                crate::target_custom::write_cmake_value(&content, &target.key_path, new_version)?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Makefile => {
+            let updated = crate::target_custom::write_makefile_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Plist => {
+            let updated =
+                crate::target_custom::write_plist_value(&content, &target.key_path, new_version)?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::Clojure => {
+            let updated = crate::target_custom::write_clojure_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
         TargetFormat::Auto => bail!("cannot write target with unresolved format"),
     }
 }
@@ -191,6 +245,14 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
         TargetFormat::Plain => extract_plain_value(&content, key_path)?,
         TargetFormat::GoMod => extract_gomod_value(&content, key_path)?,
         TargetFormat::Ruby => extract_ruby_value(path, &content, key_path)?,
+        TargetFormat::RDescription => {
+            crate::target_custom::extract_description_value(&content, key_path)?
+        }
+        TargetFormat::Gradle => crate::target_custom::extract_gradle_value(&content, key_path)?,
+        TargetFormat::CMake => crate::target_custom::extract_cmake_value(&content, key_path)?,
+        TargetFormat::Makefile => crate::target_custom::extract_makefile_value(&content, key_path)?,
+        TargetFormat::Plist => crate::target_custom::extract_plist_value(&content, key_path)?,
+        TargetFormat::Clojure => crate::target_custom::extract_clojure_value(&content, key_path)?,
         TargetFormat::Auto => unreachable!(),
     };
 
@@ -271,6 +333,24 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
     if is_ruby_manifest_filename(path) {
         return Ok(TargetFormat::Ruby);
     }
+    if crate::target_custom::is_description_filename(path) {
+        return Ok(TargetFormat::RDescription);
+    }
+    if crate::target_custom::is_cmake_filename(path) {
+        return Ok(TargetFormat::CMake);
+    }
+    if crate::target_custom::is_makefile_filename(path) {
+        return Ok(TargetFormat::Makefile);
+    }
+    if crate::target_custom::is_gradle_filename(path) {
+        return Ok(TargetFormat::Gradle);
+    }
+    if crate::target_custom::is_plist_filename(path) {
+        return Ok(TargetFormat::Plist);
+    }
+    if crate::target_custom::is_project_clj_filename(path) {
+        return Ok(TargetFormat::Clojure);
+    }
 
     let extension = Path::new(path)
         .extension()
@@ -298,11 +378,25 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
                 Ok(TargetFormat::GoMod)
             } else if extract_ruby_value(path, content, "version").is_ok() {
                 Ok(TargetFormat::Ruby)
+            } else if crate::target_custom::extract_description_value(content, "Version").is_ok() {
+                Ok(TargetFormat::RDescription)
+            } else if crate::target_custom::extract_cmake_value(content, "project").is_ok() {
+                Ok(TargetFormat::CMake)
+            } else if crate::target_custom::extract_makefile_value(content, "VERSION").is_ok() {
+                Ok(TargetFormat::Makefile)
+            } else if crate::target_custom::extract_gradle_value(content, "version").is_ok() {
+                Ok(TargetFormat::Gradle)
+            } else if crate::target_custom::extract_plist_value(content, "CFBundleShortVersionString")
+                .is_ok()
+            {
+                Ok(TargetFormat::Plist)
+            } else if crate::target_custom::extract_clojure_value(content, "defproject").is_ok() {
+                Ok(TargetFormat::Clojure)
             } else if extract_plain_value(content, "").is_ok() {
                 Ok(TargetFormat::Plain)
             } else {
                 Err(anyhow!(
-                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, plain version file)"
+                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, plain version file)"
                 ))
             }
         }
