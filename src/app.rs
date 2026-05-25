@@ -9475,6 +9475,21 @@ pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
     if file_name.ends_with(".plist") {
         return &["CFBundleShortVersionString", "CFBundleVersion"];
     }
+    if file_name == "package.swift" {
+        return &["version", "packageVersion", "comment"];
+    }
+    if file_name == "mix.exs" {
+        return &["version"];
+    }
+    if file_name == "build.sbt" {
+        return &["version", "ThisBuild / version"];
+    }
+    if file_name.ends_with(".cabal") {
+        return &["version", "name"];
+    }
+    if file_name == "configure.ac" {
+        return &["AC_INIT"];
+    }
     let extension = std::path::Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
