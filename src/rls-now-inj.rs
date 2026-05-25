@@ -280,6 +280,18 @@ fn github_release_url(remote_url: &str, tag: &str) -> Option<String> {
 /// existing auto-injected block, that whole `<details>...</details>` block is
 /// replaced. Otherwise the new block is inserted before the line at
 /// `inject_at_row` (1-indexed), and the file is written back.
+/// Remove every top-level auto-injected `<details>` block from the README.
+fn strip_all_auto_injected_blocks(file_lines: &mut Vec<String>) {
+    let mut index = 0;
+    while index < file_lines.len() {
+        if let Some((start, end)) = existing_auto_injected_block_range(file_lines, index) {
+            file_lines.drain(start..end);
+        } else {
+            index += 1;
+        }
+    }
+}
+
 fn existing_auto_injected_block_range(
     file_lines: &[String],
     start_index: usize,
@@ -289,15 +301,29 @@ fn existing_auto_injected_block_range(
         return None;
     }
 
-    let end_index = file_lines[start_index..]
-        .iter()
-        .position(|line| line.trim() == "</details>")
-        .map(|offset| start_index + offset)?;
+    let end_index = find_details_block_end(file_lines, start_index)?;
 
-    let has_marker = file_lines[start_index..=end_index]
+    let has_marker = file_lines[start_index..end_index]
         .iter()
         .any(|line| line.contains(AUTO_INJECTED_MARKER));
-    has_marker.then_some((start_index, end_index + 1))
+    has_marker.then_some((start_index, end_index))
+}
+
+fn find_details_block_end(file_lines: &[String], start_index: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, line) in file_lines[start_index..].iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("<details") {
+            depth += 1;
+        }
+        if trimmed == "</details>" {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(start_index + offset + 1);
+            }
+        }
+    }
+    None
 }
 
 fn inject_into_file(readme_path: &Path, inject_at_row: u16, block: &str) -> Result<()> {
@@ -312,6 +338,8 @@ fn inject_into_file(readme_path: &Path, inject_at_row: u16, block: &str) -> Resu
         file_lines.pop();
     }
 
+    strip_all_auto_injected_blocks(&mut file_lines);
+
     let insert_index = if inject_at_row == 0 {
         0
     } else {
@@ -319,12 +347,10 @@ fn inject_into_file(readme_path: &Path, inject_at_row: u16, block: &str) -> Resu
     };
 
     let block_lines: Vec<String> = block.split('\n').map(ToOwned::to_owned).collect();
-    let replace_range = existing_auto_injected_block_range(&file_lines, insert_index);
-    let (prefix_end, suffix_start) = replace_range.unwrap_or((insert_index, insert_index));
     let mut result: Vec<String> = Vec::with_capacity(file_lines.len() + block_lines.len());
-    result.extend_from_slice(&file_lines[..prefix_end]);
+    result.extend_from_slice(&file_lines[..insert_index]);
     result.extend(block_lines);
-    result.extend_from_slice(&file_lines[suffix_start..]);
+    result.extend_from_slice(&file_lines[insert_index..]);
 
     let mut output = result.join("\n");
     if had_trailing_newline {
@@ -678,6 +704,58 @@ mod tests {
         assert!(result.contains("new body"));
         assert!(!result.contains("v0.1.0"));
         assert!(!result.contains("old body"));
+        assert_eq!(
+            result
+                .matches("<details><summary>👀 What's new in ")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn removes_all_stale_auto_injected_blocks_before_inserting_new_one() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cg_rls_inj_strip_all_test_{}",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            concat!(
+                "intro\n",
+                "<details><summary>👀 What's new in v0.1.0 ...</summary>\n",
+                "old one\n",
+                "---\n",
+                "<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)</sup>\n",
+                "---\n",
+                "</details>\n",
+                "middle\n",
+                "<details><summary>👀 What's new in v0.2.0 ...</summary>\n",
+                "old two\n",
+                "---\n",
+                "<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)</sup>\n",
+                "---\n",
+                "</details>\n",
+                "after\n"
+            ),
+        )
+        .unwrap();
+
+        inject_into_file(
+            &path,
+            2,
+            "<details><summary>👀 What's new in v0.3.0 ...</summary>\n\nnew\n\n---\n<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)</sup>\n\n---\n\n</details>\n",
+        )
+        .unwrap();
+
+        let result = fs::read_to_string(&path).unwrap();
+        let _ = fs::remove_file(&path);
+        assert!(result.contains("v0.3.0"));
+        assert!(result.contains("new\n"));
+        assert!(!result.contains("v0.1.0"));
+        assert!(!result.contains("v0.2.0"));
+        assert!(!result.contains("old one"));
+        assert!(!result.contains("old two"));
         assert_eq!(
             result
                 .matches("<details><summary>👀 What's new in ")
