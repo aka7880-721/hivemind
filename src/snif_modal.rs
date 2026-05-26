@@ -12,9 +12,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use snif__by_comfyhome::engine::{
-    ReplaceOptions, SearchOptions, replace, search,
-};
+use snif__by_comfyhome::engine::{ReplaceOptions, SearchOptions, replace, search};
 
 use crate::app::{App, StatusMessage};
 use crate::cli::project_root;
@@ -78,12 +76,8 @@ impl SnifModal {
         })?;
         self.output_lines.clear();
         for m in &result.matches {
-            self.output_lines.push(format!(
-                "{}:{}:{}",
-                m.path.display(),
-                m.line_number,
-                m.line
-            ));
+            self.output_lines
+                .push(format!("{}:{}:{}", m.path.display(), m.line_number, m.line));
         }
         self.output_lines.push(format!(
             "--- {} match(es), {} exact ---",
@@ -150,9 +144,7 @@ impl App {
         let project = self.selected_project()?.clone();
         let root = snif_project_root(&project)?;
         self.snif_dialog = Some(SnifModal::new(root));
-        self.status = StatusMessage::info(
-            "SNIF: edit pattern, F2 run, m toggle mode, Esc close.",
-        );
+        self.status = StatusMessage::info("SNIF: edit pattern, F2 run, m toggle mode, Esc close.");
         Ok(())
     }
 
@@ -235,14 +227,17 @@ impl App {
         };
 
         let ops = vec![
-            Line::from(vec![
-                Span::raw(format!(" Root: {} ", dialog.root.display())),
-            ]),
+            Line::from(vec![Span::raw(format!(
+                " Root: {} ",
+                dialog.root.display()
+            ))]),
             Line::from(vec![
                 Span::raw(" Mode: "),
                 Span::styled(
                     mode,
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" (m)  "),
                 Span::raw("F2 run  Esc close  Tab field"),
