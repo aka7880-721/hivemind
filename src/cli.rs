@@ -383,6 +383,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             run_var(Some(action), Some(id), Some(&joined))?;
             Ok(StartupMode::Handled)
         }
+        [command, rest @ ..] if is_snif_command(command) => {
+            run_snif_command(rest)?;
+            Ok(StartupMode::Handled)
+        }
         _ => {
             print_usage();
             bail!("unknown command")
@@ -715,6 +719,15 @@ fn is_toppicks_command(value: &str) -> bool {
     matches!(value, "toppicks" | "tp" | "topp")
 }
 
+fn is_snif_command(value: &str) -> bool {
+    matches!(value, "snif")
+}
+
+fn run_snif_command(args: &[String]) -> Result<()> {
+    let root = env::current_dir().context("failed to read current directory")?;
+    snif__by_comfyhome::dispatch_with_root(args.to_vec(), root)
+}
+
 fn is_var_command(value: &str) -> bool {
     matches!(value, "var" | "vr")
 }
@@ -790,6 +803,7 @@ fn print_usage() {
     println!(
         "                             Synonyms: remove-shell | uninstall shell | shell-uninstall"
     );
+    println!("  cg snif [args...]          Run SNIF search/replace (same as standalone snif)");
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
     println!(
