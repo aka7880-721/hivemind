@@ -175,7 +175,7 @@ pub(super) fn switch_repos_to_main(
     repos: &[RepoBranchState],
     integration_mode: IntegrationMode,
 ) -> Result<()> {
-    let sync_remote = integration_mode == IntegrationMode::GitHubEnabled;
+    let sync_remote = integration_mode.is_forge_enabled();
     for repo in repos {
         switch_to_main_branch(
             &repo.repo_root,
