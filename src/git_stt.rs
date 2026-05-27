@@ -5,13 +5,16 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use chrono::{DateTime, Local, TimeZone};
-use std::process::Command;
 
-use crate::git::{
-    GitCancellation, build_git_args, ensure_gh_available, ensure_git_repo_with_cancel,
-    run_git_checked_owned_with_cancel, run_git_with_cancel,
+use crate::{
+    config::IntegrationMode,
+    forge::{self, ForgeKind},
+    git::{
+        GitCancellation, build_git_args, ensure_forge_cli_available, ensure_git_repo_with_cancel,
+        run_git_checked_owned_with_cancel, run_git_with_cancel,
+    },
 };
 
 pub(crate) fn last_commit_label(
@@ -175,58 +178,26 @@ pub(crate) fn recent_merge_check(
 
 pub(crate) fn last_rls_time(
     repo_root: &str,
+    integration_mode: IntegrationMode,
     cancel: Option<GitCancellation>,
 ) -> Result<Option<String>> {
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
-    ensure_gh_available()?;
-
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .arg("release")
-        .arg("list")
-        .arg("--limit")
-        .arg("1")
-        .arg("--json")
-        .arg("publishedAt")
-        .arg("--jq")
-        .arg(".[]?.publishedAt")
-        .output()
-        .context("failed to invoke gh to query last release published time")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("gh release list failed: {}", stderr.trim());
-    }
-
-    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok((!result.is_empty()).then_some(result))
+    let forge = forge_for_mode(integration_mode)?;
+    forge.last_release_published_at(repo_root)
 }
 
 pub(crate) fn last_rls_version(
     repo_root: &str,
+    integration_mode: IntegrationMode,
     cancel: Option<GitCancellation>,
 ) -> Result<Option<String>> {
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
-    ensure_gh_available()?;
+    let forge = forge_for_mode(integration_mode)?;
+    forge.last_release_tag(repo_root)
+}
 
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .arg("release")
-        .arg("list")
-        .arg("--limit")
-        .arg("1")
-        .arg("--json")
-        .arg("tagName")
-        .arg("--jq")
-        .arg(".[]?.tagName")
-        .output()
-        .context("failed to invoke gh to query last release tag name")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("gh release list failed: {}", stderr.trim());
-    }
-
-    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok((!result.is_empty()).then_some(result))
+fn forge_for_mode(integration_mode: IntegrationMode) -> Result<ForgeKind> {
+    let forge = forge::resolve_forge(integration_mode)?;
+    ensure_forge_cli_available(integration_mode)?;
+    Ok(forge)
 }
