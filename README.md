@@ -271,9 +271,10 @@ Enjoy!
 > **PREREQUISITES**  
 > ComfyGit expects you...
 > - ...are using a modern terminal app, e.g. `ptyxis`, `konsole`, `kitty`, `pwsh`, etc (or a built-in terminal in VSCode and similar IDE)  
-> - ...have `git` and `gh` (Git CLI) installed and configured
+> - ...have `git` installed and configured
+> - ...have the forge CLI for your host when using remote workflows: [`gh`](https://cli.github.com/) (GitHub) and/or [`glab`](https://gitlab.com/gitlab-org/cli) (GitLab)
 >
-> NOTE: There are no other requirements, no extra scripts, GitHub settings/actions - nothing.
+> NOTE: There are no other requirements beyond git and the relevant CLI for your forge — no extra scripts, host-specific CI settings, or tokens managed by ComfyGit.
 
 
 ## Overview
@@ -297,7 +298,7 @@ Whether you're managing a simple single-package project or a complex multi-scope
 - **📦 Version Management** — Automated SemVer/CalVer bumping with updates to JSON, TOML, YAML, XML, Gradle, CMake, `go.mod`, `mix.exs`, `Package.swift`, Cabal, and more (see [supported manifests](https://github.com/comfy-home/ComfyGit/wiki/Supported-Eco‐Systems-and-Version-File-Formats))
 - **🌳 Smart Branching** — Visual branch trees, parent/child navigation, and guided merge workflows
 - **📝 Changelog Generation** — Multiple formats: Standard, ReleaseNOW (with QuickDownloads), and Top Picks
-- **🔧 GitHub Integration** — PR creation, merge management, and release automation
+- **🔧 GitHub & GitLab Integration** — PR/MR creation, merge management, and release automation via `gh` or `glab`
 
 
 ### 🚀 Advanced Features
@@ -855,13 +856,15 @@ ComfyGit supports different levels of Git integration:
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| **GitLocalOnly** | Local git operations only | Simple projects, no GitHub |
-| **GitHubEnabled** | Full GitHub integration | PRs, merges, releases |
-| **GitLabEnabled** | GitLab integration (planned) | GitLab workflows |
+| **GitLocalOnly** | Local git operations only | Simple projects, no forge host |
+| **GitHubEnabled** | Full GitHub integration (`gh`) | PRs, merges, releases on github.com |
+| **GitLabEnabled** | Full GitLab integration (`glab`) | MRs, merges, releases on gitlab.com |
+
+`cg init` auto-detects **GitHubEnabled** or **GitLabEnabled** from `origin` when the remote URL points at github.com or gitlab.com.
 
 Configure in Project Settings or directly in config:
 ```toml
-integration_mode = "GitHubEnabled"
+integration_mode = "GitHubEnabled"   # or "gitlab_enabled"
 ```
 
 ---
