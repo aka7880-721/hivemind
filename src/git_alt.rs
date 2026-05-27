@@ -63,7 +63,7 @@ pub(crate) fn run_new_alt(option_name: Option<&str>) -> Result<()> {
         }
     };
 
-    if synced_work && project.integration_mode != IntegrationMode::GitHubEnabled {
+    if synced_work && !project.integration_mode.is_forge_enabled() {
         bail!(
             "cg new alt 1 (Synced Work) is only available for GitHub-enabled projects; \
              use option 2 for local-only branches"
