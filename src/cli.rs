@@ -233,18 +233,32 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         [command] if is_pr_command(command) => {
             let cwd = env::current_dir().context("failed to read current directory")?;
             let repo_root = current_git_repo_root(&cwd)?;
+            let forge = crate::forge::require_forge_for_repo(&repo_root)?;
             let custom_main_branch = find_repo_custom_main_branch(&repo_root);
             with_cli_git_cancellation(|cancel| {
-                run_pr(&repo_root, false, custom_main_branch.as_deref(), cancel)
+                run_pr(
+                    &repo_root,
+                    forge,
+                    false,
+                    custom_main_branch.as_deref(),
+                    cancel,
+                )
             })?;
             Ok(StartupMode::Handled)
         }
         [command, option] if is_pr_command(command) && is_pr_main_option(option) => {
             let cwd = env::current_dir().context("failed to read current directory")?;
             let repo_root = current_git_repo_root(&cwd)?;
+            let forge = crate::forge::require_forge_for_repo(&repo_root)?;
             let custom_main_branch = find_repo_custom_main_branch(&repo_root);
             with_cli_git_cancellation(|cancel| {
-                run_pr(&repo_root, true, custom_main_branch.as_deref(), cancel)
+                run_pr(
+                    &repo_root,
+                    forge,
+                    true,
+                    custom_main_branch.as_deref(),
+                    cancel,
+                )
             })?;
             Ok(StartupMode::Handled)
         }
@@ -257,7 +271,8 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         [command] if is_merge_command(command) => {
             let cwd = env::current_dir().context("failed to read current directory")?;
             let repo_root = current_git_repo_root(&cwd)?;
-            with_cli_git_cancellation(|cancel| run_merge(&repo_root, cancel))?;
+            let forge = crate::forge::require_forge_for_repo(&repo_root)?;
+            with_cli_git_cancellation(|cancel| run_merge(&repo_root, forge, cancel))?;
             Ok(StartupMode::Handled)
         }
         [command] if is_reroot_command(command) => {
@@ -292,8 +307,9 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             let pr_number = parse_merge_pull_request_selector(selector)?;
             let cwd = env::current_dir().context("failed to read current directory")?;
             let repo_root = current_git_repo_root(&cwd)?;
+            let forge = crate::forge::require_forge_for_repo(&repo_root)?;
             with_cli_git_cancellation(|cancel| {
-                run_merge_for_pull_request(&repo_root, pr_number, cancel)
+                run_merge_for_pull_request(&repo_root, forge, pr_number, cancel)
             })?;
             Ok(StartupMode::Handled)
         }
