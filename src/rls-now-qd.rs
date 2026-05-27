@@ -281,18 +281,28 @@ fn encode_path_segment(s: &str) -> String {
     out
 }
 
+pub(crate) fn forge_release_download_url(
+    forge: crate::forge::ForgeKind,
+    owner: &str,
+    repo: &str,
+    tag: &str,
+    file_name: &str,
+) -> String {
+    forge.release_download_url(owner, repo, tag, file_name)
+}
+
 pub(crate) fn github_release_download_url(
     owner: &str,
     repo: &str,
     tag: &str,
     file_name: &str,
 ) -> String {
-    format!(
-        "https://github.com/{}/{}/releases/download/{}/{}",
-        encode_path_segment(owner),
-        encode_path_segment(repo),
-        encode_path_segment(tag),
-        encode_path_segment(file_name)
+    forge_release_download_url(
+        crate::forge::ForgeKind::GitHub,
+        owner,
+        repo,
+        tag,
+        file_name,
     )
 }
 
@@ -344,6 +354,7 @@ fn sup_link(href: &str, label: &str, title: &str) -> String {
 }
 
 fn sup_link_or_grey(
+    forge: crate::forge::ForgeKind,
     owner: &str,
     repo: &str,
     tag: &str,
@@ -353,7 +364,7 @@ fn sup_link_or_grey(
 ) -> String {
     match file {
         Some(f) => {
-            let url = github_release_download_url(owner, repo, tag, f);
+            let url = forge_release_download_url(forge, owner, repo, tag, f);
             sup_link(&url, label, title)
         }
         None => format!(r#"<sup><sub>{}</sub></sup>"#, esc_attr(label)),
@@ -361,6 +372,7 @@ fn sup_link_or_grey(
 }
 
 pub(crate) fn build_quick_downloads_section_html(
+    forge: crate::forge::ForgeKind,
     owner: &str,
     repo: &str,
     tag: &str,
@@ -369,7 +381,7 @@ pub(crate) fn build_quick_downloads_section_html(
 ) -> String {
     let win_cell = {
         let msi = slots.win_msi.as_ref().map(|f| {
-            let u = github_release_download_url(owner, repo, tag, f);
+            let u = forge_release_download_url(forge, owner, repo, tag, f);
             sub_linked_img(
                 &u,
                 &format!("{}/msi1.svg", LOGO_BASE),
@@ -378,7 +390,7 @@ pub(crate) fn build_quick_downloads_section_html(
             )
         });
         let zip = slots.win_zip.as_ref().map(|f| {
-            let u = github_release_download_url(owner, repo, tag, f);
+            let u = forge_release_download_url(forge, owner, repo, tag, f);
             sub_linked_img(
                 &u,
                 &format!("{}/zip.svg", LOGO_BASE),
@@ -398,6 +410,7 @@ pub(crate) fn build_quick_downloads_section_html(
         LOGO_BASE,
         LOGO_BASE,
         sup_link_or_grey(
+            forge,
             owner,
             repo,
             tag,
@@ -406,6 +419,7 @@ pub(crate) fn build_quick_downloads_section_html(
             "x86_64 → AMD/Intel"
         ),
         sup_link_or_grey(
+            forge,
             owner,
             repo,
             tag,
@@ -415,6 +429,7 @@ pub(crate) fn build_quick_downloads_section_html(
         ),
         LOGO_BASE,
         sup_link_or_grey(
+            forge,
             owner,
             repo,
             tag,
@@ -423,6 +438,7 @@ pub(crate) fn build_quick_downloads_section_html(
             "x86_64 → AMD/Intel CPU"
         ),
         sup_link_or_grey(
+            forge,
             owner,
             repo,
             tag,
@@ -433,6 +449,7 @@ pub(crate) fn build_quick_downloads_section_html(
         LOGO_BASE,
         LOGO_BASE,
         sup_link_or_grey(
+            forge,
             owner,
             repo,
             tag,
@@ -441,6 +458,7 @@ pub(crate) fn build_quick_downloads_section_html(
             "amd64 → AMD/Intel CPU"
         ),
         sup_link_or_grey(
+            forge,
             owner,
             repo,
             tag,
@@ -450,6 +468,7 @@ pub(crate) fn build_quick_downloads_section_html(
         ),
         LOGO_BASE,
         sup_link_or_grey(
+            forge,
             owner,
             repo,
             tag,
@@ -458,6 +477,7 @@ pub(crate) fn build_quick_downloads_section_html(
             "amd64 → AMD/Intel CPU"
         ),
         sup_link_or_grey(
+            forge,
             owner,
             repo,
             tag,
@@ -470,7 +490,7 @@ pub(crate) fn build_quick_downloads_section_html(
     let mac_pkg_app = |pkg: Option<&String>, app: Option<&String>| {
         let pkg_s = match pkg {
             Some(f) => {
-                let u = github_release_download_url(owner, repo, tag, f);
+                let u = forge_release_download_url(forge, owner, repo, tag, f);
                 sub_linked_img(
                     &u,
                     &format!("{}/pkg.svg", LOGO_BASE),
@@ -482,7 +502,7 @@ pub(crate) fn build_quick_downloads_section_html(
         };
         let app_s = match app {
             Some(f) => {
-                let u = github_release_download_url(owner, repo, tag, f);
+                let u = forge_release_download_url(forge, owner, repo, tag, f);
                 sub_linked_img(
                     &u,
                     &format!("{}/app.svg", LOGO_BASE),
@@ -552,16 +572,28 @@ pub(crate) fn finalize_release_notes_with_quick_downloads(
         return user_trim;
     };
 
-    let Some((owner, repo)) = crate::git::github_owner_repo_from_remote_url(url) else {
+    let Some(forge) = crate::forge::detect_forge_from_remote_url(url) else {
         warnings.push(format!(
-            "Quick-Downloads skipped: remote URL is not a recognized GitHub SSH/HTTPS URL: {url}"
+            "Quick-Downloads skipped: remote URL is not a recognized GitHub or GitLab SSH/HTTPS URL: {url}"
+        ));
+        return user_trim;
+    };
+    let Some((owner, repo)) = forge.owner_repo_from_remote_url(url) else {
+        warnings.push(format!(
+            "Quick-Downloads skipped: could not parse owner/repo from remote URL: {url}"
         ));
         return user_trim;
     };
 
     let slots = assign_artifacts_to_slots(artifact_files);
-    let html =
-        build_quick_downloads_section_html(&owner, &repo, tag, &slots, qd.footer_message.trim());
+    let html = build_quick_downloads_section_html(
+        forge,
+        &owner,
+        &repo,
+        tag,
+        &slots,
+        qd.footer_message.trim(),
+    );
 
     let merged = match qd.position {
         QuickDownloadsPosition::Top => match user_trim {
@@ -615,6 +647,7 @@ mod tests {
     fn missing_slots_still_produce_html() {
         let slots = QuickDownloadSlots::default();
         let html = build_quick_downloads_section_html(
+            crate::forge::ForgeKind::GitHub,
             "o",
             "r",
             "v1",
