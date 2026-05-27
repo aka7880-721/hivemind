@@ -6799,7 +6799,7 @@ pub(crate) fn overview_bump_workflow_options(
             OverviewBumpWorkflow::Commit,
             OverviewBumpWorkflow::CommitAndTag,
         ],
-        IntegrationMode::GitHubEnabled => vec![
+        IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled => vec![
             OverviewBumpWorkflow::JustBump,
             OverviewBumpWorkflow::Commit,
             OverviewBumpWorkflow::CommitAndPush,
@@ -7147,7 +7147,9 @@ impl MainBranchWarningDialog {
 
     fn switch_label(&self) -> &'static str {
         match self.integration_mode {
-            IntegrationMode::GitHubEnabled => "Switch to mainline & Sync & Bump",
+            IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled => {
+                "Switch to mainline & Sync & Bump"
+            }
             IntegrationMode::GitLocalOnly => "Switch to mainline & Bump",
             IntegrationMode::LocalOnly => "Continue",
         }
@@ -7352,13 +7354,13 @@ impl ScopeDraft {
             target_key_custom: target_key_is_custom(&target.path, &target.key_path),
             scope_kind: branch.scope_kind,
             repo: branch.repo.clone(),
-            integration_mode: if branch
+            integration_mode: if let Some(remote_url) = branch
                 .repo
                 .as_ref()
                 .and_then(|repo| repo.remote_url.as_ref())
-                .is_some()
             {
-                IntegrationMode::GitHubEnabled
+                crate::forge::integration_mode_for_remote_url(remote_url)
+                    .unwrap_or(IntegrationMode::GitLocalOnly)
             } else if branch.repo.is_some() {
                 IntegrationMode::GitLocalOnly
             } else {
@@ -7749,7 +7751,12 @@ async fn load_overview_activity_summaries_async(
                 .await
                 .map_err(|_| anyhow!("activity summary worker pool is unavailable"))?;
             let summary = run_blocking_job(move || {
-                Ok(load_scope_activity_summary_with_cancel(&context, cancel).ok())
+                Ok(load_scope_activity_summary_with_cancel(
+                    &context,
+                    project.integration_mode,
+                    cancel,
+                )
+                .ok())
             })
             .await?;
             Ok::<_, anyhow::Error>((index, summary))
@@ -7940,11 +7947,12 @@ async fn run_create_tag_job_async(
         }
 
         if matches!(action, TagAction::CreatePushAndRelease) {
-            run_blocking_job(ensure_gh_available).await?;
+            let integration_mode = dialog.integration_mode;
             let release_notes = release_notes
                 .as_deref()
                 .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
-            create_github_release_with_retry_async(
+            create_forge_release_with_retry_async(
+                integration_mode,
                 repo_root.clone(),
                 tag_name.clone(),
                 release_notes.to_string(),
@@ -8000,11 +8008,12 @@ async fn run_create_tag_job_async(
     }
 
     if matches!(action, TagAction::CreatePushAndRelease) {
-        run_blocking_job(ensure_gh_available).await?;
+        let integration_mode = dialog.integration_mode;
         let release_notes = release_notes
             .as_deref()
             .ok_or_else(|| anyhow!("release notes should be available for release creation"))?;
-        create_github_release_with_retry_async(
+        create_forge_release_with_retry_async(
+            integration_mode,
             repo_root.clone(),
             tag_name.clone(),
             release_notes.to_string(),
@@ -8467,7 +8476,14 @@ fn build_release_notes_markdown(
 }
 
 fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
-    crate::git_stt::last_rls_version(repo_root, None)
+    let Some(forge) = crate::forge::detect_forge_for_repo(repo_root) else {
+        return Ok(None);
+    };
+    let integration_mode = match forge {
+        crate::forge::ForgeKind::GitHub => crate::config::IntegrationMode::GitHubEnabled,
+        crate::forge::ForgeKind::GitLab => crate::config::IntegrationMode::GitLabEnabled,
+    };
+    crate::git_stt::last_rls_version(repo_root, integration_mode, None)
 }
 
 async fn run_git_push_with_retry_async(
@@ -8487,11 +8503,14 @@ async fn run_git_push_with_retry_async(
     .await
 }
 
-async fn create_github_release_with_retry_async(
+async fn create_forge_release_with_retry_async(
+    integration_mode: IntegrationMode,
     repo_root: String,
     tag_name: String,
     release_notes: String,
 ) -> Result<()> {
+    let forge = crate::forge::require_forge_cli(integration_mode)?;
+    let cli_name = forge.cli_name();
     let notes_file = std::env::temp_dir().join(format!(
         "cg-release-notes-{}-{}.md",
         std::process::id(),
@@ -8512,13 +8531,14 @@ async fn create_github_release_with_retry_async(
         "--notes-file".to_string(),
         notes_file_string,
     ];
+    let action_label = format!("{cli_name} release create");
     let release_result = run_command_with_retry_async(
         repo_root,
-        "gh",
+        cli_name,
         args,
         GH_RELEASE_TIMEOUT,
         NETWORK_RETRY_ATTEMPTS,
-        "gh release create",
+        &action_label,
     )
     .await;
     let cleanup_result = fs::remove_file(&notes_file);
@@ -8539,21 +8559,23 @@ async fn run_command_with_retry_async(
     args: Vec<String>,
     timeout: Duration,
     attempts: usize,
-    action: &'static str,
+    action: &str,
 ) -> Result<()> {
     let total_attempts = attempts.max(1);
     let mut last_error = None;
+    let action = action.to_string();
 
     for attempt in 1..=total_attempts {
         let repo_root_for_attempt = repo_root.clone();
         let args_for_attempt = args.clone();
+        let action_for_attempt = action.clone();
         match run_blocking_job(move || {
             run_command_checked_with_timeout(
                 &repo_root_for_attempt,
                 program,
                 &args_for_attempt,
                 timeout,
-                action,
+                &action_for_attempt,
             )
         })
         .await
