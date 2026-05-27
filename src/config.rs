@@ -780,6 +780,7 @@ pub enum IntegrationMode {
     LocalOnly,
     GitLocalOnly,
     GitHubEnabled,
+    GitLabEnabled,
 }
 
 impl IntegrationMode {
@@ -788,6 +789,7 @@ impl IntegrationMode {
             IntegrationMode::LocalOnly => "Local-only",
             IntegrationMode::GitLocalOnly => "GitLocal-only",
             IntegrationMode::GitHubEnabled => "GitHub-enabled",
+            IntegrationMode::GitLabEnabled => "GitLab-enabled",
         }
     }
 
@@ -795,15 +797,17 @@ impl IntegrationMode {
         match self {
             IntegrationMode::LocalOnly => IntegrationMode::GitLocalOnly,
             IntegrationMode::GitLocalOnly => IntegrationMode::GitHubEnabled,
-            IntegrationMode::GitHubEnabled => IntegrationMode::LocalOnly,
+            IntegrationMode::GitHubEnabled => IntegrationMode::GitLabEnabled,
+            IntegrationMode::GitLabEnabled => IntegrationMode::LocalOnly,
         }
     }
 
     pub fn previous(self) -> Self {
         match self {
-            IntegrationMode::LocalOnly => IntegrationMode::GitHubEnabled,
+            IntegrationMode::LocalOnly => IntegrationMode::GitLabEnabled,
             IntegrationMode::GitLocalOnly => IntegrationMode::LocalOnly,
             IntegrationMode::GitHubEnabled => IntegrationMode::GitLocalOnly,
+            IntegrationMode::GitLabEnabled => IntegrationMode::GitHubEnabled,
         }
     }
 
@@ -812,7 +816,22 @@ impl IntegrationMode {
     }
 
     pub fn requires_remote(self) -> bool {
-        self == IntegrationMode::GitHubEnabled
+        self.is_forge_enabled()
+    }
+
+    pub fn is_forge_enabled(self) -> bool {
+        matches!(
+            self,
+            IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled
+        )
+    }
+
+    pub fn forge_kind(self) -> Option<crate::forge::ForgeKind> {
+        match self {
+            IntegrationMode::GitHubEnabled => Some(crate::forge::ForgeKind::GitHub),
+            IntegrationMode::GitLabEnabled => Some(crate::forge::ForgeKind::GitLab),
+            IntegrationMode::LocalOnly | IntegrationMode::GitLocalOnly => None,
+        }
     }
 }
 
