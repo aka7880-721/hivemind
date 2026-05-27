@@ -46,10 +46,3 @@ pub fn run_in_repo(repo_root: &str, args: &[&str]) -> Result<Output> {
         .output()
         .with_context(|| format!("failed to execute {CLI_NAME} {}", args.join(" ")))
 }
-
-pub fn run(args: &[&str]) -> Result<Output> {
-    Command::new(CLI_NAME)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to execute {CLI_NAME} {}", args.join(" ")))
-}

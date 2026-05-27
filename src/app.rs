@@ -84,8 +84,8 @@ use crate::{
     },
     git::{
         GitCancellation, GitScopeContext, RepoActivitySummary, branches_containing_ref_with_cancel,
-        collect_all_branch_git_scope_contexts, current_branch_with_cancel, ensure_gh_available,
-        ensure_local_tag, is_mainline_branch_name, latest_local_tag_with_cancel,
+        collect_all_branch_git_scope_contexts, current_branch_with_cancel, ensure_local_tag,
+        is_mainline_branch_name, latest_local_tag_with_cancel,
         load_scope_activity_summary_with_cancel, run_git, run_git_checked,
         sorted_local_tags_with_cancel, split_output_lines,
     },

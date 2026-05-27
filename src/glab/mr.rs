@@ -14,9 +14,6 @@ use crate::{
     glab::remote,
 };
 
-pub const MR_LIST_FIELDS: &str =
-    "iid,title,targetBranch,sourceBranch,createdAt,author,mergeStatus,detailedMergeStatus";
-
 pub fn list_open_merge_requests(repo_root: &str, limit: usize) -> Result<Vec<ForgePullRequest>> {
     let limit = limit.to_string();
     let output = cli::run_in_repo(
@@ -229,7 +226,7 @@ impl GlabMergeRequest {
             author,
             status,
             mergeable_state,
-            issue_url,
+            issue_url: issue_url.or(self.web_url),
         }
     }
 }

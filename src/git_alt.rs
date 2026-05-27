@@ -26,7 +26,7 @@ use crossterm::{
 
 use crate::{
     cli::{best_effort_canonicalize, current_git_repo_root, find_project_for_cwd},
-    config::{ConfigStore, IntegrationMode},
+    config::ConfigStore,
     git::{
         collect_all_branch_git_scope_contexts, create_branch_and_switch,
         current_branch_with_cancel, publish_branch_with_upstream, run_git_checked_with_cancel,

@@ -3,7 +3,7 @@
 //
 // Licensed under the ComfyGit License v1.2
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::ghub::cli::{self, CLI_NAME};
 

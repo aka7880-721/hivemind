@@ -3192,26 +3192,8 @@ fn format_branch_label(branch: &BranchDiagramNode) -> String {
 }
 
 fn latest_public_release_tag_for_repo(repo_root: &str) -> Option<String> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args([
-            "release",
-            "list",
-            "--limit",
-            "1",
-            "--json",
-            "tagName",
-            "--jq",
-            ".[].tagName",
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!tag.is_empty()).then_some(tag)
+    crate::forge::detect_forge_for_repo(repo_root)
+        .and_then(|forge| forge.latest_public_release_tag(repo_root))
 }
 
 fn load_config() -> Result<AppConfig> {

@@ -189,26 +189,6 @@ pub(crate) fn default_push_remote_name(repo_root: &str) -> Result<String> {
     )
 }
 
-pub(crate) fn github_repository_web_url(repo_root: &str) -> Option<String> {
-    crate::ghub::repository_web_url(repo_root)
-}
-
-pub(crate) fn github_pull_conflicts_url(repo_root: &str, pr_number: u64) -> Option<String> {
-    crate::ghub::pull_conflicts_url(repo_root, pr_number)
-}
-
-pub(crate) fn github_owner_repo_from_remote_url(remote_url: &str) -> Option<(String, String)> {
-    crate::ghub::owner_repo_from_remote_url(remote_url)
-}
-
-pub(crate) fn forge_pull_conflicts_url(
-    forge: crate::forge::ForgeKind,
-    repo_root: &str,
-    number: u64,
-) -> Option<String> {
-    forge.pull_conflicts_url(repo_root, number)
-}
-
 fn branch_upstream_ref_with_cancel(
     repo_root: &str,
     branch_name: &str,
@@ -780,10 +760,6 @@ pub(crate) fn ensure_local_tag(
         }
         Ok(true)
     }
-}
-
-pub(crate) fn ensure_gh_available() -> Result<()> {
-    crate::ghub::ensure_available()
 }
 
 pub(crate) fn ensure_forge_cli_available(

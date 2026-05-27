@@ -32,7 +32,7 @@ use crossterm::{
 
 use crate::{
     cli::{best_effort_canonicalize, current_git_repo_root, find_project_for_cwd, run_bump},
-    config::{ConfigStore, IntegrationMode},
+    config::ConfigStore,
     git::current_branch_with_cancel,
 };
 

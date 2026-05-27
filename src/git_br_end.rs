@@ -6,7 +6,6 @@
 // For details, see the LICENSE file in the repository root.
 use std::{
     io::{self, Write},
-    process::Command,
     thread,
     time::Duration,
 };

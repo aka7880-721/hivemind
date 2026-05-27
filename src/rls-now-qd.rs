@@ -265,22 +265,6 @@ pub(crate) fn assign_artifacts_to_slots(artifact_paths: &[String]) -> QuickDownl
     slots
 }
 
-fn encode_path_segment(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.as_bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(*b as char);
-            }
-            _ => {
-                use std::fmt::Write;
-                let _ = write!(out, "%{:02X}", b);
-            }
-        }
-    }
-    out
-}
-
 pub(crate) fn forge_release_download_url(
     forge: crate::forge::ForgeKind,
     owner: &str,
@@ -289,15 +273,6 @@ pub(crate) fn forge_release_download_url(
     file_name: &str,
 ) -> String {
     forge.release_download_url(owner, repo, tag, file_name)
-}
-
-pub(crate) fn github_release_download_url(
-    owner: &str,
-    repo: &str,
-    tag: &str,
-    file_name: &str,
-) -> String {
-    forge_release_download_url(crate::forge::ForgeKind::GitHub, owner, repo, tag, file_name)
 }
 
 fn esc_attr(s: &str) -> String {
@@ -611,8 +586,14 @@ mod tests {
     };
 
     #[test]
-    fn github_release_download_url_encodes_segments() {
-        let u = github_release_download_url("comfy-home", "ComfyGit", "v0.1.2", "a b.msi");
+    fn forge_release_download_url_encodes_segments() {
+        let u = forge_release_download_url(
+            crate::forge::ForgeKind::GitHub,
+            "comfy-home",
+            "ComfyGit",
+            "v0.1.2",
+            "a b.msi",
+        );
         assert!(u.contains("v0.1.2"));
         assert!(u.contains("a%20b.msi") || u.contains("releases/download"));
     }

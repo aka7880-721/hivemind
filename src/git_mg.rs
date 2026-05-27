@@ -12,24 +12,21 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use crate::{
+    forge::{ForgeKind, ForgePullRequest},
+    git::{
+        GitCancellation, current_branch_with_cancel, default_push_remote_name,
+        ensure_clean_worktree_with_cancel, ensure_local_branch_published_and_in_sync_with_cancel,
+        run_git_checked_owned_with_cancel, split_output_lines,
+    },
+};
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Local};
 use crossterm::{
     cursor::{MoveToColumn, MoveUp},
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute, queue,
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
-};
-use serde::Deserialize;
-
-use crate::{
-    forge::{self, ForgeKind, ForgePullRequest},
-    git::{
-        GitCancellation, current_branch_with_cancel, default_push_remote_name,
-        ensure_clean_worktree_with_cancel, ensure_local_branch_published_and_in_sync_with_cancel,
-        run_git_checked_owned_with_cancel, split_output_lines,
-    },
 };
 
 const PR_LIST_LIMIT: usize = 200;

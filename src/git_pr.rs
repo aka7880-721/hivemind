@@ -6,20 +6,8 @@
 use std::{
     collections::HashSet,
     io::{self, Write},
-    path::Path,
-    process::Command,
     time::{Duration, Instant},
 };
-
-use anyhow::{Context, Result, bail};
-use crossterm::{
-    cursor::{MoveTo, MoveToColumn},
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    execute, queue,
-    style::Print,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
-};
-use serde::Deserialize;
 
 use crate::{
     changelog::{pr_changelog_gen, write_temp_changelog_markdown},
@@ -29,6 +17,14 @@ use crate::{
         ensure_local_branch_published_and_in_sync_with_cancel, is_mainline_branch_name,
         resolve_main_branch_name, run_git_checked_with_cancel, split_output_lines,
     },
+};
+use anyhow::{Context, Result, bail};
+use crossterm::{
+    cursor::{MoveTo, MoveToColumn},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    execute, queue,
+    style::Print,
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
 };
 
 const PR_PREVIEW_SECONDS: u64 = 30;

@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::{DateTime, Local};
 
 use crate::config::IntegrationMode;
@@ -56,13 +56,6 @@ impl ForgeKind {
         match self {
             ForgeKind::GitHub => crate::ghub::owner_repo_from_remote_url(remote_url),
             ForgeKind::GitLab => crate::glab::owner_repo_from_remote_url(remote_url),
-        }
-    }
-
-    pub fn repository_web_url(self, repo_root: &str) -> Option<String> {
-        match self {
-            ForgeKind::GitHub => crate::ghub::repository_web_url(repo_root),
-            ForgeKind::GitLab => crate::glab::repository_web_url(repo_root),
         }
     }
 
@@ -226,11 +219,6 @@ pub struct ForgePullRequest {
 }
 
 impl ForgePullRequest {
-    pub fn is_mergeable(&self) -> bool {
-        self.mergeable_state.eq_ignore_ascii_case("MERGEABLE")
-            || self.mergeable_state.eq_ignore_ascii_case("can_be_merged")
-    }
-
     pub fn created_label(&self) -> String {
         DateTime::parse_from_rfc3339(&self.created_at)
             .map(|timestamp| {
@@ -247,10 +235,6 @@ impl ForgePullRequest {
             .ok()
             .map(|timestamp| timestamp.timestamp())
             .unwrap_or_default()
-    }
-
-    pub fn mergeable_label(&self) -> &'static str {
-        if self.is_mergeable() { "True" } else { "False" }
     }
 }
 
