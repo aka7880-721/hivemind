@@ -23,22 +23,34 @@ use crossterm::{
 };
 use serde::Deserialize;
 
-use crate::git::{
-    GitCancellation, current_branch_with_cancel, default_push_remote_name,
-    ensure_clean_worktree_with_cancel, ensure_local_branch_published_and_in_sync_with_cancel,
-    github_repository_web_url, run_git_checked_owned_with_cancel, split_output_lines,
+use crate::{
+    forge::{self, ForgeKind, ForgePullRequest},
+    git::{
+        GitCancellation, current_branch_with_cancel, default_push_remote_name,
+        ensure_clean_worktree_with_cancel, ensure_local_branch_published_and_in_sync_with_cancel,
+        run_git_checked_owned_with_cancel, split_output_lines,
+    },
 };
 
 const PR_LIST_LIMIT: usize = 200;
-const GH_PR_FIELDS: &str =
-    "number,title,baseRefName,headRefName,createdAt,author,mergeable,mergeStateStatus";
-const GITHUB_LINK_LABEL: &str = "<GitHub>";
+const FORGE_LINK_LABEL_GITHUB: &str = "<GitHub>";
+const FORGE_LINK_LABEL_GITLAB: &str = "<GitLab>";
 const VSCODE_LINK_LABEL: &str = "<VSCode>";
 const CONFLICT_FIX_PREFIX: &str = "Fix: ";
 const CONFLICT_LINKS_TOTAL_WIDTH: usize =
-    CONFLICT_FIX_PREFIX.len() + GITHUB_LINK_LABEL.len() + 1 + VSCODE_LINK_LABEL.len();
+    CONFLICT_FIX_PREFIX.len() + FORGE_LINK_LABEL_GITHUB.len() + 1 + VSCODE_LINK_LABEL.len();
+fn forge_link_label(forge: ForgeKind) -> &'static str {
+    match forge {
+        ForgeKind::GitHub => FORGE_LINK_LABEL_GITHUB,
+        ForgeKind::GitLab => FORGE_LINK_LABEL_GITLAB,
+    }
+}
 
-pub(crate) fn run_merge(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
+pub(crate) fn run_merge(
+    repo_root: &str,
+    forge: ForgeKind,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
     let current_branch = current_branch_with_cancel(repo_root, cancel.clone())?;
     if current_branch.starts_with("detached (") {
         bail!("cannot run cg merge from a detached HEAD");
@@ -53,12 +65,13 @@ pub(crate) fn run_merge(repo_root: &str, cancel: Option<GitCancellation>) -> Res
         cancel.clone(),
     )?;
 
-    let selected = prompt_pull_request_selection(repo_root, cancel.clone())?;
-    merge_pull_request(repo_root, &selected)
+    let selected = prompt_pull_request_selection(repo_root, forge, cancel.clone())?;
+    merge_pull_request(repo_root, forge, &selected)
 }
 
 pub(crate) fn run_merge_for_pull_request(
     repo_root: &str,
+    forge: ForgeKind,
     pr_number: u64,
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
@@ -76,57 +89,24 @@ pub(crate) fn run_merge_for_pull_request(
         cancel.clone(),
     )?;
 
-    let entries = fetch_open_pull_requests(repo_root, cancel)?;
+    let entries = fetch_open_pull_requests(repo_root, forge, cancel)?;
     let selected = select_pull_request_by_number(&entries, pr_number)?;
-    merge_pull_request(repo_root, &selected)
+    merge_pull_request(repo_root, forge, &selected)
 }
 
 fn fetch_open_pull_requests(
     repo_root: &str,
+    forge: ForgeKind,
     cancel: Option<GitCancellation>,
 ) -> Result<Vec<PullRequestEntry>> {
     if cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
         bail!("cancelled by user")
     }
 
-    let limit = PR_LIST_LIMIT.to_string();
-    let args = [
-        "pr".to_string(),
-        "list".to_string(),
-        "--state".to_string(),
-        "open".to_string(),
-        "--limit".to_string(),
-        limit,
-        "--json".to_string(),
-        GH_PR_FIELDS.to_string(),
-    ];
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args(args.iter().map(String::as_str))
-        .output()
-        .context("failed to execute gh pr list")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !stderr.is_empty() {
-            bail!("gh pr list failed: {}", stderr)
-        }
-        if !stdout.is_empty() {
-            bail!("gh pr list failed: {}", stdout)
-        }
-        bail!(
-            "gh pr list failed with exit code {:?}",
-            output.status.code()
-        )
-    }
-
-    let listed = serde_json::from_slice::<Vec<GhPullRequest>>(&output.stdout)
-        .context("failed to parse gh pr list output")?;
-    let repository_issue_root = github_repository_web_url(repo_root);
-    let mut entries = listed
+    let mut entries = forge
+        .list_open_pull_requests(repo_root, PR_LIST_LIMIT)?
         .into_iter()
-        .map(|pr| PullRequestEntry::from_gh(pr, repository_issue_root.as_deref()))
+        .map(PullRequestEntry::from_forge)
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         right
@@ -136,41 +116,16 @@ fn fetch_open_pull_requests(
     });
 
     if entries.is_empty() {
-        bail!("no open pull requests are available for this repository")
+        let label = forge.pull_request_label();
+        bail!("no open {label}s are available for this repository")
     }
 
     Ok(entries)
 }
 
-fn fetch_pull_request(repo_root: &str, pr_number: u64) -> Result<PullRequestEntry> {
-    let args = build_pull_request_view_args(pr_number);
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args(args.iter().map(String::as_str))
-        .output()
-        .context("failed to execute gh pr view")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !stderr.is_empty() {
-            bail!("gh pr view failed: {}", stderr)
-        }
-        if !stdout.is_empty() {
-            bail!("gh pr view failed: {}", stdout)
-        }
-        bail!(
-            "gh pr view failed with exit code {:?}",
-            output.status.code()
-        )
-    }
-
-    let entry = serde_json::from_slice::<GhPullRequest>(&output.stdout)
-        .context("failed to parse gh pr view output")?;
-    let repository_issue_root = github_repository_web_url(repo_root);
-    Ok(PullRequestEntry::from_gh(
-        entry,
-        repository_issue_root.as_deref(),
+fn fetch_pull_request(repo_root: &str, forge: ForgeKind, pr_number: u64) -> Result<PullRequestEntry> {
+    Ok(PullRequestEntry::from_forge(
+        forge.view_pull_request(repo_root, pr_number)?,
     ))
 }
 
@@ -192,9 +147,10 @@ fn select_pull_request_by_number(
 
 fn prompt_pull_request_selection(
     repo_root: &str,
+    forge: ForgeKind,
     cancel: Option<GitCancellation>,
 ) -> Result<PullRequestEntry> {
-    let mut entries = fetch_open_pull_requests(repo_root, cancel.clone())?;
+    let mut entries = fetch_open_pull_requests(repo_root, forge, cancel.clone())?;
     let mut prepared_vscode_workspace = None::<PreparedVscodeMergeWorkspace>;
     let mut selected = 0usize;
     let mut rendered_lines = 0usize;
@@ -221,6 +177,7 @@ fn prompt_pull_request_selection(
                 }
             }
             render_pull_request_picker(
+                forge,
                 &entries,
                 selected,
                 message.as_deref(),
@@ -293,7 +250,7 @@ fn prompt_pull_request_selection(
                             }
                         }
 
-                        match fetch_open_pull_requests(repo_root, cancel.clone()) {
+                        match fetch_open_pull_requests(repo_root, forge, cancel.clone()) {
                             Ok(reloaded_entries) => {
                                 entries = reloaded_entries;
                                 prepared_vscode_workspace = None;
@@ -380,6 +337,7 @@ fn prompt_pull_request_selection(
 }
 
 fn render_pull_request_picker(
+    forge: ForgeKind,
     entries: &[PullRequestEntry],
     selected: usize,
     message: Option<&str>,
@@ -419,6 +377,7 @@ fn render_pull_request_picker(
 
     for (index, entry) in entries.iter().enumerate() {
         render_pull_request_row(
+            forge,
             &mut stdout,
             entry,
             index == selected,
@@ -454,6 +413,7 @@ fn render_pull_request_picker(
 }
 
 fn render_pull_request_row(
+    forge: ForgeKind,
     stdout: &mut io::Stdout,
     entry: &PullRequestEntry,
     selected: bool,
@@ -481,6 +441,7 @@ fn render_pull_request_row(
     )
     .context("failed to queue merge picker row prefix")?;
     render_pull_request_title_cell(
+        forge,
         stdout,
         entry,
         row_color,
@@ -525,6 +486,7 @@ fn render_pull_request_row(
 }
 
 fn render_pull_request_title_cell(
+    forge: ForgeKind,
     stdout: &mut io::Stdout,
     entry: &PullRequestEntry,
     row_color: Color,
@@ -559,7 +521,7 @@ fn render_pull_request_title_cell(
         SetForegroundColor(Color::DarkGrey),
         Print(CONFLICT_FIX_PREFIX),
         SetForegroundColor(Color::Magenta),
-        Print(format_terminal_hyperlink(issue_url, GITHUB_LINK_LABEL)),
+        Print(format_terminal_hyperlink(issue_url, forge_link_label(forge))),
         SetForegroundColor(Color::DarkGrey),
         Print(" "),
         SetForegroundColor(Color::Cyan),
@@ -656,8 +618,8 @@ fn format_table_header(layout: &PullRequestTableLayout) -> String {
     )
 }
 
-fn merge_pull_request(repo_root: &str, entry: &PullRequestEntry) -> Result<()> {
-    let refreshed = fetch_pull_request(repo_root, entry.number)?;
+fn merge_pull_request(repo_root: &str, forge: ForgeKind, entry: &PullRequestEntry) -> Result<()> {
+    let refreshed = fetch_pull_request(repo_root, forge, entry.number)?;
     if !refreshed.is_mergeable() {
         let mut message = format!(
             "PR #{} is no longer mergeable (status: {}, mergeable: {}); refresh the list and resolve it before running cg merge",
@@ -674,32 +636,11 @@ fn merge_pull_request(repo_root: &str, entry: &PullRequestEntry) -> Result<()> {
     }
 
     let subject = build_merge_commit_subject(refreshed.number);
-    let args = build_merge_args(refreshed.number, &subject);
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args(args.iter().map(String::as_str))
-        .output()
-        .context("failed to execute gh pr merge")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !stderr.is_empty() {
-            bail!("gh pr merge failed: {}", stderr)
-        }
-        if !stdout.is_empty() {
-            bail!("gh pr merge failed: {}", stdout)
-        }
-        bail!(
-            "gh pr merge failed with exit code {:?}",
-            output.status.code()
-        )
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = forge.merge_pull_request(repo_root, refreshed.number, &subject)?;
     println!();
     if stdout.is_empty() {
-        println!("Pull request #{} merged.", entry.number);
+        let label = forge.pull_request_label();
+        println!("{} #{} merged.", capitalize_first(label), entry.number);
     } else {
         println!("{}", stdout);
     }
@@ -707,14 +648,12 @@ fn merge_pull_request(repo_root: &str, entry: &PullRequestEntry) -> Result<()> {
     Ok(())
 }
 
-fn build_pull_request_view_args(pr_number: u64) -> Vec<String> {
-    vec![
-        "pr".to_string(),
-        "view".to_string(),
-        pr_number.to_string(),
-        "--json".to_string(),
-        GH_PR_FIELDS.to_string(),
-    ]
+fn capitalize_first(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 fn prepare_vscode_merge_workspace(
@@ -1033,17 +972,6 @@ fn build_merge_commit_subject(pr_number: u64) -> String {
     format!("Merge pull request #{} (via ComfyGit)", pr_number)
 }
 
-fn build_merge_args(pr_number: u64, subject: &str) -> Vec<String> {
-    vec![
-        "pr".to_string(),
-        "merge".to_string(),
-        pr_number.to_string(),
-        "--merge".to_string(),
-        "--subject".to_string(),
-        subject.to_string(),
-    ]
-}
-
 fn fit_cell(value: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
@@ -1161,84 +1089,31 @@ enum PreparedWorkspaceReloadOutcome {
 }
 
 impl PullRequestEntry {
-    fn from_gh(pr: GhPullRequest, repository_issue_root: Option<&str>) -> Self {
-        let mergeable_state = pr.mergeable;
-        let status = pr.merge_state_status;
-        let issue_url = repository_issue_root
-            .filter(|_| {
-                !mergeable_state.eq_ignore_ascii_case("MERGEABLE")
-                    || !status.eq_ignore_ascii_case("CLEAN")
-            })
-            .map(|root| format!("{}/pull/{}/conflicts", root, pr.number));
-        let author = pr
-            .author
-            .and_then(|author| {
-                let login = author.login.trim().to_string();
-                if login.is_empty() {
-                    author.name.filter(|name| !name.trim().is_empty())
-                } else {
-                    Some(login)
-                }
-            })
-            .unwrap_or_else(|| "-".to_string());
-        let created_at_unix = parse_created_at_unix(&pr.created_at).unwrap_or_default();
+    fn from_forge(pr: ForgePullRequest) -> Self {
+        let created_label = pr.created_label();
+        let created_at_unix = pr.created_at_unix();
         Self {
             number: pr.number,
             title: pr.title,
-            target_branch: pr.base_ref_name,
-            source_branch: pr.head_ref_name,
-            created_label: format_created_at_label(&pr.created_at),
+            target_branch: pr.target_branch,
+            source_branch: pr.source_branch,
+            created_label,
             created_at_unix,
-            author,
-            status,
-            mergeable_state,
-            issue_url,
+            author: pr.author,
+            status: pr.status,
+            mergeable_state: pr.mergeable_state,
+            issue_url: pr.issue_url,
         }
     }
 
     fn is_mergeable(&self) -> bool {
         self.mergeable_state.eq_ignore_ascii_case("MERGEABLE")
+            || self.mergeable_state.eq_ignore_ascii_case("can_be_merged")
     }
 
     fn mergeable_label(&self) -> &'static str {
         if self.is_mergeable() { "True" } else { "False" }
     }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhPullRequest {
-    number: u64,
-    title: String,
-    base_ref_name: String,
-    head_ref_name: String,
-    created_at: String,
-    author: Option<GhPullRequestAuthor>,
-    mergeable: String,
-    merge_state_status: String,
-}
-
-#[derive(Deserialize)]
-struct GhPullRequestAuthor {
-    login: String,
-    name: Option<String>,
-}
-
-fn parse_created_at_unix(value: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|timestamp| timestamp.timestamp())
-}
-
-fn format_created_at_label(value: &str) -> String {
-    DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| {
-            timestamp
-                .with_timezone(&Local)
-                .format("%Y-%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| value.to_string())
 }
 
 #[cfg(test)]
@@ -1250,45 +1125,6 @@ mod tests {
         assert_eq!(
             build_merge_commit_subject(42),
             "Merge pull request #42 (via ComfyGit)"
-        );
-    }
-
-    #[test]
-    fn build_merge_args_uses_merge_strategy_and_subject() {
-        let args = build_merge_args(42, "Merge pull request #42 (via ComfyGit)");
-
-        assert_eq!(
-            args,
-            vec![
-                "pr",
-                "merge",
-                "42",
-                "--merge",
-                "--subject",
-                "Merge pull request #42 (via ComfyGit)",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn build_pull_request_view_args_requests_current_mergeability_fields() {
-        let args = build_pull_request_view_args(42);
-
-        assert_eq!(
-            args,
-            vec![
-                "pr",
-                "view",
-                "42",
-                "--json",
-                "number,title,baseRefName,headRefName,createdAt,author,mergeable,mergeStateStatus",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>()
         );
     }
 
@@ -1505,9 +1341,9 @@ mod tests {
         assert!(
             format_terminal_hyperlink(
                 entry.issue_url.as_deref().unwrap_or_default(),
-                GITHUB_LINK_LABEL
+                FORGE_LINK_LABEL_GITHUB
             )
-            .contains(GITHUB_LINK_LABEL)
+            .contains(FORGE_LINK_LABEL_GITHUB)
         );
     }
 
