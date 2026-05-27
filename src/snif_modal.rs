@@ -73,6 +73,7 @@ impl SnifModal {
             filters: self.filters_input.clone(),
             pattern: self.pattern_input.clone(),
             case_sensitive: self.case_sensitive,
+            ..Default::default()
         })?;
         self.output_lines.clear();
         for m in &result.matches {
@@ -98,6 +99,7 @@ impl SnifModal {
             replacement: self.replacement_input.clone(),
             case_insensitive: self.case_insensitive_replace,
             yes: true,
+            ..Default::default()
         })?;
         self.output_lines.clear();
         for path in changed {
