@@ -1,0 +1,50 @@
+name: macOS release packaging
+
+on:
+  # Manual trigger from GitHub UI or `gh workflow run`
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (defaults to Cargo.toml version)"
+        required: false
+  # Optional: build on version tags
+  push:
+    tags:
+      - "v*"
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show Rust toolchain
+        run: rustup show
+
+      - name: Make release script executable
+        run: chmod +x scripts/releaseNOW.sh
+
+      - name: Build macOS packages via releaseNOW.sh
+        env:
+          # Allow overriding the version from workflow_dispatch input if desired
+          RELEASE_VERSION_INPUT: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${RELEASE_VERSION_INPUT:-}" ]]; then
+            echo "Requested version from workflow input: ${RELEASE_VERSION_INPUT}"
+          fi
+
+          ./scripts/releaseNOW.sh --mac --no-checks --skip-msi
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-packages
+          path: |
+            dist/latest/mac-*/**
+            dist/old/mac-*/**
+          if-no-files-found: ignore
+
