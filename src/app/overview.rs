@@ -1875,7 +1875,8 @@ async fn collect_preview_entries_async(
 mod tests {
     use super::*;
     use crate::config::{
-        BranchConfig, ChangelogSettings, ReleaseNowSettings, TileInfoSettings, TileRotationTarget,
+        BranchConfig, BranchScopeKind, ChangelogSettings, ReleaseNowSettings, TargetFormat,
+        TargetSpec, TileInfoSettings, TileRotationTarget,
     };
     use crate::targets::BumpTarget;
 
