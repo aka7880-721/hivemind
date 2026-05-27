@@ -35,7 +35,7 @@ use crate::{
         AdvancedAliasSettings, AppConfig, BranchConfig, BranchScopeKind, ConfigStore,
         IntegrationMode, ProjectConfig, ProjectType, ReleaseNowSettings, RepoConfig, TargetFormat,
     },
-    git::github_owner_repo_from_remote_url,
+    forge::integration_mode_for_remote_url,
     project_wizard::ProjectWizard,
     targets::{ProbeKind, TargetProbe, probe_target},
     versioning::VersionScheme,
@@ -689,9 +689,9 @@ fn detect_integration_mode(cwd: &Path) -> Result<IntegrationDetection> {
 
     let remote_url = read_git_remote_url(cwd);
     if let Some(remote_url) = remote_url {
-        if github_owner_repo_from_remote_url(&remote_url).is_some() {
+        if let Some(integration_mode) = integration_mode_for_remote_url(&remote_url) {
             return Ok(IntegrationDetection {
-                integration_mode: IntegrationMode::GitHubEnabled,
+                integration_mode,
                 remote_url: Some(remote_url),
             });
         }
