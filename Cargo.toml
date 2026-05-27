@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.30.7"
+version = "0.31.1"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -26,9 +26,22 @@ name = "ComfyGit"
 path = "src/bin/cg-bin.rs"
 
 [workspace]
-exclude = ["src/components/comfy-toaster"]
+exclude = ["src/components/comfy-toaster", "src/components/snif-by-comfyhome"]
 
 [dependencies]
+# Comfy dependencies
+## ---------------------------------------------------------------
+## S N I F
+# -
+snif--by-comfyhome = { path = "src/components/snif-by-comfyhome" }
+# snif--by-comfyhome = "0.1.0"
+## ---------------------------------------------------------------
+## T O A S T E R
+# -
+# ratatui-comfy-toaster = "0.3.2"
+ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
+#
+# E N D ----------------------------------------------------------
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -37,8 +50,6 @@ ctrlc = "3"
 directories = "6"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 ratatui = "0.30"
-# ratatui-comfy-toaster = "0.3.2"
-ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
 ratatui-explorer = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

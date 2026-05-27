@@ -87,6 +87,9 @@ impl App {
         if self.delete_confirmation_dialog.is_some() {
             self.render_delete_confirmation_dialog(frame, frame.area());
         }
+        if self.snif_dialog.is_some() {
+            self.render_snif_dialog(frame, frame.area());
+        }
         if self.browser_dialog.is_some() {
             self.render_browser_dialog(frame, frame.area());
         }
@@ -2904,7 +2907,11 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let help = if self.browser_dialog.is_some() {
+        let help = if self.snif_dialog.is_some() {
+            Line::from(
+                "SNIF: Tab field | F2 run | m mode | e case-sensitive | a case-insensitive replace | Esc close",
+            )
+        } else if self.browser_dialog.is_some() {
             Line::from(
                 "Arrows navigate | Enter open folder or select file | U use folder | Mouse click or wheel | Esc cancel",
             )
