@@ -738,7 +738,7 @@ fn available_tag_actions(
         } else {
             vec![TagAction::CreateLocal]
         }),
-        IntegrationMode::GitHubEnabled => Ok(if has_remote {
+        IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled => Ok(if has_remote {
             vec![
                 TagAction::CreateLocal,
                 TagAction::CreateAndPush,
