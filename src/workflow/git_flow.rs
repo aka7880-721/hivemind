@@ -1,0 +1,529 @@
+// Copyright © 2026 ComfyHome™
+// All rights reserved.
+//
+// Licensed under the ComfyGit License v1.2
+//
+// For details, see the LICENSE file in the repository root.
+
+/// Git-related workflow operations for applying version bumps across repositories, managing staged changes, and ensuring tag consistency.
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use anyhow::{Context, Result, anyhow, bail};
+
+use crate::config::{IntegrationMode, ProjectConfig, TargetFormat};
+use crate::git::{
+    GitCancellation, current_branch_with_cancel, ensure_local_tag, is_mainline_branch_name,
+    publish_branch_with_upstream, resolve_push_remote_name, run_git, run_git_checked,
+    run_git_checked_with_cancel, split_output_lines, switch_or_create_branch,
+    switch_to_main_branch,
+};
+use crate::targets::{BumpScope, BumpTarget};
+
+use super::bump::{OverviewBumpWorkflow, RepoBumpOperation};
+
+#[derive(Clone)]
+pub(crate) struct UnexpectedStagedRepo {
+    pub(crate) repo_root: String,
+    pub(crate) extra_paths: Vec<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct RepoBranchState {
+    pub(crate) repo_root: String,
+    pub(crate) current_branch: String,
+    pub(super) main_branch_name: Option<String>,
+    pub(super) remote_spec: Option<String>,
+}
+
+pub(crate) fn collect_repo_bump_operations(
+    _project: &ProjectConfig,
+    scopes: &[BumpScope],
+    git_contexts: &[crate::git::GitScopeContext],
+    affected_scope_indexes: &[usize],
+) -> Result<Vec<RepoBumpOperation>> {
+    let mut operations = Vec::<RepoBumpOperation>::new();
+
+    for scope_index in affected_scope_indexes {
+        let scope = scopes
+            .get(*scope_index)
+            .ok_or_else(|| anyhow!("the selected scope does not exist"))?;
+        let context = git_contexts
+            .get(*scope_index)
+            .or_else(|| git_contexts.first())
+            .ok_or_else(|| {
+                anyhow!("git scope metadata is unavailable for the selected bump targets")
+            })?;
+        let stage_paths = collect_stage_paths_for_targets(&context.repo_root, &scope.targets);
+
+        if let Some(existing) = operations
+            .iter_mut()
+            .find(|operation| operation.repo_root == context.repo_root)
+        {
+            for path in stage_paths {
+                if !existing
+                    .stage_paths
+                    .iter()
+                    .any(|candidate| candidate == &path)
+                {
+                    existing.stage_paths.push(path);
+                }
+            }
+        } else {
+            operations.push(RepoBumpOperation {
+                repo_root: context.repo_root.clone(),
+                remote_spec: context.remote_spec.clone(),
+                stage_paths,
+            });
+        }
+    }
+
+    Ok(operations)
+}
+
+pub(crate) fn collect_non_main_repo_states(
+    project: &ProjectConfig,
+    scopes: &[BumpScope],
+    git_contexts: &[crate::git::GitScopeContext],
+    affected_scope_indexes: &[usize],
+) -> Result<Vec<RepoBranchState>> {
+    collect_non_main_repo_states_with_cancel(
+        project,
+        scopes,
+        git_contexts,
+        affected_scope_indexes,
+        None,
+    )
+}
+
+pub(crate) fn apply_repo_bump_workflow(
+    operations: &[RepoBumpOperation],
+    next_version: &str,
+    workflow: OverviewBumpWorkflow,
+    branch_name: Option<&str>,
+) -> Result<()> {
+    let commit_message = format!("bump: CG app version bump to v{}", next_version);
+    let trimmed_branch_name = branch_name.map(str::trim).filter(|name| !name.is_empty());
+
+    for operation in operations {
+        if workflow.requires_branch() {
+            let branch_name = trimmed_branch_name
+                .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
+            switch_or_create_branch(&operation.repo_root, branch_name)?;
+        }
+
+        if !operation.stage_paths.is_empty() {
+            let mut add_args = vec!["add".to_string(), "--".to_string()];
+            add_args.extend(operation.stage_paths.iter().cloned());
+            run_git_checked_owned(&operation.repo_root, add_args)?;
+        }
+
+        if has_staged_changes(&operation.repo_root)? {
+            run_git_checked(&operation.repo_root, &["commit", "-m", &commit_message])?;
+        }
+
+        if workflow.requires_tag() {
+            ensure_local_tag(&operation.repo_root, next_version, None)?;
+        }
+
+        if workflow.requires_push() {
+            let remote_spec = operation
+                .remote_spec
+                .as_deref()
+                .ok_or_else(|| anyhow!("no remote is configured for this project"))?;
+            let push_remote = resolve_push_remote_name(&operation.repo_root, remote_spec)?;
+            if workflow.requires_branch() {
+                let branch_name = trimmed_branch_name
+                    .ok_or_else(|| anyhow!("the selected workflow requires a branch name"))?;
+                let _ = publish_branch_with_upstream(
+                    &operation.repo_root,
+                    branch_name,
+                    Some(remote_spec),
+                    None,
+                )?;
+            } else {
+                run_git_checked(&operation.repo_root, &["push", &push_remote])?;
+            }
+            if workflow.requires_tag() {
+                run_git_checked(&operation.repo_root, &["push", &push_remote, next_version])?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn collect_non_main_repo_states_with_cancel(
+    project: &ProjectConfig,
+    scopes: &[BumpScope],
+    git_contexts: &[crate::git::GitScopeContext],
+    affected_scope_indexes: &[usize],
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<RepoBranchState>> {
+    let mut repo_states = Vec::new();
+
+    let operations =
+        collect_repo_bump_operations(project, scopes, git_contexts, affected_scope_indexes)?;
+
+    for operation in operations {
+        let context = git_contexts
+            .iter()
+            .find(|context| context.repo_root == operation.repo_root)
+            .ok_or_else(|| {
+                anyhow!("git scope metadata is unavailable for the selected repository")
+            })?;
+        let current_branch = current_branch_with_cancel(&operation.repo_root, cancel.clone())?;
+        if !is_mainline_branch_name(&current_branch, context.main_branch_name.as_deref()) {
+            repo_states.push(RepoBranchState {
+                repo_root: operation.repo_root,
+                current_branch,
+                main_branch_name: context.main_branch_name.clone(),
+                remote_spec: operation.remote_spec,
+            });
+        }
+    }
+
+    Ok(repo_states)
+}
+
+pub(crate) fn switch_repos_to_main(
+    repos: &[RepoBranchState],
+    integration_mode: IntegrationMode,
+) -> Result<()> {
+    let sync_remote = integration_mode.is_forge_enabled();
+    for repo in repos {
+        switch_to_main_branch(
+            &repo.repo_root,
+            repo.remote_spec.as_deref(),
+            sync_remote,
+            repo.main_branch_name.as_deref(),
+        )?;
+    }
+    Ok(())
+}
+
+fn has_staged_changes(repo_root: &str) -> Result<bool> {
+    Ok(!run_git(repo_root, &["diff", "--cached", "--quiet", "--exit-code"])?.success)
+}
+
+fn staged_paths_with_cancel(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<String>> {
+    Ok(split_output_lines(&run_git_checked_with_cancel(
+        repo_root,
+        &["diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+        cancel,
+    )?))
+}
+
+pub(crate) fn collect_unexpected_staged_paths_with_cancel(
+    operations: &[RepoBumpOperation],
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<UnexpectedStagedRepo>> {
+    let mut warnings = Vec::new();
+
+    for operation in operations {
+        let expected = operation
+            .stage_paths
+            .iter()
+            .map(|path| comparable_git_path(path))
+            .collect::<HashSet<_>>();
+        let extra_paths = staged_paths_with_cancel(&operation.repo_root, cancel.clone())?
+            .into_iter()
+            .filter(|path| !expected.contains(&comparable_git_path(path)))
+            .collect::<Vec<_>>();
+        if !extra_paths.is_empty() {
+            warnings.push(UnexpectedStagedRepo {
+                repo_root: operation.repo_root.clone(),
+                extra_paths,
+            });
+        }
+    }
+
+    Ok(warnings)
+}
+
+pub(crate) fn unstage_paths(repo_root: &str, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut args = vec![
+        "restore".to_string(),
+        "--staged".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(paths.iter().cloned());
+    run_git_checked_owned(repo_root, args)?;
+    Ok(())
+}
+
+pub(crate) fn collect_stage_paths_for_targets(
+    repo_root: &str,
+    targets: &[BumpTarget],
+) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    for target in targets {
+        push_stage_path(&mut paths, repo_root, &target.path);
+        if target.format == TargetFormat::Toml {
+            let target_path = resolve_repo_path(repo_root, &target.path);
+            let is_cargo_manifest = target_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Cargo.toml"));
+            if is_cargo_manifest {
+                let lock_path = target_path.with_file_name("Cargo.lock");
+                if lock_path.is_file() {
+                    push_stage_path(&mut paths, repo_root, &lock_path.display().to_string());
+                }
+            }
+        }
+    }
+
+    paths
+}
+
+pub(crate) fn append_repo_stage_paths(
+    operations: &mut [RepoBumpOperation],
+    repo_root: &str,
+    paths: &[String],
+) {
+    if let Some(operation) = operations
+        .iter_mut()
+        .find(|operation| operation.repo_root == repo_root)
+    {
+        for path in paths {
+            if !operation
+                .stage_paths
+                .iter()
+                .any(|existing| existing == path)
+            {
+                operation.stage_paths.push(path.clone());
+            }
+        }
+    }
+}
+
+pub(crate) fn stage_path_for_file(repo_root: &str, path: &str) -> String {
+    normalize_repo_stage_path(repo_root, path)
+}
+pub(crate) fn refresh_target_artifacts(target: &BumpTarget, repo_root: Option<&str>) -> Result<()> {
+    if target.format != TargetFormat::Toml {
+        return Ok(());
+    }
+
+    let target_path = resolve_target_path(repo_root, &target.path);
+    let is_cargo_manifest = target_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("Cargo.toml"));
+    if !is_cargo_manifest {
+        return Ok(());
+    }
+
+    let lock_path = target_path.with_file_name("Cargo.lock");
+    if !lock_path.is_file() {
+        return Ok(());
+    }
+
+    let output = Command::new("cargo")
+        .arg("generate-lockfile")
+        .arg("--manifest-path")
+        .arg(&target_path)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to refresh {} after updating {}",
+                lock_path.display(),
+                target.path
+            )
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        bail!(
+            "failed to refresh {} after updating {}: {}",
+            lock_path.display(),
+            target.path,
+            detail
+        );
+    }
+
+    Ok(())
+}
+
+fn push_stage_path(paths: &mut Vec<String>, repo_root: &str, path: &str) {
+    let candidate = normalize_repo_stage_path(repo_root, path);
+    if !candidate.is_empty() && !paths.iter().any(|existing| existing == &candidate) {
+        paths.push(candidate);
+    }
+}
+
+fn normalize_repo_stage_path(repo_root: &str, path: &str) -> String {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        candidate
+            .strip_prefix(repo_root)
+            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| path.replace('\\', "/"))
+    } else {
+        path.replace('\\', "/")
+    }
+}
+
+fn resolve_repo_path(repo_root: &str, path: &str) -> PathBuf {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        Path::new(repo_root).join(candidate)
+    }
+}
+
+fn resolve_target_path(repo_root: Option<&str>, path: &str) -> PathBuf {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else if let Some(repo_root) = repo_root {
+        Path::new(repo_root).join(candidate)
+    } else {
+        candidate.to_path_buf()
+    }
+}
+
+fn comparable_git_path(path: &str) -> String {
+    path.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn run_git_checked_owned(repo_root: &str, args: Vec<String>) -> Result<String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_checked(repo_root, &arg_refs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        env, fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn create_temp_repo_dir(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "comfygit-git-flow-{}-{}-{}",
+            test_name,
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&dir).expect("create temp repo dir");
+        dir
+    }
+
+    fn init_temp_git_repo(repo_root: &str) {
+        run_git_checked(repo_root, &["init"]).expect("init repo");
+        run_git_checked(repo_root, &["config", "user.name", "ComfyGit Tests"])
+            .expect("configure user.name");
+        run_git_checked(
+            repo_root,
+            &["config", "user.email", "tests@comfygit.invalid"],
+        )
+        .expect("configure user.email");
+        let switch_main =
+            crate::git::run_git(repo_root, &["switch", "-c", "main"]).expect("switch main");
+        if !switch_main.success {
+            run_git_checked(repo_root, &["checkout", "-b", "main"]).expect("checkout main");
+        }
+    }
+
+    #[test]
+    fn branch_commit_and_push_sets_upstream_when_remote_config_uses_url() {
+        let bare_dir = create_temp_repo_dir("bump-remote-bare");
+        let bare_root = bare_dir.to_string_lossy().to_string();
+        run_git_checked(&bare_root, &["init", "--bare"]).expect("init bare repo");
+
+        let repo_dir = create_temp_repo_dir("bump-remote-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+
+        let tracked_file = repo_dir.join("Cargo.toml");
+        fs::write(
+            &tracked_file,
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write manifest");
+        run_git_checked(&repo_root, &["add", "Cargo.toml"]).expect("stage manifest");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base manifest");
+        run_git_checked(&repo_root, &["remote", "add", "origin", &bare_root])
+            .expect("add origin remote");
+        run_git_checked(&repo_root, &["push", "-u", "origin", "main"]).expect("publish main");
+
+        fs::write(
+            &tracked_file,
+            "[package]\nname = \"demo\"\nversion = \"0.2.0\"\n",
+        )
+        .expect("write bumped manifest");
+
+        let operations = vec![RepoBumpOperation {
+            repo_root: repo_root.clone(),
+            remote_spec: Some(bare_root.clone()),
+            stage_paths: vec!["Cargo.toml".to_string()],
+        }];
+
+        apply_repo_bump_workflow(
+            &operations,
+            "0.2.0",
+            OverviewBumpWorkflow::BranchCommitAndPush,
+            Some("release/0.2.0"),
+        )
+        .expect("apply branch push workflow");
+
+        let upstream = run_git_checked(
+            &repo_root,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        )
+        .expect("read upstream")
+        .trim()
+        .to_string();
+
+        assert_eq!(upstream, "origin/release/0.2.0");
+
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
+        fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+
+    #[test]
+    fn resolve_push_remote_name_accepts_remote_name_or_matching_url() {
+        let bare_dir = create_temp_repo_dir("resolve-remote-bare");
+        let bare_root = bare_dir.to_string_lossy().to_string();
+        run_git_checked(&bare_root, &["init", "--bare"]).expect("init bare repo");
+
+        let repo_dir = create_temp_repo_dir("resolve-remote-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+        run_git_checked(&repo_root, &["remote", "add", "origin", &bare_root])
+            .expect("add origin remote");
+
+        assert_eq!(
+            resolve_push_remote_name(&repo_root, "origin").expect("resolve by remote name"),
+            "origin"
+        );
+        assert_eq!(
+            resolve_push_remote_name(&repo_root, &bare_root).expect("resolve by remote URL"),
+            "origin"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
+        fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+}
