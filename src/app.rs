@@ -317,7 +317,7 @@ fn try_clipboard_stdin_command(program: &str, args: &[&str], text: &str) -> bool
     matches!(child.wait(), Ok(status) if status.success())
 }
 
-struct App {
+pub(crate) struct App {
     config_store: ConfigStore,
     config: AppConfig,
     screen: Screen,
@@ -391,6 +391,7 @@ struct App {
     current_release_now_cancel: Option<GitCancellation>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
+    pub(crate) snif_dialog: Option<crate::snif_modal::SnifModal>,
     hit_targets: Vec<HitTarget>,
     last_text_input_click_target: Option<TextInputClickTarget>,
     last_text_input_click_at: Option<Instant>,
@@ -401,7 +402,7 @@ struct App {
     release_now_notes_textarea_click_at: Option<Instant>,
     top_picks_editor_click_at: Option<Instant>,
     top_picks_editor_rect: Option<Rect>,
-    status: StatusMessage,
+    pub(crate) status: StatusMessage,
     last_status_toast_id: u64,
     toaster: ToastEngine<()>,
     logo: PixelLogo,
@@ -502,6 +503,7 @@ impl App {
             current_release_now_cancel: None,
             project_edit_dialog: None,
             browser_dialog: None,
+            snif_dialog: None,
             hit_targets: Vec::new(),
             last_text_input_click_target: None,
             last_text_input_click_at: None,
@@ -552,6 +554,10 @@ impl App {
 
         if self.progress_dialog.is_some() {
             return Ok(());
+        }
+
+        if self.snif_dialog.is_some() {
+            return self.handle_snif_key(key);
         }
 
         if self.browser_dialog.is_some() {
@@ -686,6 +692,7 @@ impl App {
                 self.open_dashboard_changelog_preview(None)?
             }
             KeyCode::Char('t') => self.open_tag_dialog()?,
+            KeyCode::Char('f') | KeyCode::Char('F') => self.open_snif_dialog()?,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reload_dashboard_overview_data()?,
             KeyCode::Tab | KeyCode::BackTab => self.toggle_dashboard_focus(),
             KeyCode::Up => {
@@ -1762,6 +1769,9 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.snif_dialog.is_some() {
+            return;
+        }
         if self.handle_toast_mouse(mouse) {
             return;
         }
@@ -4977,7 +4987,7 @@ impl App {
         Ok(())
     }
 
-    fn selected_project(&self) -> Result<&ProjectConfig> {
+    pub(crate) fn selected_project(&self) -> Result<&ProjectConfig> {
         self.config
             .projects
             .get(self.selected_project)
@@ -7443,7 +7453,7 @@ const NEW_SCOPE_ERROR_TOAST_PRESET: ToastPreset = ToastPreset::CompactHighlightS
 const NEW_SCOPE_ERROR_TOAST_PRESET: ToastPreset = ToastPreset::MessageOnly;
 
 #[derive(Clone)]
-struct StatusMessage {
+pub(crate) struct StatusMessage {
     id: u64,
     kind: StatusKind,
     text: String,
@@ -7452,11 +7462,11 @@ struct StatusMessage {
 }
 
 impl StatusMessage {
-    fn info(text: impl Into<String>) -> Self {
+    pub(crate) fn info(text: impl Into<String>) -> Self {
         Self::new(StatusKind::Info, text)
     }
 
-    fn success(text: impl Into<String>) -> Self {
+    pub(crate) fn success(text: impl Into<String>) -> Self {
         Self::new(StatusKind::Success, text)
     }
 
@@ -7464,7 +7474,7 @@ impl StatusMessage {
         Self::new(StatusKind::Warning, text)
     }
 
-    fn error(text: impl Into<String>) -> Self {
+    pub(crate) fn error(text: impl Into<String>) -> Self {
         Self::new(StatusKind::Error, text)
     }
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/comfy-home/ComfyGit/blob/main/assets/docs-assets/cg-header.png" width="768" alt="ComfyGit Header">
+  <img src="https://raw.githubusercontent.com/comfy-home/ComfyGit/main/assets/docs-assets/cg-header.png" width="768" alt="ComfyGit Header">
 </p>
 <p align="center">
   <strong>⭐ ⭐ ⭐ &nbsp&nbspRatatui-powered Git workflow automation with custom CLI &nbsp&nbsp⭐ ⭐ ⭐</strong><br><br><sup>inc.</sup><br><br><sup>Built-in Multi-Project Management&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp |&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp Automatic Version Bumper&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp |&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp Advanced Changelog Generator</sup><br>
