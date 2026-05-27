@@ -44,7 +44,7 @@ jobs:
         with:
           name: macos-packages
           path: |
-            dist/latest/mac-*/**
-            dist/old/mac-*/**
+            dist/latest/macos-*/**
+            dist/old/macos-*/**
           if-no-files-found: ignore
 
