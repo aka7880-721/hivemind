@@ -2848,7 +2848,7 @@ checksum = "b7c388c1b5e93756d0c740965c41e8822f866621d41acbdf6336a6a168f8840c"
 
 [[package]]
 name = "snif--by-comfyhome"
-version = "0.2.3"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "crossterm 0.29.0",
