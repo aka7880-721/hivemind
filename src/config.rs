@@ -108,9 +108,9 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub repo: Option<RepoConfig>,
     #[serde(default)]
-    pub variator_storage: crate::chl_vrtr::VariatorStorage,
+    pub variator_storage: crate::variator::VariatorStorage,
     #[serde(default)]
-    pub manual_top_picks: Vec<crate::changelog_tp::TopPick>,
+    pub manual_top_picks: Vec<crate::changelog::top_picks::TopPick>,
     #[serde(default)]
     pub advanced_alias: AdvancedAliasSettings,
 }

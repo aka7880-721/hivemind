@@ -322,10 +322,9 @@ use tokio::{
 };
 
 use crate::{
+    changelog::clear_top_picks_edits,
     config::{ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
-    git::GitScopeContext,
-    git_stt::recent_merge_check,
-    mmr::clear_top_picks_edits,
+    git::{GitScopeContext, recent_merge_check},
 };
 
 #[path = "rls-now-qd.rs"]
