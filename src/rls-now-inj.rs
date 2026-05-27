@@ -262,16 +262,10 @@ fn build_details_block(
     lines.join("\n")
 }
 
-/// Build the GitHub release page URL for a specific tag.
-///
-/// Accepts both SSH (`git@github.com:owner/repo.git`) and HTTPS
-/// (`https://github.com/owner/repo`) remote URLs.
-fn github_release_url(remote_url: &str, tag: &str) -> Option<String> {
-    let (owner, repo) = crate::git::github_owner_repo_from_remote_url(remote_url)?;
-    Some(format!(
-        "https://github.com/{}/{}/releases/tag/{}",
-        owner, repo, tag
-    ))
+/// Build the forge release page URL for a specific tag.
+fn forge_release_url(remote_url: &str, tag: &str) -> Option<String> {
+    let forge = crate::forge::detect_forge_from_remote_url(remote_url)?;
+    forge.release_page_url(remote_url, tag)
 }
 
 /// Inject the "What's new" block into `readme_path` at 1-based `inject_at_row`.
@@ -405,7 +399,7 @@ pub(crate) fn inject_whats_new(params: &ReadmeInjectionParams<'_>) -> Result<()>
 
     let release_url = params
         .remote_url
-        .and_then(|u| github_release_url(u, params.tag_name));
+        .and_then(|u| forge_release_url(u, params.tag_name));
 
     let (mut body, top_picks_mode) =
         prepare_injection_body(params.changelog_markdown, params.inject_only_top_picks);
@@ -535,8 +529,8 @@ mod tests {
     }
 
     #[test]
-    fn github_release_url_from_ssh() {
-        let url = github_release_url("git@github.com:comfy-home/ComfyGit.git", "v1.0.0");
+    fn forge_release_url_from_ssh() {
+        let url = forge_release_url("git@github.com:comfy-home/ComfyGit.git", "v1.0.0");
         assert_eq!(
             url.as_deref(),
             Some("https://github.com/comfy-home/ComfyGit/releases/tag/v1.0.0")
