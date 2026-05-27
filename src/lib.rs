@@ -17,7 +17,6 @@ mod config;
 mod dialogs;
 mod forge;
 mod ghub;
-mod glab;
 mod git;
 mod git_alt;
 mod git_br;
@@ -28,6 +27,7 @@ mod git_new;
 mod git_pr;
 mod git_rrt;
 mod git_stt;
+mod glab;
 mod mmr;
 #[path = "overview-pg.rs"]
 mod overview_pg;

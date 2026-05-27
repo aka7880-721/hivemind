@@ -84,10 +84,8 @@ mod tests {
     #[test]
     fn repository_web_url_parser_accepts_https_and_ssh_formats() {
         assert_eq!(
-            repository_web_url_from_remote_url(
-                "https://gitlab.com/my-group/my-project.git"
-            )
-            .as_deref(),
+            repository_web_url_from_remote_url("https://gitlab.com/my-group/my-project.git")
+                .as_deref(),
             Some("https://gitlab.com/my-group/my-project")
         );
         assert_eq!(
@@ -98,9 +96,7 @@ mod tests {
 
     #[test]
     fn repository_web_url_parser_rejects_non_gitlab_remotes() {
-        assert!(
-            repository_web_url_from_remote_url("https://github.com/org/repo.git").is_none()
-        );
+        assert!(repository_web_url_from_remote_url("https://github.com/org/repo.git").is_none());
     }
 
     #[test]

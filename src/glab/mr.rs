@@ -59,10 +59,7 @@ pub fn view_merge_request(repo_root: &str, number: u64) -> Result<ForgePullReque
     Ok(mr.into_forge(repository_issue_root.as_deref()))
 }
 
-pub fn fetch_mergeability(
-    repo_root: &str,
-    number: u64,
-) -> Result<crate::forge::ForgeMergeability> {
+pub fn fetch_mergeability(repo_root: &str, number: u64) -> Result<crate::forge::ForgeMergeability> {
     let mr = view_merge_request(repo_root, number)?;
     Ok(crate::forge::ForgeMergeability {
         mergeable: mr.mergeable_state.clone(),

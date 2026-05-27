@@ -904,7 +904,9 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
             last_rls_version(repo_root, integration_mode, cancel.clone())
                 .ok()
                 .flatten(),
-            last_rls_time(repo_root, integration_mode, cancel).ok().flatten(),
+            last_rls_time(repo_root, integration_mode, cancel)
+                .ok()
+                .flatten(),
         )
     } else {
         (None, None)
@@ -1465,5 +1467,4 @@ mod tests {
         fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
         fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
     }
-
 }

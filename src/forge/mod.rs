@@ -111,11 +111,7 @@ impl ForgeKind {
         }
     }
 
-    pub fn fetch_mergeability(
-        self,
-        repo_root: &str,
-        number: u64,
-    ) -> Result<ForgeMergeability> {
+    pub fn fetch_mergeability(self, repo_root: &str, number: u64) -> Result<ForgeMergeability> {
         match self {
             ForgeKind::GitHub => {
                 let status = crate::ghub::pr::fetch_mergeability(repo_root, number)?;
@@ -134,12 +130,7 @@ impl ForgeKind {
         }
     }
 
-    pub fn merge_pull_request(
-        self,
-        repo_root: &str,
-        number: u64,
-        subject: &str,
-    ) -> Result<String> {
+    pub fn merge_pull_request(self, repo_root: &str, number: u64, subject: &str) -> Result<String> {
         match self {
             ForgeKind::GitHub => crate::ghub::pr::merge_pull_request(repo_root, number, subject),
             ForgeKind::GitLab => crate::glab::mr::merge_merge_request(repo_root, number, subject),
@@ -179,12 +170,16 @@ impl ForgeKind {
         target_branch: &str,
     ) -> Result<(u64, String)> {
         match self {
-            ForgeKind::GitHub => {
-                crate::ghub::pr::lookup_created_pull_request(repo_root, current_branch, target_branch)
-            }
-            ForgeKind::GitLab => {
-                crate::glab::mr::lookup_created_merge_request(repo_root, current_branch, target_branch)
-            }
+            ForgeKind::GitHub => crate::ghub::pr::lookup_created_pull_request(
+                repo_root,
+                current_branch,
+                target_branch,
+            ),
+            ForgeKind::GitLab => crate::glab::mr::lookup_created_merge_request(
+                repo_root,
+                current_branch,
+                target_branch,
+            ),
         }
     }
 

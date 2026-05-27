@@ -11,14 +11,6 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
-use crossterm::{
-    cursor::MoveToColumn,
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute, queue,
-    style::Print,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
-};
 use crate::{
     forge::{self, ForgeKind},
     git::{
@@ -27,6 +19,14 @@ use crate::{
     },
     git_mg::run_merge_for_pull_request,
     git_pr::run_pr_and_capture,
+};
+use anyhow::{Context, Result, bail};
+use crossterm::{
+    cursor::MoveToColumn,
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute, queue,
+    style::Print,
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
 
 const MERGEABILITY_RETRY_DELAYS_SECONDS: [u64; 3] = [2, 5, 15];
@@ -44,13 +44,7 @@ pub(crate) fn run_branch_done(
 ) -> Result<()> {
     let forge = forge::require_forge_for_repo(repo_root)?;
     let created_pr = loop {
-        match run_pr_and_capture(
-            repo_root,
-            forge,
-            false,
-            custom_main_branch,
-            cancel.clone(),
-        ) {
+        match run_pr_and_capture(repo_root, forge, false, custom_main_branch, cancel.clone()) {
             Ok(created_pr) => break created_pr,
             Err(error) => {
                 // Check for uncommitted changes error first
@@ -394,11 +388,7 @@ impl Drop for TerminalRawModeGuard {
     }
 }
 
-fn ensure_pull_request_mergeable(
-    repo_root: &str,
-    forge: ForgeKind,
-    pr_number: u64,
-) -> Result<()> {
+fn ensure_pull_request_mergeable(repo_root: &str, forge: ForgeKind, pr_number: u64) -> Result<()> {
     for (attempt_index, delay_seconds) in MERGEABILITY_RETRY_DELAYS_SECONDS.iter().enumerate() {
         thread::sleep(Duration::from_secs(*delay_seconds));
         let status = forge.fetch_mergeability(repo_root, pr_number)?;

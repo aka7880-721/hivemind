@@ -88,17 +88,17 @@ mod tests {
             Some("https://github.com/comfy-home/ComfyGit-test-project")
         );
         assert_eq!(
-            repository_web_url_from_remote_url("git@github.com:comfy-home/ComfyGit-test-project.git")
-                .as_deref(),
+            repository_web_url_from_remote_url(
+                "git@github.com:comfy-home/ComfyGit-test-project.git"
+            )
+            .as_deref(),
             Some("https://github.com/comfy-home/ComfyGit-test-project")
         );
     }
 
     #[test]
     fn repository_web_url_parser_rejects_non_github_remotes() {
-        assert!(
-            repository_web_url_from_remote_url("https://example.com/org/repo.git").is_none()
-        );
+        assert!(repository_web_url_from_remote_url("https://example.com/org/repo.git").is_none());
     }
 
     #[test]

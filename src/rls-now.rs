@@ -1059,8 +1059,9 @@ pub(super) async fn execute_release_now_async(
     cancel: GitCancellation,
     mut emit_progress: impl FnMut(Vec<String>) + Send,
 ) -> Result<ReleaseNowExecutionOutcome> {
-    let forge = crate::forge::detect_forge_for_repo(&request.repo_root)
-        .ok_or_else(|| anyhow!("ReleaseNOW could not detect GitHub or GitLab from the repository remote"))?;
+    let forge = crate::forge::detect_forge_for_repo(&request.repo_root).ok_or_else(|| {
+        anyhow!("ReleaseNOW could not detect GitHub or GitLab from the repository remote")
+    })?;
     forge.ensure_authenticated()?;
     ensure_not_cancelled(&cancel)?;
 
@@ -1915,7 +1916,9 @@ async fn create_or_update_forge_release(
             }
         } else {
             let remote_spec = remote_spec.ok_or_else(|| {
-                anyhow!("ReleaseNOW requires a configured git remote to publish a {forge_label} release")
+                anyhow!(
+                    "ReleaseNOW requires a configured git remote to publish a {forge_label} release"
+                )
             })?;
             emit_progress(vec![format!(
                 "Pushing tag '{}' to {}.",
@@ -1946,7 +1949,9 @@ async fn create_or_update_forge_release(
             )
             .await?;
 
-            emit_progress(vec![format!("Creating {forge_label} release '{tag_name}'." )]);
+            emit_progress(vec![format!(
+                "Creating {forge_label} release '{tag_name}'."
+            )]);
 
             let mut create_args = vec![
                 "release".to_string(),

@@ -73,8 +73,8 @@ pub fn fetch_mergeability(repo_root: &str, number: u64) -> Result<crate::forge::
     if !output.status.success() {
         bail_cli_failure("pr view", &output)?;
     }
-    let raw: GhMergeability =
-        serde_json::from_slice(&output.stdout).context("failed to parse gh pr view mergeability output")?;
+    let raw: GhMergeability = serde_json::from_slice(&output.stdout)
+        .context("failed to parse gh pr view mergeability output")?;
     Ok(crate::forge::ForgeMergeability {
         mergeable: raw.mergeable,
         merge_state_status: raw.merge_state_status,

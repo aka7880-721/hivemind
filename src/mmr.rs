@@ -112,8 +112,12 @@ pub(crate) fn resolve_top_picks_baseline_tag(repo_root: &str) -> Option<String> 
             crate::git_stt::last_rls_version(
                 repo_root,
                 match forge {
-                    crate::forge::ForgeKind::GitHub => crate::config::IntegrationMode::GitHubEnabled,
-                    crate::forge::ForgeKind::GitLab => crate::config::IntegrationMode::GitLabEnabled,
+                    crate::forge::ForgeKind::GitHub => {
+                        crate::config::IntegrationMode::GitHubEnabled
+                    }
+                    crate::forge::ForgeKind::GitLab => {
+                        crate::config::IntegrationMode::GitLabEnabled
+                    }
                 },
                 None,
             )

@@ -297,13 +297,7 @@ pub(crate) fn github_release_download_url(
     tag: &str,
     file_name: &str,
 ) -> String {
-    forge_release_download_url(
-        crate::forge::ForgeKind::GitHub,
-        owner,
-        repo,
-        tag,
-        file_name,
-    )
+    forge_release_download_url(crate::forge::ForgeKind::GitHub, owner, repo, tag, file_name)
 }
 
 fn esc_attr(s: &str) -> String {

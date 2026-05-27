@@ -123,7 +123,11 @@ fn fetch_open_pull_requests(
     Ok(entries)
 }
 
-fn fetch_pull_request(repo_root: &str, forge: ForgeKind, pr_number: u64) -> Result<PullRequestEntry> {
+fn fetch_pull_request(
+    repo_root: &str,
+    forge: ForgeKind,
+    pr_number: u64,
+) -> Result<PullRequestEntry> {
     Ok(PullRequestEntry::from_forge(
         forge.view_pull_request(repo_root, pr_number)?,
     ))
@@ -521,7 +525,10 @@ fn render_pull_request_title_cell(
         SetForegroundColor(Color::DarkGrey),
         Print(CONFLICT_FIX_PREFIX),
         SetForegroundColor(Color::Magenta),
-        Print(format_terminal_hyperlink(issue_url, forge_link_label(forge))),
+        Print(format_terminal_hyperlink(
+            issue_url,
+            forge_link_label(forge)
+        )),
         SetForegroundColor(Color::DarkGrey),
         Print(" "),
         SetForegroundColor(Color::Cyan),

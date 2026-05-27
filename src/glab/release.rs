@@ -11,13 +11,17 @@ use crate::glab::cli::{self, CLI_NAME};
 pub fn last_release_published_at(repo_root: &str) -> Result<Option<String>> {
     cli::ensure_available()?;
     let releases = list_releases(repo_root, 1)?;
-    Ok(releases.first().and_then(|release| release.released_at.clone()))
+    Ok(releases
+        .first()
+        .and_then(|release| release.released_at.clone()))
 }
 
 pub fn last_release_tag(repo_root: &str) -> Result<Option<String>> {
     cli::ensure_available()?;
     let releases = list_releases(repo_root, 1)?;
-    Ok(releases.first().and_then(|release| release.tag_name.clone()))
+    Ok(releases
+        .first()
+        .and_then(|release| release.tag_name.clone()))
 }
 
 pub fn latest_public_release_tag(repo_root: &str) -> Option<String> {
