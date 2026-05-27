@@ -899,7 +899,7 @@ fn resolve_parent_branch_name_with_cancel(
         .map(|branch| branch.name)
         .collect::<Vec<_>>();
     if let Some(parent_branch) =
-        crate::git_alt::alt_merge_parent_branch(current_branch, &existing_branches)
+        crate::git::alt_merge_parent_branch(current_branch, &existing_branches)
     {
         return Ok(parent_branch);
     }
