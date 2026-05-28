@@ -197,6 +197,11 @@ pub(crate) fn last_rls_version(
 }
 
 fn forge_for_mode(repo_root: &str, integration_mode: IntegrationMode) -> Result<ForgeKind> {
+    if let Some(forge) = integration_mode.forge_kind() {
+        forge.ensure_available()?;
+        return Ok(forge);
+    }
+
     if let Some(forge) = forge::detect_forge_for_repo(repo_root) {
         forge.ensure_available()?;
         return Ok(forge);
