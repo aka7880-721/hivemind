@@ -32,11 +32,6 @@ pub fn latest_public_release_tag(repo_root: &str) -> Option<String> {
         .and_then(|release| release.tag_name)
 }
 
-pub fn release_exists(repo_root: &str, tag_name: &str) -> Result<bool> {
-    let output = cli::run_in_repo(repo_root, &["release", "view", tag_name])?;
-    Ok(output.status.success())
-}
-
 fn list_releases(repo_root: &str, limit: usize) -> Result<Vec<GlabReleaseSummary>> {
     let limit = limit.to_string();
     let output = cli::run_in_repo(
