@@ -41,6 +41,7 @@ jobs:
           "$BASH5" ./scripts/releaseNOW.sh --mac --no-checks
 
       - name: Upload macOS artifacts
+        id: upload_macos_packages
         uses: actions/upload-artifact@v7
         with:
           name: macos-packages
@@ -48,3 +49,30 @@ jobs:
             dist/latest/macos-*/**
             dist/old/macos-*/**
           if-no-files-found: ignore
+
+      - name: Print macOS artifact download instructions
+        if: steps.upload_macos_packages.outputs.artifact-url != ''
+        env:
+          ARTIFACT_URL: ${{ steps.upload_macos_packages.outputs.artifact-url }}
+          ARTIFACT_ID: ${{ steps.upload_macos_packages.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          run_page="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          api_zip="${GITHUB_SERVER_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "macOS packages ready (artifact: macos-packages)"
+          echo "Workflow run:  ${run_page}"
+          echo "Artifact page: ${ARTIFACT_URL}"
+          echo ""
+          echo "GitHub CLI (recommended; uses your gh auth):"
+          echo "  gh run download ${GITHUB_RUN_ID} -n macos-packages -D dist"
+          echo ""
+          echo "curl (zip via REST API; set GITHUB_TOKEN or use gh auth token):"
+          echo "  curl -fL \\"
+          echo "    -H \"Authorization: Bearer \${GITHUB_TOKEN:-\$(gh auth token)}\" \\"
+          echo "    -H \"Accept: application/vnd.github+json\" \\"
+          echo "    \"${api_zip}\" -o macos-packages.zip"
+          echo "  unzip -o macos-packages.zip -d dist"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "::notice title=macOS artifact::gh run download ${GITHUB_RUN_ID} -n macos-packages -D dist"
