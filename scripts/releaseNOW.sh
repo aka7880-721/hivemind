@@ -12,7 +12,9 @@
 #   ./scripts/releaseNOW.sh --linux              # Build for Linux (both amd64 and arm64)
 #   ./scripts/releaseNOW.sh --linux=amd64        # Build for Linux amd64 only
 #   ./scripts/releaseNOW.sh --linux=arm64       # Build for Linux arm64 only
-#   ./scripts/releaseNOW.sh --mac               # Build for macOS
+#   ./scripts/releaseNOW.sh --mac               # Build for macOS (Intel + Apple Silicon)
+#   ./scripts/releaseNOW.sh --mac-intel         # Build for macOS x86_64 only
+#   ./scripts/releaseNOW.sh --mac-silicon       # Build for macOS arm64 only
 #   ./scripts/releaseNOW.sh --all               # Build for all platforms
 #   ./scripts/releaseNOW.sh --test-only         # Run fmt/clippy/test only, skip packaging
 #   ./scripts/releaseNOW.sh --no-checks       # Skip fmt/clippy/test checks
@@ -94,6 +96,7 @@ SKIP_DEB=false
 SKIP_RPM=false
 LINUX=''
 MAC=false
+MAC_ARCH='both'
 WIN64=false
 ALL=false
 MAC_CI_WAIT=true
@@ -146,6 +149,17 @@ while [[ $# -gt 0 ]]; do
             ;;
         --mac)
             MAC=true
+            MAC_ARCH='both'
+            shift
+            ;;
+        --mac-intel|--mac-x64|--mac-amd64)
+            MAC=true
+            MAC_ARCH='intel'
+            shift
+            ;;
+        --mac-silicon|--mac-arm|--mac-arm64)
+            MAC=true
+            MAC_ARCH='silicon'
             shift
             ;;
         --win64|--windows)
@@ -166,7 +180,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --linux              Build for Linux (both architectures)"
             echo "  --linux=amd64        Build for Linux amd64 only"
             echo "  --linux=arm64        Build for Linux arm64 only"
-            echo "  --mac                Build for macOS"
+            echo "  --mac                Build for macOS (Intel + Apple Silicon)"
+            echo "  --mac-intel          Build for macOS x86_64 only"
+            echo "  --mac-silicon        Build for macOS arm64 (Apple Silicon) only"
             echo "  --win64              Build for Windows x64"
             echo "  --all                Build for all platforms"
             echo "  --test-only          Run fmt/clippy/test only, skip packaging"
@@ -319,7 +335,17 @@ get_selected_targets() {
     done
 
     if [[ "$MAC" == true ]]; then
-        selection+=('mac-amd64' 'mac-arm64')
+        case "$MAC_ARCH" in
+            intel)
+                selection+=('mac-amd64')
+                ;;
+            silicon)
+                selection+=('mac-arm64')
+                ;;
+            *)
+                selection+=('mac-amd64' 'mac-arm64')
+                ;;
+        esac
     fi
 
     if [[ "$WIN64" == true ]]; then
@@ -806,7 +832,12 @@ new_portable_package() {
     runtime_name=$(get_runtime_binary_name "$target_id")
     cp "$delegate_binary_path" "${package_root}/${runtime_name}"
     cp "$delegate_binary_path" "${package_root}/${TARGET_DELEGATE_BINARY_NAME[$target_id]}"
-    copy_public_launchers "$target_id" "$package_root"
+    if [[ "${TARGET_PLATFORM[$target_id]}" == "macos" ]]; then
+        cp "$delegate_binary_path" "${package_root}/${TARGET_BINARY_NAME[$target_id]}"
+        set_unix_permissions_if_available "${package_root}/${TARGET_BINARY_NAME[$target_id]}" '+x'
+    else
+        copy_public_launchers "$target_id" "$package_root"
+    fi
     cp "${PROJECT_ROOT}/README.md" "$package_root"
     cp "${PROJECT_ROOT}/LICENSE.md" "$package_root"
     copy_shell_integration_assets "$package_root"
@@ -972,12 +1003,18 @@ new_mac_installer_artifacts() {
     mkdir -p "$bin_dir"
     local runtime_name
     runtime_name=$(get_runtime_binary_name "$target_id")
-    cp "$delegate_binary_path" "${bin_dir}/${runtime_name}"
-    cp "$delegate_binary_path" "${bin_dir}/${TARGET_DELEGATE_BINARY_NAME[$target_id]}"
-    set_unix_permissions_if_available "${bin_dir}/${runtime_name}" '+x'
-    set_unix_permissions_if_available "${bin_dir}/${TARGET_DELEGATE_BINARY_NAME[$target_id]}" '+x'
-    copy_public_launchers "$target_id" "$bin_dir"
     copy_shell_integration_assets "$share_dir"
+    cp "$delegate_binary_path" "${bin_dir}/${runtime_name}"
+    cp "$delegate_binary_path" "${bin_dir}/${TARGET_BINARY_NAME[$target_id]}"
+    if [[ "${TARGET_DELEGATE_BINARY_NAME[$target_id]}" != "$runtime_name" ]] &&
+        [[ "${TARGET_DELEGATE_BINARY_NAME[$target_id]}" != "${TARGET_BINARY_NAME[$target_id]}" ]]; then
+        cp "$delegate_binary_path" "${bin_dir}/${TARGET_DELEGATE_BINARY_NAME[$target_id]}"
+    fi
+    set_unix_permissions_if_available "${bin_dir}/${runtime_name}" '+x'
+    set_unix_permissions_if_available "${bin_dir}/${TARGET_BINARY_NAME[$target_id]}" '+x'
+    if [[ -f "${bin_dir}/${TARGET_DELEGATE_BINARY_NAME[$target_id]}" ]]; then
+        set_unix_permissions_if_available "${bin_dir}/${TARGET_DELEGATE_BINARY_NAME[$target_id]}" '+x'
+    fi
 
     local pkg_scripts_dir="${staging_root}/pkgscripts"
     mkdir -p "$pkg_scripts_dir"
@@ -1004,7 +1041,21 @@ new_mac_installer_artifacts() {
         exit 1
     fi
 
-    pkgbuild --root "$payload_root" --scripts "$pkg_scripts_dir" --install-location / --identifier "$PACKAGE_ID" --version "$version" "$pkg_path"
+    if ! pkgbuild --root "$payload_root" --scripts "$pkg_scripts_dir" --install-location / --identifier "$PACKAGE_ID" --version "$version" "$pkg_path"; then
+        log_error "pkgbuild failed for $target_id"
+        rm -rf "$staging_root"
+        exit 1
+    fi
+
+    local pkg_bytes=0
+    if [[ -f "$pkg_path" ]]; then
+        pkg_bytes=$(wc -c <"$pkg_path" | tr -d ' ')
+    fi
+    if [[ "$pkg_bytes" -lt 500000 ]]; then
+        log_error "PKG is too small (${pkg_bytes} bytes); expected compiled binaries under ${bin_dir}"
+        rm -rf "$staging_root"
+        exit 1
+    fi
 
     local dmg_source="${staging_root}/dmg"
     if [[ -d "$dmg_source" ]]; then
@@ -1610,6 +1661,14 @@ is_mac_target() {
 MACOS_CI_WORKFLOW='macos-release.yml'
 MACOS_CI_ARTIFACT='macos-packages'
 
+mac_ci_arch_workflow_field() {
+    case "$MAC_ARCH" in
+        intel) echo 'intel' ;;
+        silicon) echo 'silicon' ;;
+        *) echo 'all' ;;
+    esac
+}
+
 gh_repo_slug() {
     if command -v gh &>/dev/null; then
         local slug
@@ -1701,7 +1760,9 @@ trigger_macos_ci_workflow() {
     log_info "Triggering GitHub Actions workflow '${MACOS_CI_WORKFLOW}'..."
     local current_ref
     current_ref=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-    if ! gh workflow run "$MACOS_CI_WORKFLOW" --ref "$current_ref" --field version="$version"; then
+    local mac_arch_field
+    mac_arch_field=$(mac_ci_arch_workflow_field)
+    if ! gh workflow run "$MACOS_CI_WORKFLOW" --ref "$current_ref" --field version="$version" --field arch="$mac_arch_field"; then
         log_warning "Failed to trigger GitHub Actions macOS release workflow; trigger it manually from GitHub UI."
         return 1
     fi
