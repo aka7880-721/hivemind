@@ -334,6 +334,78 @@ const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const DEFAULT_RELEASE_NOTES: &str =
     "# Release Notes\n\nAdd release highlights here before publishing.";
 
+fn resolve_release_push_remote(repo_root: &str, configured_remote: Option<&str>) -> Result<String> {
+    if let Some(configured_remote) = configured_remote
+        && !configured_remote.trim().is_empty()
+    {
+        return crate::git::resolve_push_remote_name(repo_root, configured_remote);
+    }
+    crate::git::default_push_remote_name(repo_root)
+}
+
+fn resolve_forge_for_release_request(
+    request: &ReleaseNowExecutionRequest,
+) -> Result<crate::forge::ForgeKind> {
+    if let Some(remote_url) = request
+        .scope
+        .remote_spec
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if remote_url.contains("gitlab.com") {
+            return Ok(crate::forge::ForgeKind::GitLab);
+        }
+        if remote_url.contains("github.com") {
+            return Ok(crate::forge::ForgeKind::GitHub);
+        }
+    }
+
+    crate::forge::detect_forge_for_repo(&request.repo_root).ok_or_else(|| {
+        anyhow!("ReleaseNOW could not detect GitHub or GitLab from the repository remote")
+    })
+}
+
+fn repo_selector_from_remote_url(
+    forge: crate::forge::ForgeKind,
+    remote_url: &str,
+) -> Option<String> {
+    let trimmed = remote_url.trim();
+    let path = match forge {
+        crate::forge::ForgeKind::GitHub => trimmed
+            .strip_prefix("git@github.com:")
+            .or_else(|| trimmed.strip_prefix("https://github.com/"))
+            .or_else(|| trimmed.strip_prefix("ssh://git@github.com/"))?,
+        crate::forge::ForgeKind::GitLab => trimmed
+            .strip_prefix("git@gitlab.com:")
+            .or_else(|| trimmed.strip_prefix("https://gitlab.com/"))
+            .or_else(|| trimmed.strip_prefix("ssh://git@gitlab.com/"))?,
+    };
+    let path = path.trim_end_matches(".git").trim();
+    if path.is_empty() {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+fn release_cli_repo_args(
+    forge: crate::forge::ForgeKind,
+    repo_root: &str,
+    configured_remote: Option<&str>,
+) -> Result<Vec<String>> {
+    let remote_name = resolve_release_push_remote(repo_root, configured_remote)?;
+    let remote_url = crate::git::run_git_checked(repo_root, &["remote", "get-url", &remote_name])?;
+    let repo_selector =
+        repo_selector_from_remote_url(forge, remote_url.trim()).ok_or_else(|| {
+            anyhow!(
+                "ReleaseNOW could not derive {} repository path from remote '{}'",
+                forge.display_name(),
+                remote_url.trim()
+            )
+        })?;
+    Ok(vec!["-R".to_string(), repo_selector])
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReleaseNowMode {
     BumpWarning,
@@ -1058,9 +1130,7 @@ pub(super) async fn execute_release_now_async(
     cancel: GitCancellation,
     mut emit_progress: impl FnMut(Vec<String>) + Send,
 ) -> Result<ReleaseNowExecutionOutcome> {
-    let forge = crate::forge::detect_forge_for_repo(&request.repo_root).ok_or_else(|| {
-        anyhow!("ReleaseNOW could not detect GitHub or GitLab from the repository remote")
-    })?;
+    let forge = resolve_forge_for_release_request(&request)?;
     forge.ensure_authenticated()?;
     ensure_not_cancelled(&cancel)?;
 
@@ -1193,9 +1263,10 @@ pub(super) async fn execute_release_now_async(
         .await?;
 
         if let Some(generated_commit) = generated_commit {
-            let remote_spec = request.scope.remote_spec.clone().ok_or_else(|| {
-                anyhow!("ReleaseNOW requires a configured git remote to push generated files")
-            })?;
+            let remote_name = resolve_release_push_remote(
+                &request.repo_root,
+                request.scope.remote_spec.as_deref(),
+            )?;
             let repo_root_for_branch = request.repo_root.clone();
             let cancel_for_branch = cancel.clone();
             let branch_name = run_blocking_job(move || {
@@ -1205,12 +1276,12 @@ pub(super) async fn execute_release_now_async(
 
             emit_progress(vec![format!(
                 "Pushing generated ReleaseNOW files to {}.",
-                remote_spec
+                remote_name
             )]);
             if let Err(push_error) = run_command_with_retry_async(
                 request.repo_root.clone(),
                 "git",
-                vec!["push".to_string(), remote_spec.clone(), branch_name],
+                vec!["push".to_string(), remote_name.clone(), branch_name],
                 GIT_PUSH_TIMEOUT,
                 NETWORK_RETRY_ATTEMPTS,
                 "git push",
@@ -1305,6 +1376,13 @@ pub(super) fn format_user_facing_error(message: &str) -> String {
         return build_guided_error(
             "ReleaseNOW could not create the GitHub release.",
             "Check that GitHub CLI is authenticated and that the repository, tag, and release permissions are valid, then retry.",
+            detail.as_deref(),
+        );
+    }
+    if normalized.contains("glab release") || normalized.contains("gitlab release") {
+        return build_guided_error(
+            "ReleaseNOW could not create the GitLab release.",
+            "Check that GitLab CLI is authenticated and that the repository, tag, and release permissions are valid, then retry.",
             detail.as_deref(),
         );
     }
@@ -1844,93 +1922,142 @@ async fn create_or_update_forge_release(
     let cli_name = forge.cli_name();
     let forge_label = forge.display_name();
     ensure_not_cancelled(&cancel)?;
+    let repo_args = release_cli_repo_args(forge, repo_root, remote_spec)?;
     let notes_file = release_notes_markdown
         .filter(|notes| !notes.trim().is_empty())
         .map(write_release_notes_file)
         .transpose()?;
 
-    let release_exists = forge.release_exists(repo_root, tag_name)?;
+    let mut release_view_args = vec![
+        "release".to_string(),
+        "view".to_string(),
+        tag_name.to_string(),
+    ];
+    release_view_args.extend(repo_args.clone());
+    let release_exists = Command::new(cli_name)
+        .current_dir(repo_root)
+        .args(release_view_args.iter().map(String::as_str))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to check for an existing {forge_label} release"))?
+        .success();
 
     let result = async {
         if release_exists {
             emit_progress(vec![format!(
                 "Updating existing {forge_label} release '{tag_name}'."
             )]);
-            let repo_root_owned = repo_root.to_string();
-            let upload_cancel = cancel.clone();
+            match forge {
+                crate::forge::ForgeKind::GitHub => {
+                    let repo_root_owned = repo_root.to_string();
+                    let upload_cancel = cancel.clone();
 
-            let mut upload_args = vec![
-                "release".to_string(),
-                "upload".to_string(),
-                tag_name.to_string(),
-            ];
-            upload_args.extend(artifact_files.iter().cloned());
-            upload_args.push("--clobber".to_string());
-            #[allow(clippy::too_many_arguments)]
-            run_blocking_streaming_operation(
-                move |progress_tx| {
-                    run_command_with_streaming(
-                        &repo_root_owned,
-                        cli_name,
-                        &upload_args,
-                        RELEASE_NOW_TIMEOUT,
-                        &format!("{cli_name} release upload"),
-                        cli_name,
-                        &upload_cancel,
-                        &progress_tx,
+                    let mut upload_args = vec![
+                        "release".to_string(),
+                        "upload".to_string(),
+                        tag_name.to_string(),
+                    ];
+                    upload_args.extend(artifact_files.iter().cloned());
+                    upload_args.push("--clobber".to_string());
+                    upload_args.extend(repo_args.clone());
+                    #[allow(clippy::too_many_arguments)]
+                    run_blocking_streaming_operation(
+                        move |progress_tx| {
+                            run_command_with_streaming(
+                                &repo_root_owned,
+                                cli_name,
+                                &upload_args,
+                                RELEASE_NOW_TIMEOUT,
+                                &format!("{cli_name} release upload"),
+                                cli_name,
+                                &upload_cancel,
+                                &progress_tx,
+                            )
+                        },
+                        emit_progress,
                     )
-                },
-                emit_progress,
-            )
-            .await?;
+                    .await?;
 
-            if let Some(notes_file) = &notes_file {
-                let edit_args = vec![
-                    "release".to_string(),
-                    "edit".to_string(),
-                    tag_name.to_string(),
-                    "--title".to_string(),
-                    release_title.to_string(),
-                    "--notes-file".to_string(),
-                    notes_file.display().to_string(),
-                ];
-                let repo_root_owned = repo_root.to_string();
-                let edit_cancel = cancel.clone();
-                run_blocking_streaming_operation(
-                    move |progress_tx| {
-                        run_command_with_streaming(
-                            &repo_root_owned,
-                            cli_name,
-                            &edit_args,
-                            RELEASE_NOW_TIMEOUT,
-                            &format!("{cli_name} release edit"),
-                            cli_name,
-                            &edit_cancel,
-                            &progress_tx,
+                    if let Some(notes_file) = &notes_file {
+                        let edit_args = vec![
+                            "release".to_string(),
+                            "edit".to_string(),
+                            tag_name.to_string(),
+                            "--title".to_string(),
+                            release_title.to_string(),
+                            "--notes-file".to_string(),
+                            notes_file.display().to_string(),
+                        ]
+                        .into_iter()
+                        .chain(repo_args.clone())
+                        .collect::<Vec<_>>();
+                        let repo_root_owned = repo_root.to_string();
+                        let edit_cancel = cancel.clone();
+                        run_blocking_streaming_operation(
+                            move |progress_tx| {
+                                run_command_with_streaming(
+                                    &repo_root_owned,
+                                    cli_name,
+                                    &edit_args,
+                                    RELEASE_NOW_TIMEOUT,
+                                    &format!("{cli_name} release edit"),
+                                    cli_name,
+                                    &edit_cancel,
+                                    &progress_tx,
+                                )
+                            },
+                            emit_progress,
                         )
-                    },
-                    emit_progress,
-                )
-                .await?;
+                        .await?;
+                    }
+                }
+                crate::forge::ForgeKind::GitLab => {
+                    // glab doesn't mirror gh upload/edit subcommands; use `release create`
+                    // to update an existing release with provided assets/notes.
+                    let mut create_args = vec![
+                        "release".to_string(),
+                        "create".to_string(),
+                        tag_name.to_string(),
+                    ];
+                    create_args.extend(artifact_files.iter().cloned());
+                    create_args.push("--name".to_string());
+                    create_args.push(release_title.to_string());
+                    if let Some(notes_file) = &notes_file {
+                        create_args.push("--notes-file".to_string());
+                        create_args.push(notes_file.display().to_string());
+                    }
+                    create_args.extend(repo_args.clone());
+                    let repo_root_owned = repo_root.to_string();
+                    let create_cancel = cancel.clone();
+                    run_blocking_streaming_operation(
+                        move |progress_tx| {
+                            run_command_with_streaming(
+                                &repo_root_owned,
+                                cli_name,
+                                &create_args,
+                                RELEASE_NOW_TIMEOUT,
+                                &format!("{cli_name} release create"),
+                                cli_name,
+                                &create_cancel,
+                                &progress_tx,
+                            )
+                        },
+                        emit_progress,
+                    )
+                    .await?;
+                }
             }
         } else {
-            let remote_spec = remote_spec.ok_or_else(|| {
-                anyhow!(
-                    "ReleaseNOW requires a configured git remote to publish a {forge_label} release"
-                )
-            })?;
+            let remote_name = resolve_release_push_remote(repo_root, remote_spec)?;
             emit_progress(vec![format!(
                 "Pushing tag '{}' to {}.",
-                tag_name, remote_spec
+                tag_name, remote_name
             )]);
 
             let repo_root_owned = repo_root.to_string();
             let push_cancel = cancel.clone();
-            let push_args = vec![
-                "push".to_string(),
-                remote_spec.to_string(),
-                tag_name.to_string(),
-            ];
+            let push_args = vec!["push".to_string(), remote_name, tag_name.to_string()];
             run_blocking_streaming_operation(
                 move |progress_tx| {
                     run_command_with_streaming(
@@ -1958,12 +2085,16 @@ async fn create_or_update_forge_release(
                 tag_name.to_string(),
             ];
             create_args.extend(artifact_files.iter().cloned());
-            create_args.push("--title".to_string());
+            create_args.push(match forge {
+                crate::forge::ForgeKind::GitHub => "--title".to_string(),
+                crate::forge::ForgeKind::GitLab => "--name".to_string(),
+            });
             create_args.push(release_title.to_string());
             if let Some(notes_file) = &notes_file {
                 create_args.push("--notes-file".to_string());
                 create_args.push(notes_file.display().to_string());
             }
+            create_args.extend(repo_args.clone());
             let repo_root = repo_root.to_string();
             let create_cancel = cancel.clone();
             run_blocking_streaming_operation(
