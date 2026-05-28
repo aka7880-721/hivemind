@@ -12,7 +12,7 @@ use crate::{
     config::IntegrationMode,
     forge::{self, ForgeKind},
     git::{
-        GitCancellation, build_git_args, ensure_forge_cli_available, ensure_git_repo_with_cancel,
+        GitCancellation, build_git_args, ensure_git_repo_with_cancel,
         run_git_checked_owned_with_cancel, run_git_with_cancel,
     },
 };
@@ -182,7 +182,7 @@ pub(crate) fn last_rls_time(
     cancel: Option<GitCancellation>,
 ) -> Result<Option<String>> {
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
-    let forge = forge_for_mode(integration_mode)?;
+    let forge = forge_for_mode(repo_root, integration_mode)?;
     forge.last_release_published_at(repo_root)
 }
 
@@ -192,12 +192,17 @@ pub(crate) fn last_rls_version(
     cancel: Option<GitCancellation>,
 ) -> Result<Option<String>> {
     ensure_git_repo_with_cancel(repo_root, cancel.clone())?;
-    let forge = forge_for_mode(integration_mode)?;
+    let forge = forge_for_mode(repo_root, integration_mode)?;
     forge.last_release_tag(repo_root)
 }
 
-fn forge_for_mode(integration_mode: IntegrationMode) -> Result<ForgeKind> {
+fn forge_for_mode(repo_root: &str, integration_mode: IntegrationMode) -> Result<ForgeKind> {
+    if let Some(forge) = forge::detect_forge_for_repo(repo_root) {
+        forge.ensure_available()?;
+        return Ok(forge);
+    }
+
     let forge = forge::resolve_forge(integration_mode)?;
-    ensure_forge_cli_available(integration_mode)?;
+    forge.ensure_available()?;
     Ok(forge)
 }
