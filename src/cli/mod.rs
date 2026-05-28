@@ -833,9 +833,7 @@ fn print_usage() {
     println!(
         "                             Synonyms: remove-shell | uninstall shell | shell-uninstall"
     );
-    println!(
-        "  cg snif [args...]          Run SNIF search/replace (requires `snif` on PATH)"
-    );
+    println!("  cg snif [args...]          Run SNIF search/replace (requires `snif` on PATH)");
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
     println!(

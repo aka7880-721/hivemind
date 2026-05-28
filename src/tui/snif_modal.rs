@@ -7,6 +7,11 @@
 
 use std::path::PathBuf;
 
+use crate::app::{App, StatusMessage};
+use crate::cli::project_root;
+use crate::config::ProjectConfig;
+use crate::snif;
+use crate::tui::centered_rect;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -14,11 +19,6 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use crate::app::{App, StatusMessage};
-use crate::snif;
-use crate::cli::project_root;
-use crate::config::ProjectConfig;
-use crate::tui::centered_rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SnifMode {
