@@ -2,11 +2,13 @@
 // All rights reserved.
 //
 // Licensed under the ComfyGit SA-PS License
+//
+// For details, see the LICENSE file in the repository root.
 
-use std::{
-    io,
-    process::{Command, Stdio},
-};
+use std::io;
+
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
 
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
