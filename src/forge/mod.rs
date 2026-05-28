@@ -196,13 +196,6 @@ impl ForgeKind {
             ForgeKind::GitLab => crate::glab::release::latest_public_release_tag(repo_root),
         }
     }
-
-    pub fn release_exists(self, repo_root: &str, tag_name: &str) -> Result<bool> {
-        match self {
-            ForgeKind::GitHub => crate::ghub::release::release_exists(repo_root, tag_name),
-            ForgeKind::GitLab => crate::glab::release::release_exists(repo_root, tag_name),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
