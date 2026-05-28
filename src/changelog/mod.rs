@@ -474,8 +474,10 @@ pub(crate) fn std_changelog_gen(
     current_tag: impl Into<String>,
     lines: &[String],
     top_picks_edits: Option<&str>,
+    mini_commit_hashes: bool,
 ) -> RenderedChangelog {
     let mut document = build_document_from_git_log(current_tag, lines);
+    document = document.with_mini_commit_hashes(mini_commit_hashes);
     if let Some(top_picks_edits) = top_picks_edits {
         document = document.with_top_picks_edits(top_picks_edits);
     }
@@ -2158,7 +2160,7 @@ mod tests {
     #[test]
     fn standard_and_custom_generators_use_shared_engine() {
         let lines = vec!["abc1234 feat: ship shared generator wrappers".to_string()];
-        let standard = std_changelog_gen("v0.7.3", &lines, None);
+        let standard = std_changelog_gen("v0.7.3", &lines, None, false);
         let custom = custom_changelog_gen("v0.7.3", &lines, Some("Custom range output."));
 
         assert!(standard.markdown.contains("### 🧩 Features"));
