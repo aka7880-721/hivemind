@@ -23,8 +23,8 @@ use super::{
 };
 use crate::{
     config::{DEFAULT_CHANGELOG_PATH, ProjectConfig, ProjectType, ReadmeInjectDepth},
-    dialogs::TextInput,
-    ui::center_vertically,
+    tui::center_vertically,
+    workflow::dialogs::TextInput,
 };
 
 use super::ps_alias::{

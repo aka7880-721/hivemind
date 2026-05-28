@@ -7,9 +7,8 @@ use ratatui::layout::Rect;
 use tui_textarea::TextArea as TuiTextArea;
 
 use crate::{
-    changelog::ChangelogDocument, config::BranchScopeKind, dialogs::RecentChangesTab,
-    project_edit::ProjectEditFocus, project_wizard::WizardField, tui::OverviewTab,
-    workflow::OverviewBumpWorkflow,
+    changelog::ChangelogDocument, config::BranchScopeKind, tui::OverviewTab, tui::ProjectEditFocus,
+    tui::WizardField, workflow::OverviewBumpWorkflow, workflow::dialogs::RecentChangesTab,
 };
 
 use super::project_settings::{ProjectSettingsFocus, ProjectSettingsTab};

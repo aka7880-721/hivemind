@@ -17,7 +17,7 @@ use ratatui::{
 
 use crate::{
     config::{AdvancedAliasSettings, CustomAliasEntry, ProjectConfig},
-    dialogs::TextInput,
+    workflow::dialogs::TextInput,
 };
 
 use super::{
@@ -453,5 +453,5 @@ fn control_inset(area: Rect) -> Rect {
 }
 
 fn center_vertically(area: Rect, content_height: u16) -> Rect {
-    crate::ui::center_vertically(area, content_height)
+    crate::tui::center_vertically(area, content_height)
 }

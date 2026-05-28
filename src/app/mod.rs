@@ -20,40 +20,35 @@ use ratatui_comfy_toaster::{ToastEngine, ToastEngineBuilder, ToastProgressBarSty
 use tokio::{
     runtime::Runtime as TokioRuntime,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError},
-    time::sleep,
 };
 use tui_tabs::TabNav;
 use tui_textarea::TextArea as TuiTextArea;
 
 use crate::{
-    branding::{PixelLogo, choose_header_content},
     changelog::write_changelog_markdown,
     config::{AppConfig, ConfigStore, FooterContent, IntegrationMode, ProjectConfig, ProjectType},
-    dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog},
-    git::{
-        GitCancellation, RepoActivitySummary, collect_all_branch_git_scope_contexts,
-        current_branch_with_cancel, ensure_local_tag, run_git, run_git_checked, split_output_lines,
+    git::{GitCancellation, RepoActivitySummary, collect_all_branch_git_scope_contexts},
+    tui::{
+        OverviewTab, OverviewTileData, PixelLogo, ProjectEditDialog, ProjectEditFocus,
+        ProjectWizard, TILE_WIDTH, WizardField, center_vertically, centered_rect,
+        choose_header_content, overview_tab_rects, render_overview_tabs, render_overview_tile,
+        tile_height,
     },
-    project_edit::{ProjectEditDialog, ProjectEditFocus},
-    project_wizard::{ProjectWizard, WizardField},
-    targets::{BumpScope, ProbeKind, collect_bump_scopes, write_target_version},
-    tiles::{OverviewTileData, TILE_WIDTH, render_overview_tile, tile_height},
-    tui::{OverviewTab, overview_tab_rects, render_overview_tabs},
-    ui::{center_vertically, centered_rect},
-    versioning::VersionScheme,
+    workflow::{
+        dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog},
+        targets::{BumpScope, ProbeKind, collect_bump_scopes, write_target_version},
+        versioning::VersionScheme,
+    },
 };
 
 mod overview;
 mod project_settings;
 mod ps_alias;
 mod render;
-#[path = "../rls-now.rs"]
-mod rls_now;
-#[path = "../rls-now-inj.rs"]
-mod rls_now_inj;
 
 use self::project_settings::{ProjectSettingsState, ProjectSettingsTab};
 use crate::changelog::top_picks as changelog_tp;
+pub(crate) use crate::workflow::rls_now;
 pub(crate) use crate::workflow::{OverviewBumpWorkflow, git_flow, overview_bump_workflow_options};
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -152,7 +147,7 @@ pub(crate) struct App {
     current_release_now_cancel: Option<GitCancellation>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
-    pub(crate) snif_dialog: Option<crate::snif_modal::SnifModal>,
+    pub(crate) snif_dialog: Option<crate::tui::SnifModal>,
     hit_targets: Vec<HitTarget>,
     last_text_input_click_target: Option<TextInputClickTarget>,
     last_text_input_click_at: Option<Instant>,
@@ -321,9 +316,9 @@ mod tests {
     use super::*;
     use crate::changelog::build_document_from_git_log;
     use crate::config::{BranchConfig, BranchScopeKind, RepoConfig, TargetFormat, TargetSpec};
-    use crate::dialogs::TextInput;
-    use crate::targets::{BumpTarget, ProbeKind, TargetProbe};
-    use crate::versioning::BumpAction;
+    use crate::workflow::dialogs::TextInput;
+    use crate::workflow::targets::{BumpTarget, ProbeKind, TargetProbe};
+    use crate::workflow::versioning::BumpAction;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::project_settings::ProjectSettingsFocus;
