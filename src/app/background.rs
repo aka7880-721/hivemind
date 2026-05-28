@@ -25,11 +25,10 @@ use tokio::{
 
 use crate::{
     changelog::{
-        archive_changelog_markdown, ensure_previous_public_release_header,
-        find_archived_changelog_markdown, load_merged_std_changelog_memory, load_top_picks_edits,
-        rebuild_history_summary_readme, record_std_changelog_created, record_std_changelog_error,
-        record_std_changelog_generated, record_std_changelog_postponed, rls_changelog_gen,
-        std_changelog_gen,
+        archive_changelog_markdown, find_archived_changelog_markdown,
+        load_merged_std_changelog_memory, load_top_picks_edits, rebuild_history_summary_readme,
+        record_std_changelog_created, record_std_changelog_error, record_std_changelog_generated,
+        record_std_changelog_postponed, rls_changelog_gen, std_changelog_gen,
     },
     config::{
         BranchConfig, BranchScopeKind, IntegrationMode, ProjectConfig, RepoConfig, TargetFormat,
@@ -754,6 +753,7 @@ impl ScopeDraft {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
             changelog_wrap_detailed_if_top_picks: false,
             release_now: crate::config::ReleaseNowSettings::default(),
             version_scheme: self.version_scheme,
@@ -1758,15 +1758,9 @@ pub(crate) fn build_release_notes_markdown(
 
     let top_picks_edits = current_release_top_picks_edits(&scope.repo_root);
     let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
-    if top_picks_edits.is_none()
-        && let Some(markdown) = find_archived_changelog_markdown(&scope.repo_root, tag_name)?
-    {
-        return Ok(ensure_previous_public_release_header(
-            &markdown,
-            tag_name,
-            last_public_release.as_deref(),
-        ));
-    }
+    // Always render from the selected scope's current changelog settings so toggles
+    // (like mini hashes) apply immediately across forges, including GitLab.
+    let _ = find_archived_changelog_markdown(&scope.repo_root, tag_name)?;
 
     if let Some(last_public_release) =
         last_public_release.filter(|tag| tag.trim() != tag_name.trim())

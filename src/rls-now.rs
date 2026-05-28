@@ -10,7 +10,10 @@ fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
     Ok(())
 }
 
-fn release_now_generated_paths(repo_root: &str) -> Vec<String> {
+fn release_now_generated_paths(
+    repo_root: &str,
+    mirror_summary_to_root_changelog: bool,
+) -> Vec<String> {
     let mut paths = Vec::new();
     if Path::new(repo_root).join(".changelogs").is_dir() {
         paths.push(".changelogs".to_string());
@@ -23,11 +26,17 @@ fn release_now_generated_paths(repo_root: &str) -> Vec<String> {
     {
         paths.push(".comfygit/syncmem/stdchlg.json".to_string());
     }
+    if mirror_summary_to_root_changelog && Path::new(repo_root).join("CHANGELOG.md").is_file() {
+        paths.push("CHANGELOG.md".to_string());
+    }
     paths
 }
 
-fn stage_release_now_generated_files(repo_root: &str) -> Result<bool> {
-    let paths = release_now_generated_paths(repo_root);
+fn stage_release_now_generated_files(
+    repo_root: &str,
+    mirror_summary_to_root_changelog: bool,
+) -> Result<bool> {
+    let paths = release_now_generated_paths(repo_root, mirror_summary_to_root_changelog);
     if paths.is_empty() {
         return Ok(false);
     }
@@ -132,8 +141,9 @@ fn commit_release_now_generated_files(
     repo_root: &str,
     tag_name: &str,
     artifact_files: &[String],
+    mirror_summary_to_root_changelog: bool,
 ) -> Result<bool> {
-    let paths = release_now_generated_paths(repo_root);
+    let paths = release_now_generated_paths(repo_root, mirror_summary_to_root_changelog);
     if paths.is_empty() || !has_staged_changes_for_paths(repo_root, &paths)? {
         return Ok(false);
     }
@@ -183,6 +193,7 @@ fn create_release_now_generated_files_commit(
     repo_root: &str,
     tag_name: &str,
     artifact_files: &[String],
+    mirror_summary_to_root_changelog: bool,
 ) -> Result<Option<ReleaseNowGeneratedFilesCommit>> {
     let previous_head = current_head_commit(repo_root)?;
     let mut created_any = false;
@@ -191,8 +202,13 @@ fn create_release_now_generated_files_commit(
         created_any = true;
     }
 
-    if stage_release_now_generated_files(repo_root)?
-        && commit_release_now_generated_files(repo_root, tag_name, artifact_files)?
+    if stage_release_now_generated_files(repo_root, mirror_summary_to_root_changelog)?
+        && commit_release_now_generated_files(
+            repo_root,
+            tag_name,
+            artifact_files,
+            mirror_summary_to_root_changelog,
+        )?
     {
         created_any = true;
     }
@@ -384,6 +400,25 @@ fn rollback_release_now_generated_files_commit(
     Ok(())
 }
 
+fn mirror_summary_changelog_to_root(repo_root: &str) -> Result<bool> {
+    let source = Path::new(repo_root).join(".changelogs").join("README.md");
+    if !source.is_file() {
+        return Ok(false);
+    }
+    let destination = Path::new(repo_root).join("CHANGELOG.md");
+    let summary = fs::read_to_string(&source)
+        .with_context(|| format!("failed to read {}", source.display()))?;
+    let needs_update = fs::read_to_string(&destination)
+        .map(|current| current != summary)
+        .unwrap_or(true);
+    if !needs_update {
+        return Ok(false);
+    }
+    fs::write(&destination, summary)
+        .with_context(|| format!("failed to write {}", destination.display()))?;
+    Ok(true)
+}
+
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
@@ -523,6 +558,7 @@ pub(super) struct ReleaseNowDialog {
     pub(super) scope_label: String,
     pub(super) scope: GitScopeContext,
     pub(super) changelog_enabled: bool,
+    pub(super) mirror_summary_to_root_changelog: bool,
     pub(super) repo_root: String,
     pub(super) tag_name: String,
     pub(super) options: Vec<ReleaseNowRunOption>,
@@ -570,6 +606,7 @@ impl ReleaseNowDialog {
             scope_label: validation.scope_label,
             scope: validation.scope,
             changelog_enabled: validation.changelog_enabled,
+            mirror_summary_to_root_changelog: validation.mirror_summary_to_root_changelog,
             repo_root: validation.repo_root,
             tag_name: validation.tag_name,
             options: validation.options,
@@ -1086,6 +1123,7 @@ pub(crate) struct ReleaseNowValidation {
     pub(super) scope_label: String,
     pub(super) scope: GitScopeContext,
     pub(super) changelog_enabled: bool,
+    pub(super) mirror_summary_to_root_changelog: bool,
     pub(super) repo_root: String,
     pub(super) tag_name: String,
     pub(super) options: Vec<ReleaseNowRunOption>,
@@ -1117,6 +1155,7 @@ pub(crate) struct ReleaseNowExecutionRequest {
     pub(super) scope_label: String,
     pub(super) scope: GitScopeContext,
     pub(super) changelog_enabled: bool,
+    pub(super) mirror_summary_to_root_changelog: bool,
     pub(super) repo_root: String,
     pub(super) tag_name: String,
     pub(super) release_title: String,
@@ -1171,6 +1210,8 @@ pub(super) fn validate_release_now(
             .unwrap_or_else(|| scope.display_name.clone()),
         scope: scope.clone(),
         changelog_enabled: project.changelog_enabled_for_scope(scope_index),
+        mirror_summary_to_root_changelog: project
+            .changelog_mirror_summary_to_root_changelog_for_scope(scope_index),
         repo_root: scope.repo_root.clone(),
         tag_name: scope.suggested_tag_name.clone(),
         options,
@@ -1204,6 +1245,7 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
         scope_label: dialog.scope_label.clone(),
         scope: dialog.scope.clone(),
         changelog_enabled: dialog.changelog_enabled,
+        mirror_summary_to_root_changelog: dialog.mirror_summary_to_root_changelog,
         repo_root: dialog.repo_root.clone(),
         tag_name: dialog.tag_name.clone(),
         release_title: {
@@ -1328,6 +1370,18 @@ pub(super) async fn execute_release_now_async(
             emit_progress(vec![format!("Warning: {}", line)]);
         }
         release_notes.extend(std_outcome.summary_notes);
+
+        if request.mirror_summary_to_root_changelog {
+            let repo_root_for_mirror = request.repo_root.clone();
+            let mirrored =
+                run_blocking_job(move || mirror_summary_changelog_to_root(&repo_root_for_mirror))
+                    .await?;
+            if mirrored {
+                emit_progress(vec![
+                    "Mirrored .changelogs/README.md into repo_root/CHANGELOG.md.".to_string(),
+                ]);
+            }
+        }
     }
 
     // QD HTML is built from the same artifact list attached to this release (see rls_now_qd).
@@ -1371,6 +1425,7 @@ pub(super) async fn execute_release_now_async(
                 &repo_root_for_commit,
                 &tag_name_for_commit,
                 &artifact_files_for_commit,
+                request.mirror_summary_to_root_changelog,
             )
         })
         .await?;
@@ -2661,9 +2716,10 @@ mod tests {
         fs::create_dir_all(&syncmem_dir).expect("create syncmem dir");
         fs::write(syncmem_dir.join("stdchlg.json"), "{}\n").expect("write syncmem file");
 
-        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[])
-            .expect("create generated commit")
-            .expect("generated commit should exist");
+        let generated_commit =
+            create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[], false)
+                .expect("create generated commit")
+                .expect("generated commit should exist");
 
         let release_commit_subject = run_git_checked(&repo_root, &["log", "-1", "--pretty=%s"])
             .expect("read release commit subject");
@@ -2705,9 +2761,10 @@ mod tests {
         fs::write(repo_dir.join("README.md"), "seed\n\ninjected\n").expect("update readme");
         run_git_checked(&repo_root, &["add", "README.md"]).expect("stage readme injection");
 
-        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[])
-            .expect("create generated commit")
-            .expect("readme commit should exist");
+        let generated_commit =
+            create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[], false)
+                .expect("create generated commit")
+                .expect("readme commit should exist");
 
         let release_commit_subject = run_git_checked(&repo_root, &["log", "-1", "--pretty=%s"])
             .expect("read readme commit subject");
@@ -2751,7 +2808,7 @@ mod tests {
         fs::create_dir_all(&syncmem_dir).expect("create syncmem dir");
         fs::write(syncmem_dir.join("stdchlg.json"), "{}\n").expect("write syncmem file");
 
-        create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[])
+        create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[], false)
             .expect("create generated commit")
             .expect("commits should exist");
 
