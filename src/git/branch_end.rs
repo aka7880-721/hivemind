@@ -14,10 +14,8 @@ use crate::{
     forge::{self, ForgeKind},
     git::{
         GitCancellation, publish_branch_with_upstream, run_git_checked_with_cancel,
-        switch_to_existing_branch,
+        run_merge_for_pull_request, run_pr_and_capture, switch_to_existing_branch,
     },
-    git_mg::run_merge_for_pull_request,
-    git_pr::run_pr_and_capture,
 };
 use anyhow::{Context, Result, bail};
 use crossterm::{

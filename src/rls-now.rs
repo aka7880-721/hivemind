@@ -322,10 +322,9 @@ use tokio::{
 };
 
 use crate::{
+    changelog::clear_top_picks_edits,
     config::{ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
-    git::GitScopeContext,
-    git_stt::recent_merge_check,
-    mmr::clear_top_picks_edits,
+    git::{GitScopeContext, recent_merge_check},
 };
 
 #[path = "rls-now-qd.rs"]
@@ -906,7 +905,7 @@ impl ReleaseNowDialog {
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowValidation {
+pub(crate) struct ReleaseNowValidation {
     pub(super) project_name: String,
     pub(super) scope_label: String,
     pub(super) scope: GitScopeContext,
@@ -938,7 +937,7 @@ pub(super) struct ReleaseNowScript {
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowExecutionRequest {
+pub(crate) struct ReleaseNowExecutionRequest {
     pub(super) scope_label: String,
     pub(super) scope: GitScopeContext,
     pub(super) changelog_enabled: bool,
@@ -957,7 +956,7 @@ pub(super) struct ReleaseNowExecutionRequest {
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowExecutionOutcome {
+pub(crate) struct ReleaseNowExecutionOutcome {
     pub(super) summary: String,
     pub(super) artifact_files: Vec<String>,
     pub(super) log_lines: Vec<String>,

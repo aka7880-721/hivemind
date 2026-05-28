@@ -6,12 +6,30 @@
 // For details, see the LICENSE file in the repository root.
 
 /// Git-related workflow operations for applying version bumps across repositories, managing staged changes, and ensuring tag consistency.
-use super::*;
-use crate::git::{
-    GitCancellation, current_branch_with_cancel, is_mainline_branch_name,
-    publish_branch_with_upstream, resolve_push_remote_name, run_git_checked_with_cancel,
-    switch_or_create_branch, switch_to_main_branch,
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    process::Command,
 };
+
+use anyhow::{Context, Result, anyhow, bail};
+
+use crate::config::{IntegrationMode, ProjectConfig, TargetFormat};
+use crate::git::{
+    GitCancellation, current_branch_with_cancel, ensure_local_tag, is_mainline_branch_name,
+    publish_branch_with_upstream, resolve_push_remote_name, run_git, run_git_checked,
+    run_git_checked_with_cancel, split_output_lines, switch_or_create_branch,
+    switch_to_main_branch,
+};
+use crate::targets::{BumpScope, BumpTarget};
+
+use super::bump::{OverviewBumpWorkflow, RepoBumpOperation};
+
+#[derive(Clone)]
+pub(crate) struct UnexpectedStagedRepo {
+    pub(crate) repo_root: String,
+    pub(crate) extra_paths: Vec<String>,
+}
 
 #[derive(Clone)]
 pub(crate) struct RepoBranchState {
@@ -138,7 +156,7 @@ pub(crate) fn apply_repo_bump_workflow(
     Ok(())
 }
 
-pub(super) fn collect_non_main_repo_states_with_cancel(
+pub(crate) fn collect_non_main_repo_states_with_cancel(
     project: &ProjectConfig,
     scopes: &[BumpScope],
     git_contexts: &[crate::git::GitScopeContext],
@@ -171,7 +189,7 @@ pub(super) fn collect_non_main_repo_states_with_cancel(
     Ok(repo_states)
 }
 
-pub(super) fn switch_repos_to_main(
+pub(crate) fn switch_repos_to_main(
     repos: &[RepoBranchState],
     integration_mode: IntegrationMode,
 ) -> Result<()> {
@@ -202,7 +220,7 @@ fn staged_paths_with_cancel(
     )?))
 }
 
-pub(super) fn collect_unexpected_staged_paths_with_cancel(
+pub(crate) fn collect_unexpected_staged_paths_with_cancel(
     operations: &[RepoBumpOperation],
     cancel: Option<GitCancellation>,
 ) -> Result<Vec<UnexpectedStagedRepo>> {
@@ -229,7 +247,7 @@ pub(super) fn collect_unexpected_staged_paths_with_cancel(
     Ok(warnings)
 }
 
-pub(super) fn unstage_paths(repo_root: &str, paths: &[String]) -> Result<()> {
+pub(crate) fn unstage_paths(repo_root: &str, paths: &[String]) -> Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
@@ -244,7 +262,7 @@ pub(super) fn unstage_paths(repo_root: &str, paths: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn collect_stage_paths_for_targets(
+pub(crate) fn collect_stage_paths_for_targets(
     repo_root: &str,
     targets: &[BumpTarget],
 ) -> Vec<String> {
@@ -270,7 +288,7 @@ pub(super) fn collect_stage_paths_for_targets(
     paths
 }
 
-pub(super) fn append_repo_stage_paths(
+pub(crate) fn append_repo_stage_paths(
     operations: &mut [RepoBumpOperation],
     repo_root: &str,
     paths: &[String],
@@ -291,10 +309,10 @@ pub(super) fn append_repo_stage_paths(
     }
 }
 
-pub(super) fn stage_path_for_file(repo_root: &str, path: &str) -> String {
+pub(crate) fn stage_path_for_file(repo_root: &str, path: &str) -> String {
     normalize_repo_stage_path(repo_root, path)
 }
-pub(super) fn refresh_target_artifacts(target: &BumpTarget, repo_root: Option<&str>) -> Result<()> {
+pub(crate) fn refresh_target_artifacts(target: &BumpTarget, repo_root: Option<&str>) -> Result<()> {
     if target.format != TargetFormat::Toml {
         return Ok(());
     }

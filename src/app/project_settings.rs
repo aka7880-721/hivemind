@@ -21,15 +21,13 @@ use super::{
     App, BROWSE_BUTTON_WIDTH, BrowseTarget, FORM_LABEL_WIDTH, FormRowButton, HitAction, HitTarget,
     visible_field_width,
 };
-mod ps_alias;
-
 use crate::{
     config::{DEFAULT_CHANGELOG_PATH, ProjectConfig, ProjectType, ReadmeInjectDepth},
     dialogs::TextInput,
     ui::center_vertically,
 };
 
-use ps_alias::{
+use super::ps_alias::{
     append_alias_visible_fields, append_general_alias_rows, confirm_alias_custom_draft,
     delete_alias_custom, persist_alias_state_to_project, render_alias_row,
     set_alias_path_from_browse, sync_alias_state_from_project,
@@ -109,7 +107,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) advanced_alias_enabled: bool,
     pub(crate) alias_dist_path: TextInput,
     pub(crate) alias_ui_path: TextInput,
-    pub(crate) alias_custom: Vec<ps_alias::AliasCustomEntryState>,
+    pub(crate) alias_custom: Vec<super::ps_alias::AliasCustomEntryState>,
     pub(crate) alias_custom_draft_active: bool,
     pub(crate) alias_custom_draft_name: TextInput,
     pub(crate) changelog_path: TextInput,

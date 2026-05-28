@@ -32,33 +32,27 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 
 use crate::{
-    app::{
-        OverviewBumpWorkflow,
-        git_flow::{
-            apply_repo_bump_workflow, collect_non_main_repo_states, collect_repo_bump_operations,
-        },
-    },
     config::{
         AppConfig, BranchConfig, ConfigStore, ProjectConfig, ProjectType, RepoConfig, TargetFormat,
         TargetSpec,
     },
     git::{
-        GitCancellation, collect_all_branch_git_scope_contexts, current_branch_with_cancel,
-        last_bump_time, latest_local_tag_with_cancel, resolve_main_branch_name, run_git,
-        run_git_checked, run_git_checked_owned_with_cancel, run_git_checked_with_cancel,
-        split_output_lines, switch_to_existing_branch, switch_to_main_branch,
+        BranchNameOption, GitCancellation, RerootMode, collect_all_branch_git_scope_contexts,
+        current_branch_with_cancel, fixed_branch_name_option_with_value, is_release_line_branch,
+        last_bump_time, latest_local_tag_with_cancel, resolve_main_branch_name, run_branch_cd,
+        run_branch_done, run_git, run_git_checked, run_git_checked_owned_with_cancel,
+        run_git_checked_with_cancel, run_local_merge, run_merge, run_merge_for_pull_request,
+        run_pr, run_reroot, split_output_lines, suggest_branch_name_options,
+        switch_to_existing_branch, switch_to_main_branch,
     },
-    git_br::{
-        BranchNameOption, fixed_branch_name_option_with_value, is_release_line_branch,
-        run_branch_cd, suggest_branch_name_options,
-    },
-    git_br_end::run_branch_done,
-    git_locmerge::run_local_merge,
-    git_mg::{run_merge, run_merge_for_pull_request},
-    git_pr::run_pr,
-    git_rrt::{RerootMode, run_reroot},
     targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
     versioning::{BumpAction, VersionScheme},
+    workflow::{
+        OverviewBumpWorkflow,
+        git_flow::{
+            apply_repo_bump_workflow, collect_non_main_repo_states, collect_repo_bump_operations,
+        },
+    },
 };
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -358,23 +352,23 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             Ok(StartupMode::Handled)
         }
         [command] if is_new_command(command) => {
-            crate::git_new::run_new(None, None)?;
+            crate::git::run_new(None, None)?;
             Ok(StartupMode::Handled)
         }
         [command, action] if is_new_command(command) && action == "alt" => {
-            crate::git_alt::run_new_alt(None)?;
+            crate::git::run_new_alt(None)?;
             Ok(StartupMode::Handled)
         }
         [command, action, option] if is_new_command(command) && action == "alt" => {
-            crate::git_alt::run_new_alt(Some(option))?;
+            crate::git::run_new_alt(Some(option))?;
             Ok(StartupMode::Handled)
         }
         [command, action] if is_new_command(command) => {
-            crate::git_new::run_new(Some(action), None)?;
+            crate::git::run_new(Some(action), None)?;
             Ok(StartupMode::Handled)
         }
         [command, action, option] if is_new_command(command) => {
-            crate::git_new::run_new(Some(action), Some(option))?;
+            crate::git::run_new(Some(action), Some(option))?;
             Ok(StartupMode::Handled)
         }
         [command] if is_toppicks_command(command) => {
@@ -1065,9 +1059,7 @@ fn print_project_version(lookup: &str) -> Result<()> {
         let last_bump = last_bump_time(&context.repo_root, &context.git_pathspecs(), None)
             .ok()
             .flatten()
-            .and_then(|timestamp| {
-                crate::git_stt::format_relative_git_timestamp(&timestamp.to_string())
-            })
+            .and_then(|timestamp| crate::git::format_relative_git_timestamp(&timestamp.to_string()))
             .unwrap_or_else(|| "n/a".to_string());
         let last_release = latest_public_release_tag_for_repo(&context.repo_root)
             .or_else(|| {
@@ -1213,7 +1205,7 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
             Some(format!("v{}-dev", next_version))
         } else {
             let branch_name_options =
-                suggest_branch_name_options(crate::git_br::BranchNameSuggestionRequest {
+                suggest_branch_name_options(crate::git::BranchNameSuggestionRequest {
                     scheme,
                     action,
                     current_branch: &branch_prompt_source.current_branch,
@@ -1463,7 +1455,7 @@ fn semver_dev_branch_version_exists(existing_branches: &[String], version: &str)
 }
 
 fn switch_repo_operations_to_existing_branch(
-    operations: &[crate::app::RepoBumpOperation],
+    operations: &[crate::workflow::RepoBumpOperation],
     branch_name: &str,
 ) -> Result<()> {
     for operation in operations {
@@ -2277,9 +2269,9 @@ impl Drop for CliRawModeGuard {
 }
 
 fn resolve_branch_prompt_source(
-    repo_operations: &[crate::app::RepoBumpOperation],
+    repo_operations: &[crate::workflow::RepoBumpOperation],
     git_contexts: &[crate::git::GitScopeContext],
-    non_main_repo_states: &[crate::app::git_flow::RepoBranchState],
+    non_main_repo_states: &[crate::workflow::git_flow::RepoBranchState],
     scheme: VersionScheme,
 ) -> Result<BranchPromptSource> {
     let preferred_repo_root = non_main_repo_states
@@ -2662,7 +2654,7 @@ fn load_branch_diagram_with_cancel(
             continue;
         }
 
-        if crate::git_alt::is_alt_branch(current_branch)
+        if crate::git::is_alt_branch(current_branch)
             && let Some(segment) = path
                 .iter()
                 .position(|segment| segment.branch.name.eq_ignore_ascii_case(current_branch))
@@ -2766,7 +2758,7 @@ fn build_branch_tree_data_with_cancel(
         .chain(std::iter::once(current_ref.name.clone()))
         .collect::<Vec<_>>();
     let alt_sibling_lookups =
-        crate::git_alt::alt_sibling_branch_names(current_branch, &all_branch_names)
+        crate::git::alt_sibling_branch_names(current_branch, &all_branch_names)
             .into_iter()
             .map(|branch| normalize_lookup(&branch))
             .collect::<std::collections::HashSet<_>>();
@@ -2794,9 +2786,9 @@ fn build_branch_tree_data_with_cancel(
         path.push(current_ref);
     }
 
-    if crate::git_alt::is_alt_branch(current_branch)
+    if crate::git::is_alt_branch(current_branch)
         && let Some(parent_name) =
-            crate::git_alt::alt_merge_parent_branch(current_branch, &all_branch_names)
+            crate::git::alt_merge_parent_branch(current_branch, &all_branch_names)
         && !root_branch.name.eq_ignore_ascii_case(&parent_name)
         && path
             .iter()
@@ -2898,7 +2890,7 @@ fn resolve_parent_branch_name_with_cancel(
         .map(|branch| branch.name)
         .collect::<Vec<_>>();
     if let Some(parent_branch) =
-        crate::git_alt::alt_merge_parent_branch(current_branch, &existing_branches)
+        crate::git::alt_merge_parent_branch(current_branch, &existing_branches)
     {
         return Ok(parent_branch);
     }
@@ -3840,7 +3832,9 @@ impl ProjectRootBase for ProjectConfig {
 
 fn run_toppicks() -> Result<()> {
     use crate::changelog::ParsedCommit;
-    use crate::changelog_tp::{extract_top_picks, render_top_picks_section, sort_top_picks};
+    use crate::changelog::top_picks::{
+        extract_top_picks, render_top_picks_section, sort_top_picks,
+    };
     use crate::git::run_git;
 
     println!("Collecting commits...");
@@ -3942,7 +3936,7 @@ fn run_toppicks() -> Result<()> {
 }
 
 fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Result<()> {
-    use crate::chl_vrtr::VARIATOR_HELP;
+    use crate::variator::VARIATOR_HELP;
 
     if matches!(
         action,
@@ -4028,7 +4022,7 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
             let new_value =
                 value.ok_or_else(|| anyhow!("Usage: cg var rn <id_or_name> \"<new_value>\""))?;
 
-            use crate::chl_vrtr::RenameOutcome;
+            use crate::variator::RenameOutcome;
             match config.projects[project_index]
                 .variator_storage
                 .rename(key, new_value)
@@ -4078,8 +4072,8 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
 }
 
 fn prompt_rename_conflict(
-    by_id: &crate::chl_vrtr::Variator,
-    by_name: &crate::chl_vrtr::Variator,
+    by_id: &crate::variator::Variator,
+    by_name: &crate::variator::Variator,
 ) -> Result<Option<u32>> {
     const ANSI_YELLOW: &str = "\x1b[33m";
     const ANSI_CYAN: &str = "\x1b[36m";
@@ -4116,7 +4110,7 @@ fn prompt_rename_conflict(
             )
             .context("failed to queue rename conflict header")?;
 
-            let rows: [(&crate::chl_vrtr::Variator, &str); 2] =
+            let rows: [(&crate::variator::Variator, &str); 2] =
                 [(by_id, "numeric id match"), (by_name, "variator_id match")];
 
             for (i, (v, _)) in rows.iter().enumerate() {

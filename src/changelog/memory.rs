@@ -109,7 +109,7 @@ pub(crate) fn save_top_picks_edits(repo_root: &str, content: &str) -> Result<()>
 pub(crate) fn resolve_top_picks_baseline_tag(repo_root: &str) -> Option<String> {
     crate::forge::detect_forge_for_repo(repo_root)
         .and_then(|forge| {
-            crate::git_stt::last_rls_version(
+            crate::git::last_rls_version(
                 repo_root,
                 match forge {
                     crate::forge::ForgeKind::GitHub => {
@@ -125,7 +125,7 @@ pub(crate) fn resolve_top_picks_baseline_tag(repo_root: &str) -> Option<String> 
             .flatten()
         })
         .or_else(|| {
-            crate::git_stt::latest_local_tag_with_cancel(repo_root, None)
+            crate::git::latest_local_tag_with_cancel(repo_root, None)
                 .ok()
                 .flatten()
         })

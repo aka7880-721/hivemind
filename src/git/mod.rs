@@ -1,9 +1,22 @@
-// Copyright © 2026 ComfyHome™
-// All rights reserved.
-//
-// Licensed under the ComfyGit License v1.2
-//
-// For details, see the LICENSE file in the repository root.
+mod alt;
+mod branch;
+mod branch_end;
+mod locmerge;
+mod merge;
+mod new;
+mod pr;
+mod reroot;
+mod status;
+
+pub(crate) use alt::*;
+pub(crate) use branch::*;
+pub(crate) use branch_end::*;
+pub(crate) use locmerge::*;
+pub(crate) use merge::*;
+pub(crate) use new::*;
+pub(crate) use pr::*;
+pub(crate) use reroot::*;
+pub(crate) use status::*;
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
 use std::{
@@ -20,11 +33,12 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
     config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
-    git_stt::{last_commit_label, last_rls_time, last_rls_version, last_tag_name, last_tag_time},
     targets::{collect_bump_scopes, shared_bump_version},
 };
 
-pub(crate) use crate::git_stt::{last_bump_time, latest_local_tag_with_cancel};
+use status::{last_commit_label, last_rls_time, last_tag_name, last_tag_time};
+
+pub(crate) use status::{last_bump_time, latest_local_tag_with_cancel};
 
 pub(crate) fn current_branch_with_cancel(
     repo_root: &str,
@@ -871,13 +885,13 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
         "no tags".to_string()
     };
 
-    let last_bump_time = crate::git_stt::last_bump_time(repo_root, &pathspecs, cancel.clone())?;
+    let last_bump_time = crate::git::last_bump_time(repo_root, &pathspecs, cancel.clone())?;
     let last_tag_name = last_tag_name(repo_root, cancel.clone())?;
     let last_tag_time = last_tag_time(repo_root, &pathspecs, cancel.clone())?;
     let last_commit_label = last_commit_label(repo_root, &pathspecs, cancel.clone())?;
     let (last_rls_version, last_rls_time) = if integration_mode.is_forge_enabled() {
         (
-            last_rls_version(repo_root, integration_mode, cancel.clone())
+            status::last_rls_version(repo_root, integration_mode, cancel.clone())
                 .ok()
                 .flatten(),
             last_rls_time(repo_root, integration_mode, cancel)
@@ -995,12 +1009,12 @@ fn history_tag_components(tag: &str) -> Option<Vec<u64>> {
 
 #[cfg(test)]
 mod tests {
+    use super::status::format_relative_git_timestamp;
     use super::*;
     use crate::{
         config::{
             BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec,
         },
-        git_stt::format_relative_git_timestamp,
         versioning::VersionScheme,
     };
     use std::{

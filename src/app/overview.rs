@@ -15,11 +15,10 @@ use crate::changelog::{archive_changelog_markdown, sum_changelog_gen};
 use crate::{
     dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
     git::{
-        GitCancellation, current_branch_with_cancel, sorted_local_tags_with_cancel,
-        switch_or_create_branch,
+        BranchNameSuggestionRequest, GitCancellation, current_branch_with_cancel,
+        format_relative_git_timestamp, is_release_line_branch, sorted_local_tags_with_cancel,
+        suggest_branch_name_options, switch_or_create_branch,
     },
-    git_br::{BranchNameSuggestionRequest, is_release_line_branch, suggest_branch_name_options},
-    git_stt::format_relative_git_timestamp,
     targets::shared_bump_version,
     versioning::BumpAction,
 };
@@ -236,7 +235,7 @@ pub(super) fn should_use_recent_changes_tab(app: &App, area: Rect) -> bool {
         .map(|scope| tile_height(scope.scheme))
         .max()
         .unwrap_or(7);
-    super::should_use_recent_changes_tab(area.height, max_tile_height)
+    crate::app::should_use_recent_changes_tab(area.height, max_tile_height)
 }
 
 pub(super) fn ensure_dashboard_recent_changes(app: &mut App) {
@@ -1504,9 +1503,9 @@ struct OverviewBranchPromptSource {
 }
 
 fn resolve_overview_branch_prompt_source(
-    repo_operations: &[crate::app::RepoBumpOperation],
+    repo_operations: &[crate::workflow::RepoBumpOperation],
     git_contexts: &[crate::git::GitScopeContext],
-    non_main_repo_states: &[crate::app::git_flow::RepoBranchState],
+    non_main_repo_states: &[crate::workflow::git_flow::RepoBranchState],
     scheme: VersionScheme,
 ) -> Result<OverviewBranchPromptSource> {
     let preferred_repo_root = non_main_repo_states
@@ -1541,7 +1540,7 @@ pub(super) fn collect_overview_bump_warnings(
     project: &ProjectConfig,
     scope_index: usize,
     cancel: Option<GitCancellation>,
-) -> Result<Vec<UnexpectedStagedRepo>> {
+) -> Result<Vec<git_flow::UnexpectedStagedRepo>> {
     let scopes = collect_bump_scopes(project)?;
     let affected_scope_indexes = if project.unified_versioning {
         (0..scopes.len()).collect::<Vec<_>>()
@@ -1876,8 +1875,10 @@ async fn collect_preview_entries_async(
 mod tests {
     use super::*;
     use crate::config::{
-        BranchConfig, ChangelogSettings, ReleaseNowSettings, TileInfoSettings, TileRotationTarget,
+        BranchConfig, BranchScopeKind, ChangelogSettings, ReleaseNowSettings, TargetFormat,
+        TargetSpec, TileInfoSettings, TileRotationTarget,
     };
+    use crate::targets::BumpTarget;
 
     #[test]
     fn empty_local_only_project_uses_dashboard_placeholders() {

@@ -398,7 +398,7 @@ impl App {
                 overview_inner,
             );
         } else if self.overview_tab == OverviewTab::ProjectSettings {
-            super::p_s_s::render_project_settings(self, frame, overview_inner);
+            super::project_settings::render_project_settings(self, frame, overview_inner);
         } else {
             self.render_dashboard_overview(frame, overview_inner);
         }
