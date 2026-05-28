@@ -1595,15 +1595,7 @@ fn run_release_delete(tag_override: Option<&str>) -> Result<()> {
         run_git_checked(&repo_root, &["tag", "-d", &tag_name])?;
     }
 
-    let remote_name = run_git_checked(&repo_root, &["remote"])
-        .ok()
-        .and_then(|remotes| {
-            remotes
-                .lines()
-                .map(str::trim)
-                .find(|name| !name.is_empty())
-                .map(ToOwned::to_owned)
-        });
+    let remote_name = crate::git::default_push_remote_name(&repo_root).ok();
     if let Some(remote_name) = remote_name {
         let _ = run_git(
             &repo_root,
