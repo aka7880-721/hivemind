@@ -12,9 +12,9 @@ use ratatui_comfy_toaster::ToastShortcut;
 
 use crate::{
     config::ProjectType,
-    dialogs::RecentChangesTab,
-    project_edit::ProjectEditFocus,
+    tui::ProjectEditFocus,
     tui::{OverviewTab, overview_tabs},
+    workflow::dialogs::RecentChangesTab,
 };
 
 use super::super::{project_settings, rls_now};
