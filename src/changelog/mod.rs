@@ -519,6 +519,7 @@ pub(crate) fn pr_changelog_gen(
     doc.render_markdown()
 }
 
+#[allow(dead_code)]
 pub(crate) fn ensure_previous_public_release_header(
     markdown: &str,
     current_tag: &str,
