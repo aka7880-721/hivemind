@@ -776,12 +776,6 @@ pub(crate) fn ensure_local_tag(
     }
 }
 
-pub(crate) fn ensure_forge_cli_available(
-    integration_mode: crate::config::IntegrationMode,
-) -> Result<crate::forge::ForgeKind> {
-    crate::forge::require_forge_cli(integration_mode)
-}
-
 pub(crate) fn run_git(repo_root: &str, args: &[&str]) -> Result<GitOutput> {
     run_git_with_cancel(repo_root, args, None)
 }
