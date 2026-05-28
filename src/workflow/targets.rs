@@ -16,7 +16,7 @@ use toml_edit::{DocumentMut, Item, Value, value};
 
 use crate::{
     config::{BranchScopeKind, ProjectConfig, ProjectType, TargetFormat, TargetSpec},
-    versioning::VersionScheme,
+    workflow::versioning::VersionScheme,
 };
 
 #[derive(Clone)]
@@ -171,7 +171,7 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             write_ruby_value(&target.path, &content, &target.key_path, new_version)
         }
         TargetFormat::RDescription => {
-            let updated = crate::target_custom::write_description_value(
+            let updated = crate::workflow::target_custom::write_description_value(
                 &content,
                 &target.key_path,
                 new_version,
@@ -181,21 +181,27 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::Gradle => {
-            let updated =
-                crate::target_custom::write_gradle_value(&content, &target.key_path, new_version)?;
+            let updated = crate::workflow::target_custom::write_gradle_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
         TargetFormat::CMake => {
-            let updated =
-                crate::target_custom::write_cmake_value(&content, &target.key_path, new_version)?;
+            let updated = crate::workflow::target_custom::write_cmake_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
         TargetFormat::Makefile => {
-            let updated = crate::target_custom::write_makefile_value(
+            let updated = crate::workflow::target_custom::write_makefile_value(
                 &content,
                 &target.key_path,
                 new_version,
@@ -205,21 +211,27 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::Plist => {
-            let updated =
-                crate::target_custom::write_plist_value(&content, &target.key_path, new_version)?;
+            let updated = crate::workflow::target_custom::write_plist_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
         TargetFormat::Clojure => {
-            let updated =
-                crate::target_custom::write_clojure_value(&content, &target.key_path, new_version)?;
+            let updated = crate::workflow::target_custom::write_clojure_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
         TargetFormat::SwiftPackage => {
-            let updated = crate::target_custom::write_swift_package_value(
+            let updated = crate::workflow::target_custom::write_swift_package_value(
                 &content,
                 &target.key_path,
                 new_version,
@@ -229,7 +241,7 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::ElixirMix => {
-            let updated = crate::target_custom::write_elixir_mix_value(
+            let updated = crate::workflow::target_custom::write_elixir_mix_value(
                 &content,
                 &target.key_path,
                 new_version,
@@ -239,7 +251,7 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::ScalaSbt => {
-            let updated = crate::target_custom::write_scala_sbt_value(
+            let updated = crate::workflow::target_custom::write_scala_sbt_value(
                 &content,
                 &target.key_path,
                 new_version,
@@ -249,14 +261,17 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::Cabal => {
-            let updated =
-                crate::target_custom::write_cabal_value(&content, &target.key_path, new_version)?;
+            let updated = crate::workflow::target_custom::write_cabal_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
         TargetFormat::Autoconf => {
-            let updated = crate::target_custom::write_autoconf_value(
+            let updated = crate::workflow::target_custom::write_autoconf_value(
                 &content,
                 &target.key_path,
                 new_version,
@@ -266,21 +281,27 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::Meson => {
-            let updated =
-                crate::target_custom::write_meson_value(&content, &target.key_path, new_version)?;
+            let updated = crate::workflow::target_custom::write_meson_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
         TargetFormat::Nimble => {
-            let updated =
-                crate::target_custom::write_nimble_value(&content, &target.key_path, new_version)?;
+            let updated = crate::workflow::target_custom::write_nimble_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
         TargetFormat::Rockspec => {
-            let updated = crate::target_custom::write_rockspec_value(
+            let updated = crate::workflow::target_custom::write_rockspec_value(
                 &content,
                 &target.key_path,
                 new_version,
@@ -290,7 +311,7 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::MakefilePl => {
-            let updated = crate::target_custom::write_makefile_pl_value(
+            let updated = crate::workflow::target_custom::write_makefile_pl_value(
                 &content,
                 &target.key_path,
                 new_version,
@@ -300,8 +321,11 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
             Ok(())
         }
         TargetFormat::Bazel => {
-            let updated =
-                crate::target_custom::write_bazel_value(&content, &target.key_path, new_version)?;
+            let updated = crate::workflow::target_custom::write_bazel_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
             fs::write(&target.path, updated)
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
@@ -328,31 +352,53 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
         TargetFormat::GoMod => extract_gomod_value(&content, key_path)?,
         TargetFormat::Ruby => extract_ruby_value(path, &content, key_path)?,
         TargetFormat::RDescription => {
-            crate::target_custom::extract_description_value(&content, key_path)?
+            crate::workflow::target_custom::extract_description_value(&content, key_path)?
         }
-        TargetFormat::Gradle => crate::target_custom::extract_gradle_value(&content, key_path)?,
-        TargetFormat::CMake => crate::target_custom::extract_cmake_value(&content, key_path)?,
-        TargetFormat::Makefile => crate::target_custom::extract_makefile_value(&content, key_path)?,
-        TargetFormat::Plist => crate::target_custom::extract_plist_value(&content, key_path)?,
-        TargetFormat::Clojure => crate::target_custom::extract_clojure_value(&content, key_path)?,
+        TargetFormat::Gradle => {
+            crate::workflow::target_custom::extract_gradle_value(&content, key_path)?
+        }
+        TargetFormat::CMake => {
+            crate::workflow::target_custom::extract_cmake_value(&content, key_path)?
+        }
+        TargetFormat::Makefile => {
+            crate::workflow::target_custom::extract_makefile_value(&content, key_path)?
+        }
+        TargetFormat::Plist => {
+            crate::workflow::target_custom::extract_plist_value(&content, key_path)?
+        }
+        TargetFormat::Clojure => {
+            crate::workflow::target_custom::extract_clojure_value(&content, key_path)?
+        }
         TargetFormat::SwiftPackage => {
-            crate::target_custom::extract_swift_package_value(&content, key_path)?
+            crate::workflow::target_custom::extract_swift_package_value(&content, key_path)?
         }
         TargetFormat::ElixirMix => {
-            crate::target_custom::extract_elixir_mix_value(&content, key_path)?
+            crate::workflow::target_custom::extract_elixir_mix_value(&content, key_path)?
         }
         TargetFormat::ScalaSbt => {
-            crate::target_custom::extract_scala_sbt_value(&content, key_path)?
+            crate::workflow::target_custom::extract_scala_sbt_value(&content, key_path)?
         }
-        TargetFormat::Cabal => crate::target_custom::extract_cabal_value(&content, key_path)?,
-        TargetFormat::Autoconf => crate::target_custom::extract_autoconf_value(&content, key_path)?,
-        TargetFormat::Meson => crate::target_custom::extract_meson_value(&content, key_path)?,
-        TargetFormat::Nimble => crate::target_custom::extract_nimble_value(&content, key_path)?,
-        TargetFormat::Rockspec => crate::target_custom::extract_rockspec_value(&content, key_path)?,
+        TargetFormat::Cabal => {
+            crate::workflow::target_custom::extract_cabal_value(&content, key_path)?
+        }
+        TargetFormat::Autoconf => {
+            crate::workflow::target_custom::extract_autoconf_value(&content, key_path)?
+        }
+        TargetFormat::Meson => {
+            crate::workflow::target_custom::extract_meson_value(&content, key_path)?
+        }
+        TargetFormat::Nimble => {
+            crate::workflow::target_custom::extract_nimble_value(&content, key_path)?
+        }
+        TargetFormat::Rockspec => {
+            crate::workflow::target_custom::extract_rockspec_value(&content, key_path)?
+        }
         TargetFormat::MakefilePl => {
-            crate::target_custom::extract_makefile_pl_value(&content, key_path)?
+            crate::workflow::target_custom::extract_makefile_pl_value(&content, key_path)?
         }
-        TargetFormat::Bazel => crate::target_custom::extract_bazel_value(&content, key_path)?,
+        TargetFormat::Bazel => {
+            crate::workflow::target_custom::extract_bazel_value(&content, key_path)?
+        }
         TargetFormat::Auto => unreachable!(),
     };
 
@@ -433,52 +479,52 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
     if is_ruby_manifest_filename(path) {
         return Ok(TargetFormat::Ruby);
     }
-    if crate::target_custom::is_description_filename(path) {
+    if crate::workflow::target_custom::is_description_filename(path) {
         return Ok(TargetFormat::RDescription);
     }
-    if crate::target_custom::is_cmake_filename(path) {
+    if crate::workflow::target_custom::is_cmake_filename(path) {
         return Ok(TargetFormat::CMake);
     }
-    if crate::target_custom::is_makefile_filename(path) {
+    if crate::workflow::target_custom::is_makefile_filename(path) {
         return Ok(TargetFormat::Makefile);
     }
-    if crate::target_custom::is_gradle_filename(path) {
+    if crate::workflow::target_custom::is_gradle_filename(path) {
         return Ok(TargetFormat::Gradle);
     }
-    if crate::target_custom::is_plist_filename(path) {
+    if crate::workflow::target_custom::is_plist_filename(path) {
         return Ok(TargetFormat::Plist);
     }
-    if crate::target_custom::is_project_clj_filename(path) {
+    if crate::workflow::target_custom::is_project_clj_filename(path) {
         return Ok(TargetFormat::Clojure);
     }
-    if crate::target_custom::is_package_swift_filename(path) {
+    if crate::workflow::target_custom::is_package_swift_filename(path) {
         return Ok(TargetFormat::SwiftPackage);
     }
-    if crate::target_custom::is_mix_exs_filename(path) {
+    if crate::workflow::target_custom::is_mix_exs_filename(path) {
         return Ok(TargetFormat::ElixirMix);
     }
-    if crate::target_custom::is_build_sbt_filename(path) {
+    if crate::workflow::target_custom::is_build_sbt_filename(path) {
         return Ok(TargetFormat::ScalaSbt);
     }
-    if crate::target_custom::is_cabal_filename(path) {
+    if crate::workflow::target_custom::is_cabal_filename(path) {
         return Ok(TargetFormat::Cabal);
     }
-    if crate::target_custom::is_configure_ac_filename(path) {
+    if crate::workflow::target_custom::is_configure_ac_filename(path) {
         return Ok(TargetFormat::Autoconf);
     }
-    if crate::target_custom::is_meson_filename(path) {
+    if crate::workflow::target_custom::is_meson_filename(path) {
         return Ok(TargetFormat::Meson);
     }
-    if crate::target_custom::is_nimble_filename(path) {
+    if crate::workflow::target_custom::is_nimble_filename(path) {
         return Ok(TargetFormat::Nimble);
     }
-    if crate::target_custom::is_rockspec_filename(path) {
+    if crate::workflow::target_custom::is_rockspec_filename(path) {
         return Ok(TargetFormat::Rockspec);
     }
-    if crate::target_custom::is_makefile_pl_filename(path) {
+    if crate::workflow::target_custom::is_makefile_pl_filename(path) {
         return Ok(TargetFormat::MakefilePl);
     }
-    if crate::target_custom::is_bazel_module_filename(path) {
+    if crate::workflow::target_custom::is_bazel_module_filename(path) {
         return Ok(TargetFormat::Bazel);
     }
 
@@ -508,44 +554,75 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
                 Ok(TargetFormat::GoMod)
             } else if extract_ruby_value(path, content, "version").is_ok() {
                 Ok(TargetFormat::Ruby)
-            } else if crate::target_custom::extract_description_value(content, "Version").is_ok() {
+            } else if crate::workflow::target_custom::extract_description_value(content, "Version")
+                .is_ok()
+            {
                 Ok(TargetFormat::RDescription)
-            } else if crate::target_custom::extract_cmake_value(content, "project").is_ok() {
+            } else if crate::workflow::target_custom::extract_cmake_value(content, "project")
+                .is_ok()
+            {
                 Ok(TargetFormat::CMake)
-            } else if crate::target_custom::extract_makefile_value(content, "VERSION").is_ok() {
+            } else if crate::workflow::target_custom::extract_makefile_value(content, "VERSION")
+                .is_ok()
+            {
                 Ok(TargetFormat::Makefile)
-            } else if crate::target_custom::extract_gradle_value(content, "version").is_ok() {
+            } else if crate::workflow::target_custom::extract_gradle_value(content, "version")
+                .is_ok()
+            {
                 Ok(TargetFormat::Gradle)
-            } else if crate::target_custom::extract_plist_value(
+            } else if crate::workflow::target_custom::extract_plist_value(
                 content,
                 "CFBundleShortVersionString",
             )
             .is_ok()
             {
                 Ok(TargetFormat::Plist)
-            } else if crate::target_custom::extract_clojure_value(content, "defproject").is_ok() {
+            } else if crate::workflow::target_custom::extract_clojure_value(content, "defproject")
+                .is_ok()
+            {
                 Ok(TargetFormat::Clojure)
-            } else if crate::target_custom::extract_swift_package_value(content, "version").is_ok()
-                || crate::target_custom::extract_swift_package_value(content, "comment").is_ok()
+            } else if crate::workflow::target_custom::extract_swift_package_value(
+                content, "version",
+            )
+            .is_ok()
+                || crate::workflow::target_custom::extract_swift_package_value(content, "comment")
+                    .is_ok()
             {
                 Ok(TargetFormat::SwiftPackage)
-            } else if crate::target_custom::extract_elixir_mix_value(content, "version").is_ok() {
+            } else if crate::workflow::target_custom::extract_elixir_mix_value(content, "version")
+                .is_ok()
+            {
                 Ok(TargetFormat::ElixirMix)
-            } else if crate::target_custom::extract_scala_sbt_value(content, "version").is_ok() {
+            } else if crate::workflow::target_custom::extract_scala_sbt_value(content, "version")
+                .is_ok()
+            {
                 Ok(TargetFormat::ScalaSbt)
-            } else if crate::target_custom::extract_cabal_value(content, "version").is_ok() {
+            } else if crate::workflow::target_custom::extract_cabal_value(content, "version")
+                .is_ok()
+            {
                 Ok(TargetFormat::Cabal)
-            } else if crate::target_custom::extract_autoconf_value(content, "AC_INIT").is_ok() {
+            } else if crate::workflow::target_custom::extract_autoconf_value(content, "AC_INIT")
+                .is_ok()
+            {
                 Ok(TargetFormat::Autoconf)
-            } else if crate::target_custom::extract_meson_value(content, "project").is_ok() {
+            } else if crate::workflow::target_custom::extract_meson_value(content, "project")
+                .is_ok()
+            {
                 Ok(TargetFormat::Meson)
-            } else if crate::target_custom::extract_nimble_value(content, "version").is_ok() {
+            } else if crate::workflow::target_custom::extract_nimble_value(content, "version")
+                .is_ok()
+            {
                 Ok(TargetFormat::Nimble)
-            } else if crate::target_custom::extract_rockspec_value(content, "version").is_ok() {
+            } else if crate::workflow::target_custom::extract_rockspec_value(content, "version")
+                .is_ok()
+            {
                 Ok(TargetFormat::Rockspec)
-            } else if crate::target_custom::extract_makefile_pl_value(content, "VERSION").is_ok() {
+            } else if crate::workflow::target_custom::extract_makefile_pl_value(content, "VERSION")
+                .is_ok()
+            {
                 Ok(TargetFormat::MakefilePl)
-            } else if crate::target_custom::extract_bazel_value(content, "module").is_ok() {
+            } else if crate::workflow::target_custom::extract_bazel_value(content, "module").is_ok()
+            {
                 Ok(TargetFormat::Bazel)
             } else if extract_plain_value(content, "").is_ok() {
                 Ok(TargetFormat::Plain)

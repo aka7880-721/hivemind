@@ -36,9 +36,9 @@ use crate::{
         IntegrationMode, ProjectConfig, ProjectType, ReleaseNowSettings, RepoConfig, TargetFormat,
     },
     forge::integration_mode_for_remote_url,
-    project_wizard::ProjectWizard,
-    targets::{ProbeKind, TargetProbe, probe_target},
-    versioning::VersionScheme,
+    tui::ProjectWizard,
+    workflow::targets::{ProbeKind, TargetProbe, probe_target},
+    workflow::versioning::VersionScheme,
 };
 
 const ANSI_CYAN: &str = "\x1b[36m";
