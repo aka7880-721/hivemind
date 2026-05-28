@@ -1687,18 +1687,42 @@ gh_repo_slug() {
     return 1
 }
 
+utc_now_minus_seconds() {
+    local seconds="${1:-0}"
+    local epoch
+    epoch=$(($(date +%s) - seconds))
+    if date -u -d "@${epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null; then
+        return 0
+    fi
+    date -u -r "${epoch}" +%Y-%m-%dT%H:%M:%SZ
+}
+
+parse_gh_workflow_run_id() {
+    printf '%s\n' "$1" | sed -n 's|.*/actions/runs/\([0-9][0-9]*\).*|\1|p' | tail -1
+}
+
 resolve_macos_ci_run_id() {
     local branch="$1"
+    local not_before="${2:-}"
     local attempt=0
     local max_attempts=45
     while (( attempt < max_attempts )); do
-        local run_id
-        run_id=$(gh run list \
-            --workflow="$MACOS_CI_WORKFLOW" \
-            --branch="$branch" \
-            --limit 1 \
-            --json databaseId \
-            -q '.[0].databaseId' 2>/dev/null || true)
+        local run_id=''
+        if [[ -n "$not_before" ]]; then
+            run_id=$(gh run list \
+                --workflow="$MACOS_CI_WORKFLOW" \
+                --branch="$branch" \
+                --limit 20 \
+                --json databaseId,createdAt \
+                -q 'map(select(.createdAt >= "'"$not_before"'")) | .[0].databaseId // empty' 2>/dev/null || true)
+        else
+            run_id=$(gh run list \
+                --workflow="$MACOS_CI_WORKFLOW" \
+                --branch="$branch" \
+                --limit 1 \
+                --json databaseId \
+                -q '.[0].databaseId' 2>/dev/null || true)
+        fi
         if [[ -n "$run_id" && "$run_id" != "null" ]]; then
             echo "$run_id"
             return 0
@@ -1715,31 +1739,45 @@ print_macos_ci_download_hints() {
     if repo_slug=$(gh_repo_slug); then
         log_info "macOS CI run: https://github.com/${repo_slug}/actions/runs/${run_id}"
     fi
-    log_info "Download when complete:"
-    log_info "  gh run download ${run_id} -n ${MACOS_CI_ARTIFACT} -D dist/"
+    log_info "Manual download (use an empty directory; gh fails if files already exist under the target):"
+    log_info "  staging=\$(mktemp -d); gh run download ${run_id} -n ${MACOS_CI_ARTIFACT} -D \"\$staging\""
     log_info "Or wait for this script (default) to finish the run and merge artifacts into dist/."
 }
 
-download_macos_ci_artifacts() {
-    local run_id="$1"
-    local staging="${DIST_ROOT}/.macos-ci-download"
-    rm -rf "$staging"
-    mkdir -p "$staging"
-    log_info "Downloading '${MACOS_CI_ARTIFACT}' from run ${run_id}..."
-    if ! gh run download "$run_id" -n "$MACOS_CI_ARTIFACT" -D "$staging"; then
-        log_warning "Failed to download macOS CI artifact '${MACOS_CI_ARTIFACT}'."
-        return 1
-    fi
+merge_macos_ci_staging_into_dist() {
+    local staging="$1"
     mkdir -p "${DIST_ROOT}/latest" "${DIST_ROOT}/old"
+    local mac_dir=''
     if [[ -d "$staging/latest" ]]; then
+        for mac_dir in "$staging/latest"/macos-*; do
+            [[ -d "$mac_dir" ]] || continue
+            rm -rf "${DIST_ROOT}/latest/$(basename "$mac_dir")"
+        done
         cp -a "$staging/latest/." "${DIST_ROOT}/latest/"
     fi
     if [[ -d "$staging/old" ]]; then
+        for mac_dir in "$staging/old"/macos-*; do
+            [[ -d "$mac_dir" ]] || continue
+            rm -rf "${DIST_ROOT}/old/$(basename "$mac_dir")"
+        done
         cp -a "$staging/old/." "${DIST_ROOT}/old/"
     fi
     if [[ ! -d "$staging/latest" && ! -d "$staging/old" ]]; then
         cp -a "$staging/." "${DIST_ROOT}/"
     fi
+}
+
+download_macos_ci_artifacts() {
+    local run_id="$1"
+    local staging
+    staging=$(mktemp -d "${TMPDIR:-/tmp}/comfygit-macos-ci.XXXXXX")
+    log_info "Downloading '${MACOS_CI_ARTIFACT}' from run ${run_id} into ${staging}..."
+    if ! gh run download "$run_id" -n "$MACOS_CI_ARTIFACT" -D "$staging"; then
+        rm -rf "$staging"
+        log_warning "Failed to download macOS CI artifact '${MACOS_CI_ARTIFACT}'."
+        return 1
+    fi
+    merge_macos_ci_staging_into_dist "$staging"
     rm -rf "$staging"
     log_success "macOS CI artifacts merged into ${DIST_ROOT}/"
 }
@@ -1762,18 +1800,28 @@ trigger_macos_ci_workflow() {
     current_ref=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
     local mac_arch_field
     mac_arch_field=$(mac_ci_arch_workflow_field)
-    if ! gh workflow run "$MACOS_CI_WORKFLOW" --ref "$current_ref" --field version="$version" --field arch="$mac_arch_field"; then
+    local trigger_after
+    trigger_after=$(utc_now_minus_seconds 10)
+    local trigger_output=''
+    local trigger_status=0
+    trigger_output=$(gh workflow run "$MACOS_CI_WORKFLOW" --ref "$current_ref" --field version="$version" --field arch="$mac_arch_field" 2>&1) || trigger_status=$?
+    printf '%s\n' "$trigger_output" >&2
+    if (( trigger_status != 0 )); then
         log_warning "Failed to trigger GitHub Actions macOS release workflow; trigger it manually from GitHub UI."
         return 1
     fi
     log_success "macOS release workflow triggered on ref '${current_ref}' (version ${version})."
 
     local run_id=''
-    if ! run_id=$(resolve_macos_ci_run_id "$current_ref"); then
-        log_warning "Could not resolve workflow run ID yet."
-        log_warning "List runs: gh run list --workflow=${MACOS_CI_WORKFLOW}"
-        return 0
+    run_id=$(parse_gh_workflow_run_id "$trigger_output")
+    if [[ -z "$run_id" ]]; then
+        if ! run_id=$(resolve_macos_ci_run_id "$current_ref" "$trigger_after"); then
+            log_warning "Could not resolve workflow run ID yet."
+            log_warning "List runs: gh run list --workflow=${MACOS_CI_WORKFLOW}"
+            return 0
+        fi
     fi
+    log_info "Tracking macOS CI run ${run_id}."
     print_macos_ci_download_hints "$run_id"
 
     if [[ "$MAC_CI_WAIT" != true ]]; then
