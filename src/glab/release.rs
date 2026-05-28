@@ -46,7 +46,6 @@ fn list_releases(repo_root: &str, limit: usize) -> Result<Vec<GlabReleaseSummary
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct GlabReleaseSummary {
     tag_name: Option<String>,
     released_at: Option<String>,
