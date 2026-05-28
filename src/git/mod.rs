@@ -33,7 +33,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
     config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
-    targets::{collect_bump_scopes, shared_bump_version},
+    workflow::targets::{collect_bump_scopes, shared_bump_version},
 };
 
 use status::{last_commit_label, last_rls_time, last_tag_name, last_tag_time};
@@ -1026,7 +1026,7 @@ mod tests {
         config::{
             BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec,
         },
-        versioning::VersionScheme,
+        workflow::versioning::VersionScheme,
     };
     use std::{
         env, fs,

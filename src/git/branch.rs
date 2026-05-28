@@ -22,7 +22,7 @@ use crate::{
         GitCancellation, is_mainline_branch_name, run_git_checked_with_cancel,
         switch_to_existing_branch,
     },
-    versioning::{BumpAction, VersionScheme},
+    workflow::versioning::{BumpAction, VersionScheme},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
