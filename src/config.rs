@@ -14,7 +14,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use crate::versioning::VersionScheme;
+use crate::workflow::versioning::VersionScheme;
 
 pub const SCHEMA_VERSION: u32 = 4;
 pub const DEFAULT_CHANGELOG_PATH: &str = "CHANGELOG.md";
@@ -108,7 +108,7 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub repo: Option<RepoConfig>,
     #[serde(default)]
-    pub variator_storage: crate::variator::VariatorStorage,
+    pub variator_storage: crate::workflow::variator::VariatorStorage,
     #[serde(default)]
     pub manual_top_picks: Vec<crate::changelog::top_picks::TopPick>,
     #[serde(default)]
