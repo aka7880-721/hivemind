@@ -45,8 +45,10 @@ use crate::{
         run_pr, run_reroot, split_output_lines, suggest_branch_name_options,
         switch_to_existing_branch, switch_to_main_branch,
     },
-    targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
-    versioning::{BumpAction, VersionScheme},
+    workflow::targets::{
+        BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version,
+    },
+    workflow::versioning::{BumpAction, VersionScheme},
     workflow::{
         OverviewBumpWorkflow,
         git_flow::{
@@ -177,7 +179,7 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
     match args {
         [] => Ok(StartupMode::LaunchTui),
         [command] if is_init_command(command) => {
-            crate::cli_init::run_init()?;
+            crate::workflow::cli_init::run_init()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_help(command) => {
@@ -1312,7 +1314,7 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
 
 fn resolve_bump_current_version(
     project: &ProjectConfig,
-    scopes: &[crate::targets::BumpScope],
+    scopes: &[crate::workflow::targets::BumpScope],
     scope_index: usize,
 ) -> Result<String> {
     if project.project_type == ProjectType::AllInOne || project.unified_versioning {
@@ -4036,7 +4038,7 @@ fn run_toppicks() -> Result<()> {
 }
 
 fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Result<()> {
-    use crate::variator::VARIATOR_HELP;
+    use crate::workflow::variator::VARIATOR_HELP;
 
     if matches!(
         action,
@@ -4122,7 +4124,7 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
             let new_value =
                 value.ok_or_else(|| anyhow!("Usage: cg var rn <id_or_name> \"<new_value>\""))?;
 
-            use crate::variator::RenameOutcome;
+            use crate::workflow::variator::RenameOutcome;
             match config.projects[project_index]
                 .variator_storage
                 .rename(key, new_value)
@@ -4172,8 +4174,8 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
 }
 
 fn prompt_rename_conflict(
-    by_id: &crate::variator::Variator,
-    by_name: &crate::variator::Variator,
+    by_id: &crate::workflow::variator::Variator,
+    by_name: &crate::workflow::variator::Variator,
 ) -> Result<Option<u32>> {
     const ANSI_YELLOW: &str = "\x1b[33m";
     const ANSI_CYAN: &str = "\x1b[36m";
@@ -4210,7 +4212,7 @@ fn prompt_rename_conflict(
             )
             .context("failed to queue rename conflict header")?;
 
-            let rows: [(&crate::variator::Variator, &str); 2] =
+            let rows: [(&crate::workflow::variator::Variator, &str); 2] =
                 [(by_id, "numeric id match"), (by_name, "variator_id match")];
 
             for (i, (v, _)) in rows.iter().enumerate() {

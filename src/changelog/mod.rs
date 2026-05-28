@@ -461,7 +461,7 @@ pub(crate) fn build_document_from_git_log(
 pub(crate) fn build_document_from_git_log_with_variator(
     current_tag: impl Into<String>,
     lines: &[String],
-    variator_storage: Option<&crate::variator::VariatorStorage>,
+    variator_storage: Option<&crate::workflow::variator::VariatorStorage>,
 ) -> ChangelogDocument {
     let commits = lines
         .iter()
@@ -494,7 +494,7 @@ pub(crate) fn rls_changelog_gen(
     mini_commit_hashes: bool,
     wrap_detailed_if_top_picks: bool,
     top_picks_edits: Option<&str>,
-    variator_storage: crate::variator::VariatorStorage,
+    variator_storage: crate::workflow::variator::VariatorStorage,
 ) -> RenderedChangelog {
     let mut document =
         build_document_from_git_log_with_variator(current_tag, lines, Some(&variator_storage))
@@ -1003,7 +1003,7 @@ fn parse_graph_log_entries(line: &str) -> Vec<ParsedCommit> {
 
 fn parse_graph_log_entries_with_variator(
     line: &str,
-    variator_storage: Option<&crate::variator::VariatorStorage>,
+    variator_storage: Option<&crate::workflow::variator::VariatorStorage>,
 ) -> Vec<ParsedCommit> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -2138,7 +2138,7 @@ mod tests {
             false,
             false,
             None,
-            crate::variator::VariatorStorage::default(),
+            crate::workflow::variator::VariatorStorage::default(),
         );
 
         assert!(changelog.markdown.contains(
