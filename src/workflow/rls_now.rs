@@ -1314,9 +1314,11 @@ pub(crate) async fn execute_release_now_async(
 
     if let Some(mac_config) = mac_ci {
         let repo_root = request.repo_root.clone();
-        let (session, trigger_lines) =
-            crate::workflow::rls_now_mac::trigger_mac_ci_session(repo_root.clone(), mac_config.clone())
-                .await?;
+        let (session, trigger_lines) = crate::workflow::rls_now_mac::trigger_mac_ci_session(
+            repo_root.clone(),
+            mac_config.clone(),
+        )
+        .await?;
         emit_progress(trigger_lines);
 
         if request.selected_option_label == "All configured" {

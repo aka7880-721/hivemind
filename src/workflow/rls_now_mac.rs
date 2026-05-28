@@ -49,7 +49,10 @@ pub(crate) enum MacCiFinishOutcome {
     Failed { warning: String },
 }
 
-pub(crate) fn detect_external_mac_ci(script: &ReleaseNowScript, tag_name: &str) -> Option<MacCiConfig> {
+pub(crate) fn detect_external_mac_ci(
+    script: &ReleaseNowScript,
+    tag_name: &str,
+) -> Option<MacCiConfig> {
     if cfg!(target_os = "macos") {
         return None;
     }
@@ -137,7 +140,9 @@ fn parse_run_id_from_output(output: &str) -> Option<u64> {
     output
         .lines()
         .filter_map(|line| {
-            line.rsplit('/').next().and_then(|segment| segment.parse::<u64>().ok())
+            line.rsplit('/')
+                .next()
+                .and_then(|segment| segment.parse::<u64>().ok())
         })
         .next_back()
 }
@@ -217,7 +222,9 @@ fn utc_now_minus_seconds(seconds: u64) -> String {
         .output()
     {
         if formatted.status.success() {
-            return String::from_utf8_lossy(&formatted.stdout).trim().to_string();
+            return String::from_utf8_lossy(&formatted.stdout)
+                .trim()
+                .to_string();
         }
     }
     Command::new("date")
@@ -263,9 +270,7 @@ fn build_step_status(repo_root: &str, run_id: u64) -> Result<Option<String>> {
             "--json",
             "jobs",
             "-q",
-            &format!(
-                ".jobs[] | .steps[] | select(.name == \"{MACOS_BUILD_STEP}\") | .status"
-            ),
+            &format!(".jobs[] | .steps[] | select(.name == \"{MACOS_BUILD_STEP}\") | .status"),
         ])
         .output()
         .with_context(|| format!("failed to read macOS CI steps for run {run_id}"))?;
@@ -337,10 +342,7 @@ fn archive_superseded_mac_artifacts(repo_root: &str, version: &str) -> Result<()
         if !latest_dir.is_dir() {
             continue;
         }
-        let old_root = Path::new(repo_root)
-            .join("dist")
-            .join("old")
-            .join(dir_name);
+        let old_root = Path::new(repo_root).join("dist").join("old").join(dir_name);
         for entry in fs::read_dir(&latest_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -427,7 +429,10 @@ fn merge_macos_staging(repo_root: &str, staging: &Path) -> Result<()> {
                 let entry = entry?;
                 let path = entry.path();
                 if path.is_dir() {
-                    let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("");
+                    let name = path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("");
                     if name.starts_with("macos-") {
                         let target = destination.join(name);
                         if target.exists() {
@@ -538,7 +543,10 @@ pub(crate) async fn stream_mac_ci_until_build_started(
                 ]);
                 return Ok(());
             }
-            bail!("macOS CI run {} failed before build step started", session.run_id);
+            bail!(
+                "macOS CI run {} failed before build step started",
+                session.run_id
+            );
         }
 
         sleep(MAC_CI_POLL_INTERVAL).await;
