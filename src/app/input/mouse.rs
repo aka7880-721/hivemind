@@ -9,7 +9,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui_comfy_toaster::ToastMouseButton;
 
-use crate::dialogs::TextInput;
+use crate::workflow::dialogs::TextInput;
 
 impl App {
     pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) {

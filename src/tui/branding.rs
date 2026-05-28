@@ -65,9 +65,9 @@ pub struct PixelLogoRender {
 
 impl PixelLogo {
     pub fn load() -> Self {
-        let primary = load_image(include_bytes!("../assets/logo-protected.webp"));
+        let primary = load_image(include_bytes!("../../assets/logo-protected.webp"));
         let source =
-            primary.or_else(|| load_image(include_bytes!("../assets/logo-protected.webp")));
+            primary.or_else(|| load_image(include_bytes!("../../assets/logo-protected.webp")));
         Self { source }
     }
 

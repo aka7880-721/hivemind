@@ -21,8 +21,8 @@ use crate::{
         BranchConfig, BranchScopeKind, ChangelogSettings, DEFAULT_CHANGELOG_PATH, IntegrationMode,
         ProjectConfig, ProjectType, RepoConfig, TargetSpec, TileInfoSettings, TileRotationTarget,
     },
-    dialogs::TextInput,
-    versioning::VersionScheme,
+    workflow::dialogs::TextInput,
+    workflow::versioning::VersionScheme,
 };
 
 #[derive(Clone)]
@@ -745,7 +745,9 @@ impl ProjectEditDialog {
             }
 
             let target_key = self.target_key.value.trim();
-            if target_key.is_empty() && !crate::targets::is_plain_version_filename(target_path) {
+            if target_key.is_empty()
+                && !crate::workflow::targets::is_plain_version_filename(target_path)
+            {
                 bail!("target key cannot be empty");
             }
 

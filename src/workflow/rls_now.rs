@@ -225,15 +225,17 @@ fn stage_auto_injected_readme(
     inject_only_top_picks: bool,
     inject_depth: crate::config::ReadmeInjectDepth,
 ) -> Result<()> {
-    super::rls_now_inj::inject_whats_new(&super::rls_now_inj::ReadmeInjectionParams {
-        repo_root,
-        tag_name,
-        changelog_markdown,
-        inject_at_row,
-        remote_url,
-        inject_only_top_picks,
-        inject_depth,
-    })?;
+    crate::workflow::rls_now_inj::inject_whats_new(
+        &crate::workflow::rls_now_inj::ReadmeInjectionParams {
+            repo_root,
+            tag_name,
+            changelog_markdown,
+            inject_at_row,
+            remote_url,
+            inject_only_top_picks,
+            inject_depth,
+        },
+    )?;
     run_git_checked(repo_root, &["add", "README.md"])?;
     Ok(())
 }
@@ -421,7 +423,6 @@ fn mirror_summary_changelog_to_root(repo_root: &str) -> Result<bool> {
 
 // For details, see the LICENSE file in the repository root.
 
-use super::*;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -432,18 +433,34 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+};
 use tokio::{
     sync::mpsc::{UnboundedSender, unbounded_channel},
     task::spawn_blocking,
+    time::sleep,
 };
 
 use crate::{
+    app::{
+        StdChangelogExecutionPolicy, append_background_tag_summary_notes,
+        build_release_notes_markdown, execute_standard_changelog_for_tag,
+    },
     changelog::clear_top_picks_edits,
-    config::{ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
-    git::{GitScopeContext, recent_merge_check},
+    config::{ProjectConfig, ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
+    git::{
+        GitCancellation, GitScopeContext, collect_all_branch_git_scope_contexts,
+        current_branch_with_cancel, ensure_local_tag, recent_merge_check, run_git, run_git_checked,
+        split_output_lines,
+    },
+    workflow::runtime::{
+        GIT_PUSH_TIMEOUT, NETWORK_RETRY_ATTEMPTS, run_blocking_job, run_command_with_retry_async,
+    },
 };
 
-#[path = "rls-now-qd.rs"]
+#[path = "rls_now_qd.rs"]
 mod rls_now_qd;
 
 const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -546,55 +563,55 @@ fn release_asset_label_from_path(path: &str) -> String {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ReleaseNowMode {
+pub(crate) enum ReleaseNowMode {
     BumpWarning,
     Configure,
     Completed,
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowDialog {
-    pub(super) project_name: String,
-    pub(super) scope_label: String,
-    pub(super) scope: GitScopeContext,
-    pub(super) changelog_enabled: bool,
-    pub(super) mirror_summary_to_root_changelog: bool,
-    pub(super) repo_root: String,
-    pub(super) tag_name: String,
-    pub(super) options: Vec<ReleaseNowRunOption>,
-    pub(super) selected_option: usize,
-    pub(super) attach_changelog: bool,
-    pub(super) release_notes_markdown: String,
-    pub(super) release_notes_placeholder: String,
-    pub(super) warning_message: Option<String>,
-    pub(super) mode: ReleaseNowMode,
-    pub(super) running: bool,
-    pub(super) auto_follow: bool,
-    pub(super) cancel_requested: bool,
-    pub(super) warning_confirm_selected: bool,
-    pub(super) scroll: u16,
-    pub(super) body_viewport_height: u16,
-    pub(super) body_viewport_width: u16,
-    pub(super) selection_anchor: Option<usize>,
-    pub(super) selection_focus: Option<usize>,
-    pub(super) summary: Option<String>,
-    pub(super) summary_is_warning: bool,
-    pub(super) summary_is_error: bool,
-    pub(super) artifact_files: Vec<String>,
-    pub(super) log_lines: Vec<String>,
-    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
-    pub(super) readme_injection_enabled: bool,
-    pub(super) readme_inject_only_top_picks: bool,
-    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
-    pub(super) readme_inject_at_row: u16,
-    pub(super) release_title_template: String,
-    pub(super) started_at: Option<Instant>,
+pub(crate) struct ReleaseNowDialog {
+    pub(crate) project_name: String,
+    pub(crate) scope_label: String,
+    pub(crate) scope: GitScopeContext,
+    pub(crate) changelog_enabled: bool,
+    pub(crate) mirror_summary_to_root_changelog: bool,
+    pub(crate) repo_root: String,
+    pub(crate) tag_name: String,
+    pub(crate) options: Vec<ReleaseNowRunOption>,
+    pub(crate) selected_option: usize,
+    pub(crate) attach_changelog: bool,
+    pub(crate) release_notes_markdown: String,
+    pub(crate) release_notes_placeholder: String,
+    pub(crate) warning_message: Option<String>,
+    pub(crate) mode: ReleaseNowMode,
+    pub(crate) running: bool,
+    pub(crate) auto_follow: bool,
+    pub(crate) cancel_requested: bool,
+    pub(crate) warning_confirm_selected: bool,
+    pub(crate) scroll: u16,
+    pub(crate) body_viewport_height: u16,
+    pub(crate) body_viewport_width: u16,
+    pub(crate) selection_anchor: Option<usize>,
+    pub(crate) selection_focus: Option<usize>,
+    pub(crate) summary: Option<String>,
+    pub(crate) summary_is_warning: bool,
+    pub(crate) summary_is_error: bool,
+    pub(crate) artifact_files: Vec<String>,
+    pub(crate) log_lines: Vec<String>,
+    pub(crate) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(crate) readme_injection_enabled: bool,
+    pub(crate) readme_inject_only_top_picks: bool,
+    pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
+    pub(crate) readme_inject_at_row: u16,
+    pub(crate) release_title_template: String,
+    pub(crate) started_at: Option<Instant>,
     /// Elapsed time frozen when the run stops (success, failure, or cancel).
-    pub(super) frozen_elapsed: Option<Duration>,
+    pub(crate) frozen_elapsed: Option<Duration>,
 }
 
 impl ReleaseNowDialog {
-    pub(super) fn from_validation(validation: ReleaseNowValidation) -> Self {
+    pub(crate) fn from_validation(validation: ReleaseNowValidation) -> Self {
         let mode = if validation.warning_message.is_some() {
             ReleaseNowMode::BumpWarning
         } else {
@@ -642,27 +659,27 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn is_warning_mode(&self) -> bool {
+    pub(crate) fn is_warning_mode(&self) -> bool {
         self.mode == ReleaseNowMode::BumpWarning
     }
 
-    pub(super) fn is_completed(&self) -> bool {
+    pub(crate) fn is_completed(&self) -> bool {
         self.mode == ReleaseNowMode::Completed
     }
 
-    pub(super) fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.running
     }
 
-    pub(super) fn auto_follow(&self) -> bool {
+    pub(crate) fn auto_follow(&self) -> bool {
         self.auto_follow
     }
 
-    pub(super) fn cancel_requested(&self) -> bool {
+    pub(crate) fn cancel_requested(&self) -> bool {
         self.cancel_requested
     }
 
-    pub(super) fn set_body_viewport(&mut self, height: u16, width: u16) {
+    pub(crate) fn set_body_viewport(&mut self, height: u16, width: u16) {
         self.body_viewport_height = height;
         self.body_viewport_width = width;
         if self.running && self.auto_follow {
@@ -670,13 +687,13 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn selected_option(&self) -> &ReleaseNowRunOption {
+    pub(crate) fn selected_option(&self) -> &ReleaseNowRunOption {
         &self.options[self
             .selected_option
             .min(self.options.len().saturating_sub(1))]
     }
 
-    pub(super) fn cycle_option(&mut self, delta: isize) {
+    pub(crate) fn cycle_option(&mut self, delta: isize) {
         if self.options.is_empty() {
             self.selected_option = 0;
             return;
@@ -686,21 +703,21 @@ impl ReleaseNowDialog {
         self.selected_option = (self.selected_option as isize + delta).rem_euclid(len) as usize;
     }
 
-    pub(super) fn toggle_attach_changelog(&mut self) {
+    pub(crate) fn toggle_attach_changelog(&mut self) {
         self.attach_changelog = !self.attach_changelog;
     }
 
-    pub(super) fn toggle_warning_selection(&mut self) {
+    pub(crate) fn toggle_warning_selection(&mut self) {
         self.warning_confirm_selected = !self.warning_confirm_selected;
     }
 
-    pub(super) fn proceed_past_warning(&mut self) {
+    pub(crate) fn proceed_past_warning(&mut self) {
         self.mode = ReleaseNowMode::Configure;
         self.warning_confirm_selected = false;
         self.scroll = 0;
     }
 
-    pub(super) fn scroll_by(&mut self, delta: i16) {
+    pub(crate) fn scroll_by(&mut self, delta: i16) {
         if self.running && self.auto_follow && delta != 0 {
             self.scroll_to_tail();
             self.auto_follow = false;
@@ -711,7 +728,7 @@ impl ReleaseNowDialog {
             .min(self.max_scroll_offset());
     }
 
-    pub(super) fn begin_running(&mut self) {
+    pub(crate) fn begin_running(&mut self) {
         self.running = true;
         self.started_at = Some(Instant::now());
         self.frozen_elapsed = None;
@@ -727,7 +744,7 @@ impl ReleaseNowDialog {
         self.scroll = 0;
     }
 
-    pub(super) fn toggle_auto_follow(&mut self) -> bool {
+    pub(crate) fn toggle_auto_follow(&mut self) -> bool {
         self.auto_follow = !self.auto_follow;
         if self.auto_follow {
             self.scroll_to_tail();
@@ -735,7 +752,7 @@ impl ReleaseNowDialog {
         self.auto_follow
     }
 
-    pub(super) fn mark_cancel_requested(&mut self) {
+    pub(crate) fn mark_cancel_requested(&mut self) {
         if self.cancel_requested {
             return;
         }
@@ -746,7 +763,7 @@ impl ReleaseNowDialog {
         ]);
     }
 
-    pub(super) fn append_log_lines(&mut self, lines: Vec<String>) {
+    pub(crate) fn append_log_lines(&mut self, lines: Vec<String>) {
         if lines.is_empty() {
             return;
         }
@@ -757,7 +774,7 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn apply_outcome(&mut self, outcome: ReleaseNowExecutionOutcome) {
+    pub(crate) fn apply_outcome(&mut self, outcome: ReleaseNowExecutionOutcome) {
         self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
         self.auto_follow = false;
@@ -772,7 +789,7 @@ impl ReleaseNowDialog {
         self.scroll = 0;
     }
 
-    pub(super) fn apply_cancelled(&mut self, message: String) {
+    pub(crate) fn apply_cancelled(&mut self, message: String) {
         self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
         self.auto_follow = false;
@@ -786,7 +803,7 @@ impl ReleaseNowDialog {
         self.scroll = 0;
     }
 
-    pub(super) fn apply_failure(&mut self, error_message: String) {
+    pub(crate) fn apply_failure(&mut self, error_message: String) {
         let formatted_error = format_user_facing_error(&error_message);
         self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
@@ -807,7 +824,7 @@ impl ReleaseNowDialog {
         self.scroll = 0;
     }
 
-    pub(super) fn elapsed_label(&self) -> String {
+    pub(crate) fn elapsed_label(&self) -> String {
         let elapsed = if let Some(frozen) = self.frozen_elapsed {
             frozen
         } else if self.running {
@@ -827,15 +844,15 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn scroll_to_tail(&mut self) {
+    pub(crate) fn scroll_to_tail(&mut self) {
         self.scroll = self.tail_scroll_offset();
     }
 
-    pub(super) fn scroll_to_start(&mut self) {
+    pub(crate) fn scroll_to_start(&mut self) {
         self.scroll = 0;
     }
 
-    pub(super) fn scroll_offset(&self) -> u16 {
+    pub(crate) fn scroll_offset(&self) -> u16 {
         self.scroll.min(self.max_scroll_offset())
     }
 
@@ -850,7 +867,7 @@ impl ReleaseNowDialog {
         self.max_scroll_offset()
     }
 
-    pub(super) fn begin_body_selection(&mut self, row_offset: u16) -> bool {
+    pub(crate) fn begin_body_selection(&mut self, row_offset: u16) -> bool {
         let Some(index) = self.body_line_index_for_row(row_offset) else {
             return false;
         };
@@ -863,7 +880,7 @@ impl ReleaseNowDialog {
         true
     }
 
-    pub(super) fn update_body_selection(&mut self, row_offset: u16) -> bool {
+    pub(crate) fn update_body_selection(&mut self, row_offset: u16) -> bool {
         let Some(anchor) = self.selection_anchor else {
             return false;
         };
@@ -876,11 +893,11 @@ impl ReleaseNowDialog {
         true
     }
 
-    pub(super) fn has_body_selection(&self) -> bool {
+    pub(crate) fn has_body_selection(&self) -> bool {
         self.selection_anchor.is_some() && self.selection_focus.is_some()
     }
 
-    pub(super) fn selected_body_text(&self) -> Option<String> {
+    pub(crate) fn selected_body_text(&self) -> Option<String> {
         let (start, end) = self.selection_range()?;
         let lines = self.body_plain_lines();
         Some(lines[start..=end].join("\n"))
@@ -923,7 +940,7 @@ impl ReleaseNowDialog {
         Some(count.saturating_sub(1))
     }
 
-    pub(super) fn body_title(&self) -> &'static str {
+    pub(crate) fn body_title(&self) -> &'static str {
         match self.mode {
             ReleaseNowMode::BumpWarning => " Merge Check ",
             ReleaseNowMode::Configure => {
@@ -939,7 +956,7 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
+    pub(crate) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
         let lines = match self.mode {
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
@@ -1119,65 +1136,65 @@ impl ReleaseNowDialog {
 
 #[derive(Clone)]
 pub(crate) struct ReleaseNowValidation {
-    pub(super) project_name: String,
-    pub(super) scope_label: String,
-    pub(super) scope: GitScopeContext,
-    pub(super) changelog_enabled: bool,
-    pub(super) mirror_summary_to_root_changelog: bool,
-    pub(super) repo_root: String,
-    pub(super) tag_name: String,
-    pub(super) options: Vec<ReleaseNowRunOption>,
-    pub(super) warning_message: Option<String>,
-    pub(super) release_notes_markdown: String,
-    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
-    pub(super) readme_injection_enabled: bool,
-    pub(super) readme_inject_only_top_picks: bool,
-    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
-    pub(super) readme_inject_at_row: u16,
-    pub(super) release_title_template: String,
+    pub(crate) project_name: String,
+    pub(crate) scope_label: String,
+    pub(crate) scope: GitScopeContext,
+    pub(crate) changelog_enabled: bool,
+    pub(crate) mirror_summary_to_root_changelog: bool,
+    pub(crate) repo_root: String,
+    pub(crate) tag_name: String,
+    pub(crate) options: Vec<ReleaseNowRunOption>,
+    pub(crate) warning_message: Option<String>,
+    pub(crate) release_notes_markdown: String,
+    pub(crate) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(crate) readme_injection_enabled: bool,
+    pub(crate) readme_inject_only_top_picks: bool,
+    pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
+    pub(crate) readme_inject_at_row: u16,
+    pub(crate) release_title_template: String,
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowRunOption {
-    pub(super) label: String,
-    pub(super) scripts: Vec<ReleaseNowScript>,
-    pub(super) artifact_dirs: Vec<String>,
+pub(crate) struct ReleaseNowRunOption {
+    pub(crate) label: String,
+    pub(crate) scripts: Vec<ReleaseNowScript>,
+    pub(crate) artifact_dirs: Vec<String>,
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowScript {
-    pub(super) label: String,
-    pub(super) script_path: String,
+pub(crate) struct ReleaseNowScript {
+    pub(crate) label: String,
+    pub(crate) script_path: String,
 }
 
 #[derive(Clone)]
 pub(crate) struct ReleaseNowExecutionRequest {
-    pub(super) scope_label: String,
-    pub(super) scope: GitScopeContext,
-    pub(super) changelog_enabled: bool,
-    pub(super) mirror_summary_to_root_changelog: bool,
-    pub(super) repo_root: String,
-    pub(super) tag_name: String,
-    pub(super) release_title: String,
-    pub(super) selected_option_label: String,
-    pub(super) scripts: Vec<ReleaseNowScript>,
-    pub(super) artifact_dirs: Vec<String>,
-    pub(super) release_notes_markdown: Option<String>,
-    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
-    pub(super) readme_injection_enabled: bool,
-    pub(super) readme_inject_only_top_picks: bool,
-    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
-    pub(super) readme_inject_at_row: u16,
+    pub(crate) scope_label: String,
+    pub(crate) scope: GitScopeContext,
+    pub(crate) changelog_enabled: bool,
+    pub(crate) mirror_summary_to_root_changelog: bool,
+    pub(crate) repo_root: String,
+    pub(crate) tag_name: String,
+    pub(crate) release_title: String,
+    pub(crate) selected_option_label: String,
+    pub(crate) scripts: Vec<ReleaseNowScript>,
+    pub(crate) artifact_dirs: Vec<String>,
+    pub(crate) release_notes_markdown: Option<String>,
+    pub(crate) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(crate) readme_injection_enabled: bool,
+    pub(crate) readme_inject_only_top_picks: bool,
+    pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
+    pub(crate) readme_inject_at_row: u16,
 }
 
 #[derive(Clone)]
 pub(crate) struct ReleaseNowExecutionOutcome {
-    pub(super) summary: String,
-    pub(super) artifact_files: Vec<String>,
-    pub(super) log_lines: Vec<String>,
+    pub(crate) summary: String,
+    pub(crate) artifact_files: Vec<String>,
+    pub(crate) log_lines: Vec<String>,
 }
 
-pub(super) fn validate_release_now(
+pub(crate) fn validate_release_now(
     project: &ProjectConfig,
     scope_index: usize,
     cancel: Option<GitCancellation>,
@@ -1240,7 +1257,7 @@ pub(super) fn validate_release_now(
     })
 }
 
-pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
+pub(crate) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
     ReleaseNowExecutionRequest {
         scope_label: dialog.scope_label.clone(),
         scope: dialog.scope.clone(),
@@ -1271,7 +1288,7 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
     }
 }
 
-pub(super) async fn execute_release_now_async(
+pub(crate) async fn execute_release_now_async(
     request: ReleaseNowExecutionRequest,
     cancel: GitCancellation,
     mut emit_progress: impl FnMut(Vec<String>) + Send,
@@ -1500,11 +1517,11 @@ pub(super) async fn execute_release_now_async(
     })
 }
 
-pub(super) fn is_cancelled_error(message: &str) -> bool {
+pub(crate) fn is_cancelled_error(message: &str) -> bool {
     message.contains("cancelled by user")
 }
 
-pub(super) fn format_user_facing_error(message: &str) -> String {
+pub(crate) fn format_user_facing_error(message: &str) -> String {
     let normalized = message.to_ascii_lowercase();
     let detail = extract_relevant_error_detail(message);
 
