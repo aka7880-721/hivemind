@@ -2,6 +2,8 @@
 // All rights reserved.
 //
 // Licensed under the ComfyGit SA-PS License
+//
+// For details, see the LICENSE file in the repository root.
 
 use std::path::PathBuf;
 
@@ -12,9 +14,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use snif__by_comfyhome::engine::{ReplaceOptions, SearchOptions, replace, search};
-
 use crate::app::{App, StatusMessage};
+use crate::snif;
 use crate::cli::project_root;
 use crate::config::ProjectConfig;
 use crate::tui::centered_rect;
@@ -68,22 +69,18 @@ impl SnifModal {
         if self.pattern_input.is_empty() {
             return Ok(());
         }
-        let result = search(&SearchOptions {
-            root: self.root.clone(),
-            filters: self.filters_input.clone(),
-            pattern: self.pattern_input.clone(),
-            case_sensitive: self.case_sensitive,
-            ..Default::default()
-        })?;
+        let lines = snif::run_search(
+            &self.root,
+            &self.filters_input,
+            &self.pattern_input,
+            self.case_sensitive,
+        )?;
         self.output_lines.clear();
-        for m in &result.matches {
-            self.output_lines
-                .push(format!("{}:{}:{}", m.path.display(), m.line_number, m.line));
+        if lines.is_empty() {
+            self.output_lines.push("No matches.".into());
+        } else {
+            self.output_lines.extend(lines);
         }
-        self.output_lines.push(format!(
-            "--- {} match(es), {} exact ---",
-            result.summary.total_matches, result.summary.exact_matches
-        ));
         self.output_scroll = 0;
         Ok(())
     }
@@ -92,20 +89,19 @@ impl SnifModal {
         if self.pattern_input.is_empty() || self.replacement_input.is_empty() {
             return Ok(());
         }
-        let changed = replace(&ReplaceOptions {
-            root: self.root.clone(),
-            filters: self.filters_input.clone(),
-            pattern: self.pattern_input.clone(),
-            replacement: self.replacement_input.clone(),
-            case_insensitive: self.case_insensitive_replace,
-            yes: true,
-            ..Default::default()
-        })?;
+        let lines = snif::run_replace(
+            &self.root,
+            &self.filters_input,
+            &self.pattern_input,
+            &self.replacement_input,
+            self.case_insensitive_replace,
+        )?;
         self.output_lines.clear();
-        for path in changed {
-            self.output_lines.push(path.display().to_string());
+        if lines.is_empty() {
+            self.output_lines.push("Done.".into());
+        } else {
+            self.output_lines.extend(lines);
         }
-        self.output_lines.push("Done.".into());
         self.output_scroll = 0;
         Ok(())
     }
@@ -143,6 +139,10 @@ impl SnifModal {
 
 impl App {
     pub(crate) fn open_snif_dialog(&mut self) -> Result<()> {
+        if !snif::is_available() {
+            self.status = StatusMessage::error(snif::install_instructions());
+            return Ok(());
+        }
         let project = self.selected_project()?.clone();
         let root = snif_project_root(&project)?;
         self.snif_dialog = Some(SnifModal::new(root));
