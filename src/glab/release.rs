@@ -36,7 +36,7 @@ fn list_releases(repo_root: &str, limit: usize) -> Result<Vec<GlabReleaseSummary
     let limit = limit.to_string();
     let output = cli::run_in_repo(
         repo_root,
-        &["release", "list", "--per-page", &limit, "--output", "json"],
+        &["release", "list", "-P", &limit, "--output", "json"],
     )?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
