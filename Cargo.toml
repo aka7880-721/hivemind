@@ -38,8 +38,8 @@ snif--by-comfyhome = { path = "src/components/snif-by-comfyhome" }
 ## ---------------------------------------------------------------
 ## T O A S T E R
 # -
-# ratatui-comfy-toaster = "0.3.2"
-ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
+ratatui-comfy-toaster = "0.4"
+#ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
 #
 # E N D ----------------------------------------------------------
 anyhow = "1"
