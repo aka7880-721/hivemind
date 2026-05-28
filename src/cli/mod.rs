@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -755,7 +755,7 @@ fn is_snif_command(value: &str) -> bool {
 
 fn run_snif_command(args: &[String]) -> Result<()> {
     let root = env::current_dir().context("failed to read current directory")?;
-    snif__by_comfyhome::dispatch_with_root(args.to_vec(), root)
+    crate::snif::dispatch_with_root(args.to_vec(), root)
 }
 
 fn is_var_command(value: &str) -> bool {
@@ -833,7 +833,9 @@ fn print_usage() {
     println!(
         "                             Synonyms: remove-shell | uninstall shell | shell-uninstall"
     );
-    println!("  cg snif [args...]          Run SNIF search/replace (same as standalone snif)");
+    println!(
+        "  cg snif [args...]          Run SNIF search/replace (requires `snif` on PATH)"
+    );
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
     println!(
