@@ -21,6 +21,7 @@
 #   ./scripts/releaseNOW.sh --skip-appimage     # Skip Linux AppImage (.AppImage) packaging
 #   ./scripts/releaseNOW.sh --skip-deb          # Skip Linux .deb package
 #   ./scripts/releaseNOW.sh --skip-rpm          # Skip Linux .rpm package
+#   ./scripts/releaseNOW.sh --mac-ci-no-wait    # macOS via GHA: trigger only, no download
 #   ./scripts/releaseNOW.sh --linux=arm64 --skip-deb --skip-rpm   # AppImage (and archives) only
 #
 # Previous releases are kept under dist/old/<platform>/<version>/ (e.g. dist/old/linux-amd64/0.18.1/).
@@ -95,6 +96,7 @@ LINUX=''
 MAC=false
 WIN64=false
 ALL=false
+MAC_CI_WAIT=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -154,6 +156,10 @@ while [[ $# -gt 0 ]]; do
             ALL=true
             shift
             ;;
+        --mac-ci-no-wait)
+            MAC_CI_WAIT=false
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo "Options:"
@@ -170,6 +176,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --skip-appimage      Skip Linux AppImage (.AppImage) generation"
             echo "  --skip-deb           Skip Linux .deb package generation"
             echo "  --skip-rpm           Skip Linux .rpm package generation"
+            echo "  --mac-ci-no-wait     Trigger macOS GitHub Actions only (no wait/download)"
+            echo "                       Default: wait for CI and download artifacts into dist/"
             exit 0
             ;;
         *)
@@ -1599,6 +1607,84 @@ is_mac_target() {
     [[ "${TARGET_PLATFORM[$1]:-}" == "macos" ]]
 }
 
+MACOS_CI_WORKFLOW='macos-release.yml'
+MACOS_CI_ARTIFACT='macos-packages'
+
+gh_repo_slug() {
+    if command -v gh &>/dev/null; then
+        local slug
+        slug=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
+        if [[ -n "$slug" ]]; then
+            echo "$slug"
+            return 0
+        fi
+    fi
+    local remote
+    remote=$(git -C "$PROJECT_ROOT" remote get-url origin 2>/dev/null || true)
+    if [[ "$remote" =~ github\.com[:/]([^/]+/[^/.]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return 0
+    fi
+    return 1
+}
+
+resolve_macos_ci_run_id() {
+    local branch="$1"
+    local attempt=0
+    local max_attempts=45
+    while (( attempt < max_attempts )); do
+        local run_id
+        run_id=$(gh run list \
+            --workflow="$MACOS_CI_WORKFLOW" \
+            --branch="$branch" \
+            --limit 1 \
+            --json databaseId \
+            -q '.[0].databaseId' 2>/dev/null || true)
+        if [[ -n "$run_id" && "$run_id" != "null" ]]; then
+            echo "$run_id"
+            return 0
+        fi
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+print_macos_ci_download_hints() {
+    local run_id="$1"
+    local repo_slug=''
+    if repo_slug=$(gh_repo_slug); then
+        log_info "macOS CI run: https://github.com/${repo_slug}/actions/runs/${run_id}"
+    fi
+    log_info "Download when complete:"
+    log_info "  gh run download ${run_id} -n ${MACOS_CI_ARTIFACT} -D dist/"
+    log_info "Or wait for this script (default) to finish the run and merge artifacts into dist/."
+}
+
+download_macos_ci_artifacts() {
+    local run_id="$1"
+    local staging="${DIST_ROOT}/.macos-ci-download"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+    log_info "Downloading '${MACOS_CI_ARTIFACT}' from run ${run_id}..."
+    if ! gh run download "$run_id" -n "$MACOS_CI_ARTIFACT" -D "$staging"; then
+        log_warning "Failed to download macOS CI artifact '${MACOS_CI_ARTIFACT}'."
+        return 1
+    fi
+    mkdir -p "${DIST_ROOT}/latest" "${DIST_ROOT}/old"
+    if [[ -d "$staging/latest" ]]; then
+        cp -a "$staging/latest/." "${DIST_ROOT}/latest/"
+    fi
+    if [[ -d "$staging/old" ]]; then
+        cp -a "$staging/old/." "${DIST_ROOT}/old/"
+    fi
+    if [[ ! -d "$staging/latest" && ! -d "$staging/old" ]]; then
+        cp -a "$staging/." "${DIST_ROOT}/"
+    fi
+    rm -rf "$staging"
+    log_success "macOS CI artifacts merged into ${DIST_ROOT}/"
+}
+
 # macOS binaries use native C deps (e.g. aws-lc-sys via rustls); cross-compile from Linux is unreliable.
 trigger_macos_ci_workflow() {
     local version="$1"
@@ -1607,16 +1693,39 @@ trigger_macos_ci_workflow() {
         log_warning "GitHub CLI 'gh' not found; run the 'macOS release packaging' workflow from GitHub Actions UI."
         return 1
     fi
+    if ! gh auth status &>/dev/null; then
+        log_warning "GitHub CLI is not authenticated; run 'gh auth login' to trigger and download macOS CI artifacts."
+        return 1
+    fi
     log_info "macOS targets cannot be cross-compiled on this host (native C deps need the macOS SDK)."
-    log_info "Triggering GitHub Actions workflow 'macOS release packaging'..."
+    log_info "Triggering GitHub Actions workflow '${MACOS_CI_WORKFLOW}'..."
     local current_ref
-    current_ref=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-    if gh workflow run macos-release.yml --ref "$current_ref" --field version="$version"; then
-        log_success "GitHub Actions macOS release workflow triggered on ref '$current_ref' (version $version)."
+    current_ref=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+    if ! gh workflow run "$MACOS_CI_WORKFLOW" --ref "$current_ref" --field version="$version"; then
+        log_warning "Failed to trigger GitHub Actions macOS release workflow; trigger it manually from GitHub UI."
+        return 1
+    fi
+    log_success "macOS release workflow triggered on ref '${current_ref}' (version ${version})."
+
+    local run_id=''
+    if ! run_id=$(resolve_macos_ci_run_id "$current_ref"); then
+        log_warning "Could not resolve workflow run ID yet."
+        log_warning "List runs: gh run list --workflow=${MACOS_CI_WORKFLOW}"
         return 0
     fi
-    log_warning "Failed to trigger GitHub Actions macOS release workflow; trigger it manually from GitHub UI."
-    return 1
+    print_macos_ci_download_hints "$run_id"
+
+    if [[ "$MAC_CI_WAIT" != true ]]; then
+        log_info "Skipping CI wait/download (--mac-ci-no-wait)."
+        return 0
+    fi
+
+    log_info "Waiting for macOS CI (Ctrl+C to stop waiting; download later with gh run download ${run_id})..."
+    if ! gh run watch "$run_id" --exit-status; then
+        log_error "macOS CI failed. Logs: gh run view ${run_id} --log-failed"
+        return 1
+    fi
+    download_macos_ci_artifacts "$run_id"
 }
 
 partition_targets_for_host() {
@@ -1681,7 +1790,7 @@ if [[ ${#MAC_TARGETS_OFF_HOST[@]} -gt 0 ]] && [[ ${#LOCAL_TARGETS[@]} -eq 0 ]]; 
     if ! trigger_macos_ci_workflow "$VERSION"; then
         exit 1
     fi
-    log_success "Release build complete (macOS delegated to GitHub Actions)."
+    log_success "Release build complete (macOS packages from GitHub Actions in dist/)."
     exit 0
 fi
 
