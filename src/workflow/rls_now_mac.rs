@@ -220,12 +220,11 @@ fn utc_now_minus_seconds(seconds: u64) -> String {
     if let Ok(formatted) = Command::new("date")
         .args(["-u", "-d", &format!("@{epoch}"), "+%Y-%m-%dT%H:%M:%SZ"])
         .output()
+        && formatted.status.success()
     {
-        if formatted.status.success() {
-            return String::from_utf8_lossy(&formatted.stdout)
-                .trim()
-                .to_string();
-        }
+        return String::from_utf8_lossy(&formatted.stdout)
+            .trim()
+            .to_string();
     }
     Command::new("date")
         .args(["-u", "-r", &epoch.to_string(), "+%Y-%m-%dT%H:%M:%SZ"])
@@ -620,7 +619,7 @@ pub(crate) async fn finish_mac_ci_and_merge_artifacts(
     let repo_root_for_download = repo_root.clone();
     let run_id = session.run_id;
     let version_for_archive = version.clone();
-    let progress = run_blocking_job(move || {
+    run_blocking_job(move || {
         archive_superseded_mac_artifacts(&repo_root_for_download, &version_for_archive)?;
         let staging = download_macos_artifacts(&repo_root_for_download, run_id)?;
         merge_macos_staging(&repo_root_for_download, &staging)?;
@@ -634,7 +633,6 @@ pub(crate) async fn finish_mac_ci_and_merge_artifacts(
         "[MacOS] Archived superseded macOS artifacts under dist/old/.".to_string(),
         "[MacOS] macOS CI artifacts merged into dist/latest/.".to_string(),
     ]);
-    let _ = progress;
     Ok(MacCiFinishOutcome::Success)
 }
 
