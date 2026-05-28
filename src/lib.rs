@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -13,6 +13,7 @@ mod forge;
 mod ghub;
 mod git;
 mod glab;
+mod snif;
 mod tui;
 mod workflow;
 

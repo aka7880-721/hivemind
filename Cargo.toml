@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.33.7"
+version = "0.33.8"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -26,15 +26,10 @@ name = "ComfyGit"
 path = "src/bin/cg-bin.rs"
 
 [workspace]
-exclude = ["src/components/comfy-toaster", "src/components/snif-by-comfyhome"]
+exclude = ["src/components/comfy-toaster"]
 
 [dependencies]
 # Comfy dependencies
-## ---------------------------------------------------------------
-## S N I F
-# -
-snif--by-comfyhome = { path = "src/components/snif-by-comfyhome" }
-# snif--by-comfyhome = "0.1.0"
 ## ---------------------------------------------------------------
 ## T O A S T E R
 # -
