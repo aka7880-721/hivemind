@@ -17,7 +17,7 @@ use snif__by_comfyhome::engine::{ReplaceOptions, SearchOptions, replace, search}
 use crate::app::{App, StatusMessage};
 use crate::cli::project_root;
 use crate::config::ProjectConfig;
-use crate::ui::centered_rect;
+use crate::tui::centered_rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SnifMode {
