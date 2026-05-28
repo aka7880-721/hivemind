@@ -470,9 +470,10 @@ copy_packaged_directory() {
         return
     fi
 
+    source_dir="${source_dir%/}"
+
     find "$source_dir" -type f | while read -r file; do
-        local relative_path
-        relative_path=$(realpath --relative-to="$source_dir" "$file")
+        local relative_path="${file#"${source_dir}/"}"
         local destination_path="${destination_dir}/${relative_path}"
         local destination_parent
         destination_parent=$(dirname "$destination_path")
