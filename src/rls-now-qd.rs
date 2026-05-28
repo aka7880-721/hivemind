@@ -494,8 +494,8 @@ pub(crate) fn build_quick_downloads_section_html(
     );
 
     let footer_esc = footer_message.trim();
-    format!(
-        r#"<div align="center">
+    let inner = format!(
+        r#"
 
 |⟱  Q U I C K - D O W N L O A D S         A V A I L A B L E         H E R E  ⟱|
 |-|
@@ -505,13 +505,16 @@ pub(crate) fn build_quick_downloads_section_html(
 |{win_cell}|‧<br>✦<br>‧<br>✦<br>‧<br>✦<br>‧|{linux_cell}|‧<br>✦<br>‧<br>✦<br>‧<br>✦<br>‧|{mac_cell}|
 
 <sub><sup>{} </sub></sup>
-
-</div>"#,
+"#,
         LOGO_BASE,
         LOGO_BASE,
         LOGO_BASE,
         esc_attr(footer_esc)
-    )
+    );
+    match forge {
+        crate::forge::ForgeKind::GitHub => format!(r#"<div align="center">{inner}</div>"#),
+        crate::forge::ForgeKind::GitLab => inner.trim().to_string(),
+    }
 }
 
 /// When Quick-Downloads is enabled, merges the HTML section with user notes.

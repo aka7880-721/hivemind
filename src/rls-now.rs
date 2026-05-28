@@ -406,6 +406,29 @@ fn release_cli_repo_args(
     Ok(vec!["-R".to_string(), repo_selector])
 }
 
+fn gitlab_release_asset_argument(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    let is_package = lower.ends_with(".deb")
+        || lower.ends_with(".rpm")
+        || lower.ends_with(".pkg")
+        || lower.ends_with(".msi")
+        || lower.ends_with(".appimage");
+    if is_package {
+        format!("{path}#{}#package", release_asset_label_from_path(path))
+    } else {
+        path.to_string()
+    }
+}
+
+fn release_asset_label_from_path(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReleaseNowMode {
     BumpWarning,
@@ -2014,13 +2037,17 @@ async fn create_or_update_forge_release(
                 }
                 crate::forge::ForgeKind::GitLab => {
                     // glab doesn't mirror gh upload/edit subcommands; use `release create`
-                    // to update an existing release with provided assets/notes.
+                    // to update an existing release while preserving metadata.
                     let mut create_args = vec![
                         "release".to_string(),
                         "create".to_string(),
                         tag_name.to_string(),
                     ];
-                    create_args.extend(artifact_files.iter().cloned());
+                    create_args.extend(
+                        artifact_files
+                            .iter()
+                            .map(|path| gitlab_release_asset_argument(path)),
+                    );
                     create_args.push("--name".to_string());
                     create_args.push(release_title.to_string());
                     if let Some(notes_file) = &notes_file {
@@ -2084,7 +2111,18 @@ async fn create_or_update_forge_release(
                 "create".to_string(),
                 tag_name.to_string(),
             ];
-            create_args.extend(artifact_files.iter().cloned());
+            match forge {
+                crate::forge::ForgeKind::GitHub => {
+                    create_args.extend(artifact_files.iter().cloned());
+                }
+                crate::forge::ForgeKind::GitLab => {
+                    create_args.extend(
+                        artifact_files
+                            .iter()
+                            .map(|path| gitlab_release_asset_argument(path)),
+                    );
+                }
+            }
             create_args.push(match forge {
                 crate::forge::ForgeKind::GitHub => "--title".to_string(),
                 crate::forge::ForgeKind::GitLab => "--name".to_string(),
