@@ -6,11 +6,17 @@
 // For details, see the LICENSE file in the repository root.
 use std::{
     io::{self, Write},
-    process::Command,
     thread,
     time::Duration,
 };
 
+use crate::{
+    forge::{self, ForgeKind},
+    git::{
+        GitCancellation, publish_branch_with_upstream, run_git_checked_with_cancel,
+        run_merge_for_pull_request, run_pr_and_capture, switch_to_existing_branch,
+    },
+};
 use anyhow::{Context, Result, bail};
 use crossterm::{
     cursor::MoveToColumn,
@@ -18,16 +24,6 @@ use crossterm::{
     execute, queue,
     style::Print,
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
-};
-use serde::Deserialize;
-
-use crate::{
-    git::{
-        GitCancellation, github_pull_conflicts_url, publish_branch_with_upstream,
-        run_git_checked_with_cancel, switch_to_existing_branch,
-    },
-    git_mg::run_merge_for_pull_request,
-    git_pr::run_pr_and_capture,
 };
 
 const MERGEABILITY_RETRY_DELAYS_SECONDS: [u64; 3] = [2, 5, 15];
@@ -43,8 +39,9 @@ pub(crate) fn run_branch_done(
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
+    let forge = forge::require_forge_for_repo(repo_root)?;
     let created_pr = loop {
-        match run_pr_and_capture(repo_root, false, custom_main_branch, cancel.clone()) {
+        match run_pr_and_capture(repo_root, forge, false, custom_main_branch, cancel.clone()) {
             Ok(created_pr) => break created_pr,
             Err(error) => {
                 // Check for uncommitted changes error first
@@ -94,8 +91,8 @@ pub(crate) fn run_branch_done(
             }
         }
     };
-    ensure_pull_request_mergeable(repo_root, created_pr.number)?;
-    run_merge_for_pull_request(repo_root, created_pr.number, cancel.clone())?;
+    ensure_pull_request_mergeable(repo_root, forge, created_pr.number)?;
+    run_merge_for_pull_request(repo_root, forge, created_pr.number, cancel.clone())?;
     switch_to_existing_branch(repo_root, &created_pr.target_branch)?;
     sync_current_branch(repo_root, cancel)?;
 
@@ -388,17 +385,18 @@ impl Drop for TerminalRawModeGuard {
     }
 }
 
-fn ensure_pull_request_mergeable(repo_root: &str, pr_number: u64) -> Result<()> {
+fn ensure_pull_request_mergeable(repo_root: &str, forge: ForgeKind, pr_number: u64) -> Result<()> {
     for (attempt_index, delay_seconds) in MERGEABILITY_RETRY_DELAYS_SECONDS.iter().enumerate() {
         thread::sleep(Duration::from_secs(*delay_seconds));
-        let status = fetch_pull_request_mergeability(repo_root, pr_number)?;
-        if status.mergeable.eq_ignore_ascii_case("MERGEABLE") {
+        let status = forge.fetch_mergeability(repo_root, pr_number)?;
+        if status.is_mergeable() {
             return Ok(());
         }
         if !status.is_unknown() {
             bail!(
                 "{}",
                 format_non_mergeable_pull_request_error(
+                    forge,
                     repo_root,
                     pr_number,
                     &status.mergeable,
@@ -415,16 +413,21 @@ fn ensure_pull_request_mergeable(repo_root: &str, pr_number: u64) -> Result<()> 
 }
 
 fn format_non_mergeable_pull_request_error(
+    forge: ForgeKind,
     repo_root: &str,
     pr_number: u64,
     mergeable: &str,
     status: &str,
 ) -> String {
+    let label = forge.pull_request_label();
     let mut message = format!(
-        "PR #{} is not mergeable yet (mergeable: \x1b[31m{}\x1b[0m, status: \x1b[31m{}\x1b[0m)",
-        pr_number, mergeable, status
+        "{} #{} is not mergeable yet (mergeable: \x1b[31m{}\x1b[0m, status: \x1b[31m{}\x1b[0m)",
+        capitalize_first(label),
+        pr_number,
+        mergeable,
+        status
     );
-    if let Some(conflicts_url) = github_pull_conflicts_url(repo_root, pr_number) {
+    if let Some(conflicts_url) = forge.pull_conflicts_url(repo_root, pr_number) {
         message.push_str("\n\nTo see the issues, please visit:\n\n");
         message.push_str(&format!("\x1b[33m{}\x1b[0m", conflicts_url));
         message.push_str(&format!(
@@ -435,43 +438,12 @@ fn format_non_mergeable_pull_request_error(
     message
 }
 
-fn fetch_pull_request_mergeability(
-    repo_root: &str,
-    pr_number: u64,
-) -> Result<PullRequestMergeability> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args(build_pull_request_mergeability_args(pr_number))
-        .output()
-        .context("failed to execute gh pr view for mergeability verification")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !stderr.is_empty() {
-            bail!("gh pr view failed: {}", stderr)
-        }
-        if !stdout.is_empty() {
-            bail!("gh pr view failed: {}", stdout)
-        }
-        bail!(
-            "gh pr view failed with exit code {:?}",
-            output.status.code()
-        )
+fn capitalize_first(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
-
-    serde_json::from_slice::<PullRequestMergeability>(&output.stdout)
-        .context("failed to parse gh pr view mergeability output")
-}
-
-fn build_pull_request_mergeability_args(pr_number: u64) -> Vec<String> {
-    vec![
-        "pr".to_string(),
-        "view".to_string(),
-        pr_number.to_string(),
-        "--json".to_string(),
-        "mergeable,mergeStateStatus".to_string(),
-    ]
 }
 
 fn sync_current_branch(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
@@ -483,46 +455,22 @@ fn sync_current_branch(repo_root: &str, cancel: Option<GitCancellation>) -> Resu
     Ok(())
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PullRequestMergeability {
-    mergeable: String,
-    merge_state_status: String,
-}
-
-impl PullRequestMergeability {
-    fn is_unknown(&self) -> bool {
-        self.mergeable.eq_ignore_ascii_case("UNKNOWN")
-            || self.merge_state_status.eq_ignore_ascii_case("UNKNOWN")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn build_pull_request_mergeability_args_uses_requested_fields() {
-        assert_eq!(
-            build_pull_request_mergeability_args(67),
-            vec!["pr", "view", "67", "--json", "mergeable,mergeStateStatus",]
-                .into_iter()
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        );
-    }
+    use crate::forge::ForgeMergeability;
 
     #[test]
     fn pull_request_mergeability_unknown_detection_matches_retry_policy() {
-        let unknown = PullRequestMergeability {
+        let unknown = ForgeMergeability {
             mergeable: "UNKNOWN".to_string(),
             merge_state_status: "UNKNOWN".to_string(),
         };
-        let clean = PullRequestMergeability {
+        let clean = ForgeMergeability {
             mergeable: "MERGEABLE".to_string(),
             merge_state_status: "CLEAN".to_string(),
         };
-        let blocked = PullRequestMergeability {
+        let blocked = ForgeMergeability {
             mergeable: "CONFLICTING".to_string(),
             merge_state_status: "DIRTY".to_string(),
         };
@@ -567,7 +515,13 @@ mod tests {
 
     #[test]
     fn format_non_mergeable_pull_request_error_colors_status_values() {
-        let message = format_non_mergeable_pull_request_error("C:/repo", 9, "CONFLICTING", "DIRTY");
+        let message = format_non_mergeable_pull_request_error(
+            ForgeKind::GitHub,
+            "C:/repo",
+            9,
+            "CONFLICTING",
+            "DIRTY",
+        );
 
         assert!(message.contains("\x1b[31mCONFLICTING\x1b[0m"));
         assert!(message.contains("\x1b[31mDIRTY\x1b[0m"));

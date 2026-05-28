@@ -1,8 +1,13 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit SA-PS License
-// For details, see the LICENSE file in the repository root.
+// Licensed under the ComfyGit License v1.2
+
+pub(crate) mod memory;
+pub(crate) mod top_picks;
+
+pub(crate) use memory::*;
+
 use std::{
     collections::HashSet,
     fs,
@@ -368,9 +373,9 @@ impl ChangelogDocument {
 
         // Extract and render Top Picks section (priority 825)
         let (top_picks, top_picks_intro) = if self.include_top_picks {
-            let commit_top_picks = crate::changelog_tp::extract_top_picks(&visible_commits);
+            let commit_top_picks = top_picks::extract_top_picks(&visible_commits);
             if let Some(edits) = self.top_picks_edits.as_deref() {
-                crate::changelog_tp::merge_top_picks_with_edits(commit_top_picks, edits)
+                top_picks::merge_top_picks_with_edits(commit_top_picks, edits)
             } else {
                 (commit_top_picks, None)
             }
@@ -381,11 +386,9 @@ impl ChangelogDocument {
 
         if has_top_picks {
             let mut sorted_picks = top_picks;
-            crate::changelog_tp::sort_top_picks(&mut sorted_picks);
-            let top_picks_lines = crate::changelog_tp::render_top_picks_section(
-                &sorted_picks,
-                top_picks_intro.as_ref(),
-            );
+            top_picks::sort_top_picks(&mut sorted_picks);
+            let top_picks_lines =
+                top_picks::render_top_picks_section(&sorted_picks, top_picks_intro.as_ref());
             lines.extend(top_picks_lines);
         }
 
@@ -393,7 +396,7 @@ impl ChangelogDocument {
         let non_top_pick_commits: Vec<&ParsedCommit> = visible_commits
             .iter()
             .copied()
-            .filter(|commit| !crate::changelog_tp::is_top_pick_only_commit(commit))
+            .filter(|commit| !top_picks::is_top_pick_only_commit(commit))
             .collect();
 
         let non_breaking = non_top_pick_commits
@@ -458,7 +461,7 @@ pub(crate) fn build_document_from_git_log(
 pub(crate) fn build_document_from_git_log_with_variator(
     current_tag: impl Into<String>,
     lines: &[String],
-    variator_storage: Option<&crate::chl_vrtr::VariatorStorage>,
+    variator_storage: Option<&crate::variator::VariatorStorage>,
 ) -> ChangelogDocument {
     let commits = lines
         .iter()
@@ -489,7 +492,7 @@ pub(crate) fn rls_changelog_gen(
     mini_commit_hashes: bool,
     wrap_detailed_if_top_picks: bool,
     top_picks_edits: Option<&str>,
-    variator_storage: crate::chl_vrtr::VariatorStorage,
+    variator_storage: crate::variator::VariatorStorage,
 ) -> RenderedChangelog {
     let mut document =
         build_document_from_git_log_with_variator(current_tag, lines, Some(&variator_storage))
@@ -997,7 +1000,7 @@ fn parse_graph_log_entries(line: &str) -> Vec<ParsedCommit> {
 
 fn parse_graph_log_entries_with_variator(
     line: &str,
-    variator_storage: Option<&crate::chl_vrtr::VariatorStorage>,
+    variator_storage: Option<&crate::variator::VariatorStorage>,
 ) -> Vec<ParsedCommit> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -1141,7 +1144,7 @@ fn parse_prefix_with_top_picks(
     bool,
     Option<u8>,
 ) {
-    use crate::changelog_tp::is_top_pick_config_prefix;
+    use top_picks::is_top_pick_config_prefix;
 
     let trimmed = prefix.trim();
     if trimmed.is_empty() {
@@ -1370,7 +1373,7 @@ pub(crate) fn looks_like_prefixed_clause(segment: &str) -> bool {
     }
 
     // Check for top pick prefixes (top or top{priority})
-    if crate::changelog_tp::is_top_pick_config_prefix(remainder).is_some() {
+    if top_picks::is_top_pick_config_prefix(remainder).is_some() {
         return true;
     }
 
@@ -2132,7 +2135,7 @@ mod tests {
             false,
             false,
             None,
-            crate::chl_vrtr::VariatorStorage::default(),
+            crate::variator::VariatorStorage::default(),
         );
 
         assert!(changelog.markdown.contains(

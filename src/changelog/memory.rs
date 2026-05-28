@@ -107,11 +107,25 @@ pub(crate) fn save_top_picks_edits(repo_root: &str, content: &str) -> Result<()>
 
 /// Baseline tag for unreleased commits (last public release, else latest local tag).
 pub(crate) fn resolve_top_picks_baseline_tag(repo_root: &str) -> Option<String> {
-    crate::git_stt::last_rls_version(repo_root, None)
-        .ok()
-        .flatten()
+    crate::forge::detect_forge_for_repo(repo_root)
+        .and_then(|forge| {
+            crate::git::last_rls_version(
+                repo_root,
+                match forge {
+                    crate::forge::ForgeKind::GitHub => {
+                        crate::config::IntegrationMode::GitHubEnabled
+                    }
+                    crate::forge::ForgeKind::GitLab => {
+                        crate::config::IntegrationMode::GitLabEnabled
+                    }
+                },
+                None,
+            )
+            .ok()
+            .flatten()
+        })
         .or_else(|| {
-            crate::git_stt::latest_local_tag_with_cancel(repo_root, None)
+            crate::git::latest_local_tag_with_cancel(repo_root, None)
                 .ok()
                 .flatten()
         })

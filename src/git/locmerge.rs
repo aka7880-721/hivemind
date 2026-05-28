@@ -15,7 +15,7 @@ use crate::git::{
     GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
     run_git_checked_with_cancel, switch_to_existing_branch,
 };
-use crate::git_br::{LOCAL_MERGE_TARGET_PICKER_PROMPT, prompt_branch_selection};
+use crate::git::{LOCAL_MERGE_TARGET_PICKER_PROMPT, prompt_branch_selection};
 
 const ANSI_CYAN: &str = "\x1b[36m";
 const ANSI_YELLOW: &str = "\x1b[33m";

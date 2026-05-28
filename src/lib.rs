@@ -8,34 +8,25 @@
 mod app;
 mod branding;
 mod changelog;
-mod changelog_tp;
-#[path = "chl_vrtr.rs"]
-mod chl_vrtr;
 mod cli;
 mod cli_init;
 mod config;
 mod dialogs;
+mod forge;
+mod ghub;
 mod git;
-mod git_alt;
-mod git_br;
-mod git_br_end;
-mod git_locmerge;
-mod git_mg;
-mod git_new;
-mod git_pr;
-mod git_rrt;
-mod git_stt;
-mod mmr;
-#[path = "overview-pg.rs"]
-mod overview_pg;
+mod glab;
 mod project_edit;
 mod project_wizard;
 mod snif_modal;
 mod target_custom;
 mod targets;
 mod tiles;
+mod tui;
 mod ui;
+mod variator;
 mod versioning;
+mod workflow;
 
 pub fn run_entrypoint() -> anyhow::Result<()> {
     match cli::dispatch()? {

@@ -21,8 +21,9 @@ use crate::{
 };
 
 use super::{
-    App, BROWSE_BUTTON_WIDTH, FORM_LABEL_WIDTH, HitAction, HitTarget, ProjectSettingsFocus,
-    ProjectSettingsRow, ProjectSettingsState, visible_field_width,
+    App, BROWSE_BUTTON_WIDTH, FORM_LABEL_WIDTH, HitAction, HitTarget,
+    project_settings::{ProjectSettingsFocus, ProjectSettingsRow, ProjectSettingsState},
+    visible_field_width,
 };
 
 const ALIAS_ADD_BUTTON_WIDTH: u16 = 22;

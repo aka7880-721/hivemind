@@ -6,11 +6,18 @@
 use std::{
     collections::HashSet,
     io::{self, Write},
-    path::Path,
-    process::Command,
     time::{Duration, Instant},
 };
 
+use crate::{
+    changelog::{pr_changelog_gen, write_temp_changelog_markdown},
+    forge::ForgeKind,
+    git::{
+        GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
+        ensure_local_branch_published_and_in_sync_with_cancel, is_mainline_branch_name,
+        resolve_main_branch_name, run_git_checked_with_cancel, split_output_lines,
+    },
+};
 use anyhow::{Context, Result, bail};
 use crossterm::{
     cursor::{MoveTo, MoveToColumn},
@@ -19,24 +26,12 @@ use crossterm::{
     style::Print,
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
 };
-use serde::Deserialize;
-
-use crate::{
-    changelog::{pr_changelog_gen, write_temp_changelog_markdown},
-    git::{
-        GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
-        ensure_local_branch_published_and_in_sync_with_cancel, is_mainline_branch_name,
-        resolve_main_branch_name, run_git_checked_with_cancel, split_output_lines,
-    },
-};
 
 const PR_PREVIEW_SECONDS: u64 = 30;
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_RED: &str = "\x1b[31m";
 const ANSI_LIGHT_GREY: &str = "\x1b[37m";
 const ANSI_RESET: &str = "\x1b[0m";
-const GH_CREATED_PR_LOOKUP_FIELDS: &str = "number,url,baseRefName";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CreatedPullRequest {
     pub(crate) number: u64,
@@ -46,15 +41,17 @@ pub(crate) struct CreatedPullRequest {
 
 pub(crate) fn run_pr(
     repo_root: &str,
+    forge: ForgeKind,
     force_main: bool,
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
-    run_pr_and_capture(repo_root, force_main, custom_main_branch, cancel).map(|_| ())
+    run_pr_and_capture(repo_root, forge, force_main, custom_main_branch, cancel).map(|_| ())
 }
 
 pub(crate) fn run_pr_and_capture(
     repo_root: &str,
+    forge: ForgeKind,
     force_main: bool,
     custom_main_branch: Option<&str>,
     cancel: Option<GitCancellation>,
@@ -168,14 +165,34 @@ pub(crate) fn run_pr_and_capture(
         }
     }
     let body_path = write_temp_changelog_markdown(repo_root, &body)?;
-    let args = build_pr_create_args(&target_pr_branch, &current_pr_branch, &title, &body_path);
-    let create_output = create_pr(repo_root, &args)?;
+    let create_output = forge.create_pull_request(
+        repo_root,
+        &target_pr_branch,
+        &current_pr_branch,
+        &title,
+        &body_path,
+    )?;
+    println!();
+    if create_output.is_empty() {
+        println!("{} created.", capitalize_first(forge.pull_request_label()));
+    } else {
+        println!("{create_output}");
+    }
     resolve_created_pull_request(
+        forge,
         repo_root,
         &current_pr_branch,
         &target_branch,
         &create_output,
     )
+}
+
+fn capitalize_first(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 fn build_pr_body(
@@ -794,60 +811,8 @@ fn truncate_for_terminal(value: &str, width: usize) -> String {
     value.chars().take(width).collect()
 }
 
-fn build_pr_create_args(
-    target_branch: &str,
-    current_branch: &str,
-    title: &str,
-    body_path: &Path,
-) -> Vec<String> {
-    vec![
-        "pr".to_string(),
-        "create".to_string(),
-        "--base".to_string(),
-        target_branch.to_string(),
-        "--head".to_string(),
-        current_branch.to_string(),
-        "--title".to_string(),
-        title.to_string(),
-        "--body-file".to_string(),
-        body_path.display().to_string(),
-    ]
-}
-
-fn create_pr(repo_root: &str, args: &[String]) -> Result<String> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args(args)
-        .output()
-        .context("failed to execute gh pr create")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !stderr.is_empty() {
-            bail!("gh pr create failed: {}", stderr);
-        }
-        if !stdout.is_empty() {
-            bail!("gh pr create failed: {}", stdout);
-        }
-        bail!(
-            "gh pr create failed with exit code {:?}",
-            output.status.code()
-        );
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    println!();
-    if stdout.is_empty() {
-        println!("Pull request created.");
-    } else {
-        println!("{}", stdout);
-    }
-
-    Ok(stdout)
-}
-
 fn resolve_created_pull_request(
+    forge: ForgeKind,
     repo_root: &str,
     current_branch: &str,
     target_branch: &str,
@@ -863,7 +828,7 @@ fn resolve_created_pull_request(
         });
     }
 
-    lookup_created_pull_request(repo_root, current_branch, target_branch)
+    lookup_created_pull_request(forge, repo_root, current_branch, target_branch)
 }
 
 fn find_pull_request_url_in_output(output: &str) -> Option<String> {
@@ -895,68 +860,18 @@ fn pull_request_branch_name_from_upstream_ref(upstream_ref: &str) -> Result<Stri
 }
 
 fn lookup_created_pull_request(
+    forge: ForgeKind,
     repo_root: &str,
     current_branch: &str,
     target_branch: &str,
 ) -> Result<CreatedPullRequest> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args([
-            "pr",
-            "list",
-            "--head",
-            current_branch,
-            "--state",
-            "open",
-            "--limit",
-            "20",
-            "--json",
-            GH_CREATED_PR_LOOKUP_FIELDS,
-        ])
-        .output()
-        .context("failed to execute gh pr list for the newly created branch")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !stderr.is_empty() {
-            bail!("gh pr list failed after PR creation: {}", stderr);
-        }
-        if !stdout.is_empty() {
-            bail!("gh pr list failed after PR creation: {}", stdout);
-        }
-        bail!(
-            "gh pr list failed after PR creation with exit code {:?}",
-            output.status.code()
-        );
-    }
-
-    let listed = serde_json::from_slice::<Vec<CreatedPullRequestLookup>>(&output.stdout)
-        .context("failed to parse gh pr list output for the newly created branch")?;
-    let matched = listed
-        .into_iter()
-        .find(|pull_request| pull_request.base_ref_name == target_branch)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "created PR for branch '{}' targeting '{}' could not be resolved",
-                current_branch,
-                target_branch
-            )
-        })?;
-
+    let (number, url) =
+        forge.lookup_created_pull_request(repo_root, current_branch, target_branch)?;
     Ok(CreatedPullRequest {
-        number: matched.number,
+        number,
         target_branch: target_branch.to_string(),
-        url: matched.url,
+        url,
     })
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatedPullRequestLookup {
-    number: u64,
-    url: String,
-    base_ref_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -984,7 +899,7 @@ fn resolve_parent_branch_name_with_cancel(
         .map(|branch| branch.name)
         .collect::<Vec<_>>();
     if let Some(parent_branch) =
-        crate::git_alt::alt_merge_parent_branch(current_branch, &existing_branches)
+        crate::git::alt_merge_parent_branch(current_branch, &existing_branches)
     {
         return Ok(parent_branch);
     }
@@ -1685,35 +1600,6 @@ mod tests {
         ));
         assert!(!is_dev_to_main_scenario("feature", "main", None));
         assert!(!is_dev_to_main_scenario("main", "main", None));
-    }
-
-    #[test]
-    fn build_pr_create_args_uses_non_interactive_flags() {
-        let args = build_pr_create_args(
-            "main",
-            "feature/demo",
-            "feature/demo (via ComfyGit)",
-            Path::new("changelog_temp.md"),
-        );
-
-        assert_eq!(
-            args,
-            vec![
-                "pr",
-                "create",
-                "--base",
-                "main",
-                "--head",
-                "feature/demo",
-                "--title",
-                "feature/demo (via ComfyGit)",
-                "--body-file",
-                "changelog_temp.md",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>()
-        );
     }
 
     #[test]

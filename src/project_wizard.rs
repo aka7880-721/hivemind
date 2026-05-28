@@ -609,6 +609,7 @@ impl ProjectWizard {
                     IntegrationMode::LocalOnly => 0,
                     IntegrationMode::GitLocalOnly => 1,
                     IntegrationMode::GitHubEnabled => 2,
+                    IntegrationMode::GitLabEnabled => 3,
                 })
                 .unwrap_or(IntegrationMode::LocalOnly)
         } else {
@@ -935,15 +936,17 @@ impl ProjectWizard {
                     remote_url: None,
                     ..RepoConfig::default()
                 }),
-                IntegrationMode::GitHubEnabled => Some(RepoConfig {
-                    local_root: root,
-                    remote_url: if remote.is_empty() {
-                        None
-                    } else {
-                        Some(remote)
-                    },
-                    ..RepoConfig::default()
-                }),
+                IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled => {
+                    Some(RepoConfig {
+                        local_root: root,
+                        remote_url: if remote.is_empty() {
+                            None
+                        } else {
+                            Some(remote)
+                        },
+                        ..RepoConfig::default()
+                    })
+                }
             };
         }
     }

@@ -322,10 +322,9 @@ use tokio::{
 };
 
 use crate::{
+    changelog::clear_top_picks_edits,
     config::{ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
-    git::GitScopeContext,
-    git_stt::recent_merge_check,
-    mmr::clear_top_picks_edits,
+    git::{GitScopeContext, recent_merge_check},
 };
 
 #[path = "rls-now-qd.rs"]
@@ -906,7 +905,7 @@ impl ReleaseNowDialog {
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowValidation {
+pub(crate) struct ReleaseNowValidation {
     pub(super) project_name: String,
     pub(super) scope_label: String,
     pub(super) scope: GitScopeContext,
@@ -938,7 +937,7 @@ pub(super) struct ReleaseNowScript {
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowExecutionRequest {
+pub(crate) struct ReleaseNowExecutionRequest {
     pub(super) scope_label: String,
     pub(super) scope: GitScopeContext,
     pub(super) changelog_enabled: bool,
@@ -957,7 +956,7 @@ pub(super) struct ReleaseNowExecutionRequest {
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowExecutionOutcome {
+pub(crate) struct ReleaseNowExecutionOutcome {
     pub(super) summary: String,
     pub(super) artifact_files: Vec<String>,
     pub(super) log_lines: Vec<String>,
@@ -968,11 +967,12 @@ pub(super) fn validate_release_now(
     scope_index: usize,
     cancel: Option<GitCancellation>,
 ) -> Result<ReleaseNowValidation> {
-    if project.integration_mode != IntegrationMode::GitHubEnabled {
-        bail!("ReleaseNOW requires a GitHub-enabled project with a configured remote")
+    if !project.integration_mode.is_forge_enabled() {
+        bail!("ReleaseNOW requires a GitHub- or GitLab-enabled project with a configured remote")
     }
 
-    ensure_gh_authenticated()?;
+    let forge = crate::forge::require_forge_cli(project.integration_mode)?;
+    forge.ensure_authenticated()?;
 
     let contexts = collect_all_branch_git_scope_contexts(project)?;
     if contexts.is_empty() {
@@ -1058,7 +1058,10 @@ pub(super) async fn execute_release_now_async(
     cancel: GitCancellation,
     mut emit_progress: impl FnMut(Vec<String>) + Send,
 ) -> Result<ReleaseNowExecutionOutcome> {
-    ensure_gh_authenticated()?;
+    let forge = crate::forge::detect_forge_for_repo(&request.repo_root).ok_or_else(|| {
+        anyhow!("ReleaseNOW could not detect GitHub or GitLab from the repository remote")
+    })?;
+    forge.ensure_authenticated()?;
     ensure_not_cancelled(&cancel)?;
 
     emit_progress(vec![format!(
@@ -1167,7 +1170,8 @@ pub(super) async fn execute_release_now_async(
         emit_progress(vec![format!("Warning: {}", warning)]);
     }
 
-    create_or_update_github_release(
+    create_or_update_forge_release(
+        forge,
         &request.repo_root,
         &request.tag_name,
         request.scope.remote_spec.as_deref(),
@@ -1486,23 +1490,6 @@ fn build_recent_merge_warning(
             "ReleaseNOW! expected a recent pull request merge within the last 5 minutes. You can safely ignore this warning if you are intentionally running a release without a recent merge. Just confirm with the yellow-ish button below.\n\n\n{}",
             warnings.join("\n")
         )))
-    }
-}
-fn ensure_gh_authenticated() -> Result<()> {
-    ensure_gh_available()?;
-    let output = Command::new("gh")
-        .args(["auth", "status"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .context("failed to invoke gh auth status")?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if stderr.is_empty() { stdout } else { stderr };
-        bail!("GitHub CLI is not authenticated: {}", detail)
     }
 }
 
@@ -1843,7 +1830,8 @@ fn collect_files_recursive(root: &Path, files: &mut Vec<String>) -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn create_or_update_github_release(
+async fn create_or_update_forge_release(
+    forge: crate::forge::ForgeKind,
     repo_root: &str,
     tag_name: &str,
     remote_spec: Option<&str>,
@@ -1853,26 +1841,20 @@ async fn create_or_update_github_release(
     cancel: GitCancellation,
     emit_progress: &mut impl FnMut(Vec<String>),
 ) -> Result<()> {
+    let cli_name = forge.cli_name();
+    let forge_label = forge.display_name();
     ensure_not_cancelled(&cancel)?;
     let notes_file = release_notes_markdown
         .filter(|notes| !notes.trim().is_empty())
         .map(write_release_notes_file)
         .transpose()?;
 
-    let release_exists = Command::new("gh")
-        .current_dir(repo_root)
-        .args(["release", "view", tag_name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("failed to check for an existing GitHub release")?
-        .success();
+    let release_exists = forge.release_exists(repo_root, tag_name)?;
 
     let result = async {
         if release_exists {
             emit_progress(vec![format!(
-                "Updating existing GitHub release '{}'.",
-                tag_name
+                "Updating existing {forge_label} release '{tag_name}'."
             )]);
             let repo_root_owned = repo_root.to_string();
             let upload_cancel = cancel.clone();
@@ -1889,11 +1871,11 @@ async fn create_or_update_github_release(
                 move |progress_tx| {
                     run_command_with_streaming(
                         &repo_root_owned,
-                        "gh",
+                        cli_name,
                         &upload_args,
                         RELEASE_NOW_TIMEOUT,
-                        "gh release upload",
-                        "gh",
+                        &format!("{cli_name} release upload"),
+                        cli_name,
                         &upload_cancel,
                         &progress_tx,
                     )
@@ -1918,11 +1900,11 @@ async fn create_or_update_github_release(
                     move |progress_tx| {
                         run_command_with_streaming(
                             &repo_root_owned,
-                            "gh",
+                            cli_name,
                             &edit_args,
                             RELEASE_NOW_TIMEOUT,
-                            "gh release edit",
-                            "gh",
+                            &format!("{cli_name} release edit"),
+                            cli_name,
                             &edit_cancel,
                             &progress_tx,
                         )
@@ -1933,7 +1915,9 @@ async fn create_or_update_github_release(
             }
         } else {
             let remote_spec = remote_spec.ok_or_else(|| {
-                anyhow!("ReleaseNOW requires a configured git remote to publish a GitHub release")
+                anyhow!(
+                    "ReleaseNOW requires a configured git remote to publish a {forge_label} release"
+                )
             })?;
             emit_progress(vec![format!(
                 "Pushing tag '{}' to {}.",
@@ -1964,7 +1948,9 @@ async fn create_or_update_github_release(
             )
             .await?;
 
-            emit_progress(vec![format!("Creating GitHub release '{}'.", tag_name)]);
+            emit_progress(vec![format!(
+                "Creating {forge_label} release '{tag_name}'."
+            )]);
 
             let mut create_args = vec![
                 "release".to_string(),
@@ -1984,11 +1970,11 @@ async fn create_or_update_github_release(
                 move |progress_tx| {
                     run_command_with_streaming(
                         &repo_root,
-                        "gh",
+                        cli_name,
                         &create_args,
                         RELEASE_NOW_TIMEOUT,
-                        "gh release create",
-                        "gh",
+                        &format!("{cli_name} release create"),
+                        cli_name,
                         &create_cancel,
                         &progress_tx,
                     )

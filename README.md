@@ -1,15 +1,15 @@
-<p align="center">
+<div align="center">
   <img src="https://raw.githubusercontent.com/comfy-home/ComfyGit/main/assets/docs-assets/cg-header.png" width="768" alt="ComfyGit Header">
-</p>
-<p align="center">
+</div>
+<div align="center">
   <strong>⭐ ⭐ ⭐ &nbsp&nbspRatatui-powered Git workflow automation with custom CLI &nbsp&nbsp⭐ ⭐ ⭐</strong><br><br><sup>inc.</sup><br><br><sup>Built-in Multi-Project Management&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp |&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp Automatic Version Bumper&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp |&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp Advanced Changelog Generator</sup><br>
-</p>
+</div>
 <br>
-<p align="center">
+<div align="center">
   <a href="https://github.com/comfy-home/ComfyGit/releases"><img src="https://img.shields.io/github/v/release/comfy-home/ComfyGit?style=plastic" alt="GitHub Release"></a>&nbsp&nbsp&nbsp&nbsp&nbsp
   <a href="https://github.com/comfy-home/ComfyGit/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-SA--PS-blue?style=plastic" alt="License: SA-PS"></a>&nbsp&nbsp&nbsp&nbsp&nbsp
   <a href="https://github.com/comfy-home/ComfyGit"><img src="https://img.shields.io/badge/Rust-2024%20Edition-orange?style=plastic&logo=rust" alt="Rust 2024 Edition"></a>
-</p>
+</div>
 
 ---
 
@@ -267,13 +267,16 @@ Enjoy!
 
 ---
 
-> [!IMPORTANT]  
-> **PREREQUISITES**  
+> [!IMPORTANT]
+> <br>
+>
+> **PREREQUISITES:**<br>  
 > ComfyGit expects you...
 > - ...are using a modern terminal app, e.g. `ptyxis`, `konsole`, `kitty`, `pwsh`, etc (or a built-in terminal in VSCode and similar IDE)  
-> - ...have `git` and `gh` (Git CLI) installed and configured
+> - ...have `git` installed and configured
+> - ...have the forge CLI for your host when using remote workflows: [`gh`](https://cli.github.com/) (GitHub) and/or [`glab`](https://gitlab.com/gitlab-org/cli) (GitLab)
 >
-> NOTE: There are no other requirements, no extra scripts, GitHub settings/actions - nothing.
+> NOTE: There are no other requirements beyond git and the relevant CLI for your forge — no extra scripts, host-specific CI settings, or tokens managed by ComfyGit.
 
 
 ## Overview
@@ -283,8 +286,8 @@ Enjoy!
 Whether you're managing a simple single-package project or a complex multi-scope monorepo, ComfyGit adapts to your workflow with flexible project configurations and intelligent automation.
 
 > [!NOTE]
-> **ComfyGit** supports **20+ version manifest formats** across Rust, Node/TypeScript, Python, Go, Java, .NET, mobile, and many others — not only Rust and Node.  
-> See the wiki: [Supported languages & version files](https://github.com/comfy-home/ComfyGit/wiki/Supported-Eco‐Systems-and-Version-File-Formats) for the full list, key paths, and limitations.  
+> **ComfyGit** supports **20+ version manifest formats** across Rust, Node/TypeScript, Python, Go, Java, .NET, mobile, and many others.  
+> See the WIKI: [Supported languages & version files](https://github.com/comfy-home/ComfyGit/wiki/Supported-Eco‐Systems-and-Version-File-Formats) for the full list, key paths, and limitations.  
 > Want another ecosystem? Request it [here](https://github.com/comfy-home/ComfyGit/discussions/127).
 
 ---
@@ -297,7 +300,7 @@ Whether you're managing a simple single-package project or a complex multi-scope
 - **📦 Version Management** — Automated SemVer/CalVer bumping with updates to JSON, TOML, YAML, XML, Gradle, CMake, `go.mod`, `mix.exs`, `Package.swift`, Cabal, and more (see [supported manifests](https://github.com/comfy-home/ComfyGit/wiki/Supported-Eco‐Systems-and-Version-File-Formats))
 - **🌳 Smart Branching** — Visual branch trees, parent/child navigation, and guided merge workflows
 - **📝 Changelog Generation** — Multiple formats: Standard, ReleaseNOW (with QuickDownloads), and Top Picks
-- **🔧 GitHub Integration** — PR creation, merge management, and release automation
+- **🔧 GitHub & GitLab Integration** — PR/MR creation, merge management, and release automation via `gh` or `glab`
 
 
 ### 🚀 Advanced Features
@@ -326,7 +329,7 @@ ComfyGit can **read, bump, and auto-detect** version fields in many ecosystems. 
 
 Run **`cg init`** in a repo root to scan for manifests (including common monorepo paths like `electron/package.json` and `packages/*/package.json`). Use **`format: auto`** or pick a specific format in project settings. Full reference: [wiki/supported-lang-and-ver-files.md](https://github.com/comfy-home/ComfyGit/wiki/Supported-Eco‐Systems-and-Version-File-Formats).
 
->[!TIP]
+> [!TIP]
 > Make sure to visit [ComfyGit's WIKI](https://github.com/comfy-home/ComfyGit/wiki)
 > 
 > We’re rolling out lots of deep‑info educational CG usage scenarios with full step‑by‑step breakdowns — and some are already live!
@@ -356,7 +359,7 @@ Run **`cg init`** in a repo root to scan for manifests (including common monorep
 #### RPM (Fedora, SUSE, etc.)
 
 ##### Example video
-<a href="https://youtu.be/2aIsQ4Wk9hg"><img src="https://github.com/comfy-home/ComfyGit/blob/main/video-manuals/01-installation.gif" width="640" title="Click to see the video on YT (you can pause, make it faster/slower)"/></a>
+<a href="https://youtu.be/2aIsQ4Wk9hg"><img src="https://raw.github.com/comfy-home/comfygit/main/video-manuals/01-installation.gif" width="640" title="Click to see the video on YT (you can pause, make it faster/slower)"/></a>
 
 ```bash
 # Download (replace <> with actual version, OS, and architecture)
@@ -855,13 +858,15 @@ ComfyGit supports different levels of Git integration:
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| **GitLocalOnly** | Local git operations only | Simple projects, no GitHub |
-| **GitHubEnabled** | Full GitHub integration | PRs, merges, releases |
-| **GitLabEnabled** | GitLab integration (planned) | GitLab workflows |
+| **GitLocalOnly** | Local git operations only | Simple projects, no forge host |
+| **GitHubEnabled** | Full GitHub integration (`gh`) | PRs, merges, releases on github.com |
+| **GitLabEnabled** | Full GitLab integration (`glab`) | MRs, merges, releases on gitlab.com |
+
+`cg init` auto-detects **GitHubEnabled** or **GitLabEnabled** from `origin` when the remote URL points at github.com or gitlab.com.
 
 Configure in Project Settings or directly in config:
 ```toml
-integration_mode = "GitHubEnabled"
+integration_mode = "GitHubEnabled"   # or "gitlab_enabled"
 ```
 
 ---

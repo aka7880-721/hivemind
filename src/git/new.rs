@@ -32,7 +32,7 @@ use crossterm::{
 
 use crate::{
     cli::{best_effort_canonicalize, current_git_repo_root, find_project_for_cwd, run_bump},
-    config::{ConfigStore, IntegrationMode},
+    config::ConfigStore,
     git::current_branch_with_cancel,
 };
 
@@ -46,7 +46,7 @@ pub(crate) fn run_new(action_name: Option<&str>, option_name: Option<&str>) -> R
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
     let project = find_project_for_cwd(&config.projects, &cwd)?;
 
-    if project.integration_mode != IntegrationMode::GitHubEnabled {
+    if !project.integration_mode.is_forge_enabled() {
         bail!(
             "cg new is only available for GitHub-enabled projects; \
              this project uses {} mode",

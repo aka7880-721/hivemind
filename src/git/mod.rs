@@ -1,9 +1,22 @@
-// Copyright © 2026 ComfyHome™
-// All rights reserved.
-//
-// Licensed under the ComfyGit License v1.2
-//
-// For details, see the LICENSE file in the repository root.
+mod alt;
+mod branch;
+mod branch_end;
+mod locmerge;
+mod merge;
+mod new;
+mod pr;
+mod reroot;
+mod status;
+
+pub(crate) use alt::*;
+pub(crate) use branch::*;
+pub(crate) use branch_end::*;
+pub(crate) use locmerge::*;
+pub(crate) use merge::*;
+pub(crate) use new::*;
+pub(crate) use pr::*;
+pub(crate) use reroot::*;
+pub(crate) use status::*;
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
 use std::{
@@ -20,11 +33,12 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
     config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
-    git_stt::{last_commit_label, last_rls_time, last_rls_version, last_tag_name, last_tag_time},
     targets::{collect_bump_scopes, shared_bump_version},
 };
 
-pub(crate) use crate::git_stt::{last_bump_time, latest_local_tag_with_cancel};
+use status::{last_commit_label, last_rls_time, last_tag_name, last_tag_time};
+
+pub(crate) use status::{last_bump_time, latest_local_tag_with_cancel};
 
 pub(crate) fn current_branch_with_cancel(
     repo_root: &str,
@@ -187,40 +201,6 @@ pub(crate) fn default_push_remote_name(repo_root: &str) -> Result<String> {
     bail!(
         "could not determine a push remote; configure remote.pushDefault or add an 'origin' remote"
     )
-}
-
-pub(crate) fn github_repository_web_url(repo_root: &str) -> Option<String> {
-    let remote_name = default_push_remote_name(repo_root).ok()?;
-    let remote_url = run_git_checked(repo_root, &["remote", "get-url", &remote_name]).ok()?;
-    github_repository_web_url_from_remote_url(remote_url.trim())
-}
-
-pub(crate) fn github_pull_conflicts_url(repo_root: &str, pr_number: u64) -> Option<String> {
-    let repository_url = github_repository_web_url(repo_root)?;
-    Some(format!("{}/pull/{}/conflicts", repository_url, pr_number))
-}
-
-pub(crate) fn github_owner_repo_from_remote_url(remote_url: &str) -> Option<(String, String)> {
-    let remote_url = remote_url.trim();
-    let path = remote_url
-        .strip_prefix("git@github.com:")
-        .or_else(|| remote_url.strip_prefix("https://github.com/"))
-        .or_else(|| remote_url.strip_prefix("ssh://git@github.com/"))?;
-
-    let path = path.trim_end_matches(".git");
-    let mut segments = path.split('/');
-    let owner = segments.next()?.trim();
-    let repo = segments.next()?.trim();
-    if owner.is_empty() || repo.is_empty() || segments.next().is_some() {
-        return None;
-    }
-
-    Some((owner.to_string(), repo.to_string()))
-}
-
-fn github_repository_web_url_from_remote_url(remote_url: &str) -> Option<String> {
-    let (owner, repo) = github_owner_repo_from_remote_url(remote_url)?;
-    Some(format!("https://github.com/{}/{}", owner, repo))
 }
 
 fn branch_upstream_ref_with_cancel(
@@ -796,16 +776,10 @@ pub(crate) fn ensure_local_tag(
     }
 }
 
-pub(crate) fn ensure_gh_available() -> Result<()> {
-    let output = Command::new("gh")
-        .arg("--version")
-        .output()
-        .context("failed to invoke gh; install GitHub CLI to create releases")?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        bail!("gh is not available or not functioning; install GitHub CLI to create releases")
-    }
+pub(crate) fn ensure_forge_cli_available(
+    integration_mode: crate::config::IntegrationMode,
+) -> Result<crate::forge::ForgeKind> {
+    crate::forge::require_forge_cli(integration_mode)
 }
 
 pub(crate) fn run_git(repo_root: &str, args: &[&str]) -> Result<GitOutput> {
@@ -884,6 +858,7 @@ pub(crate) fn split_output_lines(output: &str) -> Vec<String> {
 
 pub(crate) fn load_scope_activity_summary_with_cancel(
     scope: &GitScopeContext,
+    integration_mode: crate::config::IntegrationMode,
     cancel: Option<GitCancellation>,
 ) -> Result<RepoActivitySummary> {
     let repo_root = &scope.repo_root;
@@ -910,12 +885,22 @@ pub(crate) fn load_scope_activity_summary_with_cancel(
         "no tags".to_string()
     };
 
-    let last_bump_time = crate::git_stt::last_bump_time(repo_root, &pathspecs, cancel.clone())?;
+    let last_bump_time = crate::git::last_bump_time(repo_root, &pathspecs, cancel.clone())?;
     let last_tag_name = last_tag_name(repo_root, cancel.clone())?;
     let last_tag_time = last_tag_time(repo_root, &pathspecs, cancel.clone())?;
     let last_commit_label = last_commit_label(repo_root, &pathspecs, cancel.clone())?;
-    let last_rls_version = last_rls_version(repo_root, cancel.clone()).ok().flatten();
-    let last_rls_time = last_rls_time(repo_root, cancel).ok().flatten();
+    let (last_rls_version, last_rls_time) = if integration_mode.is_forge_enabled() {
+        (
+            status::last_rls_version(repo_root, integration_mode, cancel.clone())
+                .ok()
+                .flatten(),
+            last_rls_time(repo_root, integration_mode, cancel)
+                .ok()
+                .flatten(),
+        )
+    } else {
+        (None, None)
+    };
 
     Ok(RepoActivitySummary {
         commits_since_tag_label,
@@ -1024,12 +1009,12 @@ fn history_tag_components(tag: &str) -> Option<Vec<u64>> {
 
 #[cfg(test)]
 mod tests {
+    use super::status::format_relative_git_timestamp;
     use super::*;
     use crate::{
         config::{
             BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec,
         },
-        git_stt::format_relative_git_timestamp,
         versioning::VersionScheme,
     };
     use std::{
@@ -1471,46 +1456,5 @@ mod tests {
 
         fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
         fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
-    }
-
-    #[test]
-    fn github_repository_web_url_parser_accepts_https_and_ssh_formats() {
-        assert_eq!(
-            github_repository_web_url_from_remote_url(
-                "https://github.com/comfy-home/ComfyGit-test-project.git"
-            )
-            .as_deref(),
-            Some("https://github.com/comfy-home/ComfyGit-test-project")
-        );
-        assert_eq!(
-            github_repository_web_url_from_remote_url(
-                "git@github.com:comfy-home/ComfyGit-test-project.git"
-            )
-            .as_deref(),
-            Some("https://github.com/comfy-home/ComfyGit-test-project")
-        );
-    }
-
-    #[test]
-    fn github_repository_web_url_parser_rejects_non_github_remotes() {
-        assert!(
-            github_repository_web_url_from_remote_url("https://example.com/org/repo.git").is_none()
-        );
-    }
-
-    #[test]
-    fn github_owner_repo_from_remote_url_parses_ssh_https_and_ssh_scheme() {
-        assert_eq!(
-            github_owner_repo_from_remote_url("git@github.com:comfy-home/ComfyGit.git"),
-            Some(("comfy-home".to_string(), "ComfyGit".to_string()))
-        );
-        assert_eq!(
-            github_owner_repo_from_remote_url("https://github.com/foo/bar.git"),
-            Some(("foo".to_string(), "bar".to_string()))
-        );
-        assert_eq!(
-            github_owner_repo_from_remote_url("ssh://git@github.com/org/repo.git"),
-            Some(("org".to_string(), "repo".to_string()))
-        );
     }
 }
