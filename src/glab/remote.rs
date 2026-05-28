@@ -13,14 +13,20 @@ pub fn owner_repo_from_remote_url(remote_url: &str) -> Option<(String, String)> 
         .or_else(|| remote_url.strip_prefix("ssh://git@gitlab.com/"))?;
 
     let path = path.trim_end_matches(".git");
-    let mut segments = path.split('/');
-    let owner = segments.next()?.trim();
-    let repo = segments.next()?.trim();
-    if owner.is_empty() || repo.is_empty() || segments.next().is_some() {
+    let mut segments = path.split('/').map(str::trim).collect::<Vec<_>>();
+    if segments.len() < 2 {
+        return None;
+    }
+    let repo = segments.pop()?.trim();
+    if repo.is_empty() {
+        return None;
+    }
+    let owner = segments.join("/");
+    if owner.is_empty() {
         return None;
     }
 
-    Some((owner.to_string(), repo.to_string()))
+    Some((owner, repo.to_string()))
 }
 
 pub fn repository_web_url_from_remote_url(remote_url: &str) -> Option<String> {
@@ -53,11 +59,19 @@ pub fn release_page_url(remote_url: &str, tag: &str) -> Option<String> {
 pub fn release_download_url(owner: &str, repo: &str, tag: &str, file_name: &str) -> String {
     format!(
         "https://gitlab.com/{}/{}/-/releases/{}/downloads/{}",
-        encode_path_segment(owner),
+        encode_namespace(owner),
         encode_path_segment(repo),
         encode_path_segment(tag),
         encode_path_segment(file_name)
     )
+}
+
+fn encode_namespace(namespace: &str) -> String {
+    namespace
+        .split('/')
+        .map(encode_path_segment)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn encode_path_segment(segment: &str) -> String {
@@ -112,6 +126,10 @@ mod tests {
         assert_eq!(
             owner_repo_from_remote_url("ssh://git@gitlab.com/org/repo.git"),
             Some(("org".to_string(), "repo".to_string()))
+        );
+        assert_eq!(
+            owner_repo_from_remote_url("git@gitlab.com:comfyhome/dev/SNIF.git"),
+            Some(("comfyhome/dev".to_string(), "SNIF".to_string()))
         );
     }
 
