@@ -1467,6 +1467,7 @@ pub(crate) fn execute_standard_changelog_for_tag_blocking(
                         tag_name.to_string(),
                         &range.lines,
                         top_picks_edits.as_deref(),
+                        scope.mini_commit_hashes,
                     )
                     .markdown;
                     archive_changelog_markdown(repo_root, tag_name, &markdown)?;
@@ -1658,7 +1659,13 @@ pub(crate) fn replay_postponed_std_changelogs_blocking(
             continue;
         }
 
-        let markdown = std_changelog_gen(entry.tag_from.clone(), &range.lines, None).markdown;
+        let markdown = std_changelog_gen(
+            entry.tag_from.clone(),
+            &range.lines,
+            None,
+            scope.mini_commit_hashes,
+        )
+        .markdown;
         archive_changelog_markdown(repo_root, &entry.tag_from, &markdown)?;
         record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
         outcome.notices.push(format!(
