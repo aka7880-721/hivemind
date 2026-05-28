@@ -32,6 +32,16 @@ pub fn latest_public_release_tag(repo_root: &str) -> Option<String> {
         .and_then(|release| release.tag_name)
 }
 
+pub fn delete_release(repo_root: &str, tag_name: &str) -> Result<()> {
+    cli::ensure_available()?;
+    let output = cli::run_in_repo(repo_root, &["release", "delete", tag_name, "--yes"])?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("{CLI_NAME} release delete failed: {}", stderr.trim());
+    }
+    Ok(())
+}
+
 fn list_releases(repo_root: &str, limit: usize) -> Result<Vec<GlabReleaseSummary>> {
     let limit = limit.to_string();
     let output = cli::run_in_repo(
