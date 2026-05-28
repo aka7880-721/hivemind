@@ -74,8 +74,3 @@ pub fn latest_public_release_tag(repo_root: &str) -> Option<String> {
     let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!tag.is_empty()).then_some(tag)
 }
-
-pub fn release_exists(repo_root: &str, tag_name: &str) -> Result<bool> {
-    let output = cli::run_in_repo(repo_root, &["release", "view", tag_name])?;
-    Ok(output.status.success())
-}
