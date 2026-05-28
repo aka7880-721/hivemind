@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::config::{QuickDownloadsPosition, ReleaseNowQuickDownloadsSettings};
 
-const LOGO_BASE: &str = "https://github.com/comfy-home/ComfyGit/blob/main/assets/logos-3rd-party";
+const LOGO_BASE: &str = "https://raw.github.com/comfy-home/ComfyGit/main/assets/logos-3rd-party";
 const NOT_AVAILABLE_TITLE: &str = "\u{1f6ab} NOT AVAILABLE in this release! \u{1f622}";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
