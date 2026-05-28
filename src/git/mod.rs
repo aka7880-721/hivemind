@@ -187,6 +187,23 @@ pub(crate) fn default_push_remote_name(repo_root: &str) -> Result<String> {
         return resolve_push_remote_name(repo_root, &configured);
     }
 
+    let upstream_remote = run_git_checked(
+        repo_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .and_then(|upstream| {
+        upstream
+            .split_once('/')
+            .map(|(remote, _)| remote.to_string())
+    })
+    .filter(|remote| !remote.is_empty());
+    if let Some(remote) = upstream_remote {
+        return Ok(remote);
+    }
+
     let remotes = git_remote_names(repo_root)?;
     if remotes.is_empty() {
         bail!("no git remotes are configured for this repository")

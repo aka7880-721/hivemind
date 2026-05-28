@@ -307,6 +307,16 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             })?;
             Ok(StartupMode::Handled)
         }
+        [command, action] if is_release_command(command) && is_release_delete_action(action) => {
+            run_release_delete(None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, tag_name]
+            if is_release_command(command) && is_release_delete_action(action) =>
+        {
+            run_release_delete(Some(tag_name))?;
+            Ok(StartupMode::Handled)
+        }
         [command, lookup] if is_project_version_command(command) => {
             print_project_version(lookup)?;
             Ok(StartupMode::Handled)
@@ -713,6 +723,14 @@ fn is_merge_command(value: &str) -> bool {
     matches!(value, "merge" | "mg" | "mrg")
 }
 
+fn is_release_command(value: &str) -> bool {
+    matches!(value, "release" | "rls" | "rl")
+}
+
+fn is_release_delete_action(value: &str) -> bool {
+    matches!(value, "del" | "rm" | "delete" | "drop")
+}
+
 fn is_reroot_command(value: &str) -> bool {
     matches!(value, "reroot" | "rrt")
 }
@@ -823,10 +841,15 @@ fn print_usage() {
     println!(
         "                             <target> may be a commit hash or a HEAD offset (0 = HEAD, 1 = HEAD~1)"
     );
+    println!("  cg rls del [tag]           Delete the last or selected release and tag(s)");
+    println!(
+        "                             Creates an empty marker commit after successful deletion"
+    );
     println!("          synonyms:");
     println!("            commit: cmt | com | ct");
     println!("            del: del | rm | rem | delete | drop | erase");
     println!("            rename: rename | rn | rnm | reword | rwrd | rwd");
+    println!("            rls: release | rls | rl");
     println!(" ");
     println!("  BRANCHING COMMANDS:");
     println!(" ");
@@ -1537,6 +1560,83 @@ fn run_commit_delete(commit_hash: &str) -> Result<()> {
     }
     println!();
 
+    Ok(())
+}
+
+fn run_release_delete(tag_override: Option<&str>) -> Result<()> {
+    let cwd = env::current_dir().context("failed to read current directory")?;
+    let repo_root = current_git_repo_root(&cwd)?;
+    ensure_clean_worktree(&repo_root)?;
+    let forge = crate::forge::require_forge_for_repo(&repo_root)?;
+    forge.ensure_authenticated()?;
+
+    let tag_name = match tag_override.map(str::trim).filter(|tag| !tag.is_empty()) {
+        Some(tag) => tag.to_string(),
+        None => forge
+            .last_release_tag(&repo_root)?
+            .ok_or_else(|| anyhow!("no release was found for this repository"))?,
+    };
+
+    println!();
+    println!(
+        "You are about to delete release '{}' from {} and remove local+remote tags.",
+        tag_name,
+        forge.display_name()
+    );
+    if !prompt_confirm_default_no("Continue with release deletion? [y/N]: ")? {
+        bail!("cancelled by user")
+    }
+
+    forge.delete_release(&repo_root, &tag_name)?;
+
+    let local_tag_exists =
+        run_git(&repo_root, &["rev-parse", "-q", "--verify", &tag_name])?.success;
+    if local_tag_exists {
+        run_git_checked(&repo_root, &["tag", "-d", &tag_name])?;
+    }
+
+    let remote_name = crate::git::default_push_remote_name(&repo_root).ok();
+    if let Some(remote_name) = remote_name {
+        let _ = run_git(
+            &repo_root,
+            &[
+                "push",
+                &remote_name,
+                "--delete",
+                &format!("refs/tags/{}", tag_name),
+            ],
+        );
+    }
+
+    let delete_commit_message = format!(
+        "~: ReleaseNOW! → {} release has just been DELETED via ComfyGit!",
+        tag_name
+    );
+    run_git_checked(
+        &repo_root,
+        &["commit", "--allow-empty", "-m", &delete_commit_message],
+    )?;
+    let upstream_ref = current_upstream_ref(&repo_root)?;
+    if upstream_ref.is_some() {
+        run_git_checked(&repo_root, &["push"])?;
+    }
+
+    println!();
+    println!(
+        "Deleted release '{}' from {} and removed tags.",
+        tag_name,
+        forge.display_name()
+    );
+    println!("Created deletion marker commit: {}", delete_commit_message);
+    if upstream_ref.is_some() {
+        println!(
+            "Pushed the deletion marker commit to {}.",
+            upstream_ref.as_deref().unwrap_or("the upstream branch")
+        );
+    } else {
+        println!("No upstream branch is configured, so the deletion marker commit is local.");
+    }
+    println!();
     Ok(())
 }
 
@@ -4491,6 +4591,23 @@ mod tests {
         assert!(is_merge_command("mg"));
         assert!(is_merge_command("mrg"));
         assert!(!is_merge_command("mrg2"));
+    }
+
+    #[test]
+    fn is_release_command_accepts_requested_synonyms() {
+        assert!(is_release_command("release"));
+        assert!(is_release_command("rls"));
+        assert!(is_release_command("rl"));
+        assert!(!is_release_command("rels"));
+    }
+
+    #[test]
+    fn is_release_delete_action_accepts_requested_synonyms() {
+        assert!(is_release_delete_action("del"));
+        assert!(is_release_delete_action("rm"));
+        assert!(is_release_delete_action("delete"));
+        assert!(is_release_delete_action("drop"));
+        assert!(!is_release_delete_action("erase"));
     }
 
     #[test]

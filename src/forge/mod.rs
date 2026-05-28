@@ -196,6 +196,13 @@ impl ForgeKind {
             ForgeKind::GitLab => crate::glab::release::latest_public_release_tag(repo_root),
         }
     }
+
+    pub fn delete_release(self, repo_root: &str, tag_name: &str) -> Result<()> {
+        match self {
+            ForgeKind::GitHub => crate::ghub::release::delete_release(repo_root, tag_name),
+            ForgeKind::GitLab => crate::glab::release::delete_release(repo_root, tag_name),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

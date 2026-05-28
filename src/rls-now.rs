@@ -54,17 +54,97 @@ fn has_staged_changes_for_paths(repo_root: &str, paths: &[String]) -> Result<boo
     Ok(!run_git(repo_root, &arg_refs)?.success)
 }
 
-fn commit_release_now_generated_files(repo_root: &str, tag_name: &str) -> Result<bool> {
+fn release_now_commit_subject(tag_name: &str) -> String {
+    format!(
+        "~: ReleaseNOW! → {} has just been released via ComfyGit!",
+        tag_name
+    )
+}
+
+pub(crate) fn release_now_delete_commit_subject(tag_name: &str) -> String {
+    format!(
+        "~: ReleaseNOW! → {} release has just been DELETED via ComfyGit!",
+        tag_name
+    )
+}
+
+fn release_now_artifacts_body(artifact_files: &[String]) -> String {
+    let mut entries = artifact_files
+        .iter()
+        .map(|path| {
+            Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(path.as_str())
+                .trim()
+                .to_string()
+        })
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    entries.sort_by_cached_key(|entry| entry.to_lowercase());
+    entries.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    format!("Artifacts: {}", entries.join(", "))
+}
+
+fn parse_release_now_artifacts_from_commit_body(body: &str) -> Vec<String> {
+    for line in body.lines() {
+        if let Some(rest) = line.trim().strip_prefix("Artifacts:") {
+            return rest
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+fn historical_release_now_artifacts_for_tag(
+    repo_root: &str,
+    tag_name: &str,
+) -> Result<Vec<String>> {
+    let output = run_git_checked(
+        repo_root,
+        &["log", "--format=%s%x1f%b%x1e", "--max-count=256"],
+    )?;
+    let release_subject = release_now_commit_subject(tag_name);
+    let delete_subject = release_now_delete_commit_subject(tag_name);
+    for entry in output.split('\x1e') {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut fields = trimmed.splitn(2, '\x1f');
+        let subject = fields.next().unwrap_or("").trim();
+        let body = fields.next().unwrap_or("").trim();
+        if subject == delete_subject {
+            return Ok(Vec::new());
+        }
+        if subject == release_subject {
+            return Ok(parse_release_now_artifacts_from_commit_body(body));
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn commit_release_now_generated_files(
+    repo_root: &str,
+    tag_name: &str,
+    artifact_files: &[String],
+) -> Result<bool> {
     let paths = release_now_generated_paths(repo_root);
     if paths.is_empty() || !has_staged_changes_for_paths(repo_root, &paths)? {
         return Ok(false);
     }
 
-    let commit_message = format!(
-        "~: ReleaseNOW! → {} has just been released via ComfyGit!",
-        tag_name
-    );
-    let mut args = vec!["commit".to_string(), "-m".to_string(), commit_message];
+    let mut args = vec![
+        "commit".to_string(),
+        "-m".to_string(),
+        release_now_commit_subject(tag_name),
+        "-m".to_string(),
+        release_now_artifacts_body(artifact_files),
+    ];
     args.push("--".to_string());
     args.extend(paths);
     let arg_refs = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
@@ -102,6 +182,7 @@ fn current_head_commit(repo_root: &str) -> Result<String> {
 fn create_release_now_generated_files_commit(
     repo_root: &str,
     tag_name: &str,
+    artifact_files: &[String],
 ) -> Result<Option<ReleaseNowGeneratedFilesCommit>> {
     let previous_head = current_head_commit(repo_root)?;
     let mut created_any = false;
@@ -111,7 +192,7 @@ fn create_release_now_generated_files_commit(
     }
 
     if stage_release_now_generated_files(repo_root)?
-        && commit_release_now_generated_files(repo_root, tag_name)?
+        && commit_release_now_generated_files(repo_root, tag_name, artifact_files)?
     {
         created_any = true;
     }
@@ -1251,11 +1332,15 @@ pub(super) async fn execute_release_now_async(
 
     // QD HTML is built from the same artifact list attached to this release (see rls_now_qd).
     let mut qd_warnings = Vec::new();
+    let historical_qd_artifacts =
+        historical_release_now_artifacts_for_tag(&request.repo_root, &request.tag_name)?;
+    let qd_artifacts =
+        rls_now_qd::merge_artifacts_for_quick_downloads(&artifact_files, &historical_qd_artifacts);
     let release_notes_for_github = rls_now_qd::finalize_release_notes_with_quick_downloads(
         request.release_notes_markdown.clone(),
         request.scope.remote_spec.as_deref(),
         &request.tag_name,
-        &artifact_files,
+        &qd_artifacts,
         &request.quick_downloads,
         &mut qd_warnings,
     );
@@ -1280,8 +1365,13 @@ pub(super) async fn execute_release_now_async(
         ensure_not_cancelled(&cancel)?;
         let repo_root_for_commit = request.repo_root.clone();
         let tag_name_for_commit = request.tag_name.clone();
+        let artifact_files_for_commit = artifact_files.clone();
         let generated_commit = run_blocking_job(move || {
-            create_release_now_generated_files_commit(&repo_root_for_commit, &tag_name_for_commit)
+            create_release_now_generated_files_commit(
+                &repo_root_for_commit,
+                &tag_name_for_commit,
+                &artifact_files_for_commit,
+            )
         })
         .await?;
 
@@ -2571,7 +2661,7 @@ mod tests {
         fs::create_dir_all(&syncmem_dir).expect("create syncmem dir");
         fs::write(syncmem_dir.join("stdchlg.json"), "{}\n").expect("write syncmem file");
 
-        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3")
+        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[])
             .expect("create generated commit")
             .expect("generated commit should exist");
 
@@ -2615,7 +2705,7 @@ mod tests {
         fs::write(repo_dir.join("README.md"), "seed\n\ninjected\n").expect("update readme");
         run_git_checked(&repo_root, &["add", "README.md"]).expect("stage readme injection");
 
-        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3")
+        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[])
             .expect("create generated commit")
             .expect("readme commit should exist");
 
@@ -2661,7 +2751,7 @@ mod tests {
         fs::create_dir_all(&syncmem_dir).expect("create syncmem dir");
         fs::write(syncmem_dir.join("stdchlg.json"), "{}\n").expect("write syncmem file");
 
-        create_release_now_generated_files_commit(&repo_root, "v1.2.3")
+        create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[])
             .expect("create generated commit")
             .expect("commits should exist");
 

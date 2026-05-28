@@ -42,6 +42,22 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
+pub(crate) fn merge_artifacts_for_quick_downloads(
+    current_artifacts: &[String],
+    historical_artifacts: &[String],
+) -> Vec<String> {
+    let mut merged = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for artifact in current_artifacts.iter().chain(historical_artifacts.iter()) {
+        let name = basename(artifact);
+        let key = name.to_lowercase();
+        if seen.insert(key) {
+            merged.push(name);
+        }
+    }
+    merged
+}
+
 fn lower(s: &str) -> String {
     s.to_lowercase()
 }
@@ -668,5 +684,17 @@ mod tests {
         .expect("merged notes");
         assert!(out2.starts_with("# Notes"));
         assert!(out2.contains("<div"));
+    }
+
+    #[test]
+    fn merge_artifacts_for_quick_downloads_keeps_current_and_adds_missing_history() {
+        let merged = merge_artifacts_for_quick_downloads(
+            &["dist/latest/app-win.msi".to_string()],
+            &["app-macos.pkg".to_string(), "APP-WIN.MSI".to_string()],
+        );
+        assert_eq!(
+            merged,
+            vec!["app-win.msi".to_string(), "app-macos.pkg".to_string()]
+        );
     }
 }
