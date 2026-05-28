@@ -75,6 +75,7 @@ pub(crate) enum ProjectSettingsFocus {
     ChangelogHidePrMessages,
     ChangelogHideBumpMessages,
     ChangelogMiniCommitHashes,
+    ChangelogMirrorSummaryToRootChangelog,
     ChangelogWrapDetailedIfTopPicks,
     ReleaseNowEnabled,
     ReleaseNowGeneral,
@@ -114,6 +115,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) changelog_hide_pr_messages: bool,
     pub(crate) changelog_hide_bump_messages: bool,
     pub(crate) changelog_mini_commit_hashes: bool,
+    pub(crate) changelog_mirror_summary_to_root_changelog: bool,
     pub(crate) changelog_wrap_detailed_if_top_picks: bool,
     pub(crate) release_now_general: TextInput,
     pub(crate) release_now_windows: TextInput,
@@ -146,6 +148,7 @@ impl Default for ProjectSettingsState {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
             changelog_wrap_detailed_if_top_picks: false,
             release_now_general: TextInput::with_value(""),
             release_now_windows: TextInput::with_value(""),
@@ -187,6 +190,8 @@ impl ProjectSettingsState {
             project.changelog_hide_bump_messages_for_scope(scope_index);
         self.changelog_mini_commit_hashes =
             project.changelog_mini_commit_hashes_for_scope(scope_index);
+        self.changelog_mirror_summary_to_root_changelog =
+            project.changelog_mirror_summary_to_root_changelog_for_scope(scope_index);
         self.changelog_wrap_detailed_if_top_picks =
             project.changelog_wrap_detailed_if_top_picks_for_scope(scope_index);
         self.release_now_general
@@ -1198,6 +1203,7 @@ fn changelog_visible_fields(
         fields.push(ProjectSettingsFocus::ChangelogHideBumpMessages);
         fields.push(ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks);
         fields.push(ProjectSettingsFocus::ChangelogMiniCommitHashes);
+        fields.push(ProjectSettingsFocus::ChangelogMirrorSummaryToRootChangelog);
         fields.push(ProjectSettingsFocus::ReadmeInjectionEnabled);
         if project
             .release_now_for_scope(scope_index)
@@ -1273,6 +1279,9 @@ fn build_changelogs_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Pro
         ));
         rows.push(ProjectSettingsRow::Checkbox(
             ProjectSettingsFocus::ChangelogMiniCommitHashes,
+        ));
+        rows.push(ProjectSettingsRow::Checkbox(
+            ProjectSettingsFocus::ChangelogMirrorSummaryToRootChangelog,
         ));
         rows.push(ProjectSettingsRow::Checkbox(
             ProjectSettingsFocus::ReadmeInjectionEnabled,
@@ -1493,6 +1502,9 @@ fn render_checkbox_row(
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => {
             project.changelog_mini_commit_hashes_for_scope(scope_index)
+        }
+        ProjectSettingsFocus::ChangelogMirrorSummaryToRootChangelog => {
+            project.changelog_mirror_summary_to_root_changelog_for_scope(scope_index)
         }
         ProjectSettingsFocus::ReadmeInjectionEnabled => {
             project
@@ -1811,6 +1823,9 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
             "Wrap detailed changelog if TopPicks present"
         }
         ProjectSettingsFocus::ChangelogMiniCommitHashes => "Mini commit hashes",
+        ProjectSettingsFocus::ChangelogMirrorSummaryToRootChangelog => {
+            "Mirror summary changelog to repo_root/CHANGELOG.md"
+        }
         ProjectSettingsFocus::ReadmeInjectionEnabled => "👀 What's new README injection enabled",
         ProjectSettingsFocus::ReadmeInjectOnlyTopPicks => "Inject only Top Picks",
         ProjectSettingsFocus::ReleaseNowEnabled => {
@@ -1853,6 +1868,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ChangelogHideBumpMessages
             | ProjectSettingsFocus::ChangelogWrapDetailedIfTopPicks
             | ProjectSettingsFocus::ChangelogMiniCommitHashes
+            | ProjectSettingsFocus::ChangelogMirrorSummaryToRootChangelog
             | ProjectSettingsFocus::ReadmeInjectionEnabled
             | ProjectSettingsFocus::ReadmeInjectOnlyTopPicks
             | ProjectSettingsFocus::AdvancedAliasEnabled
@@ -1980,6 +1996,20 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
             active_project.set_changelog_mini_commit_hashes_for_scope(scope_index, next);
             app.status = super::StatusMessage::success(format!(
                 "Mini commit hashes {} for {}.",
+                if next { "enabled" } else { "disabled" },
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::ChangelogMirrorSummaryToRootChangelog => {
+            let next = !app
+                .project_settings_state
+                .changelog_mirror_summary_to_root_changelog;
+            app.project_settings_state
+                .changelog_mirror_summary_to_root_changelog = next;
+            active_project
+                .set_changelog_mirror_summary_to_root_changelog_for_scope(scope_index, next);
+            app.status = super::StatusMessage::success(format!(
+                "Summary changelog mirroring {} for {}.",
                 if next { "enabled" } else { "disabled" },
                 scope_name
             ));
