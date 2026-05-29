@@ -33,6 +33,10 @@ impl HelpModal {
         }
     }
 
+    pub(crate) fn scroll_wheel(&mut self, delta: i16) {
+        self.scroll_by(delta);
+    }
+
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> bool {
         if key.modifiers.is_empty() && matches!(key.code, KeyCode::Char('?') | KeyCode::Esc) {
             return true;
@@ -69,7 +73,7 @@ impl HelpModal {
 
         frame.render_widget(
             Paragraph::new(Line::from(
-                "? or Esc close  |  ↑/↓ PgUp/PgDn scroll  |  Home/End jump",
+                "? or Esc close  |  ↑/↓ PgUp/PgDn or wheel scroll  |  Home/End jump",
             ))
             .style(Style::default().fg(Color::DarkGray)),
             sections[0],
