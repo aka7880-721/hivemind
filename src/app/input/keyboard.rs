@@ -34,8 +34,6 @@ impl App {
             if self.handle_help_key(key) {
                 return Ok(());
             }
-        } else if self.try_handle_help_shortcut(key)? {
-            return Ok(());
         }
 
         if self.progress_dialog.is_some() {
@@ -126,6 +124,10 @@ impl App {
         }
 
         if self.handle_tab_shortcut(key) {
+            return Ok(());
+        }
+
+        if self.try_handle_help_shortcut(key)? {
             return Ok(());
         }
 
