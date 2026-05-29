@@ -36,11 +36,13 @@ pub(crate) enum MacCiArch {
 pub(crate) struct MacCiConfig {
     pub version: String,
     pub arch: MacCiArch,
+    pub github_repo: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct MacCiSession {
     pub run_id: u64,
+    pub github_repo: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +82,11 @@ pub(crate) fn detect_external_mac_ci(
     if version.is_empty() {
         return None;
     }
-    Some(MacCiConfig { version, arch })
+    Some(MacCiConfig {
+        version,
+        arch,
+        github_repo: None,
+    })
 }
 
 pub(crate) fn partition_mac_scripts(
@@ -107,6 +113,15 @@ fn arch_workflow_field(arch: MacCiArch) -> &'static str {
         MacCiArch::Silicon => "silicon",
         MacCiArch::All => "all",
     }
+}
+
+fn gh_command(repo_root: &str, github_repo: Option<&str>) -> Command {
+    let mut command = Command::new("gh");
+    command.current_dir(repo_root);
+    if let Some(repo) = github_repo.filter(|value| !value.trim().is_empty()) {
+        command.args(["-R", repo.trim()]);
+    }
+    command
 }
 
 fn ensure_gh_available() -> Result<()> {
@@ -151,9 +166,10 @@ fn trigger_macos_workflow(repo_root: &str, config: &MacCiConfig) -> Result<(MacC
     ensure_gh_available()?;
     let git_ref = current_git_ref(repo_root)?;
     let arch = arch_workflow_field(config.arch);
-    let output = Command::new("gh")
-        .current_dir(repo_root)
-        .args([
+    let github_repo = config.github_repo.as_deref();
+    let trigger = |include_arch: bool| -> Result<std::process::Output> {
+        let mut command = gh_command(repo_root, github_repo);
+        command.args([
             "workflow",
             "run",
             MACOS_CI_WORKFLOW,
@@ -161,29 +177,55 @@ fn trigger_macos_workflow(repo_root: &str, config: &MacCiConfig) -> Result<(MacC
             &git_ref,
             "--field",
             &format!("version={}", config.version),
-            "--field",
-            &format!("arch={arch}"),
-        ])
-        .output()
-        .with_context(|| format!("failed to trigger workflow {MACOS_CI_WORKFLOW}"))?;
-    let combined = format!(
+        ]);
+        if include_arch {
+            command.args(["--field", &format!("arch={arch}")]);
+        }
+        command
+            .output()
+            .with_context(|| format!("failed to trigger workflow {MACOS_CI_WORKFLOW}"))
+    };
+
+    let mut output = trigger(true)?;
+    let mut combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    if !output.status.success()
+        && combined.contains("Unexpected inputs")
+        && combined.contains("arch")
+    {
+        output = trigger(false)?;
+        combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     if !output.status.success() {
         bail!("failed to trigger macOS CI workflow: {}", combined.trim());
     }
     let run_id = parse_run_id_from_output(&combined).ok_or_else(|| {
         anyhow::anyhow!("macOS CI workflow triggered but run ID was not found in gh output")
     })?;
-    Ok((MacCiSession { run_id }, combined))
+    Ok((
+        MacCiSession {
+            run_id,
+            github_repo: config.github_repo.clone(),
+        },
+        combined,
+    ))
 }
 
-fn resolve_run_id_after_trigger(repo_root: &str, git_ref: &str, not_before: &str) -> Result<u64> {
+fn resolve_run_id_after_trigger(
+    repo_root: &str,
+    git_ref: &str,
+    not_before: &str,
+    github_repo: Option<&str>,
+) -> Result<u64> {
     for _ in 0..45 {
-        let output = Command::new("gh")
-            .current_dir(repo_root)
+        let output = gh_command(repo_root, github_repo)
             .args([
                 "run",
                 "list",
@@ -235,9 +277,8 @@ fn utc_now_minus_seconds(seconds: u64) -> String {
         .unwrap_or_default()
 }
 
-fn run_conclusion(repo_root: &str, run_id: u64) -> Result<String> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
+fn run_conclusion(repo_root: &str, run_id: u64, github_repo: Option<&str>) -> Result<String> {
+    let output = gh_command(repo_root, github_repo)
         .args([
             "run",
             "view",
@@ -259,9 +300,12 @@ fn run_conclusion(repo_root: &str, run_id: u64) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn build_step_status(repo_root: &str, run_id: u64) -> Result<Option<String>> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
+fn build_step_status(
+    repo_root: &str,
+    run_id: u64,
+    github_repo: Option<&str>,
+) -> Result<Option<String>> {
+    let output = gh_command(repo_root, github_repo)
         .args([
             "run",
             "view",
@@ -284,9 +328,8 @@ fn build_step_status(repo_root: &str, run_id: u64) -> Result<Option<String>> {
     }
 }
 
-fn fetch_run_log(repo_root: &str, run_id: u64) -> Result<String> {
-    let output = Command::new("gh")
-        .current_dir(repo_root)
+fn fetch_run_log(repo_root: &str, run_id: u64, github_repo: Option<&str>) -> Result<String> {
+    let output = gh_command(repo_root, github_repo)
         .args(["run", "view", &run_id.to_string(), "--log"])
         .output()
         .with_context(|| format!("failed to fetch macOS CI log for run {run_id}"))?;
@@ -381,7 +424,11 @@ fn read_package_name(repo_root: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn download_macos_artifacts(repo_root: &str, run_id: u64) -> Result<PathBuf> {
+fn download_macos_artifacts(
+    repo_root: &str,
+    run_id: u64,
+    github_repo: Option<&str>,
+) -> Result<PathBuf> {
     let staging = std::env::temp_dir().join(format!(
         "comfygit-macos-ci-{}-{}",
         std::process::id(),
@@ -394,8 +441,7 @@ fn download_macos_artifacts(repo_root: &str, run_id: u64) -> Result<PathBuf> {
         fs::remove_dir_all(&staging)?;
     }
     fs::create_dir_all(&staging)?;
-    let status = Command::new("gh")
-        .current_dir(repo_root)
+    let status = gh_command(repo_root, github_repo)
         .args([
             "run",
             "download",
@@ -488,11 +534,31 @@ pub(crate) async fn trigger_mac_ci_session(
                 config.version
             ),
         );
+        if config.github_repo.is_some() {
+            lines.insert(
+                1,
+                format!(
+                    "[MacOS] Using GitHub repository {} for macOS CI.",
+                    config.github_repo.as_deref().unwrap_or_default()
+                ),
+            );
+        }
         lines.push(format!("[MacOS] Tracking macOS CI run {}.", session.run_id));
         if parse_run_id_from_output(&trigger_output).is_none() {
-            let resolved = resolve_run_id_after_trigger(&repo_root, &git_ref, &trigger_after)?;
+            let resolved = resolve_run_id_after_trigger(
+                &repo_root,
+                &git_ref,
+                &trigger_after,
+                config.github_repo.as_deref(),
+            )?;
             lines.push(format!("[MacOS] Resolved macOS CI run {}.", resolved));
-            return Ok((MacCiSession { run_id: resolved }, lines));
+            return Ok((
+                MacCiSession {
+                    run_id: resolved,
+                    github_repo: config.github_repo,
+                },
+                lines,
+            ));
         }
         Ok((session, lines))
     })
@@ -512,10 +578,12 @@ pub(crate) async fn stream_mac_ci_until_build_started(
         }
         let repo_root_for_poll = repo_root.clone();
         let run_id = session.run_id;
+        let github_repo = session.github_repo.clone();
         let (step_status, log_tail, run_state) = run_blocking_job(move || {
-            let step_status = build_step_status(&repo_root_for_poll, run_id)?;
-            let log = fetch_run_log(&repo_root_for_poll, run_id).unwrap_or_default();
-            let run_state = run_conclusion(&repo_root_for_poll, run_id)?;
+            let github_repo = github_repo.as_deref();
+            let step_status = build_step_status(&repo_root_for_poll, run_id, github_repo)?;
+            let log = fetch_run_log(&repo_root_for_poll, run_id, github_repo).unwrap_or_default();
+            let run_state = run_conclusion(&repo_root_for_poll, run_id, github_repo)?;
             Ok::<_, anyhow::Error>((step_status, log, run_state))
         })
         .await?;
@@ -565,9 +633,11 @@ pub(crate) async fn watch_mac_ci_to_completion(
         }
         let repo_root_for_poll = repo_root.clone();
         let run_id = session.run_id;
+        let github_repo = session.github_repo.clone();
         let (log_tail, run_state) = run_blocking_job(move || {
-            let log = fetch_run_log(&repo_root_for_poll, run_id).unwrap_or_default();
-            let run_state = run_conclusion(&repo_root_for_poll, run_id)?;
+            let github_repo = github_repo.as_deref();
+            let log = fetch_run_log(&repo_root_for_poll, run_id, github_repo).unwrap_or_default();
+            let run_state = run_conclusion(&repo_root_for_poll, run_id, github_repo)?;
             Ok::<_, anyhow::Error>((log, run_state))
         })
         .await?;
@@ -618,10 +688,12 @@ pub(crate) async fn finish_mac_ci_and_merge_artifacts(
 
     let repo_root_for_download = repo_root.clone();
     let run_id = session.run_id;
+    let github_repo = session.github_repo.clone();
     let version_for_archive = version.clone();
     run_blocking_job(move || {
         archive_superseded_mac_artifacts(&repo_root_for_download, &version_for_archive)?;
-        let staging = download_macos_artifacts(&repo_root_for_download, run_id)?;
+        let staging =
+            download_macos_artifacts(&repo_root_for_download, run_id, github_repo.as_deref())?;
         merge_macos_staging(&repo_root_for_download, &staging)?;
         fs::remove_dir_all(&staging).ok();
         Ok::<_, anyhow::Error>(())
