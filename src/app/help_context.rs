@@ -34,6 +34,9 @@ impl App {
             if dialog.is_warning_mode() {
                 return HelpContext::ModalReleaseNowWarning;
             }
+            if dialog.is_mirror_sync_mode() {
+                return HelpContext::ModalReleaseNowConfigure;
+            }
             if dialog.is_artifacts_customize_mode() {
                 return HelpContext::ModalReleaseNowConfigure;
             }
