@@ -2925,7 +2925,7 @@ impl App {
         frame.render_widget(block, area);
 
         let help = if self.help_modal.is_some() {
-            Line::from("? or Esc close help  |  ↑/↓ PgUp/PgDn scroll")
+            Line::from("? or Esc close help  |  ↑/↓ PgUp/PgDn or wheel scroll")
         } else if self.snif_dialog.is_some() {
             Line::from(
                 "SNIF: Tab field | F2 run | m mode | e case-sensitive | a case-insensitive replace | Esc close",
