@@ -141,6 +141,12 @@ impl App {
                     dialog.proceed_past_warning();
                 }
             }
+            HitAction::RunReleaseNowMirrorSync => {
+                return self.request_release_now_mirror_sync(true);
+            }
+            HitAction::RefreshReleaseNowMirrorSync => {
+                return self.request_release_now_mirror_sync(false);
+            }
             HitAction::SelectReleaseNowArtifactsChoice(choice) => {
                 if let Some(dialog) = &mut self.release_now_dialog {
                     dialog.artifacts_choice_selected = choice;
@@ -608,6 +614,9 @@ impl App {
             if dialog.is_warning_mode() {
                 bail!("confirm the recent bump warning before running ReleaseNOW")
             }
+            if dialog.is_mirror_sync_mode() {
+                bail!("sync GitLab and GitHub remotes before running ReleaseNOW")
+            }
             if dialog.is_existing_artifacts_mode() {
                 bail!(
                     "choose whether to reuse or rebuild existing artifacts before running ReleaseNOW"
@@ -635,7 +644,57 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn request_release_now_mirror_sync(&mut self, push: bool) -> Result<()> {
+        let (repo_root, gitlab_remote, github_remote) = {
+            let dialog = self
+                .release_now_dialog
+                .as_ref()
+                .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
+            if !dialog.is_mirror_sync_mode() {
+                bail!("mirror sync is not required for this ReleaseNOW session")
+            }
+            if dialog.mirror_sync_running {
+                bail!("mirror sync is already running")
+            }
+            (
+                dialog.repo_root.clone(),
+                dialog.scope.remote_spec.clone(),
+                dialog.scope.secondary_remote_spec.clone(),
+            )
+        };
+
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.begin_mirror_sync();
+        }
+
+        self.schedule_foreground_job(BackgroundJobRequest::ReleaseNowMirrorSync {
+            repo_root,
+            gitlab_remote,
+            github_remote,
+            push,
+        })?;
+        self.status = if push {
+            StatusMessage::info(
+                "Pushing the current branch to GitLab and GitHub before continuing ReleaseNOW.",
+            )
+        } else {
+            StatusMessage::info("Refreshing GitLab/GitHub mirror sync status.")
+        };
+        Ok(())
+    }
+
     pub(crate) fn close_release_now_dialog(&mut self) {
+        if self
+            .release_now_dialog
+            .as_ref()
+            .map(|dialog| dialog.mirror_sync_running)
+            .unwrap_or(false)
+        {
+            self.status = StatusMessage::warning(
+                "Mirror sync is still running. Wait for it to finish before closing the dialog.",
+            );
+            return;
+        }
         if self
             .release_now_dialog
             .as_ref()
@@ -830,16 +889,28 @@ impl App {
                     } else {
                         None
                     };
+                    let mirror_sync_error = message.kind == BackgroundJobKind::ReleaseNow
+                        && self
+                            .release_now_dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.mirror_sync_running);
                     if message.kind == BackgroundJobKind::ReleaseNow
                         && let Some(dialog) = &mut self.release_now_dialog
                     {
-                        if rls_now::is_cancelled_error(&error_message) {
+                        if mirror_sync_error {
+                            dialog.apply_mirror_sync_failure(error_message.clone());
+                        } else if rls_now::is_cancelled_error(&error_message) {
                             dialog.apply_cancelled(error_message.clone());
                         } else {
                             dialog.apply_failure(error_message.clone());
                         }
                     }
-                    self.status = if message.kind == BackgroundJobKind::ReleaseNow
+                    self.status = if mirror_sync_error {
+                        StatusMessage::error(format!(
+                            "Mirror sync failed: {}",
+                            error_message.lines().next().unwrap_or(&error_message)
+                        ))
+                    } else if message.kind == BackgroundJobKind::ReleaseNow
                         && rls_now::is_cancelled_error(&error_message)
                     {
                         StatusMessage::warning(error_message)
@@ -951,16 +1022,39 @@ impl App {
             }
             BackgroundJobOutput::ReleaseNowValidated(validation) => {
                 let project_name = validation.project_name.clone();
+                let mirror_sync_pending = validation
+                    .mirror_sync_report
+                    .as_ref()
+                    .is_some_and(|report| !report.in_sync());
                 let warning_pending = validation.warning_message.is_some();
                 self.release_now_dialog =
                     Some(rls_now::ReleaseNowDialog::from_validation(validation));
                 self.release_now_notes_dialog = None;
-                self.status = if warning_pending {
+                self.status = if mirror_sync_pending {
+                    StatusMessage::warning(
+                        "ReleaseNOW requires GitLab and GitHub to be in sync before publishing.",
+                    )
+                } else if warning_pending {
                     StatusMessage::warning(
                         "ReleaseNOW found an older-than-expected bump. Confirm before continuing.",
                     )
                 } else {
                     StatusMessage::info(format!("ReleaseNOW is ready for {}.", project_name))
+                };
+            }
+            BackgroundJobOutput::ReleaseNowMirrorSyncResult(result) => {
+                let in_sync = result.report.in_sync();
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.apply_mirror_sync_result(result.report, result.log_lines);
+                }
+                self.status = if in_sync {
+                    StatusMessage::success(
+                        "GitLab and GitHub remotes are in sync. Continue ReleaseNOW.",
+                    )
+                } else {
+                    StatusMessage::warning(
+                        "Mirror sync finished, but GitLab and GitHub still appear out of sync.",
+                    )
                 };
             }
             BackgroundJobOutput::ReleaseNowLogChunk(lines) => {

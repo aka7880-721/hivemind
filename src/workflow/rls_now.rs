@@ -566,6 +566,7 @@ fn release_asset_label_from_path(path: &str) -> String {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReleaseNowMode {
+    MirrorSync,
     BumpWarning,
     ExistingArtifacts,
     ArtifactsCustomize,
@@ -632,6 +633,9 @@ pub(crate) struct ReleaseNowDialog {
     pub(crate) readme_inject_at_row: u16,
     pub(crate) release_title_template: String,
     pub(crate) integration_mode: crate::config::IntegrationMode,
+    pub(crate) mirror_sync_report: Option<crate::git::MirrorSyncReport>,
+    pub(crate) mirror_sync_running: bool,
+    pub(crate) mirror_sync_log_lines: Vec<String>,
     pub(crate) started_at: Option<Instant>,
     /// Elapsed time frozen when the run stops (success, failure, or cancel).
     pub(crate) frozen_elapsed: Option<Duration>,
@@ -639,13 +643,6 @@ pub(crate) struct ReleaseNowDialog {
 
 impl ReleaseNowDialog {
     pub(crate) fn from_validation(validation: ReleaseNowValidation) -> Self {
-        let has_warning = validation.warning_message.is_some();
-        let mode = if has_warning {
-            ReleaseNowMode::BumpWarning
-        } else {
-            ReleaseNowMode::Configure
-        };
-
         let mut dialog = Self {
             project_name: validation.project_name,
             integration_mode: validation.integration_mode,
@@ -662,7 +659,7 @@ impl ReleaseNowDialog {
             release_notes_placeholder: "Edit release notes in Markdown before publishing."
                 .to_string(),
             warning_message: validation.warning_message,
-            mode,
+            mode: ReleaseNowMode::Configure,
             running: false,
             auto_follow: false,
             cancel_requested: false,
@@ -688,19 +685,94 @@ impl ReleaseNowDialog {
             readme_inject_depth: validation.readme_inject_depth,
             readme_inject_at_row: validation.readme_inject_at_row,
             release_title_template: validation.release_title_template,
+            mirror_sync_report: validation
+                .mirror_sync_report
+                .map(|report| (*report).clone()),
+            mirror_sync_running: false,
+            mirror_sync_log_lines: Vec::new(),
             started_at: None,
             frozen_elapsed: None,
         };
 
-        if !has_warning {
-            dialog.refresh_artifact_preflight();
-            if dialog.should_prompt_for_existing_artifacts() {
-                dialog.mode = ReleaseNowMode::ExistingArtifacts;
-                dialog.init_per_platform_defaults();
+        dialog.apply_post_validation_preflight();
+        dialog
+    }
+
+    fn apply_post_validation_preflight(&mut self) {
+        if self.needs_mirror_sync_prompt() {
+            self.mode = ReleaseNowMode::MirrorSync;
+            self.scroll = 0;
+            return;
+        }
+        if self.warning_message.is_some() {
+            self.mode = ReleaseNowMode::BumpWarning;
+            self.scroll = 0;
+            return;
+        }
+        self.refresh_artifact_preflight();
+        if self.should_prompt_for_existing_artifacts() {
+            self.mode = ReleaseNowMode::ExistingArtifacts;
+            self.init_per_platform_defaults();
+        } else {
+            self.mode = ReleaseNowMode::Configure;
+        }
+        self.scroll = 0;
+    }
+
+    pub(crate) fn needs_mirror_sync_prompt(&self) -> bool {
+        self.mirror_sync_report
+            .as_ref()
+            .is_some_and(|report| !report.in_sync())
+    }
+
+    pub(crate) fn is_mirror_sync_mode(&self) -> bool {
+        self.mode == ReleaseNowMode::MirrorSync
+    }
+
+    pub(crate) fn begin_mirror_sync(&mut self) {
+        self.mirror_sync_running = true;
+        self.mirror_sync_log_lines.clear();
+        self.scroll = 0;
+    }
+
+    pub(crate) fn apply_mirror_sync_result(
+        &mut self,
+        report: crate::git::MirrorSyncReport,
+        log_lines: Vec<String>,
+    ) {
+        self.mirror_sync_running = false;
+        self.mirror_sync_report = Some(report.clone());
+        self.mirror_sync_log_lines.extend(log_lines);
+        if report.in_sync() {
+            self.proceed_past_mirror_sync();
+        }
+        self.scroll = 0;
+    }
+
+    pub(crate) fn apply_mirror_sync_failure(&mut self, error_message: String) {
+        self.mirror_sync_running = false;
+        self.mirror_sync_log_lines
+            .push(format!("[Mirror sync][error] {error_message}"));
+        self.scroll = 0;
+    }
+
+    pub(crate) fn proceed_past_mirror_sync(&mut self) {
+        if self.needs_mirror_sync_prompt() {
+            return;
+        }
+        if self.warning_message.is_some() {
+            self.mode = ReleaseNowMode::BumpWarning;
+        } else {
+            self.refresh_artifact_preflight();
+            if self.should_prompt_for_existing_artifacts() {
+                self.mode = ReleaseNowMode::ExistingArtifacts;
+                self.artifacts_choice_selected = 0;
+                self.init_per_platform_defaults();
+            } else {
+                self.mode = ReleaseNowMode::Configure;
             }
         }
-
-        dialog
+        self.scroll = 0;
     }
 
     pub(crate) fn is_warning_mode(&self) -> bool {
@@ -1175,6 +1247,7 @@ impl ReleaseNowDialog {
 
     pub(crate) fn body_title(&self) -> &'static str {
         match self.mode {
+            ReleaseNowMode::MirrorSync => " Mirror Sync ",
             ReleaseNowMode::BumpWarning => " Merge Check ",
             ReleaseNowMode::ExistingArtifacts => " Existing Artifacts ",
             ReleaseNowMode::ArtifactsCustomize => " Reuse / Rebuild ",
@@ -1193,6 +1266,7 @@ impl ReleaseNowDialog {
 
     pub(crate) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
         let lines = match self.mode {
+            ReleaseNowMode::MirrorSync => self.mirror_sync_body_lines(),
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
                     Line::from(
@@ -1289,6 +1363,7 @@ impl ReleaseNowDialog {
 
     fn body_plain_lines(&self) -> Vec<String> {
         match self.mode {
+            ReleaseNowMode::MirrorSync => self.mirror_sync_plain_lines(),
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
                     "Recent merge validation did not find a very recent pull request merge."
@@ -1352,6 +1427,35 @@ impl ReleaseNowDialog {
                 lines
             }
         }
+    }
+
+    fn mirror_sync_body_lines(&self) -> Vec<Line<'static>> {
+        self.mirror_sync_plain_lines()
+            .into_iter()
+            .map(Line::from)
+            .collect()
+    }
+
+    fn mirror_sync_plain_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            "GitLab+GitHub projects require both remotes to track the same commit before ReleaseNOW can publish."
+                .to_string(),
+            String::new(),
+        ];
+        if let Some(report) = &self.mirror_sync_report {
+            lines.extend(report.summary_lines());
+        } else {
+            lines.push("Mirror sync status is unavailable.".to_string());
+        }
+        if self.mirror_sync_running {
+            lines.push(String::new());
+            lines.push("Sync in progress...".to_string());
+        }
+        if !self.mirror_sync_log_lines.is_empty() {
+            lines.push(String::new());
+            lines.extend(self.mirror_sync_log_lines.clone());
+        }
+        lines
     }
 
     fn existing_artifacts_body_lines(&self) -> Vec<Line<'static>> {
@@ -1477,6 +1581,7 @@ pub(crate) struct ReleaseNowValidation {
     pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
     pub(crate) readme_inject_at_row: u16,
     pub(crate) release_title_template: String,
+    pub(crate) mirror_sync_report: Option<Box<crate::git::MirrorSyncReport>>,
 }
 
 #[derive(Clone)]
@@ -1521,6 +1626,25 @@ pub(crate) struct ReleaseNowExecutionOutcome {
     pub(crate) log_lines: Vec<String>,
 }
 
+pub(crate) struct ReleaseNowMirrorSyncResult {
+    pub(crate) report: crate::git::MirrorSyncReport,
+    pub(crate) log_lines: Vec<String>,
+}
+
+pub(crate) fn run_mirror_sync_operation(
+    repo_root: &str,
+    gitlab_remote: Option<&str>,
+    github_remote: Option<&str>,
+    push: bool,
+) -> Result<ReleaseNowMirrorSyncResult> {
+    let mut log_lines = Vec::new();
+    if push {
+        log_lines = crate::git::push_mirror_sync(repo_root, gitlab_remote, github_remote)?;
+    }
+    let report = crate::git::check_mirror_sync(repo_root, gitlab_remote, github_remote)?;
+    Ok(ReleaseNowMirrorSyncResult { report, log_lines })
+}
+
 pub(crate) fn validate_release_now(
     project: &ProjectConfig,
     scope_index: usize,
@@ -1540,30 +1664,23 @@ pub(crate) fn validate_release_now(
     let scope_index = scope_index.min(contexts.len().saturating_sub(1));
     let scope = contexts[scope_index].clone();
 
-    if project.integration_mode.is_dual_forge() {
-        let sync_report = crate::git::check_mirror_sync(
-            &scope.repo_root,
-            scope.remote_spec.as_deref(),
-            scope.secondary_remote_spec.as_deref(),
-        )
-        .with_context(|| {
-            format!(
-                "ReleaseNOW pre-flight mirror sync check failed for {}",
-                scope.display_name
+    let mirror_sync_report = if project.integration_mode.is_dual_forge() {
+        Some(Box::new(
+            crate::git::check_mirror_sync(
+                &scope.repo_root,
+                scope.remote_spec.as_deref(),
+                scope.secondary_remote_spec.as_deref(),
             )
-        })?;
-        if !sync_report.in_sync() {
-            bail!(
-                "ReleaseNOW requires GitLab and GitHub remotes to be in sync before publishing. Run 'cg sync' and retry.\n{}",
-                sync_report
-                    .summary_lines()
-                    .into_iter()
-                    .map(|line| format!("  {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
-        }
-    }
+            .with_context(|| {
+                format!(
+                    "ReleaseNOW pre-flight mirror sync check failed for {}",
+                    scope.display_name
+                )
+            })?,
+        ))
+    } else {
+        None
+    };
 
     let options = collect_release_now_options(project.release_now_for_scope(scope_index))?;
     let warning_message =
@@ -1607,6 +1724,7 @@ pub(crate) fn validate_release_now(
             .release_now_for_scope(scope_index)
             .release_title_template
             .clone(),
+        mirror_sync_report,
     })
 }
 
@@ -3698,6 +3816,9 @@ mod tests {
             readme_inject_depth: crate::config::ReadmeInjectDepth::CurrentOnly,
             readme_inject_at_row: 0,
             release_title_template: String::new(),
+            mirror_sync_report: None,
+            mirror_sync_running: false,
+            mirror_sync_log_lines: Vec::new(),
             started_at: None,
             frozen_elapsed: None,
         };

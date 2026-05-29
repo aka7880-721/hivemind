@@ -2154,7 +2154,20 @@ impl App {
             Line::from(format!("Tag: {}", dialog.tag_name))
                 .style(Style::default().fg(Color::Yellow)),
         ];
-        if dialog.is_warning_mode() {
+        if dialog.is_mirror_sync_mode() {
+            header.push(Line::from(
+                "GitLab and GitHub must track the same commit before ReleaseNOW can publish.",
+            ));
+            if dialog.mirror_sync_running {
+                header.push(Line::from(
+                    "Pushing to both remotes now. Wait for sync to finish before continuing.",
+                ));
+            } else {
+                header.push(Line::from(
+                    "Push the current branch to both remotes here, or refresh the sync status.",
+                ));
+            }
+        } else if dialog.is_warning_mode() {
             header.push(Line::from(
                 "The most recent bump does not look fresh enough for a confident release.",
             ));
@@ -2198,7 +2211,10 @@ impl App {
             sections[0],
         );
 
-        if !dialog.is_warning_mode() && !dialog.is_existing_artifacts_mode() {
+        if !dialog.is_warning_mode()
+            && !dialog.is_existing_artifacts_mode()
+            && !dialog.is_mirror_sync_mode()
+        {
             let config_line = if dialog.is_running() {
                 format!(
                     "Running: {} | Follow: {} | Cancel: {} | Live log lines: {}",
@@ -2252,7 +2268,39 @@ impl App {
             body_inner,
         );
 
-        if dialog.is_warning_mode() {
+        if dialog.is_mirror_sync_mode() {
+            let sync_label = if dialog.mirror_sync_running {
+                "Syncing..."
+            } else {
+                "Push to both remotes"
+            };
+            self.render_button_row(
+                frame,
+                sections[3],
+                &[
+                    DialogButton::new(
+                        sync_label,
+                        !dialog.mirror_sync_running,
+                        HitAction::RunReleaseNowMirrorSync,
+                        Style::default().fg(Color::Black).bg(Color::Green),
+                    ),
+                    DialogButton::new(
+                        "Refresh status",
+                        false,
+                        HitAction::RefreshReleaseNowMirrorSync,
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Rgb(180, 205, 255)),
+                    ),
+                    DialogButton::new(
+                        "Cancel",
+                        false,
+                        HitAction::CloseReleaseNow,
+                        Style::default().fg(Color::White).bg(Color::Red),
+                    ),
+                ],
+            );
+        } else if dialog.is_warning_mode() {
             self.render_button_row(
                 frame,
                 sections[3],

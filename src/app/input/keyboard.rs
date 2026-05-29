@@ -253,6 +253,11 @@ impl App {
             .as_ref()
             .map(rls_now::ReleaseNowDialog::is_warning_mode)
             .unwrap_or(false);
+        let mirror_sync_mode = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_mirror_sync_mode)
+            .unwrap_or(false);
         let existing_artifacts_mode = self
             .release_now_dialog
             .as_ref()
@@ -273,6 +278,31 @@ impl App {
             .as_ref()
             .map(rls_now::ReleaseNowDialog::is_completed)
             .unwrap_or(false);
+
+        if mirror_sync_mode {
+            let sync_running = self
+                .release_now_dialog
+                .as_ref()
+                .map(|dialog| dialog.mirror_sync_running)
+                .unwrap_or(false);
+            match key.code {
+                KeyCode::Enter if !sync_running => {
+                    return self.request_release_now_mirror_sync(true);
+                }
+                KeyCode::Char('r') | KeyCode::Char('R') if !sync_running => {
+                    return self.request_release_now_mirror_sync(false);
+                }
+                KeyCode::Esc if !sync_running => self.close_release_now_dialog(),
+                KeyCode::Up => self.scroll_release_now(-1),
+                KeyCode::Down => self.scroll_release_now(1),
+                KeyCode::PageUp => self.scroll_release_now(-6),
+                KeyCode::PageDown => self.scroll_release_now(6),
+                KeyCode::Home => self.scroll_release_now_to_start(),
+                KeyCode::End => self.scroll_release_now_to_end(),
+                _ => {}
+            }
+            return Ok(());
+        }
 
         if warning_mode {
             match key.code {
