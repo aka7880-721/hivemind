@@ -2161,6 +2161,20 @@ impl App {
             header.push(Line::from(
                 "Choose whether to continue anyway or cancel this release.",
             ));
+        } else if dialog.is_existing_artifacts_mode() {
+            header.push(Line::from(format!(
+                "dist/latest already has version {} artifacts for some platforms.",
+                rls_now::release_version_from_tag(&dialog.tag_name)
+            )));
+            if dialog.is_artifacts_customize_mode() {
+                header.push(Line::from(
+                    "Toggle each ready platform between Reuse and Rebuild, then continue.",
+                ));
+            } else {
+                header.push(Line::from(
+                    "Reuse the existing builds, rebuild everything, or choose per platform.",
+                ));
+            }
         } else if dialog.is_running() {
             header.push(Line::from("ReleaseNOW is running now. Live stdout/stderr is streaming into the log pane below."));
             header.push(Line::from("Use the mouse wheel or PgUp/PgDn to review output. F toggles follow mode and X cancels the run."));
@@ -2184,7 +2198,7 @@ impl App {
             sections[0],
         );
 
-        if !dialog.is_warning_mode() {
+        if !dialog.is_warning_mode() && !dialog.is_existing_artifacts_mode() {
             let config_line = if dialog.is_running() {
                 format!(
                     "Running: {} | Follow: {} | Cancel: {} | Live log lines: {}",
@@ -2253,6 +2267,68 @@ impl App {
                         "OMG, no, cancel!",
                         !dialog.warning_confirm_selected,
                         HitAction::CloseReleaseNow,
+                        Style::default().fg(Color::White).bg(Color::Red),
+                    ),
+                ],
+            );
+        } else if dialog.is_artifacts_customize_mode() {
+            self.render_button_row(
+                frame,
+                sections[3],
+                &[
+                    DialogButton::new(
+                        "Continue",
+                        true,
+                        HitAction::ContinueReleaseNowArtifactsCustomize,
+                        Style::default().fg(Color::Black).bg(Color::Green),
+                    ),
+                    DialogButton::new(
+                        "Back",
+                        false,
+                        HitAction::BackReleaseNowArtifactsCustomize,
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Rgb(180, 205, 255)),
+                    ),
+                    DialogButton::new(
+                        "Cancel",
+                        false,
+                        HitAction::CloseReleaseNow,
+                        Style::default().fg(Color::White).bg(Color::Red),
+                    ),
+                ],
+            );
+        } else if dialog.is_existing_artifacts_mode() {
+            self.render_button_row(
+                frame,
+                sections[3],
+                &[
+                    DialogButton::new(
+                        "Reuse ready builds",
+                        dialog.artifacts_choice_selected == 0,
+                        HitAction::SelectReleaseNowArtifactsChoice(0),
+                        Style::default().fg(Color::Black).bg(Color::Green),
+                    ),
+                    DialogButton::new(
+                        "Rebuild all",
+                        dialog.artifacts_choice_selected == 1,
+                        HitAction::SelectReleaseNowArtifactsChoice(1),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Rgb(180, 205, 255)),
+                    ),
+                    DialogButton::new(
+                        "Choose per platform",
+                        dialog.artifacts_choice_selected == 2,
+                        HitAction::SelectReleaseNowArtifactsChoice(2),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Rgb(140, 220, 180)),
+                    ),
+                    DialogButton::new(
+                        "Cancel",
+                        dialog.artifacts_choice_selected == 3,
+                        HitAction::SelectReleaseNowArtifactsChoice(3),
                         Style::default().fg(Color::White).bg(Color::Red),
                     ),
                 ],
