@@ -1770,6 +1770,16 @@ fn build_guided_error(summary: &str, guidance: &str, detail: Option<&str>) -> St
     }
 }
 
+fn repo_selector_from_cli_repo_args(repo_args: &[String]) -> Result<String> {
+    repo_args
+        .windows(2)
+        .find(|window| window[0] == "-R")
+        .map(|window| window[1].clone())
+        .ok_or_else(|| {
+            anyhow!("ReleaseNOW could not derive repository selector from forge CLI arguments")
+        })
+}
+
 fn extract_relevant_error_detail(message: &str) -> Option<String> {
     let cleaned = strip_terminal_control_sequences(message);
     let detail_source = cleaned
@@ -1777,27 +1787,48 @@ fn extract_relevant_error_detail(message: &str) -> Option<String> {
         .map(|(_, rest)| rest)
         .unwrap_or(cleaned.as_str());
 
-    let preferred = detail_source
+    let segments = detail_source
         .split(" | ")
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
-        .find(|segment| {
-            let lower = segment.to_ascii_lowercase();
-            lower.contains("fatal:")
-                || lower.contains("error:")
-                || lower.contains("denied")
-                || lower.contains("rejected")
-                || lower.contains("not found")
-                || lower.contains("failed")
-        })
-        .or_else(|| {
-            detail_source
-                .split(" | ")
-                .map(str::trim)
-                .find(|segment| !segment.is_empty())
-        })?;
+        .collect::<Vec<_>>();
 
-    Some(truncate_error_detail(preferred, 220))
+    if let Some(segment) = segments
+        .iter()
+        .rev()
+        .find(|segment| is_error_detail_segment(segment))
+    {
+        return Some(truncate_error_detail(segment, 220));
+    }
+
+    segments
+        .iter()
+        .rev()
+        .find(|segment| !is_progress_detail_segment(segment))
+        .map(|segment| truncate_error_detail(segment, 220))
+}
+
+fn is_error_detail_segment(segment: &str) -> bool {
+    let lower = segment.to_ascii_lowercase();
+    lower.contains("error")
+        || lower.contains("failed")
+        || lower.contains("fatal:")
+        || lower.contains("denied")
+        || lower.contains("rejected")
+        || lower.contains("not found")
+        || lower.contains("already been taken")
+        || lower.contains("validation failed")
+        || lower.contains("http 4")
+        || lower.contains("http 5")
+}
+
+fn is_progress_detail_segment(segment: &str) -> bool {
+    let lower = segment.to_ascii_lowercase();
+    lower.contains("validating tag")
+        || lower.contains("creating or updating release")
+        || lower.contains("uploading release assets")
+        || lower.contains("uploading to release")
+        || lower.contains("release updated")
 }
 
 fn truncate_error_detail(detail: &str, max_len: usize) -> String {
@@ -2382,20 +2413,19 @@ async fn create_or_update_forge_release(
                     }
                 }
                 crate::forge::ForgeKind::GitLab => {
-                    // glab doesn't mirror gh upload/edit subcommands; use `release create`
-                    // to update an existing release while preserving metadata.
+                    let repo_selector = repo_selector_from_cli_repo_args(&repo_args)?;
+                    let asset_labels = artifact_files
+                        .iter()
+                        .map(|path| release_asset_label_from_path(path))
+                        .collect::<Vec<_>>();
+
                     let mut create_args = vec![
                         "release".to_string(),
                         "create".to_string(),
                         tag_name.to_string(),
+                        "--name".to_string(),
+                        release_title.to_string(),
                     ];
-                    create_args.extend(
-                        artifact_files
-                            .iter()
-                            .map(|path| gitlab_release_asset_argument(path)),
-                    );
-                    create_args.push("--name".to_string());
-                    create_args.push(release_title.to_string());
                     if let Some(notes_file) = &notes_file {
                         create_args.push("--notes-file".to_string());
                         create_args.push(notes_file.display().to_string());
@@ -2413,6 +2443,51 @@ async fn create_or_update_forge_release(
                                 &format!("{cli_name} release create"),
                                 cli_name,
                                 &create_cancel,
+                                &progress_tx,
+                            )
+                        },
+                        emit_progress,
+                    )
+                    .await?;
+
+                    let tag_name_owned = tag_name.to_string();
+                    let removed_assets = run_blocking_job(move || {
+                        crate::glab::release::remove_conflicting_release_assets(
+                            &repo_selector,
+                            &tag_name_owned,
+                            &asset_labels,
+                        )
+                    })
+                    .await?;
+                    for asset_name in removed_assets {
+                        emit_progress(vec![format!(
+                            "Removed existing GitLab release asset '{asset_name}' before re-upload."
+                        )]);
+                    }
+
+                    let mut upload_args = vec![
+                        "release".to_string(),
+                        "upload".to_string(),
+                        tag_name.to_string(),
+                    ];
+                    upload_args.extend(
+                        artifact_files
+                            .iter()
+                            .map(|path| gitlab_release_asset_argument(path)),
+                    );
+                    upload_args.extend(repo_args.clone());
+                    let repo_root_owned = repo_root.to_string();
+                    let upload_cancel = cancel.clone();
+                    run_blocking_streaming_operation(
+                        move |progress_tx| {
+                            run_command_with_streaming(
+                                &repo_root_owned,
+                                cli_name,
+                                &upload_args,
+                                RELEASE_NOW_TIMEOUT,
+                                &format!("{cli_name} release upload"),
+                                cli_name,
+                                &upload_cancel,
                                 &progress_tx,
                             )
                         },
@@ -2886,6 +2961,15 @@ mod tests {
         assert!(formatted.contains("Windows build script failed"));
         assert!(formatted.contains("Run the configured Windows script manually in PowerShell"));
         assert!(formatted.contains("cargo build failed"));
+    }
+
+    #[test]
+    fn extract_relevant_error_detail_prefers_glab_asset_conflict() {
+        let message = "glab release create failed with exit code 1: [glab][stdout] • Validating tag v0.3.2 | [glab][stdout] ✓ Release updated | [glab][stdout] ERROR | [glab][stdout] Name has already been taken";
+
+        let detail = extract_relevant_error_detail(message).expect("detail");
+
+        assert!(detail.contains("already been taken") || detail.contains("ERROR"));
     }
 
     #[test]
