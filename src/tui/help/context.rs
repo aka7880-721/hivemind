@@ -1,0 +1,86 @@
+// Copyright © 2026 ComfyHome™
+// All rights reserved.
+//
+// Licensed under the ComfyGit SA-PS License
+// For details, see the LICENSE file in the repository root.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HelpContext {
+    DashboardProjects,
+    OverviewTiles,
+    OverviewRecentEmbedded,
+    OverviewProjectDetail,
+    ProjectSettingsGeneral,
+    ProjectSettingsChangelogs,
+    ProjectSettingsDistro,
+    ProjectSettingsRlsQd,
+    ScreenWizard,
+    ScreenUiSettings,
+    ModalSnif,
+    ModalBrowser,
+    ModalReleaseNowNotes,
+    ModalTopPicksEditor,
+    ModalReleaseNowWarning,
+    ModalReleaseNowConfigure,
+    ModalReleaseNowRunning,
+    ModalReleaseNowCompleted,
+    ModalDeleteConfirm,
+    ModalCommitRename,
+    ModalProjectEdit,
+    ModalTagAnnotation,
+    ModalMainBranchWarning,
+    ModalStdChangelogSubBranch,
+    ModalTag,
+    ModalChangelogPreviewWorkflow,
+    ModalChangelogPreviewCustomRange,
+    ModalChangelogPreviewReadonly,
+    ModalRecentChanges,
+    ModalOverviewBumpWarning,
+    ModalOverviewBumpKind,
+    ModalOverviewBranchBump,
+    ModalOverviewBumpWorkflow,
+    ModalBump,
+    ModalProgress,
+}
+
+impl HelpContext {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::DashboardProjects => "Projects Pane",
+            Self::OverviewTiles => "Overview — Tiles",
+            Self::OverviewRecentEmbedded => "Overview — Recent Changes",
+            Self::OverviewProjectDetail => "Overview — Project Detail",
+            Self::ProjectSettingsGeneral => "Project Settings — General",
+            Self::ProjectSettingsChangelogs => "Project Settings — Changelogs",
+            Self::ProjectSettingsDistro => "Project Settings — Distro",
+            Self::ProjectSettingsRlsQd => "Project Settings — ReleaseNOW & QD",
+            Self::ScreenWizard => "New Project Wizard",
+            Self::ScreenUiSettings => "UI Settings",
+            Self::ModalSnif => "SNIF — Search & Replace",
+            Self::ModalBrowser => "File Browser",
+            Self::ModalReleaseNowNotes => "ReleaseNOW — Notes Editor",
+            Self::ModalTopPicksEditor => "Top Picks Editor",
+            Self::ModalReleaseNowWarning => "ReleaseNOW — Warning",
+            Self::ModalReleaseNowConfigure => "ReleaseNOW",
+            Self::ModalReleaseNowRunning => "ReleaseNOW — Running",
+            Self::ModalReleaseNowCompleted => "ReleaseNOW — Completed",
+            Self::ModalDeleteConfirm => "Delete Confirmation",
+            Self::ModalCommitRename => "Rename Commit",
+            Self::ModalProjectEdit => "Edit Project",
+            Self::ModalTagAnnotation => "Tag Annotation",
+            Self::ModalMainBranchWarning => "Main Branch Warning",
+            Self::ModalStdChangelogSubBranch => "Changelog Sub-Branch Warning",
+            Self::ModalTag => "Create Tag",
+            Self::ModalChangelogPreviewWorkflow => "Changelog Preview — Release",
+            Self::ModalChangelogPreviewCustomRange => "Changelog Preview — Custom Range",
+            Self::ModalChangelogPreviewReadonly => "Changelog Preview",
+            Self::ModalRecentChanges => "Recent Changes",
+            Self::ModalOverviewBumpWarning => "Bump Warning",
+            Self::ModalOverviewBumpKind => "Bump Kind",
+            Self::ModalOverviewBranchBump => "Branch Bump",
+            Self::ModalOverviewBumpWorkflow => "Bump Workflow",
+            Self::ModalBump => "Version Bump",
+            Self::ModalProgress => "Background Task",
+        }
+    }
+}
