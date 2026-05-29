@@ -141,6 +141,26 @@ impl App {
                     dialog.proceed_past_warning();
                 }
             }
+            HitAction::SelectReleaseNowArtifactsChoice(choice) => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.artifacts_choice_selected = choice;
+                    if choice == 3 {
+                        self.close_release_now_dialog();
+                    } else {
+                        dialog.confirm_existing_artifacts_choice();
+                    }
+                }
+            }
+            HitAction::ContinueReleaseNowArtifactsCustomize => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.confirm_artifacts_customize();
+                }
+            }
+            HitAction::BackReleaseNowArtifactsCustomize => {
+                if let Some(dialog) = &mut self.release_now_dialog {
+                    dialog.back_from_artifacts_customize();
+                }
+            }
             HitAction::ToggleReleaseNowAutoFollow => self.toggle_release_now_auto_follow(),
             HitAction::CancelReleaseNowRun => self.request_cancel_release_now(),
             HitAction::ScrollReleaseNow(delta) => self.scroll_release_now(delta),
@@ -587,6 +607,11 @@ impl App {
                 .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
             if dialog.is_warning_mode() {
                 bail!("confirm the recent bump warning before running ReleaseNOW")
+            }
+            if dialog.is_existing_artifacts_mode() {
+                bail!(
+                    "choose whether to reuse or rebuild existing artifacts before running ReleaseNOW"
+                )
             }
             if dialog.is_running() {
                 bail!("ReleaseNOW is already running")
