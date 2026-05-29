@@ -197,10 +197,10 @@ impl ForgeKind {
         }
     }
 
-    pub fn release_exists(self, repo_root: &str, tag_name: &str) -> Result<bool> {
+    pub fn delete_release(self, repo_root: &str, tag_name: &str) -> Result<()> {
         match self {
-            ForgeKind::GitHub => crate::ghub::release::release_exists(repo_root, tag_name),
-            ForgeKind::GitLab => crate::glab::release::release_exists(repo_root, tag_name),
+            ForgeKind::GitHub => crate::ghub::release::delete_release(repo_root, tag_name),
+            ForgeKind::GitLab => crate::glab::release::delete_release(repo_root, tag_name),
         }
     }
 }

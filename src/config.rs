@@ -14,7 +14,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use crate::versioning::VersionScheme;
+use crate::workflow::versioning::VersionScheme;
 
 pub const SCHEMA_VERSION: u32 = 4;
 pub const DEFAULT_CHANGELOG_PATH: &str = "CHANGELOG.md";
@@ -108,7 +108,7 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub repo: Option<RepoConfig>,
     #[serde(default)]
-    pub variator_storage: crate::variator::VariatorStorage,
+    pub variator_storage: crate::workflow::variator::VariatorStorage,
     #[serde(default)]
     pub manual_top_picks: Vec<crate::changelog::top_picks::TopPick>,
     #[serde(default)]
@@ -329,6 +329,42 @@ impl ProjectConfig {
                     .branches
                     .first()
                     .map(|branch| branch.changelog_mini_commit_hashes)
+                    .unwrap_or(false);
+            }
+        }
+    }
+
+    pub fn changelog_mirror_summary_to_root_changelog_for_scope(&self, scope_index: usize) -> bool {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.mirror_summary_to_root_changelog,
+            ProjectType::Branched => self
+                .branches
+                .get(scope_index)
+                .map(|branch| branch.changelog_mirror_summary_to_root_changelog)
+                .or_else(|| {
+                    self.branches
+                        .first()
+                        .map(|branch| branch.changelog_mirror_summary_to_root_changelog)
+                })
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn set_changelog_mirror_summary_to_root_changelog_for_scope(
+        &mut self,
+        scope_index: usize,
+        mirror: bool,
+    ) {
+        match self.project_type {
+            ProjectType::AllInOne => self.changelog.mirror_summary_to_root_changelog = mirror,
+            ProjectType::Branched => {
+                if let Some(branch) = self.branches.get_mut(scope_index) {
+                    branch.changelog_mirror_summary_to_root_changelog = mirror;
+                }
+                self.changelog.mirror_summary_to_root_changelog = self
+                    .branches
+                    .first()
+                    .map(|branch| branch.changelog_mirror_summary_to_root_changelog)
                     .unwrap_or(false);
             }
         }
@@ -563,6 +599,7 @@ pub struct ChangelogSettings {
     pub hide_pr_messages: bool,
     pub hide_bump_messages: bool,
     pub mini_commit_hashes: bool,
+    pub mirror_summary_to_root_changelog: bool,
     pub wrap_detailed_changelog_if_top_picks: bool,
 }
 
@@ -574,6 +611,7 @@ impl Default for ChangelogSettings {
             hide_pr_messages: false,
             hide_bump_messages: false,
             mini_commit_hashes: false,
+            mirror_summary_to_root_changelog: false,
             wrap_detailed_changelog_if_top_picks: false,
         }
     }
@@ -855,6 +893,8 @@ pub struct BranchConfig {
     pub changelog_hide_bump_messages: bool,
     #[serde(default)]
     pub changelog_mini_commit_hashes: bool,
+    #[serde(default)]
+    pub changelog_mirror_summary_to_root_changelog: bool,
     #[serde(default)]
     pub changelog_wrap_detailed_if_top_picks: bool,
     #[serde(default)]
@@ -1198,6 +1238,9 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
                 changelog_hide_pr_messages: project.changelog.hide_pr_messages,
                 changelog_hide_bump_messages: project.changelog.hide_bump_messages,
                 changelog_mini_commit_hashes: project.changelog.mini_commit_hashes,
+                changelog_mirror_summary_to_root_changelog: project
+                    .changelog
+                    .mirror_summary_to_root_changelog,
                 changelog_wrap_detailed_if_top_picks: project
                     .changelog
                     .wrap_detailed_changelog_if_top_picks,
@@ -1247,6 +1290,7 @@ mod tests {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
             changelog_wrap_detailed_if_top_picks: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
@@ -1402,6 +1446,7 @@ format = "json"
                 changelog_hide_pr_messages: false,
                 changelog_hide_bump_messages: false,
                 changelog_mini_commit_hashes: false,
+                changelog_mirror_summary_to_root_changelog: false,
                 changelog_wrap_detailed_if_top_picks: false,
                 release_now: ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
@@ -1429,6 +1474,7 @@ format = "json"
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::CalVerYearMonthMicro,
@@ -1451,6 +1497,7 @@ format = "json"
             hide_pr_messages: false,
             hide_bump_messages: false,
             mini_commit_hashes: false,
+            mirror_summary_to_root_changelog: false,
             wrap_detailed_changelog_if_top_picks: false,
         };
 

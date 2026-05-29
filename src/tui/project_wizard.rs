@@ -22,9 +22,9 @@ use crate::{
         ProjectConfig, ProjectType, ReleaseNowSettings, RepoConfig, TargetFormat, TargetSpec,
         TileInfoSettings, TileRotationTarget,
     },
-    dialogs::TextInput,
-    targets::{ProbeKind, TargetProbe},
-    versioning::VersionScheme,
+    workflow::dialogs::TextInput,
+    workflow::targets::{ProbeKind, TargetProbe},
+    workflow::versioning::VersionScheme,
 };
 
 #[derive(Clone)]
@@ -649,7 +649,7 @@ impl ProjectWizard {
                 bail!("target path is required");
             }
             if self.target_key.value.trim().is_empty()
-                && !crate::targets::is_plain_version_filename(self.target_path.value())
+                && !crate::workflow::targets::is_plain_version_filename(self.target_path.value())
             {
                 bail!("target key is required");
             }
@@ -716,6 +716,7 @@ impl ProjectWizard {
             hide_pr_messages: false,
             hide_bump_messages: false,
             mini_commit_hashes: false,
+            mirror_summary_to_root_changelog: false,
             wrap_detailed_changelog_if_top_picks: false,
         }
     }

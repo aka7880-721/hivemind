@@ -21,16 +21,16 @@ use crate::{
     },
     cli::{prepare_commit_rename, push_branch_force_with_lease, rename_commit_with_subject},
     config::{ProjectConfig, ProjectType},
-    dialogs::{BumpDialog, RecentChangesTab, TagAction, TagDialog},
     git::{
         GitScopeContext, branches_containing_ref_with_cancel,
         collect_all_branch_git_scope_contexts, current_branch_with_cancel,
         latest_local_tag_with_cancel, run_git,
     },
-    project_edit::{ProjectEditDialog, ProjectEditFocus},
-    project_wizard::{ProjectWizard, WizardField},
-    targets::{ProbeKind, TargetProbe, probe_target, write_target_version},
     tui::OverviewTab,
+    tui::{ProjectEditDialog, ProjectEditFocus},
+    tui::{ProjectWizard, WizardField},
+    workflow::dialogs::{BumpDialog, RecentChangesTab, TagAction, TagDialog},
+    workflow::targets::{ProbeKind, TargetProbe, probe_target, write_target_version},
 };
 
 use super::super::{overview, project_settings, rls_now};

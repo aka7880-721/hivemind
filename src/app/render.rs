@@ -1,8 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
-//
+// Licensed under the ComfyGit SA-PS License
 // For details, see the LICENSE file in the repository root.
 
 use super::*;
@@ -95,6 +94,9 @@ impl App {
         }
         if self.progress_dialog.is_some() {
             self.render_progress_dialog(frame, frame.area());
+        }
+        if let Some(help) = &mut self.help_modal {
+            help.render(frame, frame.area());
         }
 
         if !self.config.ui.hide_footer {
@@ -1164,9 +1166,9 @@ impl App {
     }
 
     fn render_changelog_preview_dialog(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(dialog) = &self.changelog_preview_dialog else {
+        if self.changelog_preview_dialog.is_none() {
             return;
-        };
+        }
 
         let popup = centered_rect(area, 88, 78);
         frame.render_widget(Clear, popup);
@@ -1177,6 +1179,10 @@ impl App {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
+        let dialog = self
+            .changelog_preview_dialog
+            .as_ref()
+            .expect("checked above");
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints(if dialog.workflow.is_some() {
@@ -1245,25 +1251,40 @@ impl App {
         let body_block = Block::default().borders(Borders::ALL).title(" Preview ");
         let body_inner = body_block.inner(sections[2]);
         frame.render_widget(body_block, sections[2]);
-        let preview_markdown = dialog.combined_preview_markdown();
-        let body = tui_markdown::from_str(&preview_markdown);
+        let preview_width = body_inner.width.max(20);
+        let preview_markdown = {
+            let dialog = self
+                .changelog_preview_dialog
+                .as_mut()
+                .expect("checked above");
+            dialog.preview_render_width = preview_width;
+            dialog.combined_preview_markdown()
+        };
+        let scroll = self
+            .changelog_preview_dialog
+            .as_ref()
+            .expect("checked above")
+            .scroll;
+        let body = crate::tui::render_markdown(&preview_markdown, preview_width);
         frame.render_widget(
             Paragraph::new(body)
                 .wrap(Wrap { trim: false })
-                .scroll((dialog.scroll, 0)),
+                .scroll((scroll, 0)),
             body_inner,
         );
 
+        let workflow_active = self
+            .changelog_preview_dialog
+            .as_ref()
+            .expect("checked above")
+            .workflow
+            .is_some();
         self.render_button_row(
             frame,
             sections[3],
             &[
                 DialogButton::new(
-                    if dialog.workflow.is_some() {
-                        "Continue"
-                    } else {
-                        "Close"
-                    },
+                    if workflow_active { "Continue" } else { "Close" },
                     false,
                     HitAction::ConfirmChangelogPreview,
                     Style::default().fg(Color::Black).bg(Color::Green),
@@ -1283,11 +1304,7 @@ impl App {
                     Style::default().fg(Color::Black).bg(Color::Yellow),
                 ),
                 DialogButton::new(
-                    if dialog.workflow.is_some() {
-                        "Cancel"
-                    } else {
-                        "Back"
-                    },
+                    if workflow_active { "Cancel" } else { "Back" },
                     false,
                     HitAction::CancelChangelogPreview,
                     Style::default().fg(Color::White).bg(Color::Red),
@@ -2907,7 +2924,9 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let help = if self.snif_dialog.is_some() {
+        let help = if self.help_modal.is_some() {
+            Line::from("? or Esc close help  |  ↑/↓ PgUp/PgDn or wheel scroll")
+        } else if self.snif_dialog.is_some() {
             Line::from(
                 "SNIF: Tab field | F2 run | m mode | e case-sensitive | a case-insensitive replace | Esc close",
             )
@@ -2961,6 +2980,8 @@ impl App {
                         "Tab move | Left/Right change enums | PgUp/PgDn or wheel scroll | Ctrl+O browse | F5 read target | F2 save | ",
                     )];
                     spans.extend(shortcut_key_label("S", "ettings"));
+                    spans.push(Span::raw(" | "));
+                    spans.extend(shortcut_key_label("?", " Help"));
                     spans.push(Span::raw(" | Esc cancel"));
                     Line::from(spans)
                 }
@@ -3091,6 +3112,8 @@ impl App {
             spans.push(Span::raw(" | "));
         }
         spans.extend(shortcut_key_label("H", "ide Footer"));
+        spans.push(Span::raw(" | "));
+        spans.extend(shortcut_key_label("?", " Help"));
         spans.push(Span::raw(" | "));
         spans.extend(shortcut_key_label("S", "ettings"));
         spans.push(Span::raw(" | "));

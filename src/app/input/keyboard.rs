@@ -12,9 +12,9 @@ use ratatui_comfy_toaster::ToastShortcut;
 
 use crate::{
     config::ProjectType,
-    dialogs::RecentChangesTab,
-    project_edit::ProjectEditFocus,
+    tui::ProjectEditFocus,
     tui::{OverviewTab, overview_tabs},
+    workflow::dialogs::RecentChangesTab,
 };
 
 use super::super::{project_settings, rls_now};
@@ -28,6 +28,12 @@ impl App {
 
         if self.try_handle_toast_shortcut(key) {
             return Ok(());
+        }
+
+        if self.help_modal.is_some() {
+            if self.handle_help_key(key) {
+                return Ok(());
+            }
         }
 
         if self.progress_dialog.is_some() {
@@ -118,6 +124,10 @@ impl App {
         }
 
         if self.handle_tab_shortcut(key) {
+            return Ok(());
+        }
+
+        if self.try_handle_help_shortcut(key)? {
             return Ok(());
         }
 
@@ -1485,6 +1495,29 @@ impl App {
                 self.dashboard_focus = DashboardPane::Projects;
             }
             _ => self.screen = target,
+        }
+        true
+    }
+
+    pub(crate) fn try_handle_help_shortcut(&mut self, key: KeyEvent) -> Result<bool> {
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('?') {
+            if self.help_blocked_by_text_input() {
+                return Ok(false);
+            }
+            let context = self.resolve_help_context();
+            self.help_modal = Some(crate::tui::HelpModal::new(context));
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub(crate) fn handle_help_key(&mut self, key: KeyEvent) -> bool {
+        let Some(modal) = &mut self.help_modal else {
+            return false;
+        };
+        if modal.handle_key(key) {
+            self.help_modal = None;
+            return true;
         }
         true
     }

@@ -75,7 +75,12 @@ pub fn latest_public_release_tag(repo_root: &str) -> Option<String> {
     (!tag.is_empty()).then_some(tag)
 }
 
-pub fn release_exists(repo_root: &str, tag_name: &str) -> Result<bool> {
-    let output = cli::run_in_repo(repo_root, &["release", "view", tag_name])?;
-    Ok(output.status.success())
+pub fn delete_release(repo_root: &str, tag_name: &str) -> Result<()> {
+    cli::ensure_available()?;
+    let output = cli::run_in_repo(repo_root, &["release", "delete", tag_name, "--yes"])?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("{CLI_NAME} release delete failed: {}", stderr.trim());
+    }
+    Ok(())
 }

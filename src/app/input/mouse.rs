@@ -9,7 +9,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui_comfy_toaster::ToastMouseButton;
 
-use crate::dialogs::TextInput;
+use crate::workflow::dialogs::TextInput;
 
 impl App {
     pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -17,6 +17,23 @@ impl App {
             return;
         }
         if self.handle_toast_mouse(mouse) {
+            return;
+        }
+
+        if self.help_modal.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    if let Some(help) = &mut self.help_modal {
+                        help.scroll_wheel(-3);
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(help) = &mut self.help_modal {
+                        help.scroll_wheel(3);
+                    }
+                }
+                _ => {}
+            }
             return;
         }
 

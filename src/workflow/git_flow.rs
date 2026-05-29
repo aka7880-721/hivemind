@@ -21,7 +21,7 @@ use crate::git::{
     run_git_checked_with_cancel, split_output_lines, switch_or_create_branch,
     switch_to_main_branch,
 };
-use crate::targets::{BumpScope, BumpTarget};
+use crate::workflow::targets::{BumpScope, BumpTarget};
 
 use super::bump::{OverviewBumpWorkflow, RepoBumpOperation};
 

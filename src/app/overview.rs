@@ -13,14 +13,16 @@ use super::git_flow::{
 use super::*;
 use crate::changelog::{archive_changelog_markdown, sum_changelog_gen};
 use crate::{
-    dialogs::{load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel},
     git::{
         BranchNameSuggestionRequest, GitCancellation, current_branch_with_cancel,
         format_relative_git_timestamp, is_release_line_branch, sorted_local_tags_with_cancel,
         suggest_branch_name_options, switch_or_create_branch,
     },
-    targets::shared_bump_version,
-    versioning::BumpAction,
+    workflow::dialogs::{
+        load_change_range_for_refs_with_cancel, load_recent_change_range_with_cancel,
+    },
+    workflow::targets::shared_bump_version,
+    workflow::versioning::BumpAction,
 };
 use chrono::Local;
 use std::sync::Arc;
@@ -1878,7 +1880,7 @@ mod tests {
         BranchConfig, BranchScopeKind, ChangelogSettings, ReleaseNowSettings, TargetFormat,
         TargetSpec, TileInfoSettings, TileRotationTarget,
     };
-    use crate::targets::BumpTarget;
+    use crate::workflow::targets::BumpTarget;
 
     #[test]
     fn empty_local_only_project_uses_dashboard_placeholders() {
@@ -1965,6 +1967,7 @@ mod tests {
                 changelog_hide_pr_messages: false,
                 changelog_hide_bump_messages: false,
                 changelog_mini_commit_hashes: false,
+                changelog_mirror_summary_to_root_changelog: false,
                 changelog_wrap_detailed_if_top_picks: false,
                 release_now: ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,

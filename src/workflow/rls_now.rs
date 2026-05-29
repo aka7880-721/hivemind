@@ -3,6 +3,8 @@
 //
 // Licensed under the ComfyGit SA-PS License
 //
+// For details, see the LICENSE file in the repository root.
+
 fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
     if cancel.is_cancelled() {
         bail!("ReleaseNOW cancelled by user")
@@ -10,7 +12,10 @@ fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
     Ok(())
 }
 
-fn release_now_generated_paths(repo_root: &str) -> Vec<String> {
+fn release_now_generated_paths(
+    repo_root: &str,
+    mirror_summary_to_root_changelog: bool,
+) -> Vec<String> {
     let mut paths = Vec::new();
     if Path::new(repo_root).join(".changelogs").is_dir() {
         paths.push(".changelogs".to_string());
@@ -23,11 +28,17 @@ fn release_now_generated_paths(repo_root: &str) -> Vec<String> {
     {
         paths.push(".comfygit/syncmem/stdchlg.json".to_string());
     }
+    if mirror_summary_to_root_changelog && Path::new(repo_root).join("CHANGELOG.md").is_file() {
+        paths.push("CHANGELOG.md".to_string());
+    }
     paths
 }
 
-fn stage_release_now_generated_files(repo_root: &str) -> Result<bool> {
-    let paths = release_now_generated_paths(repo_root);
+fn stage_release_now_generated_files(
+    repo_root: &str,
+    mirror_summary_to_root_changelog: bool,
+) -> Result<bool> {
+    let paths = release_now_generated_paths(repo_root, mirror_summary_to_root_changelog);
     if paths.is_empty() {
         return Ok(false);
     }
@@ -54,17 +65,98 @@ fn has_staged_changes_for_paths(repo_root: &str, paths: &[String]) -> Result<boo
     Ok(!run_git(repo_root, &arg_refs)?.success)
 }
 
-fn commit_release_now_generated_files(repo_root: &str, tag_name: &str) -> Result<bool> {
-    let paths = release_now_generated_paths(repo_root);
+fn release_now_commit_subject(tag_name: &str) -> String {
+    format!(
+        "~: ReleaseNOW! → {} has just been released via ComfyGit!",
+        tag_name
+    )
+}
+
+pub(crate) fn release_now_delete_commit_subject(tag_name: &str) -> String {
+    format!(
+        "~: ReleaseNOW! → {} release has just been DELETED via ComfyGit!",
+        tag_name
+    )
+}
+
+fn release_now_artifacts_body(artifact_files: &[String]) -> String {
+    let mut entries = artifact_files
+        .iter()
+        .map(|path| {
+            Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(path.as_str())
+                .trim()
+                .to_string()
+        })
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    entries.sort_by_cached_key(|entry| entry.to_lowercase());
+    entries.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    format!("Artifacts: {}", entries.join(", "))
+}
+
+fn parse_release_now_artifacts_from_commit_body(body: &str) -> Vec<String> {
+    for line in body.lines() {
+        if let Some(rest) = line.trim().strip_prefix("Artifacts:") {
+            return rest
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+fn historical_release_now_artifacts_for_tag(
+    repo_root: &str,
+    tag_name: &str,
+) -> Result<Vec<String>> {
+    let output = run_git_checked(
+        repo_root,
+        &["log", "--format=%s%x1f%b%x1e", "--max-count=256"],
+    )?;
+    let release_subject = release_now_commit_subject(tag_name);
+    let delete_subject = release_now_delete_commit_subject(tag_name);
+    for entry in output.split('\x1e') {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut fields = trimmed.splitn(2, '\x1f');
+        let subject = fields.next().unwrap_or("").trim();
+        let body = fields.next().unwrap_or("").trim();
+        if subject == delete_subject {
+            return Ok(Vec::new());
+        }
+        if subject == release_subject {
+            return Ok(parse_release_now_artifacts_from_commit_body(body));
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn commit_release_now_generated_files(
+    repo_root: &str,
+    tag_name: &str,
+    artifact_files: &[String],
+    mirror_summary_to_root_changelog: bool,
+) -> Result<bool> {
+    let paths = release_now_generated_paths(repo_root, mirror_summary_to_root_changelog);
     if paths.is_empty() || !has_staged_changes_for_paths(repo_root, &paths)? {
         return Ok(false);
     }
 
-    let commit_message = format!(
-        "~: ReleaseNOW! → {} has just been released via ComfyGit!",
-        tag_name
-    );
-    let mut args = vec!["commit".to_string(), "-m".to_string(), commit_message];
+    let mut args = vec![
+        "commit".to_string(),
+        "-m".to_string(),
+        release_now_commit_subject(tag_name),
+        "-m".to_string(),
+        release_now_artifacts_body(artifact_files),
+    ];
     args.push("--".to_string());
     args.extend(paths);
     let arg_refs = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
@@ -102,6 +194,8 @@ fn current_head_commit(repo_root: &str) -> Result<String> {
 fn create_release_now_generated_files_commit(
     repo_root: &str,
     tag_name: &str,
+    artifact_files: &[String],
+    mirror_summary_to_root_changelog: bool,
 ) -> Result<Option<ReleaseNowGeneratedFilesCommit>> {
     let previous_head = current_head_commit(repo_root)?;
     let mut created_any = false;
@@ -110,8 +204,13 @@ fn create_release_now_generated_files_commit(
         created_any = true;
     }
 
-    if stage_release_now_generated_files(repo_root)?
-        && commit_release_now_generated_files(repo_root, tag_name)?
+    if stage_release_now_generated_files(repo_root, mirror_summary_to_root_changelog)?
+        && commit_release_now_generated_files(
+            repo_root,
+            tag_name,
+            artifact_files,
+            mirror_summary_to_root_changelog,
+        )?
     {
         created_any = true;
     }
@@ -128,15 +227,17 @@ fn stage_auto_injected_readme(
     inject_only_top_picks: bool,
     inject_depth: crate::config::ReadmeInjectDepth,
 ) -> Result<()> {
-    super::rls_now_inj::inject_whats_new(&super::rls_now_inj::ReadmeInjectionParams {
-        repo_root,
-        tag_name,
-        changelog_markdown,
-        inject_at_row,
-        remote_url,
-        inject_only_top_picks,
-        inject_depth,
-    })?;
+    crate::workflow::rls_now_inj::inject_whats_new(
+        &crate::workflow::rls_now_inj::ReadmeInjectionParams {
+            repo_root,
+            tag_name,
+            changelog_markdown,
+            inject_at_row,
+            remote_url,
+            inject_only_top_picks,
+            inject_depth,
+        },
+    )?;
     run_git_checked(repo_root, &["add", "README.md"])?;
     Ok(())
 }
@@ -303,9 +404,27 @@ fn rollback_release_now_generated_files_commit(
     Ok(())
 }
 
+fn mirror_summary_changelog_to_root(repo_root: &str) -> Result<bool> {
+    let source = Path::new(repo_root).join(".changelogs").join("README.md");
+    if !source.is_file() {
+        return Ok(false);
+    }
+    let destination = Path::new(repo_root).join("CHANGELOG.md");
+    let summary = fs::read_to_string(&source)
+        .with_context(|| format!("failed to read {}", source.display()))?;
+    let needs_update = fs::read_to_string(&destination)
+        .map(|current| current != summary)
+        .unwrap_or(true);
+    if !needs_update {
+        return Ok(false);
+    }
+    fs::write(&destination, summary)
+        .with_context(|| format!("failed to write {}", destination.display()))?;
+    Ok(true)
+}
+
 // For details, see the LICENSE file in the repository root.
 
-use super::*;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -316,73 +435,185 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+};
 use tokio::{
     sync::mpsc::{UnboundedSender, unbounded_channel},
     task::spawn_blocking,
+    time::sleep,
 };
 
 use crate::{
+    app::{
+        StdChangelogExecutionPolicy, append_background_tag_summary_notes,
+        build_release_notes_markdown, execute_standard_changelog_for_tag,
+    },
     changelog::clear_top_picks_edits,
-    config::{ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
-    git::{GitScopeContext, recent_merge_check},
+    config::{ProjectConfig, ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
+    git::{
+        GitCancellation, GitScopeContext, collect_all_branch_git_scope_contexts,
+        current_branch_with_cancel, ensure_local_tag, recent_merge_check, run_git, run_git_checked,
+        split_output_lines,
+    },
+    workflow::runtime::{
+        GIT_PUSH_TIMEOUT, NETWORK_RETRY_ATTEMPTS, run_blocking_job, run_command_with_retry_async,
+    },
 };
 
-#[path = "rls-now-qd.rs"]
+#[path = "rls_now_qd.rs"]
 mod rls_now_qd;
 
 const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const DEFAULT_RELEASE_NOTES: &str =
     "# Release Notes\n\nAdd release highlights here before publishing.";
 
+fn resolve_release_push_remote(repo_root: &str, configured_remote: Option<&str>) -> Result<String> {
+    if let Some(configured_remote) = configured_remote
+        && !configured_remote.trim().is_empty()
+    {
+        return crate::git::resolve_push_remote_name(repo_root, configured_remote);
+    }
+    crate::git::default_push_remote_name(repo_root)
+}
+
+fn resolve_forge_for_release_request(
+    request: &ReleaseNowExecutionRequest,
+) -> Result<crate::forge::ForgeKind> {
+    if let Some(remote_url) = request
+        .scope
+        .remote_spec
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if remote_url.contains("gitlab.com") {
+            return Ok(crate::forge::ForgeKind::GitLab);
+        }
+        if remote_url.contains("github.com") {
+            return Ok(crate::forge::ForgeKind::GitHub);
+        }
+    }
+
+    crate::forge::detect_forge_for_repo(&request.repo_root).ok_or_else(|| {
+        anyhow!("ReleaseNOW could not detect GitHub or GitLab from the repository remote")
+    })
+}
+
+fn repo_selector_from_remote_url(
+    forge: crate::forge::ForgeKind,
+    remote_url: &str,
+) -> Option<String> {
+    let trimmed = remote_url.trim();
+    let path = match forge {
+        crate::forge::ForgeKind::GitHub => trimmed
+            .strip_prefix("git@github.com:")
+            .or_else(|| trimmed.strip_prefix("https://github.com/"))
+            .or_else(|| trimmed.strip_prefix("ssh://git@github.com/"))?,
+        crate::forge::ForgeKind::GitLab => trimmed
+            .strip_prefix("git@gitlab.com:")
+            .or_else(|| trimmed.strip_prefix("https://gitlab.com/"))
+            .or_else(|| trimmed.strip_prefix("ssh://git@gitlab.com/"))?,
+    };
+    let path = path.trim_end_matches(".git").trim();
+    if path.is_empty() {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+fn release_cli_repo_args(
+    forge: crate::forge::ForgeKind,
+    repo_root: &str,
+    configured_remote: Option<&str>,
+) -> Result<Vec<String>> {
+    let remote_name = resolve_release_push_remote(repo_root, configured_remote)?;
+    let remote_url = crate::git::run_git_checked(repo_root, &["remote", "get-url", &remote_name])?;
+    let repo_selector =
+        repo_selector_from_remote_url(forge, remote_url.trim()).ok_or_else(|| {
+            anyhow!(
+                "ReleaseNOW could not derive {} repository path from remote '{}'",
+                forge.display_name(),
+                remote_url.trim()
+            )
+        })?;
+    Ok(vec!["-R".to_string(), repo_selector])
+}
+
+fn gitlab_release_asset_argument(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    let is_package = lower.ends_with(".deb")
+        || lower.ends_with(".rpm")
+        || lower.ends_with(".pkg")
+        || lower.ends_with(".msi")
+        || lower.ends_with(".appimage");
+    if is_package {
+        format!("{path}#{}#package", release_asset_label_from_path(path))
+    } else {
+        path.to_string()
+    }
+}
+
+fn release_asset_label_from_path(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ReleaseNowMode {
+pub(crate) enum ReleaseNowMode {
     BumpWarning,
     Configure,
     Completed,
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowDialog {
-    pub(super) project_name: String,
-    pub(super) scope_label: String,
-    pub(super) scope: GitScopeContext,
-    pub(super) changelog_enabled: bool,
-    pub(super) repo_root: String,
-    pub(super) tag_name: String,
-    pub(super) options: Vec<ReleaseNowRunOption>,
-    pub(super) selected_option: usize,
-    pub(super) attach_changelog: bool,
-    pub(super) release_notes_markdown: String,
-    pub(super) release_notes_placeholder: String,
-    pub(super) warning_message: Option<String>,
-    pub(super) mode: ReleaseNowMode,
-    pub(super) running: bool,
-    pub(super) auto_follow: bool,
-    pub(super) cancel_requested: bool,
-    pub(super) warning_confirm_selected: bool,
-    pub(super) scroll: u16,
-    pub(super) body_viewport_height: u16,
-    pub(super) body_viewport_width: u16,
-    pub(super) selection_anchor: Option<usize>,
-    pub(super) selection_focus: Option<usize>,
-    pub(super) summary: Option<String>,
-    pub(super) summary_is_warning: bool,
-    pub(super) summary_is_error: bool,
-    pub(super) artifact_files: Vec<String>,
-    pub(super) log_lines: Vec<String>,
-    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
-    pub(super) readme_injection_enabled: bool,
-    pub(super) readme_inject_only_top_picks: bool,
-    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
-    pub(super) readme_inject_at_row: u16,
-    pub(super) release_title_template: String,
-    pub(super) started_at: Option<Instant>,
+pub(crate) struct ReleaseNowDialog {
+    pub(crate) project_name: String,
+    pub(crate) scope_label: String,
+    pub(crate) scope: GitScopeContext,
+    pub(crate) changelog_enabled: bool,
+    pub(crate) mirror_summary_to_root_changelog: bool,
+    pub(crate) repo_root: String,
+    pub(crate) tag_name: String,
+    pub(crate) options: Vec<ReleaseNowRunOption>,
+    pub(crate) selected_option: usize,
+    pub(crate) attach_changelog: bool,
+    pub(crate) release_notes_markdown: String,
+    pub(crate) release_notes_placeholder: String,
+    pub(crate) warning_message: Option<String>,
+    pub(crate) mode: ReleaseNowMode,
+    pub(crate) running: bool,
+    pub(crate) auto_follow: bool,
+    pub(crate) cancel_requested: bool,
+    pub(crate) warning_confirm_selected: bool,
+    pub(crate) scroll: u16,
+    pub(crate) body_viewport_height: u16,
+    pub(crate) body_viewport_width: u16,
+    pub(crate) selection_anchor: Option<usize>,
+    pub(crate) selection_focus: Option<usize>,
+    pub(crate) summary: Option<String>,
+    pub(crate) summary_is_warning: bool,
+    pub(crate) summary_is_error: bool,
+    pub(crate) artifact_files: Vec<String>,
+    pub(crate) log_lines: Vec<String>,
+    pub(crate) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(crate) readme_injection_enabled: bool,
+    pub(crate) readme_inject_only_top_picks: bool,
+    pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
+    pub(crate) readme_inject_at_row: u16,
+    pub(crate) release_title_template: String,
+    pub(crate) started_at: Option<Instant>,
     /// Elapsed time frozen when the run stops (success, failure, or cancel).
-    pub(super) frozen_elapsed: Option<Duration>,
+    pub(crate) frozen_elapsed: Option<Duration>,
 }
 
 impl ReleaseNowDialog {
-    pub(super) fn from_validation(validation: ReleaseNowValidation) -> Self {
+    pub(crate) fn from_validation(validation: ReleaseNowValidation) -> Self {
         let mode = if validation.warning_message.is_some() {
             ReleaseNowMode::BumpWarning
         } else {
@@ -394,6 +625,7 @@ impl ReleaseNowDialog {
             scope_label: validation.scope_label,
             scope: validation.scope,
             changelog_enabled: validation.changelog_enabled,
+            mirror_summary_to_root_changelog: validation.mirror_summary_to_root_changelog,
             repo_root: validation.repo_root,
             tag_name: validation.tag_name,
             options: validation.options,
@@ -429,27 +661,27 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn is_warning_mode(&self) -> bool {
+    pub(crate) fn is_warning_mode(&self) -> bool {
         self.mode == ReleaseNowMode::BumpWarning
     }
 
-    pub(super) fn is_completed(&self) -> bool {
+    pub(crate) fn is_completed(&self) -> bool {
         self.mode == ReleaseNowMode::Completed
     }
 
-    pub(super) fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.running
     }
 
-    pub(super) fn auto_follow(&self) -> bool {
+    pub(crate) fn auto_follow(&self) -> bool {
         self.auto_follow
     }
 
-    pub(super) fn cancel_requested(&self) -> bool {
+    pub(crate) fn cancel_requested(&self) -> bool {
         self.cancel_requested
     }
 
-    pub(super) fn set_body_viewport(&mut self, height: u16, width: u16) {
+    pub(crate) fn set_body_viewport(&mut self, height: u16, width: u16) {
         self.body_viewport_height = height;
         self.body_viewport_width = width;
         if self.running && self.auto_follow {
@@ -457,13 +689,13 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn selected_option(&self) -> &ReleaseNowRunOption {
+    pub(crate) fn selected_option(&self) -> &ReleaseNowRunOption {
         &self.options[self
             .selected_option
             .min(self.options.len().saturating_sub(1))]
     }
 
-    pub(super) fn cycle_option(&mut self, delta: isize) {
+    pub(crate) fn cycle_option(&mut self, delta: isize) {
         if self.options.is_empty() {
             self.selected_option = 0;
             return;
@@ -473,21 +705,21 @@ impl ReleaseNowDialog {
         self.selected_option = (self.selected_option as isize + delta).rem_euclid(len) as usize;
     }
 
-    pub(super) fn toggle_attach_changelog(&mut self) {
+    pub(crate) fn toggle_attach_changelog(&mut self) {
         self.attach_changelog = !self.attach_changelog;
     }
 
-    pub(super) fn toggle_warning_selection(&mut self) {
+    pub(crate) fn toggle_warning_selection(&mut self) {
         self.warning_confirm_selected = !self.warning_confirm_selected;
     }
 
-    pub(super) fn proceed_past_warning(&mut self) {
+    pub(crate) fn proceed_past_warning(&mut self) {
         self.mode = ReleaseNowMode::Configure;
         self.warning_confirm_selected = false;
         self.scroll = 0;
     }
 
-    pub(super) fn scroll_by(&mut self, delta: i16) {
+    pub(crate) fn scroll_by(&mut self, delta: i16) {
         if self.running && self.auto_follow && delta != 0 {
             self.scroll_to_tail();
             self.auto_follow = false;
@@ -498,7 +730,7 @@ impl ReleaseNowDialog {
             .min(self.max_scroll_offset());
     }
 
-    pub(super) fn begin_running(&mut self) {
+    pub(crate) fn begin_running(&mut self) {
         self.running = true;
         self.started_at = Some(Instant::now());
         self.frozen_elapsed = None;
@@ -514,7 +746,7 @@ impl ReleaseNowDialog {
         self.scroll = 0;
     }
 
-    pub(super) fn toggle_auto_follow(&mut self) -> bool {
+    pub(crate) fn toggle_auto_follow(&mut self) -> bool {
         self.auto_follow = !self.auto_follow;
         if self.auto_follow {
             self.scroll_to_tail();
@@ -522,7 +754,7 @@ impl ReleaseNowDialog {
         self.auto_follow
     }
 
-    pub(super) fn mark_cancel_requested(&mut self) {
+    pub(crate) fn mark_cancel_requested(&mut self) {
         if self.cancel_requested {
             return;
         }
@@ -533,7 +765,7 @@ impl ReleaseNowDialog {
         ]);
     }
 
-    pub(super) fn append_log_lines(&mut self, lines: Vec<String>) {
+    pub(crate) fn append_log_lines(&mut self, lines: Vec<String>) {
         if lines.is_empty() {
             return;
         }
@@ -544,7 +776,7 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn apply_outcome(&mut self, outcome: ReleaseNowExecutionOutcome) {
+    pub(crate) fn apply_outcome(&mut self, outcome: ReleaseNowExecutionOutcome) {
         self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
         self.auto_follow = false;
@@ -559,7 +791,7 @@ impl ReleaseNowDialog {
         self.scroll = 0;
     }
 
-    pub(super) fn apply_cancelled(&mut self, message: String) {
+    pub(crate) fn apply_cancelled(&mut self, message: String) {
         self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
         self.auto_follow = false;
@@ -573,7 +805,7 @@ impl ReleaseNowDialog {
         self.scroll = 0;
     }
 
-    pub(super) fn apply_failure(&mut self, error_message: String) {
+    pub(crate) fn apply_failure(&mut self, error_message: String) {
         let formatted_error = format_user_facing_error(&error_message);
         self.frozen_elapsed = self.started_at.map(|started| started.elapsed());
         self.running = false;
@@ -594,7 +826,7 @@ impl ReleaseNowDialog {
         self.scroll = 0;
     }
 
-    pub(super) fn elapsed_label(&self) -> String {
+    pub(crate) fn elapsed_label(&self) -> String {
         let elapsed = if let Some(frozen) = self.frozen_elapsed {
             frozen
         } else if self.running {
@@ -614,15 +846,15 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn scroll_to_tail(&mut self) {
+    pub(crate) fn scroll_to_tail(&mut self) {
         self.scroll = self.tail_scroll_offset();
     }
 
-    pub(super) fn scroll_to_start(&mut self) {
+    pub(crate) fn scroll_to_start(&mut self) {
         self.scroll = 0;
     }
 
-    pub(super) fn scroll_offset(&self) -> u16 {
+    pub(crate) fn scroll_offset(&self) -> u16 {
         self.scroll.min(self.max_scroll_offset())
     }
 
@@ -637,7 +869,7 @@ impl ReleaseNowDialog {
         self.max_scroll_offset()
     }
 
-    pub(super) fn begin_body_selection(&mut self, row_offset: u16) -> bool {
+    pub(crate) fn begin_body_selection(&mut self, row_offset: u16) -> bool {
         let Some(index) = self.body_line_index_for_row(row_offset) else {
             return false;
         };
@@ -650,7 +882,7 @@ impl ReleaseNowDialog {
         true
     }
 
-    pub(super) fn update_body_selection(&mut self, row_offset: u16) -> bool {
+    pub(crate) fn update_body_selection(&mut self, row_offset: u16) -> bool {
         let Some(anchor) = self.selection_anchor else {
             return false;
         };
@@ -663,11 +895,11 @@ impl ReleaseNowDialog {
         true
     }
 
-    pub(super) fn has_body_selection(&self) -> bool {
+    pub(crate) fn has_body_selection(&self) -> bool {
         self.selection_anchor.is_some() && self.selection_focus.is_some()
     }
 
-    pub(super) fn selected_body_text(&self) -> Option<String> {
+    pub(crate) fn selected_body_text(&self) -> Option<String> {
         let (start, end) = self.selection_range()?;
         let lines = self.body_plain_lines();
         Some(lines[start..=end].join("\n"))
@@ -710,7 +942,7 @@ impl ReleaseNowDialog {
         Some(count.saturating_sub(1))
     }
 
-    pub(super) fn body_title(&self) -> &'static str {
+    pub(crate) fn body_title(&self) -> &'static str {
         match self.mode {
             ReleaseNowMode::BumpWarning => " Merge Check ",
             ReleaseNowMode::Configure => {
@@ -726,7 +958,7 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(super) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
+    pub(crate) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
         let lines = match self.mode {
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
@@ -906,63 +1138,65 @@ impl ReleaseNowDialog {
 
 #[derive(Clone)]
 pub(crate) struct ReleaseNowValidation {
-    pub(super) project_name: String,
-    pub(super) scope_label: String,
-    pub(super) scope: GitScopeContext,
-    pub(super) changelog_enabled: bool,
-    pub(super) repo_root: String,
-    pub(super) tag_name: String,
-    pub(super) options: Vec<ReleaseNowRunOption>,
-    pub(super) warning_message: Option<String>,
-    pub(super) release_notes_markdown: String,
-    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
-    pub(super) readme_injection_enabled: bool,
-    pub(super) readme_inject_only_top_picks: bool,
-    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
-    pub(super) readme_inject_at_row: u16,
-    pub(super) release_title_template: String,
+    pub(crate) project_name: String,
+    pub(crate) scope_label: String,
+    pub(crate) scope: GitScopeContext,
+    pub(crate) changelog_enabled: bool,
+    pub(crate) mirror_summary_to_root_changelog: bool,
+    pub(crate) repo_root: String,
+    pub(crate) tag_name: String,
+    pub(crate) options: Vec<ReleaseNowRunOption>,
+    pub(crate) warning_message: Option<String>,
+    pub(crate) release_notes_markdown: String,
+    pub(crate) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(crate) readme_injection_enabled: bool,
+    pub(crate) readme_inject_only_top_picks: bool,
+    pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
+    pub(crate) readme_inject_at_row: u16,
+    pub(crate) release_title_template: String,
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowRunOption {
-    pub(super) label: String,
-    pub(super) scripts: Vec<ReleaseNowScript>,
-    pub(super) artifact_dirs: Vec<String>,
+pub(crate) struct ReleaseNowRunOption {
+    pub(crate) label: String,
+    pub(crate) scripts: Vec<ReleaseNowScript>,
+    pub(crate) artifact_dirs: Vec<String>,
 }
 
 #[derive(Clone)]
-pub(super) struct ReleaseNowScript {
-    pub(super) label: String,
-    pub(super) script_path: String,
+pub(crate) struct ReleaseNowScript {
+    pub(crate) label: String,
+    pub(crate) script_path: String,
 }
 
 #[derive(Clone)]
 pub(crate) struct ReleaseNowExecutionRequest {
-    pub(super) scope_label: String,
-    pub(super) scope: GitScopeContext,
-    pub(super) changelog_enabled: bool,
-    pub(super) repo_root: String,
-    pub(super) tag_name: String,
-    pub(super) release_title: String,
-    pub(super) selected_option_label: String,
-    pub(super) scripts: Vec<ReleaseNowScript>,
-    pub(super) artifact_dirs: Vec<String>,
-    pub(super) release_notes_markdown: Option<String>,
-    pub(super) quick_downloads: ReleaseNowQuickDownloadsSettings,
-    pub(super) readme_injection_enabled: bool,
-    pub(super) readme_inject_only_top_picks: bool,
-    pub(super) readme_inject_depth: crate::config::ReadmeInjectDepth,
-    pub(super) readme_inject_at_row: u16,
+    pub(crate) scope_label: String,
+    pub(crate) scope: GitScopeContext,
+    pub(crate) changelog_enabled: bool,
+    pub(crate) mirror_summary_to_root_changelog: bool,
+    pub(crate) repo_root: String,
+    pub(crate) tag_name: String,
+    pub(crate) release_title: String,
+    pub(crate) selected_option_label: String,
+    pub(crate) scripts: Vec<ReleaseNowScript>,
+    pub(crate) artifact_dirs: Vec<String>,
+    pub(crate) release_notes_markdown: Option<String>,
+    pub(crate) quick_downloads: ReleaseNowQuickDownloadsSettings,
+    pub(crate) readme_injection_enabled: bool,
+    pub(crate) readme_inject_only_top_picks: bool,
+    pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
+    pub(crate) readme_inject_at_row: u16,
 }
 
 #[derive(Clone)]
 pub(crate) struct ReleaseNowExecutionOutcome {
-    pub(super) summary: String,
-    pub(super) artifact_files: Vec<String>,
-    pub(super) log_lines: Vec<String>,
+    pub(crate) summary: String,
+    pub(crate) artifact_files: Vec<String>,
+    pub(crate) log_lines: Vec<String>,
 }
 
-pub(super) fn validate_release_now(
+pub(crate) fn validate_release_now(
     project: &ProjectConfig,
     scope_index: usize,
     cancel: Option<GitCancellation>,
@@ -995,6 +1229,8 @@ pub(super) fn validate_release_now(
             .unwrap_or_else(|| scope.display_name.clone()),
         scope: scope.clone(),
         changelog_enabled: project.changelog_enabled_for_scope(scope_index),
+        mirror_summary_to_root_changelog: project
+            .changelog_mirror_summary_to_root_changelog_for_scope(scope_index),
         repo_root: scope.repo_root.clone(),
         tag_name: scope.suggested_tag_name.clone(),
         options,
@@ -1023,11 +1259,12 @@ pub(super) fn validate_release_now(
     })
 }
 
-pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
+pub(crate) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
     ReleaseNowExecutionRequest {
         scope_label: dialog.scope_label.clone(),
         scope: dialog.scope.clone(),
         changelog_enabled: dialog.changelog_enabled,
+        mirror_summary_to_root_changelog: dialog.mirror_summary_to_root_changelog,
         repo_root: dialog.repo_root.clone(),
         tag_name: dialog.tag_name.clone(),
         release_title: {
@@ -1053,14 +1290,12 @@ pub(super) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
     }
 }
 
-pub(super) async fn execute_release_now_async(
+pub(crate) async fn execute_release_now_async(
     request: ReleaseNowExecutionRequest,
     cancel: GitCancellation,
     mut emit_progress: impl FnMut(Vec<String>) + Send,
 ) -> Result<ReleaseNowExecutionOutcome> {
-    let forge = crate::forge::detect_forge_for_repo(&request.repo_root).ok_or_else(|| {
-        anyhow!("ReleaseNOW could not detect GitHub or GitLab from the repository remote")
-    })?;
+    let forge = resolve_forge_for_release_request(&request)?;
     forge.ensure_authenticated()?;
     ensure_not_cancelled(&cancel)?;
 
@@ -1073,15 +1308,87 @@ pub(super) async fn execute_release_now_async(
         prepush_auto_injected_readme_async(&request, &cancel, &mut emit_progress).await?;
     }
 
-    for script in &request.scripts {
-        ensure_not_cancelled(&cancel)?;
-        run_script_with_live_logs(
-            &request.repo_root,
-            script,
-            cancel.clone(),
-            &mut emit_progress,
+    let (mac_ci, local_scripts) =
+        crate::workflow::rls_now_mac::partition_mac_scripts(&request.scripts, &request.tag_name);
+    let mut mac_ci_warning: Option<String> = None;
+
+    if let Some(mac_config) = mac_ci {
+        let repo_root = request.repo_root.clone();
+        let (session, trigger_lines) = crate::workflow::rls_now_mac::trigger_mac_ci_session(
+            repo_root.clone(),
+            mac_config.clone(),
         )
         .await?;
+        emit_progress(trigger_lines);
+
+        if request.selected_option_label == "All configured" {
+            crate::workflow::rls_now_mac::stream_mac_ci_until_build_started(
+                repo_root.clone(),
+                session.clone(),
+                cancel.clone(),
+                &mut emit_progress,
+            )
+            .await?;
+
+            for script in &local_scripts {
+                ensure_not_cancelled(&cancel)?;
+                run_script_with_live_logs(
+                    &request.repo_root,
+                    script,
+                    cancel.clone(),
+                    &mut emit_progress,
+                )
+                .await?;
+            }
+
+            match crate::workflow::rls_now_mac::finish_mac_ci_and_merge_artifacts(
+                repo_root,
+                session,
+                mac_config.version,
+                cancel.clone(),
+                &mut emit_progress,
+            )
+            .await?
+            {
+                crate::workflow::rls_now_mac::MacCiFinishOutcome::Success => {}
+                crate::workflow::rls_now_mac::MacCiFinishOutcome::Failed { warning } => {
+                    mac_ci_warning = Some(warning);
+                }
+            }
+        } else {
+            match crate::workflow::rls_now_mac::finish_mac_ci_and_merge_artifacts(
+                repo_root,
+                session,
+                mac_config.version,
+                cancel.clone(),
+                &mut emit_progress,
+            )
+            .await?
+            {
+                crate::workflow::rls_now_mac::MacCiFinishOutcome::Success => {}
+                crate::workflow::rls_now_mac::MacCiFinishOutcome::Failed { warning } => {
+                    bail!(warning);
+                }
+            }
+        }
+    } else {
+        for script in &request.scripts {
+            ensure_not_cancelled(&cancel)?;
+            run_script_with_live_logs(
+                &request.repo_root,
+                script,
+                cancel.clone(),
+                &mut emit_progress,
+            )
+            .await?;
+        }
+    }
+
+    if let Some(warning) = mac_ci_warning {
+        emit_progress(vec![
+            "[MacOS][warning] macOS build failed.".to_string(),
+            format!("[MacOS][warning] {warning}"),
+        ]);
     }
 
     ensure_not_cancelled(&cancel)?;
@@ -1154,15 +1461,31 @@ pub(super) async fn execute_release_now_async(
             emit_progress(vec![format!("Warning: {}", line)]);
         }
         release_notes.extend(std_outcome.summary_notes);
+
+        if request.mirror_summary_to_root_changelog {
+            let repo_root_for_mirror = request.repo_root.clone();
+            let mirrored =
+                run_blocking_job(move || mirror_summary_changelog_to_root(&repo_root_for_mirror))
+                    .await?;
+            if mirrored {
+                emit_progress(vec![
+                    "Mirrored .changelogs/README.md into repo_root/CHANGELOG.md.".to_string(),
+                ]);
+            }
+        }
     }
 
     // QD HTML is built from the same artifact list attached to this release (see rls_now_qd).
     let mut qd_warnings = Vec::new();
+    let historical_qd_artifacts =
+        historical_release_now_artifacts_for_tag(&request.repo_root, &request.tag_name)?;
+    let qd_artifacts =
+        rls_now_qd::merge_artifacts_for_quick_downloads(&artifact_files, &historical_qd_artifacts);
     let release_notes_for_github = rls_now_qd::finalize_release_notes_with_quick_downloads(
         request.release_notes_markdown.clone(),
         request.scope.remote_spec.as_deref(),
         &request.tag_name,
-        &artifact_files,
+        &qd_artifacts,
         &request.quick_downloads,
         &mut qd_warnings,
     );
@@ -1187,15 +1510,22 @@ pub(super) async fn execute_release_now_async(
         ensure_not_cancelled(&cancel)?;
         let repo_root_for_commit = request.repo_root.clone();
         let tag_name_for_commit = request.tag_name.clone();
+        let artifact_files_for_commit = artifact_files.clone();
         let generated_commit = run_blocking_job(move || {
-            create_release_now_generated_files_commit(&repo_root_for_commit, &tag_name_for_commit)
+            create_release_now_generated_files_commit(
+                &repo_root_for_commit,
+                &tag_name_for_commit,
+                &artifact_files_for_commit,
+                request.mirror_summary_to_root_changelog,
+            )
         })
         .await?;
 
         if let Some(generated_commit) = generated_commit {
-            let remote_spec = request.scope.remote_spec.clone().ok_or_else(|| {
-                anyhow!("ReleaseNOW requires a configured git remote to push generated files")
-            })?;
+            let remote_name = resolve_release_push_remote(
+                &request.repo_root,
+                request.scope.remote_spec.as_deref(),
+            )?;
             let repo_root_for_branch = request.repo_root.clone();
             let cancel_for_branch = cancel.clone();
             let branch_name = run_blocking_job(move || {
@@ -1205,12 +1535,12 @@ pub(super) async fn execute_release_now_async(
 
             emit_progress(vec![format!(
                 "Pushing generated ReleaseNOW files to {}.",
-                remote_spec
+                remote_name
             )]);
             if let Err(push_error) = run_command_with_retry_async(
                 request.repo_root.clone(),
                 "git",
-                vec!["push".to_string(), remote_spec.clone(), branch_name],
+                vec!["push".to_string(), remote_name.clone(), branch_name],
                 GIT_PUSH_TIMEOUT,
                 NETWORK_RETRY_ATTEMPTS,
                 "git push",
@@ -1261,11 +1591,11 @@ pub(super) async fn execute_release_now_async(
     })
 }
 
-pub(super) fn is_cancelled_error(message: &str) -> bool {
+pub(crate) fn is_cancelled_error(message: &str) -> bool {
     message.contains("cancelled by user")
 }
 
-pub(super) fn format_user_facing_error(message: &str) -> String {
+pub(crate) fn format_user_facing_error(message: &str) -> String {
     let normalized = message.to_ascii_lowercase();
     let detail = extract_relevant_error_detail(message);
 
@@ -1305,6 +1635,13 @@ pub(super) fn format_user_facing_error(message: &str) -> String {
         return build_guided_error(
             "ReleaseNOW could not create the GitHub release.",
             "Check that GitHub CLI is authenticated and that the repository, tag, and release permissions are valid, then retry.",
+            detail.as_deref(),
+        );
+    }
+    if normalized.contains("glab release") || normalized.contains("gitlab release") {
+        return build_guided_error(
+            "ReleaseNOW could not create the GitLab release.",
+            "Check that GitLab CLI is authenticated and that the repository, tag, and release permissions are valid, then retry.",
             detail.as_deref(),
         );
     }
@@ -1844,93 +2181,146 @@ async fn create_or_update_forge_release(
     let cli_name = forge.cli_name();
     let forge_label = forge.display_name();
     ensure_not_cancelled(&cancel)?;
+    let repo_args = release_cli_repo_args(forge, repo_root, remote_spec)?;
     let notes_file = release_notes_markdown
         .filter(|notes| !notes.trim().is_empty())
         .map(write_release_notes_file)
         .transpose()?;
 
-    let release_exists = forge.release_exists(repo_root, tag_name)?;
+    let mut release_view_args = vec![
+        "release".to_string(),
+        "view".to_string(),
+        tag_name.to_string(),
+    ];
+    release_view_args.extend(repo_args.clone());
+    let release_exists = Command::new(cli_name)
+        .current_dir(repo_root)
+        .args(release_view_args.iter().map(String::as_str))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to check for an existing {forge_label} release"))?
+        .success();
 
     let result = async {
         if release_exists {
             emit_progress(vec![format!(
                 "Updating existing {forge_label} release '{tag_name}'."
             )]);
-            let repo_root_owned = repo_root.to_string();
-            let upload_cancel = cancel.clone();
+            match forge {
+                crate::forge::ForgeKind::GitHub => {
+                    let repo_root_owned = repo_root.to_string();
+                    let upload_cancel = cancel.clone();
 
-            let mut upload_args = vec![
-                "release".to_string(),
-                "upload".to_string(),
-                tag_name.to_string(),
-            ];
-            upload_args.extend(artifact_files.iter().cloned());
-            upload_args.push("--clobber".to_string());
-            #[allow(clippy::too_many_arguments)]
-            run_blocking_streaming_operation(
-                move |progress_tx| {
-                    run_command_with_streaming(
-                        &repo_root_owned,
-                        cli_name,
-                        &upload_args,
-                        RELEASE_NOW_TIMEOUT,
-                        &format!("{cli_name} release upload"),
-                        cli_name,
-                        &upload_cancel,
-                        &progress_tx,
+                    let mut upload_args = vec![
+                        "release".to_string(),
+                        "upload".to_string(),
+                        tag_name.to_string(),
+                    ];
+                    upload_args.extend(artifact_files.iter().cloned());
+                    upload_args.push("--clobber".to_string());
+                    upload_args.extend(repo_args.clone());
+                    #[allow(clippy::too_many_arguments)]
+                    run_blocking_streaming_operation(
+                        move |progress_tx| {
+                            run_command_with_streaming(
+                                &repo_root_owned,
+                                cli_name,
+                                &upload_args,
+                                RELEASE_NOW_TIMEOUT,
+                                &format!("{cli_name} release upload"),
+                                cli_name,
+                                &upload_cancel,
+                                &progress_tx,
+                            )
+                        },
+                        emit_progress,
                     )
-                },
-                emit_progress,
-            )
-            .await?;
+                    .await?;
 
-            if let Some(notes_file) = &notes_file {
-                let edit_args = vec![
-                    "release".to_string(),
-                    "edit".to_string(),
-                    tag_name.to_string(),
-                    "--title".to_string(),
-                    release_title.to_string(),
-                    "--notes-file".to_string(),
-                    notes_file.display().to_string(),
-                ];
-                let repo_root_owned = repo_root.to_string();
-                let edit_cancel = cancel.clone();
-                run_blocking_streaming_operation(
-                    move |progress_tx| {
-                        run_command_with_streaming(
-                            &repo_root_owned,
-                            cli_name,
-                            &edit_args,
-                            RELEASE_NOW_TIMEOUT,
-                            &format!("{cli_name} release edit"),
-                            cli_name,
-                            &edit_cancel,
-                            &progress_tx,
+                    if let Some(notes_file) = &notes_file {
+                        let edit_args = vec![
+                            "release".to_string(),
+                            "edit".to_string(),
+                            tag_name.to_string(),
+                            "--title".to_string(),
+                            release_title.to_string(),
+                            "--notes-file".to_string(),
+                            notes_file.display().to_string(),
+                        ]
+                        .into_iter()
+                        .chain(repo_args.clone())
+                        .collect::<Vec<_>>();
+                        let repo_root_owned = repo_root.to_string();
+                        let edit_cancel = cancel.clone();
+                        run_blocking_streaming_operation(
+                            move |progress_tx| {
+                                run_command_with_streaming(
+                                    &repo_root_owned,
+                                    cli_name,
+                                    &edit_args,
+                                    RELEASE_NOW_TIMEOUT,
+                                    &format!("{cli_name} release edit"),
+                                    cli_name,
+                                    &edit_cancel,
+                                    &progress_tx,
+                                )
+                            },
+                            emit_progress,
                         )
-                    },
-                    emit_progress,
-                )
-                .await?;
+                        .await?;
+                    }
+                }
+                crate::forge::ForgeKind::GitLab => {
+                    // glab doesn't mirror gh upload/edit subcommands; use `release create`
+                    // to update an existing release while preserving metadata.
+                    let mut create_args = vec![
+                        "release".to_string(),
+                        "create".to_string(),
+                        tag_name.to_string(),
+                    ];
+                    create_args.extend(
+                        artifact_files
+                            .iter()
+                            .map(|path| gitlab_release_asset_argument(path)),
+                    );
+                    create_args.push("--name".to_string());
+                    create_args.push(release_title.to_string());
+                    if let Some(notes_file) = &notes_file {
+                        create_args.push("--notes-file".to_string());
+                        create_args.push(notes_file.display().to_string());
+                    }
+                    create_args.extend(repo_args.clone());
+                    let repo_root_owned = repo_root.to_string();
+                    let create_cancel = cancel.clone();
+                    run_blocking_streaming_operation(
+                        move |progress_tx| {
+                            run_command_with_streaming(
+                                &repo_root_owned,
+                                cli_name,
+                                &create_args,
+                                RELEASE_NOW_TIMEOUT,
+                                &format!("{cli_name} release create"),
+                                cli_name,
+                                &create_cancel,
+                                &progress_tx,
+                            )
+                        },
+                        emit_progress,
+                    )
+                    .await?;
+                }
             }
         } else {
-            let remote_spec = remote_spec.ok_or_else(|| {
-                anyhow!(
-                    "ReleaseNOW requires a configured git remote to publish a {forge_label} release"
-                )
-            })?;
+            let remote_name = resolve_release_push_remote(repo_root, remote_spec)?;
             emit_progress(vec![format!(
                 "Pushing tag '{}' to {}.",
-                tag_name, remote_spec
+                tag_name, remote_name
             )]);
 
             let repo_root_owned = repo_root.to_string();
             let push_cancel = cancel.clone();
-            let push_args = vec![
-                "push".to_string(),
-                remote_spec.to_string(),
-                tag_name.to_string(),
-            ];
+            let push_args = vec!["push".to_string(), remote_name, tag_name.to_string()];
             run_blocking_streaming_operation(
                 move |progress_tx| {
                     run_command_with_streaming(
@@ -1957,13 +2347,28 @@ async fn create_or_update_forge_release(
                 "create".to_string(),
                 tag_name.to_string(),
             ];
-            create_args.extend(artifact_files.iter().cloned());
-            create_args.push("--title".to_string());
+            match forge {
+                crate::forge::ForgeKind::GitHub => {
+                    create_args.extend(artifact_files.iter().cloned());
+                }
+                crate::forge::ForgeKind::GitLab => {
+                    create_args.extend(
+                        artifact_files
+                            .iter()
+                            .map(|path| gitlab_release_asset_argument(path)),
+                    );
+                }
+            }
+            create_args.push(match forge {
+                crate::forge::ForgeKind::GitHub => "--title".to_string(),
+                crate::forge::ForgeKind::GitLab => "--name".to_string(),
+            });
             create_args.push(release_title.to_string());
             if let Some(notes_file) = &notes_file {
                 create_args.push("--notes-file".to_string());
                 create_args.push(notes_file.display().to_string());
             }
+            create_args.extend(repo_args.clone());
             let repo_root = repo_root.to_string();
             let create_cancel = cancel.clone();
             run_blocking_streaming_operation(
@@ -2402,9 +2807,10 @@ mod tests {
         fs::create_dir_all(&syncmem_dir).expect("create syncmem dir");
         fs::write(syncmem_dir.join("stdchlg.json"), "{}\n").expect("write syncmem file");
 
-        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3")
-            .expect("create generated commit")
-            .expect("generated commit should exist");
+        let generated_commit =
+            create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[], false)
+                .expect("create generated commit")
+                .expect("generated commit should exist");
 
         let release_commit_subject = run_git_checked(&repo_root, &["log", "-1", "--pretty=%s"])
             .expect("read release commit subject");
@@ -2446,9 +2852,10 @@ mod tests {
         fs::write(repo_dir.join("README.md"), "seed\n\ninjected\n").expect("update readme");
         run_git_checked(&repo_root, &["add", "README.md"]).expect("stage readme injection");
 
-        let generated_commit = create_release_now_generated_files_commit(&repo_root, "v1.2.3")
-            .expect("create generated commit")
-            .expect("readme commit should exist");
+        let generated_commit =
+            create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[], false)
+                .expect("create generated commit")
+                .expect("readme commit should exist");
 
         let release_commit_subject = run_git_checked(&repo_root, &["log", "-1", "--pretty=%s"])
             .expect("read readme commit subject");
@@ -2492,7 +2899,7 @@ mod tests {
         fs::create_dir_all(&syncmem_dir).expect("create syncmem dir");
         fs::write(syncmem_dir.join("stdchlg.json"), "{}\n").expect("write syncmem file");
 
-        create_release_now_generated_files_commit(&repo_root, "v1.2.3")
+        create_release_now_generated_files_commit(&repo_root, "v1.2.3", &[], false)
             .expect("create generated commit")
             .expect("commits should exist");
 

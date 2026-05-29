@@ -21,8 +21,8 @@ use crate::{
         BranchConfig, BranchScopeKind, ChangelogSettings, DEFAULT_CHANGELOG_PATH, IntegrationMode,
         ProjectConfig, ProjectType, RepoConfig, TargetSpec, TileInfoSettings, TileRotationTarget,
     },
-    dialogs::TextInput,
-    versioning::VersionScheme,
+    workflow::dialogs::TextInput,
+    workflow::versioning::VersionScheme,
 };
 
 #[derive(Clone)]
@@ -745,7 +745,9 @@ impl ProjectEditDialog {
             }
 
             let target_key = self.target_key.value.trim();
-            if target_key.is_empty() && !crate::targets::is_plain_version_filename(target_path) {
+            if target_key.is_empty()
+                && !crate::workflow::targets::is_plain_version_filename(target_path)
+            {
                 bail!("target key cannot be empty");
             }
 
@@ -822,6 +824,7 @@ impl ProjectEditDialog {
             hide_pr_messages: false,
             hide_bump_messages: false,
             mini_commit_hashes: false,
+            mirror_summary_to_root_changelog: false,
             wrap_detailed_changelog_if_top_picks: false,
         }
     }
@@ -1153,6 +1156,7 @@ mod tests {
                     hide_pr_messages: false,
                     hide_bump_messages: false,
                     mini_commit_hashes: false,
+                    mirror_summary_to_root_changelog: false,
                     wrap_detailed_changelog_if_top_picks: false,
                 },
                 ..Default::default()
@@ -1194,6 +1198,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
@@ -1216,6 +1221,7 @@ mod tests {
                     hide_pr_messages: false,
                     hide_bump_messages: false,
                     mini_commit_hashes: false,
+                    mirror_summary_to_root_changelog: false,
                     wrap_detailed_changelog_if_top_picks: false,
                 },
                 ..Default::default()
@@ -1327,6 +1333,7 @@ mod tests {
                         changelog_hide_pr_messages: false,
                         changelog_hide_bump_messages: false,
                         changelog_mini_commit_hashes: false,
+                        changelog_mirror_summary_to_root_changelog: false,
                         changelog_wrap_detailed_if_top_picks: false,
                         release_now: crate::config::ReleaseNowSettings::default(),
                         version_scheme: VersionScheme::SemVer,
@@ -1352,6 +1359,7 @@ mod tests {
                         changelog_hide_pr_messages: false,
                         changelog_hide_bump_messages: false,
                         changelog_mini_commit_hashes: false,
+                        changelog_mirror_summary_to_root_changelog: false,
                         changelog_wrap_detailed_if_top_picks: false,
                         release_now: crate::config::ReleaseNowSettings::default(),
                         version_scheme: VersionScheme::CalVerYearMonthMicro,
@@ -1371,6 +1379,7 @@ mod tests {
                     hide_pr_messages: false,
                     hide_bump_messages: false,
                     mini_commit_hashes: false,
+                    mirror_summary_to_root_changelog: false,
                     wrap_detailed_changelog_if_top_picks: false,
                 },
                 ..Default::default()
@@ -1414,6 +1423,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,

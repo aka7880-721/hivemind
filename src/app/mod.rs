@@ -20,40 +20,36 @@ use ratatui_comfy_toaster::{ToastEngine, ToastEngineBuilder, ToastProgressBarSty
 use tokio::{
     runtime::Runtime as TokioRuntime,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError},
-    time::sleep,
 };
 use tui_tabs::TabNav;
 use tui_textarea::TextArea as TuiTextArea;
 
 use crate::{
-    branding::{PixelLogo, choose_header_content},
     changelog::write_changelog_markdown,
     config::{AppConfig, ConfigStore, FooterContent, IntegrationMode, ProjectConfig, ProjectType},
-    dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog},
-    git::{
-        GitCancellation, RepoActivitySummary, collect_all_branch_git_scope_contexts,
-        current_branch_with_cancel, ensure_local_tag, run_git, run_git_checked, split_output_lines,
+    git::{GitCancellation, RepoActivitySummary, collect_all_branch_git_scope_contexts},
+    tui::{
+        HelpModal, OverviewTab, OverviewTileData, PixelLogo, ProjectEditDialog, ProjectEditFocus,
+        ProjectWizard, TILE_WIDTH, WizardField, center_vertically, centered_rect,
+        choose_header_content, overview_tab_rects, render_overview_tabs, render_overview_tile,
+        tile_height,
     },
-    project_edit::{ProjectEditDialog, ProjectEditFocus},
-    project_wizard::{ProjectWizard, WizardField},
-    targets::{BumpScope, ProbeKind, collect_bump_scopes, write_target_version},
-    tiles::{OverviewTileData, TILE_WIDTH, render_overview_tile, tile_height},
-    tui::{OverviewTab, overview_tab_rects, render_overview_tabs},
-    ui::{center_vertically, centered_rect},
-    versioning::VersionScheme,
+    workflow::{
+        dialogs::{BumpDialog, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog},
+        targets::{BumpScope, ProbeKind, collect_bump_scopes, write_target_version},
+        versioning::VersionScheme,
+    },
 };
 
+mod help_context;
 mod overview;
 mod project_settings;
 mod ps_alias;
 mod render;
-#[path = "../rls-now.rs"]
-mod rls_now;
-#[path = "../rls-now-inj.rs"]
-mod rls_now_inj;
 
 use self::project_settings::{ProjectSettingsState, ProjectSettingsTab};
 use crate::changelog::top_picks as changelog_tp;
+pub(crate) use crate::workflow::rls_now;
 pub(crate) use crate::workflow::{OverviewBumpWorkflow, git_flow, overview_bump_workflow_options};
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -152,7 +148,8 @@ pub(crate) struct App {
     current_release_now_cancel: Option<GitCancellation>,
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
-    pub(crate) snif_dialog: Option<crate::snif_modal::SnifModal>,
+    pub(crate) snif_dialog: Option<crate::tui::SnifModal>,
+    help_modal: Option<HelpModal>,
     hit_targets: Vec<HitTarget>,
     last_text_input_click_target: Option<TextInputClickTarget>,
     last_text_input_click_at: Option<Instant>,
@@ -277,6 +274,7 @@ impl App {
             project_edit_dialog: None,
             browser_dialog: None,
             snif_dialog: None,
+            help_modal: None,
             hit_targets: Vec::new(),
             last_text_input_click_target: None,
             last_text_input_click_at: None,
@@ -321,9 +319,10 @@ mod tests {
     use super::*;
     use crate::changelog::build_document_from_git_log;
     use crate::config::{BranchConfig, BranchScopeKind, RepoConfig, TargetFormat, TargetSpec};
-    use crate::dialogs::TextInput;
-    use crate::targets::{BumpTarget, ProbeKind, TargetProbe};
-    use crate::versioning::BumpAction;
+    use crate::tui::HelpContext;
+    use crate::workflow::dialogs::TextInput;
+    use crate::workflow::targets::{BumpTarget, ProbeKind, TargetProbe};
+    use crate::workflow::versioning::BumpAction;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::project_settings::ProjectSettingsFocus;
@@ -829,6 +828,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
@@ -845,6 +845,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
@@ -898,6 +899,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
@@ -923,6 +925,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::CalVerYearMonthMicro,
@@ -977,6 +980,7 @@ mod tests {
                 changelog_hide_pr_messages: false,
                 changelog_hide_bump_messages: false,
                 changelog_mini_commit_hashes: false,
+                changelog_mirror_summary_to_root_changelog: false,
                 changelog_wrap_detailed_if_top_picks: false,
                 release_now: crate::config::ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
@@ -1028,6 +1032,7 @@ mod tests {
                 changelog_hide_pr_messages: false,
                 changelog_hide_bump_messages: false,
                 changelog_mini_commit_hashes: false,
+                changelog_mirror_summary_to_root_changelog: false,
                 changelog_wrap_detailed_if_top_picks: false,
                 release_now: crate::config::ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,
@@ -1168,5 +1173,19 @@ mod tests {
         );
 
         assert_eq!(dialog.selected_action(), BumpAction::Patch);
+    }
+
+    #[test]
+    fn question_mark_toggles_context_help() -> Result<()> {
+        let mut app = App::new_for_tests()?;
+        assert!(app.help_modal.is_none());
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE))?;
+        let modal = app.help_modal.as_ref().expect("help should open");
+        assert_eq!(modal.context, HelpContext::DashboardProjects);
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
+        assert!(app.help_modal.is_none());
+        Ok(())
     }
 }

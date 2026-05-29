@@ -1,7 +1,7 @@
 // Copyright © 2026 ComfyHome™
 // All rights reserved.
 //
-// Licensed under the ComfyGit License v1.2
+// Licensed under the ComfyGit SA-PS License
 //
 // For details, see the LICENSE file in the repository root.
 
@@ -45,8 +45,10 @@ use crate::{
         run_pr, run_reroot, split_output_lines, suggest_branch_name_options,
         switch_to_existing_branch, switch_to_main_branch,
     },
-    targets::{BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version},
-    versioning::{BumpAction, VersionScheme},
+    workflow::targets::{
+        BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version,
+    },
+    workflow::versioning::{BumpAction, VersionScheme},
     workflow::{
         OverviewBumpWorkflow,
         git_flow::{
@@ -177,7 +179,7 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
     match args {
         [] => Ok(StartupMode::LaunchTui),
         [command] if is_init_command(command) => {
-            crate::cli_init::run_init()?;
+            crate::workflow::cli_init::run_init()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_help(command) => {
@@ -305,6 +307,16 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             with_cli_git_cancellation(|cancel| {
                 run_merge_for_pull_request(&repo_root, forge, pr_number, cancel)
             })?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action] if is_release_command(command) && is_release_delete_action(action) => {
+            run_release_delete(None)?;
+            Ok(StartupMode::Handled)
+        }
+        [command, action, tag_name]
+            if is_release_command(command) && is_release_delete_action(action) =>
+        {
+            run_release_delete(Some(tag_name))?;
             Ok(StartupMode::Handled)
         }
         [command, lookup] if is_project_version_command(command) => {
@@ -713,6 +725,14 @@ fn is_merge_command(value: &str) -> bool {
     matches!(value, "merge" | "mg" | "mrg")
 }
 
+fn is_release_command(value: &str) -> bool {
+    matches!(value, "release" | "rls" | "rl")
+}
+
+fn is_release_delete_action(value: &str) -> bool {
+    matches!(value, "del" | "rm" | "delete" | "drop")
+}
+
 fn is_reroot_command(value: &str) -> bool {
     matches!(value, "reroot" | "rrt")
 }
@@ -735,7 +755,7 @@ fn is_snif_command(value: &str) -> bool {
 
 fn run_snif_command(args: &[String]) -> Result<()> {
     let root = env::current_dir().context("failed to read current directory")?;
-    snif__by_comfyhome::dispatch_with_root(args.to_vec(), root)
+    crate::snif::dispatch_with_root(args.to_vec(), root)
 }
 
 fn is_var_command(value: &str) -> bool {
@@ -813,7 +833,7 @@ fn print_usage() {
     println!(
         "                             Synonyms: remove-shell | uninstall shell | shell-uninstall"
     );
-    println!("  cg snif [args...]          Run SNIF search/replace (same as standalone snif)");
+    println!("  cg snif [args...]          Run SNIF search/replace (requires `snif` on PATH)");
     println!("  cg v <alias>               Show project version, last bump, and last release");
     println!("  cg commit del <hash>       Safely remove a published commit by reverting it");
     println!(
@@ -823,10 +843,15 @@ fn print_usage() {
     println!(
         "                             <target> may be a commit hash or a HEAD offset (0 = HEAD, 1 = HEAD~1)"
     );
+    println!("  cg rls del [tag]           Delete the last or selected release and tag(s)");
+    println!(
+        "                             Creates an empty marker commit after successful deletion"
+    );
     println!("          synonyms:");
     println!("            commit: cmt | com | ct");
     println!("            del: del | rm | rem | delete | drop | erase");
     println!("            rename: rename | rn | rnm | reword | rwrd | rwd");
+    println!("            rls: release | rls | rl");
     println!(" ");
     println!("  BRANCHING COMMANDS:");
     println!(" ");
@@ -1289,7 +1314,7 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
 
 fn resolve_bump_current_version(
     project: &ProjectConfig,
-    scopes: &[crate::targets::BumpScope],
+    scopes: &[crate::workflow::targets::BumpScope],
     scope_index: usize,
 ) -> Result<String> {
     if project.project_type == ProjectType::AllInOne || project.unified_versioning {
@@ -1537,6 +1562,83 @@ fn run_commit_delete(commit_hash: &str) -> Result<()> {
     }
     println!();
 
+    Ok(())
+}
+
+fn run_release_delete(tag_override: Option<&str>) -> Result<()> {
+    let cwd = env::current_dir().context("failed to read current directory")?;
+    let repo_root = current_git_repo_root(&cwd)?;
+    ensure_clean_worktree(&repo_root)?;
+    let forge = crate::forge::require_forge_for_repo(&repo_root)?;
+    forge.ensure_authenticated()?;
+
+    let tag_name = match tag_override.map(str::trim).filter(|tag| !tag.is_empty()) {
+        Some(tag) => tag.to_string(),
+        None => forge
+            .last_release_tag(&repo_root)?
+            .ok_or_else(|| anyhow!("no release was found for this repository"))?,
+    };
+
+    println!();
+    println!(
+        "You are about to delete release '{}' from {} and remove local+remote tags.",
+        tag_name,
+        forge.display_name()
+    );
+    if !prompt_confirm_default_no("Continue with release deletion? [y/N]: ")? {
+        bail!("cancelled by user")
+    }
+
+    forge.delete_release(&repo_root, &tag_name)?;
+
+    let local_tag_exists =
+        run_git(&repo_root, &["rev-parse", "-q", "--verify", &tag_name])?.success;
+    if local_tag_exists {
+        run_git_checked(&repo_root, &["tag", "-d", &tag_name])?;
+    }
+
+    let remote_name = crate::git::default_push_remote_name(&repo_root).ok();
+    if let Some(remote_name) = remote_name {
+        let _ = run_git(
+            &repo_root,
+            &[
+                "push",
+                &remote_name,
+                "--delete",
+                &format!("refs/tags/{}", tag_name),
+            ],
+        );
+    }
+
+    let delete_commit_message = format!(
+        "~: ReleaseNOW! → {} release has just been DELETED via ComfyGit!",
+        tag_name
+    );
+    run_git_checked(
+        &repo_root,
+        &["commit", "--allow-empty", "-m", &delete_commit_message],
+    )?;
+    let upstream_ref = current_upstream_ref(&repo_root)?;
+    if upstream_ref.is_some() {
+        run_git_checked(&repo_root, &["push"])?;
+    }
+
+    println!();
+    println!(
+        "Deleted release '{}' from {} and removed tags.",
+        tag_name,
+        forge.display_name()
+    );
+    println!("Created deletion marker commit: {}", delete_commit_message);
+    if upstream_ref.is_some() {
+        println!(
+            "Pushed the deletion marker commit to {}.",
+            upstream_ref.as_deref().unwrap_or("the upstream branch")
+        );
+    } else {
+        println!("No upstream branch is configured, so the deletion marker commit is local.");
+    }
+    println!();
     Ok(())
 }
 
@@ -3936,7 +4038,7 @@ fn run_toppicks() -> Result<()> {
 }
 
 fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Result<()> {
-    use crate::variator::VARIATOR_HELP;
+    use crate::workflow::variator::VARIATOR_HELP;
 
     if matches!(
         action,
@@ -4022,7 +4124,7 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
             let new_value =
                 value.ok_or_else(|| anyhow!("Usage: cg var rn <id_or_name> \"<new_value>\""))?;
 
-            use crate::variator::RenameOutcome;
+            use crate::workflow::variator::RenameOutcome;
             match config.projects[project_index]
                 .variator_storage
                 .rename(key, new_value)
@@ -4072,8 +4174,8 @@ fn run_var(action: Option<&str>, id: Option<&str>, value: Option<&str>) -> Resul
 }
 
 fn prompt_rename_conflict(
-    by_id: &crate::variator::Variator,
-    by_name: &crate::variator::Variator,
+    by_id: &crate::workflow::variator::Variator,
+    by_name: &crate::workflow::variator::Variator,
 ) -> Result<Option<u32>> {
     const ANSI_YELLOW: &str = "\x1b[33m";
     const ANSI_CYAN: &str = "\x1b[36m";
@@ -4110,7 +4212,7 @@ fn prompt_rename_conflict(
             )
             .context("failed to queue rename conflict header")?;
 
-            let rows: [(&crate::variator::Variator, &str); 2] =
+            let rows: [(&crate::workflow::variator::Variator, &str); 2] =
                 [(by_id, "numeric id match"), (by_name, "variator_id match")];
 
             for (i, (v, _)) in rows.iter().enumerate() {
@@ -4494,6 +4596,23 @@ mod tests {
     }
 
     #[test]
+    fn is_release_command_accepts_requested_synonyms() {
+        assert!(is_release_command("release"));
+        assert!(is_release_command("rls"));
+        assert!(is_release_command("rl"));
+        assert!(!is_release_command("rels"));
+    }
+
+    #[test]
+    fn is_release_delete_action_accepts_requested_synonyms() {
+        assert!(is_release_delete_action("del"));
+        assert!(is_release_delete_action("rm"));
+        assert!(is_release_delete_action("delete"));
+        assert!(is_release_delete_action("drop"));
+        assert!(!is_release_delete_action("erase"));
+    }
+
+    #[test]
     fn is_local_merge_action_accepts_requested_synonyms() {
         assert!(is_local_merge_action("local"));
         assert!(is_local_merge_action("ll"));
@@ -4728,6 +4847,7 @@ mod tests {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
             changelog_wrap_detailed_if_top_picks: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,
@@ -5226,6 +5346,7 @@ mod tests {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
             changelog_wrap_detailed_if_top_picks: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,

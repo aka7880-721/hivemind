@@ -461,7 +461,7 @@ pub(crate) fn build_document_from_git_log(
 pub(crate) fn build_document_from_git_log_with_variator(
     current_tag: impl Into<String>,
     lines: &[String],
-    variator_storage: Option<&crate::variator::VariatorStorage>,
+    variator_storage: Option<&crate::workflow::variator::VariatorStorage>,
 ) -> ChangelogDocument {
     let commits = lines
         .iter()
@@ -474,8 +474,10 @@ pub(crate) fn std_changelog_gen(
     current_tag: impl Into<String>,
     lines: &[String],
     top_picks_edits: Option<&str>,
+    mini_commit_hashes: bool,
 ) -> RenderedChangelog {
     let mut document = build_document_from_git_log(current_tag, lines);
+    document = document.with_mini_commit_hashes(mini_commit_hashes);
     if let Some(top_picks_edits) = top_picks_edits {
         document = document.with_top_picks_edits(top_picks_edits);
     }
@@ -492,7 +494,7 @@ pub(crate) fn rls_changelog_gen(
     mini_commit_hashes: bool,
     wrap_detailed_if_top_picks: bool,
     top_picks_edits: Option<&str>,
-    variator_storage: crate::variator::VariatorStorage,
+    variator_storage: crate::workflow::variator::VariatorStorage,
 ) -> RenderedChangelog {
     let mut document =
         build_document_from_git_log_with_variator(current_tag, lines, Some(&variator_storage))
@@ -517,6 +519,7 @@ pub(crate) fn pr_changelog_gen(
     doc.render_markdown()
 }
 
+#[allow(dead_code)]
 pub(crate) fn ensure_previous_public_release_header(
     markdown: &str,
     current_tag: &str,
@@ -1000,7 +1003,7 @@ fn parse_graph_log_entries(line: &str) -> Vec<ParsedCommit> {
 
 fn parse_graph_log_entries_with_variator(
     line: &str,
-    variator_storage: Option<&crate::variator::VariatorStorage>,
+    variator_storage: Option<&crate::workflow::variator::VariatorStorage>,
 ) -> Vec<ParsedCommit> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -2135,7 +2138,7 @@ mod tests {
             false,
             false,
             None,
-            crate::variator::VariatorStorage::default(),
+            crate::workflow::variator::VariatorStorage::default(),
         );
 
         assert!(changelog.markdown.contains(
@@ -2158,7 +2161,7 @@ mod tests {
     #[test]
     fn standard_and_custom_generators_use_shared_engine() {
         let lines = vec!["abc1234 feat: ship shared generator wrappers".to_string()];
-        let standard = std_changelog_gen("v0.7.3", &lines, None);
+        let standard = std_changelog_gen("v0.7.3", &lines, None, false);
         let custom = custom_changelog_gen("v0.7.3", &lines, Some("Custom range output."));
 
         assert!(standard.markdown.contains("### 🧩 Features"));

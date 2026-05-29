@@ -33,7 +33,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
     config::{BranchScopeKind, ProjectConfig, ProjectType, TargetSpec},
-    targets::{collect_bump_scopes, shared_bump_version},
+    workflow::targets::{collect_bump_scopes, shared_bump_version},
 };
 
 use status::{last_commit_label, last_rls_time, last_tag_name, last_tag_time};
@@ -185,6 +185,23 @@ pub(crate) fn default_push_remote_name(repo_root: &str) -> Result<String> {
         .filter(|value| !value.is_empty());
     if let Some(configured) = configured {
         return resolve_push_remote_name(repo_root, &configured);
+    }
+
+    let upstream_remote = run_git_checked(
+        repo_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .and_then(|upstream| {
+        upstream
+            .split_once('/')
+            .map(|(remote, _)| remote.to_string())
+    })
+    .filter(|remote| !remote.is_empty());
+    if let Some(remote) = upstream_remote {
+        return Ok(remote);
     }
 
     let remotes = git_remote_names(repo_root)?;
@@ -776,12 +793,6 @@ pub(crate) fn ensure_local_tag(
     }
 }
 
-pub(crate) fn ensure_forge_cli_available(
-    integration_mode: crate::config::IntegrationMode,
-) -> Result<crate::forge::ForgeKind> {
-    crate::forge::require_forge_cli(integration_mode)
-}
-
 pub(crate) fn run_git(repo_root: &str, args: &[&str]) -> Result<GitOutput> {
     run_git_with_cancel(repo_root, args, None)
 }
@@ -1015,7 +1026,7 @@ mod tests {
         config::{
             BranchConfig, ChangelogSettings, IntegrationMode, RepoConfig, TargetFormat, TargetSpec,
         },
-        versioning::VersionScheme,
+        workflow::versioning::VersionScheme,
     };
     use std::{
         env, fs,
@@ -1096,6 +1107,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
@@ -1117,6 +1129,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
@@ -1178,6 +1191,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
@@ -1203,6 +1217,7 @@ mod tests {
                     changelog_hide_pr_messages: false,
                     changelog_hide_bump_messages: false,
                     changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
                     changelog_wrap_detailed_if_top_picks: false,
                     release_now: crate::config::ReleaseNowSettings::default(),
                     version_scheme: VersionScheme::SemVer,
@@ -1271,6 +1286,7 @@ mod tests {
                 changelog_hide_pr_messages: false,
                 changelog_hide_bump_messages: false,
                 changelog_mini_commit_hashes: false,
+                changelog_mirror_summary_to_root_changelog: false,
                 changelog_wrap_detailed_if_top_picks: false,
                 release_now: crate::config::ReleaseNowSettings::default(),
                 version_scheme: VersionScheme::SemVer,

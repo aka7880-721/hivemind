@@ -36,9 +36,9 @@ use crate::{
         IntegrationMode, ProjectConfig, ProjectType, ReleaseNowSettings, RepoConfig, TargetFormat,
     },
     forge::integration_mode_for_remote_url,
-    project_wizard::ProjectWizard,
-    targets::{ProbeKind, TargetProbe, probe_target},
-    versioning::VersionScheme,
+    tui::ProjectWizard,
+    workflow::targets::{ProbeKind, TargetProbe, probe_target},
+    workflow::versioning::VersionScheme,
 };
 
 const ANSI_CYAN: &str = "\x1b[36m";
@@ -384,6 +384,7 @@ fn add_scope_to_parent(parent: &mut ProjectConfig, branch: BranchConfig) -> Resu
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
             changelog_wrap_detailed_if_top_picks: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme,
@@ -1487,6 +1488,7 @@ mod tests {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
             changelog_wrap_detailed_if_top_picks: false,
             release_now: ReleaseNowSettings::default(),
             version_scheme: VersionScheme::SemVer,

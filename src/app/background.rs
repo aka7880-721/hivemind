@@ -6,9 +6,8 @@
 use std::{
     fs,
     path::Path,
-    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -20,25 +19,18 @@ use tokio::{
         mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     },
     task::JoinSet,
-    time::sleep,
 };
 
 use crate::{
     changelog::{
-        archive_changelog_markdown, ensure_previous_public_release_header,
-        find_archived_changelog_markdown, load_merged_std_changelog_memory, load_top_picks_edits,
-        rebuild_history_summary_readme, record_std_changelog_created, record_std_changelog_error,
-        record_std_changelog_generated, record_std_changelog_postponed, rls_changelog_gen,
-        std_changelog_gen,
+        archive_changelog_markdown, find_archived_changelog_markdown,
+        load_merged_std_changelog_memory, load_top_picks_edits, rebuild_history_summary_readme,
+        record_std_changelog_created, record_std_changelog_error, record_std_changelog_generated,
+        record_std_changelog_postponed, rls_changelog_gen, std_changelog_gen,
     },
     config::{
         BranchConfig, BranchScopeKind, IntegrationMode, ProjectConfig, RepoConfig, TargetFormat,
         TargetSpec,
-    },
-    dialogs::{
-        ChangeRange, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog, TextInput,
-        load_change_range_for_refs_with_cancel, load_change_range_for_tags_with_cancel,
-        load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
     },
     git::BranchNameOption,
     git::{
@@ -47,8 +39,13 @@ use crate::{
         is_mainline_branch_name, load_scope_activity_summary_with_cancel,
         semver_dev_branch_canonical_label, sorted_local_tags_with_cancel,
     },
-    targets::{ProbeKind, TargetProbe, collect_bump_scopes},
-    versioning::{BumpAction, VersionScheme},
+    workflow::dialogs::{
+        ChangeRange, RecentChangesDialog, RecentChangesTab, TagAction, TagDialog, TextInput,
+        load_change_range_for_refs_with_cancel, load_change_range_for_tags_with_cancel,
+        load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
+    },
+    workflow::targets::{ProbeKind, TargetProbe, collect_bump_scopes},
+    workflow::versioning::{BumpAction, VersionScheme},
     workflow::{OverviewBumpWorkflow, git_flow},
 };
 
@@ -58,10 +55,10 @@ use super::{
 };
 
 pub(crate) const BACKGROUND_MAX_PARALLEL_REPO_JOBS: usize = 4;
-pub(crate) const NETWORK_RETRY_ATTEMPTS: usize = 2;
-const NETWORK_RETRY_DELAY: Duration = Duration::from_millis(750);
-pub(crate) const GIT_PUSH_TIMEOUT: Duration = Duration::from_secs(20);
 const GH_RELEASE_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) use crate::workflow::runtime::{
+    GIT_PUSH_TIMEOUT, NETWORK_RETRY_ATTEMPTS, run_blocking_job, run_command_with_retry_async,
+};
 pub(crate) enum BackgroundJobRequest {
     OpenRecentChanges {
         project: ProjectConfig,
@@ -722,7 +719,9 @@ impl ScopeDraft {
         }
 
         let target_key = self.target_key.value.trim();
-        if target_key.is_empty() && !crate::targets::is_plain_version_filename(target_path) {
+        if target_key.is_empty()
+            && !crate::workflow::targets::is_plain_version_filename(target_path)
+        {
             bail!("scope '{}' target key cannot be empty", name);
         }
 
@@ -754,6 +753,7 @@ impl ScopeDraft {
             changelog_hide_pr_messages: false,
             changelog_hide_bump_messages: false,
             changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
             changelog_wrap_detailed_if_top_picks: false,
             release_now: crate::config::ReleaseNowSettings::default(),
             version_scheme: self.version_scheme,
@@ -893,16 +893,6 @@ pub(crate) fn spawn_background_job_task(
             payload: BackgroundJobMessagePayload::Finished(result),
         });
     });
-}
-
-pub(crate) async fn run_blocking_job<T, F>(operation: F) -> Result<T>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T> + Send + 'static,
-{
-    tokio::task::spawn_blocking(operation)
-        .await
-        .map_err(|error| anyhow!("background task failed: {error}"))?
 }
 
 async fn run_background_job(
@@ -1467,6 +1457,7 @@ pub(crate) fn execute_standard_changelog_for_tag_blocking(
                         tag_name.to_string(),
                         &range.lines,
                         top_picks_edits.as_deref(),
+                        scope.mini_commit_hashes,
                     )
                     .markdown;
                     archive_changelog_markdown(repo_root, tag_name, &markdown)?;
@@ -1658,7 +1649,13 @@ pub(crate) fn replay_postponed_std_changelogs_blocking(
             continue;
         }
 
-        let markdown = std_changelog_gen(entry.tag_from.clone(), &range.lines, None).markdown;
+        let markdown = std_changelog_gen(
+            entry.tag_from.clone(),
+            &range.lines,
+            None,
+            scope.mini_commit_hashes,
+        )
+        .markdown;
         archive_changelog_markdown(repo_root, &entry.tag_from, &markdown)?;
         record_std_changelog_generated(repo_root, &entry.tag_from, &entry.tag_origin)?;
         outcome.notices.push(format!(
@@ -1751,15 +1748,9 @@ pub(crate) fn build_release_notes_markdown(
 
     let top_picks_edits = current_release_top_picks_edits(&scope.repo_root);
     let last_public_release = latest_public_release_tag(&scope.repo_root).ok().flatten();
-    if top_picks_edits.is_none()
-        && let Some(markdown) = find_archived_changelog_markdown(&scope.repo_root, tag_name)?
-    {
-        return Ok(ensure_previous_public_release_header(
-            &markdown,
-            tag_name,
-            last_public_release.as_deref(),
-        ));
-    }
+    // Always render from the selected scope's current changelog settings so toggles
+    // (like mini hashes) apply immediately across forges, including GitLab.
+    let _ = find_archived_changelog_markdown(&scope.repo_root, tag_name)?;
 
     if let Some(last_public_release) =
         last_public_release.filter(|tag| tag.trim() != tag_name.trim())
@@ -1878,93 +1869,6 @@ async fn create_forge_release_with_retry_async(
         )
     })?;
     Ok(())
-}
-
-pub(crate) async fn run_command_with_retry_async(
-    repo_root: String,
-    program: &'static str,
-    args: Vec<String>,
-    timeout: Duration,
-    attempts: usize,
-    action: &str,
-) -> Result<()> {
-    let total_attempts = attempts.max(1);
-    let mut last_error = None;
-    let action = action.to_string();
-
-    for attempt in 1..=total_attempts {
-        let repo_root_for_attempt = repo_root.clone();
-        let args_for_attempt = args.clone();
-        let action_for_attempt = action.clone();
-        match run_blocking_job(move || {
-            run_command_checked_with_timeout(
-                &repo_root_for_attempt,
-                program,
-                &args_for_attempt,
-                timeout,
-                &action_for_attempt,
-            )
-        })
-        .await
-        {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                last_error = Some(error);
-                if attempt < total_attempts {
-                    sleep(NETWORK_RETRY_DELAY).await;
-                }
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| anyhow!("{action} failed")))
-}
-
-pub(crate) fn run_command_checked_with_timeout(
-    repo_root: &str,
-    program: &str,
-    args: &[String],
-    timeout: Duration,
-    action: &str,
-) -> Result<()> {
-    let mut command = Command::new(program);
-    command
-        .current_dir(repo_root)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("failed to start {action} in '{}'", repo_root))?;
-    let started_at = Instant::now();
-
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .with_context(|| format!("failed to poll {action}"))?
-        {
-            let output = child
-                .wait_with_output()
-                .with_context(|| format!("failed to collect output for {action}"))?;
-            if status.success() {
-                return Ok(());
-            }
-
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let detail = if stderr.is_empty() { stdout } else { stderr };
-            bail!("{action} failed: {detail}");
-        }
-
-        if started_at.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait_with_output();
-            bail!("{action} timed out after {}s", timeout.as_secs());
-        }
-
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 impl App {

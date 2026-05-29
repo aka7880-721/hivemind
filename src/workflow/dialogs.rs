@@ -19,8 +19,10 @@ use crate::{
         collect_git_scope_contexts, ensure_git_repo_with_cancel, run_git_checked_with_cancel,
         run_git_with_cancel, split_output_lines,
     },
-    targets::{BumpScope, BumpTarget, collect_bump_scopes, shared_bump_version},
-    versioning::{BumpAction, VersionScheme},
+    workflow::{
+        targets::{BumpScope, BumpTarget, collect_bump_scopes, shared_bump_version},
+        versioning::{BumpAction, VersionScheme},
+    },
 };
 
 #[derive(Clone)]
@@ -1264,8 +1266,8 @@ mod tests {
     use super::{BumpDialog, TagAction, TextInput, available_tag_actions};
     use crate::{
         config::{BranchScopeKind, IntegrationMode, TargetFormat},
-        targets::{BumpScope, BumpTarget},
-        versioning::VersionScheme,
+        workflow::targets::{BumpScope, BumpTarget},
+        workflow::versioning::VersionScheme,
     };
 
     #[test]

@@ -42,6 +42,22 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
+pub(crate) fn merge_artifacts_for_quick_downloads(
+    current_artifacts: &[String],
+    historical_artifacts: &[String],
+) -> Vec<String> {
+    let mut merged = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for artifact in current_artifacts.iter().chain(historical_artifacts.iter()) {
+        let name = basename(artifact);
+        let key = name.to_lowercase();
+        if seen.insert(key) {
+            merged.push(name);
+        }
+    }
+    merged
+}
+
 fn lower(s: &str) -> String {
     s.to_lowercase()
 }
@@ -494,8 +510,8 @@ pub(crate) fn build_quick_downloads_section_html(
     );
 
     let footer_esc = footer_message.trim();
-    format!(
-        r#"<div align="center">
+    let inner = format!(
+        r#"
 
 |⟱  Q U I C K - D O W N L O A D S         A V A I L A B L E         H E R E  ⟱|
 |-|
@@ -505,13 +521,16 @@ pub(crate) fn build_quick_downloads_section_html(
 |{win_cell}|‧<br>✦<br>‧<br>✦<br>‧<br>✦<br>‧|{linux_cell}|‧<br>✦<br>‧<br>✦<br>‧<br>✦<br>‧|{mac_cell}|
 
 <sub><sup>{} </sub></sup>
-
-</div>"#,
+"#,
         LOGO_BASE,
         LOGO_BASE,
         LOGO_BASE,
         esc_attr(footer_esc)
-    )
+    );
+    match forge {
+        crate::forge::ForgeKind::GitHub => format!(r#"<div align="center">{inner}</div>"#),
+        crate::forge::ForgeKind::GitLab => inner.trim().to_string(),
+    }
 }
 
 /// When Quick-Downloads is enabled, merges the HTML section with user notes.
@@ -665,5 +684,17 @@ mod tests {
         .expect("merged notes");
         assert!(out2.starts_with("# Notes"));
         assert!(out2.contains("<div"));
+    }
+
+    #[test]
+    fn merge_artifacts_for_quick_downloads_keeps_current_and_adds_missing_history() {
+        let merged = merge_artifacts_for_quick_downloads(
+            &["dist/latest/app-win.msi".to_string()],
+            &["app-macos.pkg".to_string(), "APP-WIN.MSI".to_string()],
+        );
+        assert_eq!(
+            merged,
+            vec!["app-win.msi".to_string(), "app-macos.pkg".to_string()]
+        );
     }
 }

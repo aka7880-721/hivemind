@@ -15,7 +15,7 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::versioning::VersionScheme;
+use crate::workflow::versioning::VersionScheme;
 
 pub(crate) const TILE_WIDTH: u16 = 34;
 pub(crate) const SEMVER_TILE_HEIGHT: u16 = 9;

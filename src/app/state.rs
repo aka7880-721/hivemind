@@ -2,14 +2,14 @@
 // All rights reserved.
 //
 // Licensed under the ComfyGit SA-PS License
+// For details, see the LICENSE file in the repository root.
 
 use ratatui::layout::Rect;
 use tui_textarea::TextArea as TuiTextArea;
 
 use crate::{
-    changelog::ChangelogDocument, config::BranchScopeKind, dialogs::RecentChangesTab,
-    project_edit::ProjectEditFocus, project_wizard::WizardField, tui::OverviewTab,
-    workflow::OverviewBumpWorkflow,
+    changelog::ChangelogDocument, config::BranchScopeKind, tui::OverviewTab, tui::ProjectEditFocus,
+    tui::WizardField, workflow::OverviewBumpWorkflow, workflow::dialogs::RecentChangesTab,
 };
 
 use super::project_settings::{ProjectSettingsFocus, ProjectSettingsTab};
@@ -395,6 +395,8 @@ pub(crate) struct ChangelogPreviewDialog {
     pub(crate) release_message: TuiTextArea<'static>,
     pub(crate) release_message_placeholder: String,
     pub(crate) scroll: u16,
+    /// Layout width of the preview body, set when the dialog is drawn.
+    pub(crate) preview_render_width: u16,
 }
 
 #[derive(Clone)]
@@ -475,6 +477,7 @@ impl ChangelogPreviewDialog {
             release_message_placeholder: "Optional multi-line release notes in Markdown"
                 .to_string(),
             scroll: 0,
+            preview_render_width: 80,
         }
     }
 
@@ -496,6 +499,7 @@ impl ChangelogPreviewDialog {
             release_message_placeholder: "Optional multi-line release notes in Markdown"
                 .to_string(),
             scroll: 0,
+            preview_render_width: 80,
         }
     }
 
@@ -528,9 +532,10 @@ impl ChangelogPreviewDialog {
     }
 
     pub(crate) fn preview_line_count(&self) -> usize {
-        tui_markdown::from_str(&self.combined_preview_markdown())
-            .lines
-            .len()
+        crate::tui::markdown_line_count(
+            &self.combined_preview_markdown(),
+            self.preview_render_width,
+        )
     }
 
     pub(crate) fn prepare_pending_write(&self) -> PendingChangelogWrite {

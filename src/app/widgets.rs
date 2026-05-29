@@ -2,6 +2,7 @@
 // All rights reserved.
 //
 // Licensed under the ComfyGit SA-PS License
+// For details, see the LICENSE file in the repository root.
 
 use std::path::{Path, PathBuf};
 
@@ -18,8 +19,8 @@ use ratatui_explorer::{FileExplorer, FileExplorerBuilder};
 use tui_textarea::{Input as TextAreaInput, Key as TextAreaKey, TextArea as TuiTextArea};
 
 use crate::{
-    cli::CommitRenamePlan, config::BranchScopeKind, project_edit::ProjectEditFocus,
-    project_wizard::WizardField, tiles::TILE_WIDTH, versioning::VersionScheme,
+    cli::CommitRenamePlan, config::BranchScopeKind, tui::ProjectEditFocus, tui::TILE_WIDTH,
+    tui::WizardField, workflow::versioning::VersionScheme,
 };
 
 use super::state::{OverviewVersionControl, RecentChangeView};
@@ -599,10 +600,10 @@ pub(crate) fn target_key_presets(path: &str) -> &'static [&'static str] {
         .and_then(|name| name.to_str())
         .unwrap_or(path)
         .to_ascii_lowercase();
-    if crate::targets::is_plain_version_filename(path) {
+    if crate::workflow::targets::is_plain_version_filename(path) {
         return &["", ".", "@"];
     }
-    if crate::targets::is_gomod_filename(path) {
+    if crate::workflow::targets::is_gomod_filename(path) {
         return &["comment", "require."];
     }
     if file_name == "gemfile" {
@@ -878,6 +879,8 @@ pub(crate) fn ui_settings_footer_line() -> Line<'static> {
     spans.extend(shortcut_key_label("C", "ycle Footer Content"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("H", "ide Footer"));
+    spans.push(Span::raw(" | "));
+    spans.extend(shortcut_key_label("?", " Help"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("N", "ew Project"));
     spans.push(Span::raw(" | "));
