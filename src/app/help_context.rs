@@ -6,8 +6,8 @@
 use crate::tui::{HelpContext, OverviewTab};
 
 use super::{
-    project_settings::{self, ProjectSettingsTab},
     App, DashboardPane, Screen,
+    project_settings::{self, ProjectSettingsTab},
 };
 
 impl App {
