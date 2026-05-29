@@ -2,6 +2,7 @@
 // All rights reserved.
 //
 // Licensed under the ComfyGit SA-PS License
+// For details, see the LICENSE file in the repository root.
 
 use std::path::{Path, PathBuf};
 
@@ -878,6 +879,8 @@ pub(crate) fn ui_settings_footer_line() -> Line<'static> {
     spans.extend(shortcut_key_label("C", "ycle Footer Content"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("H", "ide Footer"));
+    spans.push(Span::raw(" | "));
+    spans.extend(shortcut_key_label("?", " Help"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("N", "ew Project"));
     spans.push(Span::raw(" | "));
