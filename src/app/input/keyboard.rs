@@ -30,6 +30,14 @@ impl App {
             return Ok(());
         }
 
+        if self.help_modal.is_some() {
+            if self.handle_help_key(key) {
+                return Ok(());
+            }
+        } else if self.try_handle_help_shortcut(key)? {
+            return Ok(());
+        }
+
         if self.progress_dialog.is_some() {
             return Ok(());
         }
@@ -1485,6 +1493,29 @@ impl App {
                 self.dashboard_focus = DashboardPane::Projects;
             }
             _ => self.screen = target,
+        }
+        true
+    }
+
+    pub(crate) fn try_handle_help_shortcut(&mut self, key: KeyEvent) -> Result<bool> {
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('?') {
+            if self.help_blocked_by_text_input() {
+                return Ok(false);
+            }
+            let context = self.resolve_help_context();
+            self.help_modal = Some(crate::tui::HelpModal::new(context));
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub(crate) fn handle_help_key(&mut self, key: KeyEvent) -> bool {
+        let Some(modal) = &mut self.help_modal else {
+            return false;
+        };
+        if modal.handle_key(key) {
+            self.help_modal = None;
+            return true;
         }
         true
     }
