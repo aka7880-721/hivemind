@@ -30,10 +30,8 @@ impl App {
             return Ok(());
         }
 
-        if self.help_modal.is_some() {
-            if self.handle_help_key(key) {
-                return Ok(());
-            }
+        if self.help_modal.is_some() && self.handle_help_key(key) {
+            return Ok(());
         }
 
         if self.progress_dialog.is_some() {
