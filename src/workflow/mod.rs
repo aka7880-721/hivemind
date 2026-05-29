@@ -9,6 +9,7 @@ pub(crate) mod dialogs;
 pub(crate) mod git_flow;
 pub(crate) mod rls_now;
 pub(crate) mod rls_now_inj;
+pub(crate) mod rls_now_mac;
 pub(crate) mod runtime;
 pub(crate) mod target_custom;
 pub(crate) mod targets;

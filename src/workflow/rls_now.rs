@@ -3,6 +3,8 @@
 //
 // Licensed under the ComfyGit SA-PS License
 //
+// For details, see the LICENSE file in the repository root.
+
 fn ensure_not_cancelled(cancel: &GitCancellation) -> Result<()> {
     if cancel.is_cancelled() {
         bail!("ReleaseNOW cancelled by user")
@@ -1306,15 +1308,87 @@ pub(crate) async fn execute_release_now_async(
         prepush_auto_injected_readme_async(&request, &cancel, &mut emit_progress).await?;
     }
 
-    for script in &request.scripts {
-        ensure_not_cancelled(&cancel)?;
-        run_script_with_live_logs(
-            &request.repo_root,
-            script,
-            cancel.clone(),
-            &mut emit_progress,
+    let (mac_ci, local_scripts) =
+        crate::workflow::rls_now_mac::partition_mac_scripts(&request.scripts, &request.tag_name);
+    let mut mac_ci_warning: Option<String> = None;
+
+    if let Some(mac_config) = mac_ci {
+        let repo_root = request.repo_root.clone();
+        let (session, trigger_lines) = crate::workflow::rls_now_mac::trigger_mac_ci_session(
+            repo_root.clone(),
+            mac_config.clone(),
         )
         .await?;
+        emit_progress(trigger_lines);
+
+        if request.selected_option_label == "All configured" {
+            crate::workflow::rls_now_mac::stream_mac_ci_until_build_started(
+                repo_root.clone(),
+                session.clone(),
+                cancel.clone(),
+                &mut emit_progress,
+            )
+            .await?;
+
+            for script in &local_scripts {
+                ensure_not_cancelled(&cancel)?;
+                run_script_with_live_logs(
+                    &request.repo_root,
+                    script,
+                    cancel.clone(),
+                    &mut emit_progress,
+                )
+                .await?;
+            }
+
+            match crate::workflow::rls_now_mac::finish_mac_ci_and_merge_artifacts(
+                repo_root,
+                session,
+                mac_config.version,
+                cancel.clone(),
+                &mut emit_progress,
+            )
+            .await?
+            {
+                crate::workflow::rls_now_mac::MacCiFinishOutcome::Success => {}
+                crate::workflow::rls_now_mac::MacCiFinishOutcome::Failed { warning } => {
+                    mac_ci_warning = Some(warning);
+                }
+            }
+        } else {
+            match crate::workflow::rls_now_mac::finish_mac_ci_and_merge_artifacts(
+                repo_root,
+                session,
+                mac_config.version,
+                cancel.clone(),
+                &mut emit_progress,
+            )
+            .await?
+            {
+                crate::workflow::rls_now_mac::MacCiFinishOutcome::Success => {}
+                crate::workflow::rls_now_mac::MacCiFinishOutcome::Failed { warning } => {
+                    bail!(warning);
+                }
+            }
+        }
+    } else {
+        for script in &request.scripts {
+            ensure_not_cancelled(&cancel)?;
+            run_script_with_live_logs(
+                &request.repo_root,
+                script,
+                cancel.clone(),
+                &mut emit_progress,
+            )
+            .await?;
+        }
+    }
+
+    if let Some(warning) = mac_ci_warning {
+        emit_progress(vec![
+            "[MacOS][warning] macOS build failed.".to_string(),
+            format!("[MacOS][warning] {warning}"),
+        ]);
     }
 
     ensure_not_cancelled(&cancel)?;
