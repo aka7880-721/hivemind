@@ -25,7 +25,9 @@ pub(crate) fn overview_bump_workflow_options(
             OverviewBumpWorkflow::Commit,
             OverviewBumpWorkflow::CommitAndTag,
         ],
-        IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled => vec![
+        IntegrationMode::GitHubEnabled
+        | IntegrationMode::GitLabEnabled
+        | IntegrationMode::GitLabGitHubEnabled => vec![
             OverviewBumpWorkflow::JustBump,
             OverviewBumpWorkflow::Commit,
             OverviewBumpWorkflow::CommitAndPush,
