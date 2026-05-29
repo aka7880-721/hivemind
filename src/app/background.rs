@@ -524,9 +524,9 @@ impl MainBranchWarningDialog {
 
     pub(crate) fn switch_label(&self) -> &'static str {
         match self.integration_mode {
-            IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled => {
-                "Switch to mainline & Sync & Bump"
-            }
+            IntegrationMode::GitHubEnabled
+            | IntegrationMode::GitLabEnabled
+            | IntegrationMode::GitLabGitHubEnabled => "Switch to mainline & Sync & Bump",
             IntegrationMode::GitLocalOnly => "Switch to mainline & Bump",
             IntegrationMode::LocalOnly => "Continue",
         }
