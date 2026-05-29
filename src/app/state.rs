@@ -137,6 +137,8 @@ pub(crate) enum HitAction {
     EditReleaseNowNotes,
     RunReleaseNow,
     ContinueReleaseNowWarning,
+    RunReleaseNowMirrorSync,
+    RefreshReleaseNowMirrorSync,
     SelectReleaseNowArtifactsChoice(usize),
     ContinueReleaseNowArtifactsCustomize,
     BackReleaseNowArtifactsCustomize,
