@@ -61,7 +61,7 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/comfy-home/ComfyGit/releases/latest";
 const MR_SETTINGS_TOML_URL: &str =
-    "https://gitlab.com/comfyhome/dev/hosted-settings/mr-settings/-/raw/main/mr.toml";
+    "https://gitlab.com/dev-ComfyHome/mr-settings/-/raw/main/mr.toml";
 const MR_VERSION_KEY: &str = "cg";
 const GITHUB_CARGO_TOML_URL: &str =
     "https://raw.githubusercontent.com/comfy-home/ComfyGit/main/Cargo.toml";
