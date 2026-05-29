@@ -607,6 +607,7 @@ pub(crate) struct ReleaseNowDialog {
     pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
     pub(crate) readme_inject_at_row: u16,
     pub(crate) release_title_template: String,
+    pub(crate) integration_mode: crate::config::IntegrationMode,
     pub(crate) started_at: Option<Instant>,
     /// Elapsed time frozen when the run stops (success, failure, or cancel).
     pub(crate) frozen_elapsed: Option<Duration>,
@@ -622,6 +623,7 @@ impl ReleaseNowDialog {
 
         Self {
             project_name: validation.project_name,
+            integration_mode: validation.integration_mode,
             scope_label: validation.scope_label,
             scope: validation.scope,
             changelog_enabled: validation.changelog_enabled,
@@ -1139,6 +1141,7 @@ impl ReleaseNowDialog {
 #[derive(Clone)]
 pub(crate) struct ReleaseNowValidation {
     pub(crate) project_name: String,
+    pub(crate) integration_mode: crate::config::IntegrationMode,
     pub(crate) scope_label: String,
     pub(crate) scope: GitScopeContext,
     pub(crate) changelog_enabled: bool,
@@ -1172,6 +1175,7 @@ pub(crate) struct ReleaseNowScript {
 #[derive(Clone)]
 pub(crate) struct ReleaseNowExecutionRequest {
     pub(crate) scope_label: String,
+    pub(crate) integration_mode: crate::config::IntegrationMode,
     pub(crate) scope: GitScopeContext,
     pub(crate) changelog_enabled: bool,
     pub(crate) mirror_summary_to_root_changelog: bool,
@@ -1205,8 +1209,7 @@ pub(crate) fn validate_release_now(
         bail!("ReleaseNOW requires a GitHub- or GitLab-enabled project with a configured remote")
     }
 
-    let forge = crate::forge::require_forge_cli(project.integration_mode)?;
-    forge.ensure_authenticated()?;
+    crate::forge::ensure_forge_authenticated(project.integration_mode)?;
 
     let contexts = collect_all_branch_git_scope_contexts(project)?;
     if contexts.is_empty() {
@@ -1215,6 +1218,32 @@ pub(crate) fn validate_release_now(
 
     let scope_index = scope_index.min(contexts.len().saturating_sub(1));
     let scope = contexts[scope_index].clone();
+
+    if project.integration_mode.is_dual_forge() {
+        let sync_report = crate::git::check_mirror_sync(
+            &scope.repo_root,
+            scope.remote_spec.as_deref(),
+            scope.secondary_remote_spec.as_deref(),
+        )
+        .with_context(|| {
+            format!(
+                "ReleaseNOW pre-flight mirror sync check failed for {}",
+                scope.display_name
+            )
+        })?;
+        if !sync_report.in_sync() {
+            bail!(
+                "ReleaseNOW requires GitLab and GitHub remotes to be in sync before publishing. Run 'cg sync' and retry.\n{}",
+                sync_report
+                    .summary_lines()
+                    .into_iter()
+                    .map(|line| format!("  {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
+    }
+
     let options = collect_release_now_options(project.release_now_for_scope(scope_index))?;
     let warning_message =
         build_recent_merge_warning(project, &contexts, scope_index, cancel.clone())?;
@@ -1223,6 +1252,7 @@ pub(crate) fn validate_release_now(
 
     Ok(ReleaseNowValidation {
         project_name: project.name.clone(),
+        integration_mode: project.integration_mode,
         scope_label: scope
             .scope_kind
             .map(|kind| format!("{} ({})", scope.display_name, kind.display_name()))
@@ -1262,6 +1292,7 @@ pub(crate) fn validate_release_now(
 pub(crate) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
     ReleaseNowExecutionRequest {
         scope_label: dialog.scope_label.clone(),
+        integration_mode: dialog.integration_mode,
         scope: dialog.scope.clone(),
         changelog_enabled: dialog.changelog_enabled,
         mirror_summary_to_root_changelog: dialog.mirror_summary_to_root_changelog,
@@ -1312,7 +1343,11 @@ pub(crate) async fn execute_release_now_async(
         crate::workflow::rls_now_mac::partition_mac_scripts(&request.scripts, &request.tag_name);
     let mut mac_ci_warning: Option<String> = None;
 
-    if let Some(mac_config) = mac_ci {
+    if let Some(mut mac_config) = mac_ci {
+        mac_config.github_repo = Some(crate::forge::resolve_github_repo_slug_for_actions(
+            &request.repo_root,
+            request.scope.secondary_remote_spec.as_deref(),
+        )?);
         let repo_root = request.repo_root.clone();
         let (session, trigger_lines) = crate::workflow::rls_now_mac::trigger_mac_ci_session(
             repo_root.clone(),
@@ -1493,18 +1528,93 @@ pub(crate) async fn execute_release_now_async(
         emit_progress(vec![format!("Warning: {}", warning)]);
     }
 
-    create_or_update_forge_release(
-        forge,
-        &request.repo_root,
-        &request.tag_name,
-        request.scope.remote_spec.as_deref(),
-        &request.release_title,
-        release_notes_for_github.as_deref(),
-        &artifact_files,
-        cancel.clone(),
-        &mut emit_progress,
-    )
-    .await?;
+    if request.integration_mode.is_dual_forge() {
+        let primary_url = request
+            .scope
+            .remote_spec
+            .as_deref()
+            .ok_or_else(|| anyhow!("GitLab+GitHub project is missing the GitLab remote URL"))?;
+        let secondary_url = request
+            .scope
+            .secondary_remote_spec
+            .as_deref()
+            .ok_or_else(|| anyhow!("GitLab+GitHub project is missing the GitHub remote URL"))?;
+
+        let mut gitlab_warnings = Vec::new();
+        let release_notes_for_gitlab = rls_now_qd::finalize_release_notes_with_quick_downloads(
+            request.release_notes_markdown.clone(),
+            Some(primary_url),
+            &request.tag_name,
+            &qd_artifacts,
+            &request.quick_downloads,
+            &mut gitlab_warnings,
+        );
+        for warning in gitlab_warnings {
+            emit_progress(vec![format!("Warning: {}", warning)]);
+        }
+
+        let mut github_warnings = Vec::new();
+        let release_notes_for_github_secondary =
+            rls_now_qd::finalize_release_notes_with_quick_downloads(
+                request.release_notes_markdown.clone(),
+                Some(secondary_url),
+                &request.tag_name,
+                &qd_artifacts,
+                &request.quick_downloads,
+                &mut github_warnings,
+            );
+        for warning in github_warnings {
+            emit_progress(vec![format!("Warning: {}", warning)]);
+        }
+
+        let primary_forge = request
+            .integration_mode
+            .forge_kind()
+            .ok_or_else(|| anyhow!("GitLab+GitHub project is missing a primary forge"))?;
+        let secondary_forge = request
+            .integration_mode
+            .secondary_forge_kind()
+            .ok_or_else(|| anyhow!("GitLab+GitHub project is missing a secondary forge"))?;
+
+        create_or_update_forge_release(
+            primary_forge,
+            &request.repo_root,
+            &request.tag_name,
+            Some(primary_url),
+            &request.release_title,
+            release_notes_for_gitlab.as_deref(),
+            &artifact_files,
+            cancel.clone(),
+            &mut emit_progress,
+        )
+        .await?;
+
+        create_or_update_forge_release(
+            secondary_forge,
+            &request.repo_root,
+            &request.tag_name,
+            Some(secondary_url),
+            &request.release_title,
+            release_notes_for_github_secondary.as_deref(),
+            &artifact_files,
+            cancel.clone(),
+            &mut emit_progress,
+        )
+        .await?;
+    } else {
+        create_or_update_forge_release(
+            forge,
+            &request.repo_root,
+            &request.tag_name,
+            request.scope.remote_spec.as_deref(),
+            &request.release_title,
+            release_notes_for_github.as_deref(),
+            &artifact_files,
+            cancel.clone(),
+            &mut emit_progress,
+        )
+        .await?;
+    }
 
     if request.changelog_enabled || request.readme_injection_enabled {
         ensure_not_cancelled(&cancel)?;
