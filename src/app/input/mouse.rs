@@ -1195,6 +1195,11 @@ impl App {
                             | HitAction::EditReleaseNowNotes
                             | HitAction::RunReleaseNow
                             | HitAction::ContinueReleaseNowWarning
+                            | HitAction::RunReleaseNowMirrorSync
+                            | HitAction::RefreshReleaseNowMirrorSync
+                            | HitAction::SelectReleaseNowArtifactsChoice(_)
+                            | HitAction::ContinueReleaseNowArtifactsCustomize
+                            | HitAction::BackReleaseNowArtifactsCustomize
                             | HitAction::ToggleReleaseNowAutoFollow
                             | HitAction::CancelReleaseNowRun
                             | HitAction::ScrollReleaseNow(_)

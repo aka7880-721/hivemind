@@ -60,6 +60,9 @@ use crate::{
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/comfy-home/ComfyGit/releases/latest";
+const MR_SETTINGS_TOML_URL: &str =
+    "https://gitlab.com/dev-ComfyHome/mr-settings/-/raw/main/mr.toml";
+const MR_VERSION_KEY: &str = "cg";
 const GITHUB_CARGO_TOML_URL: &str =
     "https://raw.githubusercontent.com/comfy-home/ComfyGit/main/Cargo.toml";
 
@@ -180,6 +183,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
         [] => Ok(StartupMode::LaunchTui),
         [command] if is_init_command(command) => {
             crate::workflow::cli_init::run_init()?;
+            Ok(StartupMode::Handled)
+        }
+        [command] if is_sync_command(command) => {
+            crate::workflow::cli_sync::run_sync()?;
             Ok(StartupMode::Handled)
         }
         [command] if is_help(command) => {
@@ -665,6 +672,10 @@ fn is_init_command(value: &str) -> bool {
     value == "init"
 }
 
+fn is_sync_command(value: &str) -> bool {
+    value == "sync"
+}
+
 fn is_help(value: &str) -> bool {
     matches!(value, "help" | "-h" | "--help")
 }
@@ -858,6 +869,7 @@ fn print_usage() {
     println!(
         "  cg init                    Register the current directory as a new ComfyGit project"
     );
+    println!("  cg sync                    Check GitLab/GitHub mirror sync and push both remotes");
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
@@ -3808,53 +3820,22 @@ enum MinimumVersionStatus {
     },
 }
 
-/// Reads `[package.metadata] minimum_required` from the canonical `Cargo.toml`
-/// on the `main` branch.  Fails open (returns `Satisfied`) on any network or
-/// parse error so that offline users are never blocked.
+/// Reads the minimum version from hosted [`mr.toml`](MR_SETTINGS_TOML_URL) (`[mr].cg`)
+/// and optional `minimum_required_reason` from the canonical `Cargo.toml` on `main`.
+/// Fails open (returns `Satisfied`) on any network or parse error so offline users
+/// are never blocked.
 fn check_minimum_version() -> MinimumVersionStatus {
     let client = match Client::builder().timeout(Duration::from_secs(2)).build() {
         Ok(client) => client,
         Err(_) => return MinimumVersionStatus::Satisfied,
     };
 
-    let body = match client
-        .get(GITHUB_CARGO_TOML_URL)
-        .header("User-Agent", format!("cg/{}", APP_VERSION))
-        .send()
-        .and_then(|r| r.error_for_status())
-        .and_then(|r| r.text())
-    {
-        Ok(body) => body,
-        Err(_) => return MinimumVersionStatus::Satisfied,
-    };
-
-    let toml_value = match toml::from_str::<toml::Value>(&body) {
-        Ok(v) => v,
-        Err(_) => return MinimumVersionStatus::Satisfied,
-    };
-
-    // [package.metadata]
-    // minimum_required = "0.18.0"
-    // minimum_required_reason = "critical security fix"
-    let meta = match toml_value.get("package").and_then(|p| p.get("metadata")) {
-        Some(m) => m,
+    let minimum = match fetch_mr_minimum_version(&client, MR_VERSION_KEY) {
+        Some(v) => v,
         None => return MinimumVersionStatus::Satisfied,
     };
 
-    let minimum = match meta
-        .get("minimum_required")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.trim().is_empty())
-    {
-        Some(v) => normalize_release_version(v).to_string(),
-        None => return MinimumVersionStatus::Satisfied,
-    };
-
-    let reason = meta
-        .get("minimum_required_reason")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.trim().is_empty())
-        .map(str::to_owned);
+    let reason = fetch_cargo_minimum_reason(&client);
 
     if matches!(
         compare_release_versions(APP_VERSION, &minimum),
@@ -3864,6 +3845,43 @@ fn check_minimum_version() -> MinimumVersionStatus {
     } else {
         MinimumVersionStatus::Satisfied
     }
+}
+
+fn fetch_mr_minimum_version(client: &Client, key: &str) -> Option<String> {
+    let body = client
+        .get(MR_SETTINGS_TOML_URL)
+        .header("User-Agent", format!("cg/{}", APP_VERSION))
+        .send()
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .ok()?;
+    let toml_value = toml::from_str::<toml::Value>(&body).ok()?;
+    toml_value
+        .get("mr")?
+        .get(key)?
+        .as_str()
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| normalize_release_version(v).to_string())
+}
+
+fn fetch_cargo_minimum_reason(client: &Client) -> Option<String> {
+    let body = client
+        .get(GITHUB_CARGO_TOML_URL)
+        .header("User-Agent", format!("cg/{}", APP_VERSION))
+        .send()
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .ok()?;
+    let toml_value = toml::from_str::<toml::Value>(&body).ok()?;
+    let meta = toml_value.get("package")?.get("metadata")?;
+    meta.get("minimum_required_reason")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_owned)
 }
 
 fn github_release_status() -> ReleaseStatus {
@@ -4912,11 +4930,32 @@ mod tests {
 
     #[test]
     fn minimum_version_gate_handles_v_prefix_in_minimum() {
-        // minimum_required in versions.json may be "v0.18.0"
+        // minimum in mr.toml may be "v0.18.0"
         let normalised = normalize_release_version("v0.18.0");
         assert_eq!(normalised, "0.18.0");
         assert!(matches!(
             compare_release_versions("0.17.5", normalised),
+            Ordering::Less
+        ));
+    }
+
+    #[test]
+    fn parses_mr_minimum_version_for_comfygit() {
+        let body = r#"
+[mr]
+snf = "0.40.0"
+cg = "0.50.0"
+"#;
+        let value: toml::Value = toml::from_str(body).expect("parse mr.toml");
+        let minimum = value
+            .get("mr")
+            .and_then(|m| m.get("cg"))
+            .and_then(|v| v.as_str())
+            .map(normalize_release_version)
+            .expect("cg minimum");
+        assert_eq!(minimum, "0.50.0");
+        assert!(matches!(
+            compare_release_versions("0.34.3", minimum),
             Ordering::Less
         ));
     }

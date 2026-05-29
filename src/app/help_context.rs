@@ -6,8 +6,8 @@
 use crate::tui::{HelpContext, OverviewTab};
 
 use super::{
-    project_settings::{self, ProjectSettingsTab},
     App, DashboardPane, Screen,
+    project_settings::{self, ProjectSettingsTab},
 };
 
 impl App {
@@ -33,6 +33,15 @@ impl App {
             }
             if dialog.is_warning_mode() {
                 return HelpContext::ModalReleaseNowWarning;
+            }
+            if dialog.is_mirror_sync_mode() {
+                return HelpContext::ModalReleaseNowConfigure;
+            }
+            if dialog.is_artifacts_customize_mode() {
+                return HelpContext::ModalReleaseNowConfigure;
+            }
+            if dialog.is_existing_artifacts_mode() {
+                return HelpContext::ModalReleaseNowConfigure;
             }
             return HelpContext::ModalReleaseNowConfigure;
         }

@@ -566,9 +566,29 @@ fn release_asset_label_from_path(path: &str) -> String {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReleaseNowMode {
+    MirrorSync,
     BumpWarning,
+    ExistingArtifacts,
+    ArtifactsCustomize,
     Configure,
     Completed,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ReleaseNowArtifactStrategy {
+    #[default]
+    Pending,
+    ReuseAll,
+    RebuildAll,
+    PerPlatform,
+}
+
+#[derive(Clone)]
+pub(crate) struct ReleaseNowPlatformArtifactStatus {
+    pub(crate) label: String,
+    pub(crate) script: ReleaseNowScript,
+    pub(crate) existing_files: Vec<String>,
+    pub(crate) ready: bool,
 }
 
 #[derive(Clone)]
@@ -591,6 +611,11 @@ pub(crate) struct ReleaseNowDialog {
     pub(crate) auto_follow: bool,
     pub(crate) cancel_requested: bool,
     pub(crate) warning_confirm_selected: bool,
+    pub(crate) platform_artifact_statuses: Vec<ReleaseNowPlatformArtifactStatus>,
+    pub(crate) artifact_strategy: ReleaseNowArtifactStrategy,
+    pub(crate) artifact_reuse_by_label: std::collections::HashMap<String, bool>,
+    pub(crate) artifacts_choice_selected: usize,
+    pub(crate) customize_selected_platform: usize,
     pub(crate) scroll: u16,
     pub(crate) body_viewport_height: u16,
     pub(crate) body_viewport_width: u16,
@@ -607,6 +632,10 @@ pub(crate) struct ReleaseNowDialog {
     pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
     pub(crate) readme_inject_at_row: u16,
     pub(crate) release_title_template: String,
+    pub(crate) integration_mode: crate::config::IntegrationMode,
+    pub(crate) mirror_sync_report: Option<crate::git::MirrorSyncReport>,
+    pub(crate) mirror_sync_running: bool,
+    pub(crate) mirror_sync_log_lines: Vec<String>,
     pub(crate) started_at: Option<Instant>,
     /// Elapsed time frozen when the run stops (success, failure, or cancel).
     pub(crate) frozen_elapsed: Option<Duration>,
@@ -614,14 +643,9 @@ pub(crate) struct ReleaseNowDialog {
 
 impl ReleaseNowDialog {
     pub(crate) fn from_validation(validation: ReleaseNowValidation) -> Self {
-        let mode = if validation.warning_message.is_some() {
-            ReleaseNowMode::BumpWarning
-        } else {
-            ReleaseNowMode::Configure
-        };
-
-        Self {
+        let mut dialog = Self {
             project_name: validation.project_name,
+            integration_mode: validation.integration_mode,
             scope_label: validation.scope_label,
             scope: validation.scope,
             changelog_enabled: validation.changelog_enabled,
@@ -635,11 +659,16 @@ impl ReleaseNowDialog {
             release_notes_placeholder: "Edit release notes in Markdown before publishing."
                 .to_string(),
             warning_message: validation.warning_message,
-            mode,
+            mode: ReleaseNowMode::Configure,
             running: false,
             auto_follow: false,
             cancel_requested: false,
             warning_confirm_selected: false,
+            platform_artifact_statuses: Vec::new(),
+            artifact_strategy: ReleaseNowArtifactStrategy::Pending,
+            artifact_reuse_by_label: std::collections::HashMap::new(),
+            artifacts_choice_selected: 0,
+            customize_selected_platform: 0,
             scroll: 0,
             body_viewport_height: 0,
             body_viewport_width: 0,
@@ -656,13 +685,266 @@ impl ReleaseNowDialog {
             readme_inject_depth: validation.readme_inject_depth,
             readme_inject_at_row: validation.readme_inject_at_row,
             release_title_template: validation.release_title_template,
+            mirror_sync_report: validation
+                .mirror_sync_report
+                .map(|report| (*report).clone()),
+            mirror_sync_running: false,
+            mirror_sync_log_lines: Vec::new(),
             started_at: None,
             frozen_elapsed: None,
+        };
+
+        dialog.apply_post_validation_preflight();
+        dialog
+    }
+
+    fn apply_post_validation_preflight(&mut self) {
+        if self.needs_mirror_sync_prompt() {
+            self.mode = ReleaseNowMode::MirrorSync;
+            self.scroll = 0;
+            return;
         }
+        if self.warning_message.is_some() {
+            self.mode = ReleaseNowMode::BumpWarning;
+            self.scroll = 0;
+            return;
+        }
+        self.refresh_artifact_preflight();
+        if self.should_prompt_for_existing_artifacts() {
+            self.mode = ReleaseNowMode::ExistingArtifacts;
+            self.init_per_platform_defaults();
+        } else {
+            self.mode = ReleaseNowMode::Configure;
+        }
+        self.scroll = 0;
+    }
+
+    pub(crate) fn needs_mirror_sync_prompt(&self) -> bool {
+        self.mirror_sync_report
+            .as_ref()
+            .is_some_and(|report| !report.in_sync())
+    }
+
+    pub(crate) fn is_mirror_sync_mode(&self) -> bool {
+        self.mode == ReleaseNowMode::MirrorSync
+    }
+
+    pub(crate) fn begin_mirror_sync(&mut self) {
+        self.mirror_sync_running = true;
+        self.mirror_sync_log_lines.clear();
+        self.scroll = 0;
+    }
+
+    pub(crate) fn apply_mirror_sync_result(
+        &mut self,
+        report: crate::git::MirrorSyncReport,
+        log_lines: Vec<String>,
+    ) {
+        self.mirror_sync_running = false;
+        self.mirror_sync_report = Some(report.clone());
+        self.mirror_sync_log_lines.extend(log_lines);
+        if report.in_sync() {
+            self.proceed_past_mirror_sync();
+        }
+        self.scroll = 0;
+    }
+
+    pub(crate) fn apply_mirror_sync_failure(&mut self, error_message: String) {
+        self.mirror_sync_running = false;
+        self.mirror_sync_log_lines
+            .push(format!("[Mirror sync][error] {error_message}"));
+        self.scroll = 0;
+    }
+
+    pub(crate) fn proceed_past_mirror_sync(&mut self) {
+        if self.needs_mirror_sync_prompt() {
+            return;
+        }
+        if self.warning_message.is_some() {
+            self.mode = ReleaseNowMode::BumpWarning;
+        } else {
+            self.refresh_artifact_preflight();
+            if self.should_prompt_for_existing_artifacts() {
+                self.mode = ReleaseNowMode::ExistingArtifacts;
+                self.artifacts_choice_selected = 0;
+                self.init_per_platform_defaults();
+            } else {
+                self.mode = ReleaseNowMode::Configure;
+            }
+        }
+        self.scroll = 0;
     }
 
     pub(crate) fn is_warning_mode(&self) -> bool {
         self.mode == ReleaseNowMode::BumpWarning
+    }
+
+    pub(crate) fn is_existing_artifacts_mode(&self) -> bool {
+        matches!(
+            self.mode,
+            ReleaseNowMode::ExistingArtifacts | ReleaseNowMode::ArtifactsCustomize
+        )
+    }
+
+    pub(crate) fn is_artifacts_customize_mode(&self) -> bool {
+        self.mode == ReleaseNowMode::ArtifactsCustomize
+    }
+
+    pub(crate) fn should_prompt_for_existing_artifacts(&self) -> bool {
+        self.platform_artifact_statuses
+            .iter()
+            .any(|status| status.ready)
+    }
+
+    pub(crate) fn refresh_artifact_preflight(&mut self) {
+        self.platform_artifact_statuses = scan_artifacts_for_release_version(
+            &self.repo_root,
+            &self.tag_name,
+            self.selected_option(),
+        );
+    }
+
+    fn init_per_platform_defaults(&mut self) {
+        self.artifact_reuse_by_label = self
+            .platform_artifact_statuses
+            .iter()
+            .map(|status| (status.label.clone(), status.ready))
+            .collect();
+    }
+
+    pub(crate) fn proceed_past_warning(&mut self) {
+        self.refresh_artifact_preflight();
+        if self.should_prompt_for_existing_artifacts() {
+            self.mode = ReleaseNowMode::ExistingArtifacts;
+            self.artifacts_choice_selected = 0;
+            self.init_per_platform_defaults();
+        } else {
+            self.mode = ReleaseNowMode::Configure;
+        }
+        self.warning_confirm_selected = false;
+        self.scroll = 0;
+    }
+
+    pub(crate) fn cycle_artifacts_choice(&mut self, delta: isize) {
+        const CHOICES: usize = 4;
+        self.artifacts_choice_selected =
+            (self.artifacts_choice_selected as isize + delta).rem_euclid(CHOICES as isize) as usize;
+    }
+
+    pub(crate) fn confirm_existing_artifacts_choice(&mut self) {
+        match self.artifacts_choice_selected {
+            0 => {
+                self.artifact_strategy = ReleaseNowArtifactStrategy::ReuseAll;
+                self.mode = ReleaseNowMode::Configure;
+            }
+            1 => {
+                self.artifact_strategy = ReleaseNowArtifactStrategy::RebuildAll;
+                self.mode = ReleaseNowMode::Configure;
+            }
+            2 => {
+                self.artifact_strategy = ReleaseNowArtifactStrategy::PerPlatform;
+                self.mode = ReleaseNowMode::ArtifactsCustomize;
+                self.customize_selected_platform = self
+                    .customizable_platform_indices()
+                    .first()
+                    .copied()
+                    .unwrap_or(0);
+            }
+            _ => {}
+        }
+        self.scroll = 0;
+    }
+
+    pub(crate) fn confirm_artifacts_customize(&mut self) {
+        self.mode = ReleaseNowMode::Configure;
+        self.scroll = 0;
+    }
+
+    pub(crate) fn cycle_customize_platform(&mut self, delta: isize) {
+        let indices = self.customizable_platform_indices();
+        if indices.is_empty() {
+            self.customize_selected_platform = 0;
+            return;
+        }
+        let current = indices
+            .iter()
+            .position(|index| *index == self.customize_selected_platform)
+            .unwrap_or(0);
+        let next = (current as isize + delta).rem_euclid(indices.len() as isize) as usize;
+        self.customize_selected_platform = indices[next];
+    }
+
+    pub(crate) fn toggle_customize_platform_reuse(&mut self) {
+        let Some(status) = self
+            .platform_artifact_statuses
+            .get(self.customize_selected_platform)
+        else {
+            return;
+        };
+        if !status.ready {
+            return;
+        }
+        let entry = self
+            .artifact_reuse_by_label
+            .entry(status.label.clone())
+            .or_insert(true);
+        *entry = !*entry;
+    }
+
+    fn customizable_platform_indices(&self) -> Vec<usize> {
+        self.platform_artifact_statuses
+            .iter()
+            .enumerate()
+            .filter(|(_, status)| !status.script.artifact_dirs.is_empty())
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    pub(crate) fn scripts_to_run(&self) -> Vec<ReleaseNowScript> {
+        let option = self.selected_option();
+        match self.artifact_strategy {
+            ReleaseNowArtifactStrategy::Pending | ReleaseNowArtifactStrategy::RebuildAll => {
+                option.scripts.clone()
+            }
+            ReleaseNowArtifactStrategy::ReuseAll => option
+                .scripts
+                .iter()
+                .filter(|script| {
+                    !self
+                        .platform_artifact_statuses
+                        .iter()
+                        .find(|status| status.label == script.label)
+                        .is_some_and(|status| status.ready)
+                })
+                .cloned()
+                .collect(),
+            ReleaseNowArtifactStrategy::PerPlatform => option
+                .scripts
+                .iter()
+                .filter(|script| {
+                    !self
+                        .artifact_reuse_by_label
+                        .get(&script.label)
+                        .copied()
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect(),
+        }
+    }
+
+    pub(crate) fn artifact_reuse_summary(&self) -> Option<String> {
+        if self.artifact_strategy == ReleaseNowArtifactStrategy::Pending {
+            return None;
+        }
+        let total = self.selected_option().scripts.len();
+        let skipped = total.saturating_sub(self.scripts_to_run().len());
+        if skipped == 0 {
+            return None;
+        }
+        Some(format!(
+            "Reusing existing dist/latest artifacts for {skipped} of {total} configured build(s)."
+        ))
     }
 
     pub(crate) fn is_completed(&self) -> bool {
@@ -703,6 +985,24 @@ impl ReleaseNowDialog {
 
         let len = self.options.len() as isize;
         self.selected_option = (self.selected_option as isize + delta).rem_euclid(len) as usize;
+        if !self.running
+            && matches!(
+                self.mode,
+                ReleaseNowMode::Configure
+                    | ReleaseNowMode::ExistingArtifacts
+                    | ReleaseNowMode::ArtifactsCustomize
+            )
+        {
+            self.artifact_strategy = ReleaseNowArtifactStrategy::Pending;
+            self.refresh_artifact_preflight();
+            if self.should_prompt_for_existing_artifacts() {
+                self.mode = ReleaseNowMode::ExistingArtifacts;
+                self.artifacts_choice_selected = 0;
+                self.init_per_platform_defaults();
+            } else {
+                self.mode = ReleaseNowMode::Configure;
+            }
+        }
     }
 
     pub(crate) fn toggle_attach_changelog(&mut self) {
@@ -711,12 +1011,6 @@ impl ReleaseNowDialog {
 
     pub(crate) fn toggle_warning_selection(&mut self) {
         self.warning_confirm_selected = !self.warning_confirm_selected;
-    }
-
-    pub(crate) fn proceed_past_warning(&mut self) {
-        self.mode = ReleaseNowMode::Configure;
-        self.warning_confirm_selected = false;
-        self.scroll = 0;
     }
 
     pub(crate) fn scroll_by(&mut self, delta: i16) {
@@ -728,6 +1022,12 @@ impl ReleaseNowDialog {
             .scroll
             .saturating_add_signed(delta)
             .min(self.max_scroll_offset());
+    }
+
+    pub(crate) fn back_from_artifacts_customize(&mut self) {
+        self.mode = ReleaseNowMode::ExistingArtifacts;
+        self.artifact_strategy = ReleaseNowArtifactStrategy::Pending;
+        self.scroll = 0;
     }
 
     pub(crate) fn begin_running(&mut self) {
@@ -743,6 +1043,9 @@ impl ReleaseNowDialog {
         self.summary_is_error = false;
         self.artifact_files.clear();
         self.log_lines.clear();
+        if let Some(summary) = self.artifact_reuse_summary() {
+            self.log_lines.push(summary);
+        }
         self.scroll = 0;
     }
 
@@ -944,7 +1247,10 @@ impl ReleaseNowDialog {
 
     pub(crate) fn body_title(&self) -> &'static str {
         match self.mode {
+            ReleaseNowMode::MirrorSync => " Mirror Sync ",
             ReleaseNowMode::BumpWarning => " Merge Check ",
+            ReleaseNowMode::ExistingArtifacts => " Existing Artifacts ",
+            ReleaseNowMode::ArtifactsCustomize => " Reuse / Rebuild ",
             ReleaseNowMode::Configure => {
                 if self.running {
                     " Live Log "
@@ -960,6 +1266,7 @@ impl ReleaseNowDialog {
 
     pub(crate) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
         let lines = match self.mode {
+            ReleaseNowMode::MirrorSync => self.mirror_sync_body_lines(),
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
                     Line::from(
@@ -977,6 +1284,8 @@ impl ReleaseNowDialog {
                 }
                 lines
             }
+            ReleaseNowMode::ExistingArtifacts => self.existing_artifacts_body_lines(),
+            ReleaseNowMode::ArtifactsCustomize => self.artifacts_customize_body_lines(),
             ReleaseNowMode::Configure => {
                 if self.running {
                     if self.log_lines.is_empty() {
@@ -1054,6 +1363,7 @@ impl ReleaseNowDialog {
 
     fn body_plain_lines(&self) -> Vec<String> {
         match self.mode {
+            ReleaseNowMode::MirrorSync => self.mirror_sync_plain_lines(),
             ReleaseNowMode::BumpWarning => {
                 let mut lines = vec![
                     "Recent merge validation did not find a very recent pull request merge."
@@ -1065,6 +1375,8 @@ impl ReleaseNowDialog {
                 }
                 lines
             }
+            ReleaseNowMode::ExistingArtifacts => self.existing_artifacts_plain_lines(),
+            ReleaseNowMode::ArtifactsCustomize => self.artifacts_customize_plain_lines(),
             ReleaseNowMode::Configure => {
                 if self.running {
                     if self.log_lines.is_empty() {
@@ -1117,6 +1429,120 @@ impl ReleaseNowDialog {
         }
     }
 
+    fn mirror_sync_body_lines(&self) -> Vec<Line<'static>> {
+        self.mirror_sync_plain_lines()
+            .into_iter()
+            .map(Line::from)
+            .collect()
+    }
+
+    fn mirror_sync_plain_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            "GitLab+GitHub projects require both remotes to track the same commit before ReleaseNOW can publish."
+                .to_string(),
+            String::new(),
+        ];
+        if let Some(report) = &self.mirror_sync_report {
+            lines.extend(report.summary_lines());
+        } else {
+            lines.push("Mirror sync status is unavailable.".to_string());
+        }
+        if self.mirror_sync_running {
+            lines.push(String::new());
+            lines.push("Sync in progress...".to_string());
+        }
+        if !self.mirror_sync_log_lines.is_empty() {
+            lines.push(String::new());
+            lines.extend(self.mirror_sync_log_lines.clone());
+        }
+        lines
+    }
+
+    fn existing_artifacts_body_lines(&self) -> Vec<Line<'static>> {
+        self.existing_artifacts_plain_lines()
+            .into_iter()
+            .map(Line::from)
+            .collect()
+    }
+
+    fn existing_artifacts_plain_lines(&self) -> Vec<String> {
+        let version = release_version_from_tag(&self.tag_name);
+        let mut lines = vec![
+            format!("dist/latest already contains version {version} artifacts for this release."),
+            String::new(),
+            "Choose whether to reuse the existing builds or run the configured scripts again."
+                .to_string(),
+            String::new(),
+        ];
+        for status in &self.platform_artifact_statuses {
+            if status.script.artifact_dirs.is_empty() {
+                continue;
+            }
+            let state = if status.ready {
+                format!("ready ({} file(s))", status.existing_files.len())
+            } else {
+                "missing".to_string()
+            };
+            lines.push(format!("- {}: {state}", status.label));
+        }
+        lines
+    }
+
+    fn artifacts_customize_body_lines(&self) -> Vec<Line<'static>> {
+        self.artifacts_customize_plain_lines()
+            .into_iter()
+            .map(|line| {
+                if line.starts_with('>') {
+                    Line::from(line).style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    Line::from(line)
+                }
+            })
+            .collect()
+    }
+
+    fn artifacts_customize_plain_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            "Toggle each ready platform between Reuse and Rebuild.".to_string(),
+            "Platforms without matching artifacts must be rebuilt.".to_string(),
+            String::new(),
+        ];
+        for (index, status) in self.platform_artifact_statuses.iter().enumerate() {
+            if status.script.artifact_dirs.is_empty() {
+                continue;
+            }
+            let reuse = self
+                .artifact_reuse_by_label
+                .get(&status.label)
+                .copied()
+                .unwrap_or(false);
+            let action = if !status.ready {
+                "Rebuild (required)"
+            } else if reuse {
+                "Reuse existing"
+            } else {
+                "Rebuild"
+            };
+            let prefix = if index == self.customize_selected_platform {
+                ">"
+            } else {
+                " "
+            };
+            lines.push(format!(
+                "{prefix} {}: {action} — {} file(s)",
+                status.label,
+                status.existing_files.len()
+            ));
+        }
+        lines.push(String::new());
+        lines.push("Space toggles Reuse/Rebuild. Enter continues to ReleaseNOW.".to_string());
+        lines
+    }
+
     fn highlight_selected_lines(&self, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
         let Some((start, end)) = self.selection_range() else {
             return lines;
@@ -1139,6 +1565,7 @@ impl ReleaseNowDialog {
 #[derive(Clone)]
 pub(crate) struct ReleaseNowValidation {
     pub(crate) project_name: String,
+    pub(crate) integration_mode: crate::config::IntegrationMode,
     pub(crate) scope_label: String,
     pub(crate) scope: GitScopeContext,
     pub(crate) changelog_enabled: bool,
@@ -1154,6 +1581,7 @@ pub(crate) struct ReleaseNowValidation {
     pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
     pub(crate) readme_inject_at_row: u16,
     pub(crate) release_title_template: String,
+    pub(crate) mirror_sync_report: Option<Box<crate::git::MirrorSyncReport>>,
 }
 
 #[derive(Clone)]
@@ -1167,11 +1595,13 @@ pub(crate) struct ReleaseNowRunOption {
 pub(crate) struct ReleaseNowScript {
     pub(crate) label: String,
     pub(crate) script_path: String,
+    pub(crate) artifact_dirs: Vec<String>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ReleaseNowExecutionRequest {
     pub(crate) scope_label: String,
+    pub(crate) integration_mode: crate::config::IntegrationMode,
     pub(crate) scope: GitScopeContext,
     pub(crate) changelog_enabled: bool,
     pub(crate) mirror_summary_to_root_changelog: bool,
@@ -1196,6 +1626,25 @@ pub(crate) struct ReleaseNowExecutionOutcome {
     pub(crate) log_lines: Vec<String>,
 }
 
+pub(crate) struct ReleaseNowMirrorSyncResult {
+    pub(crate) report: crate::git::MirrorSyncReport,
+    pub(crate) log_lines: Vec<String>,
+}
+
+pub(crate) fn run_mirror_sync_operation(
+    repo_root: &str,
+    gitlab_remote: Option<&str>,
+    github_remote: Option<&str>,
+    push: bool,
+) -> Result<ReleaseNowMirrorSyncResult> {
+    let mut log_lines = Vec::new();
+    if push {
+        log_lines = crate::git::push_mirror_sync(repo_root, gitlab_remote, github_remote)?;
+    }
+    let report = crate::git::check_mirror_sync(repo_root, gitlab_remote, github_remote)?;
+    Ok(ReleaseNowMirrorSyncResult { report, log_lines })
+}
+
 pub(crate) fn validate_release_now(
     project: &ProjectConfig,
     scope_index: usize,
@@ -1205,8 +1654,7 @@ pub(crate) fn validate_release_now(
         bail!("ReleaseNOW requires a GitHub- or GitLab-enabled project with a configured remote")
     }
 
-    let forge = crate::forge::require_forge_cli(project.integration_mode)?;
-    forge.ensure_authenticated()?;
+    crate::forge::ensure_forge_authenticated(project.integration_mode)?;
 
     let contexts = collect_all_branch_git_scope_contexts(project)?;
     if contexts.is_empty() {
@@ -1215,6 +1663,25 @@ pub(crate) fn validate_release_now(
 
     let scope_index = scope_index.min(contexts.len().saturating_sub(1));
     let scope = contexts[scope_index].clone();
+
+    let mirror_sync_report = if project.integration_mode.is_dual_forge() {
+        Some(Box::new(
+            crate::git::check_mirror_sync(
+                &scope.repo_root,
+                scope.remote_spec.as_deref(),
+                scope.secondary_remote_spec.as_deref(),
+            )
+            .with_context(|| {
+                format!(
+                    "ReleaseNOW pre-flight mirror sync check failed for {}",
+                    scope.display_name
+                )
+            })?,
+        ))
+    } else {
+        None
+    };
+
     let options = collect_release_now_options(project.release_now_for_scope(scope_index))?;
     let warning_message =
         build_recent_merge_warning(project, &contexts, scope_index, cancel.clone())?;
@@ -1223,6 +1690,7 @@ pub(crate) fn validate_release_now(
 
     Ok(ReleaseNowValidation {
         project_name: project.name.clone(),
+        integration_mode: project.integration_mode,
         scope_label: scope
             .scope_kind
             .map(|kind| format!("{} ({})", scope.display_name, kind.display_name()))
@@ -1256,12 +1724,14 @@ pub(crate) fn validate_release_now(
             .release_now_for_scope(scope_index)
             .release_title_template
             .clone(),
+        mirror_sync_report,
     })
 }
 
 pub(crate) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
     ReleaseNowExecutionRequest {
         scope_label: dialog.scope_label.clone(),
+        integration_mode: dialog.integration_mode,
         scope: dialog.scope.clone(),
         changelog_enabled: dialog.changelog_enabled,
         mirror_summary_to_root_changelog: dialog.mirror_summary_to_root_changelog,
@@ -1276,7 +1746,7 @@ pub(crate) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
             }
         },
         selected_option_label: dialog.selected_option().label.clone(),
-        scripts: dialog.selected_option().scripts.clone(),
+        scripts: dialog.scripts_to_run(),
         artifact_dirs: dialog.selected_option().artifact_dirs.clone(),
         release_notes_markdown: dialog
             .attach_changelog
@@ -1304,6 +1774,13 @@ pub(crate) async fn execute_release_now_async(
         request.scope_label, request.selected_option_label
     )]);
 
+    if request.scripts.is_empty() && !request.artifact_dirs.is_empty() {
+        emit_progress(vec![
+            "Skipping configured build scripts; reusing existing dist/latest artifacts."
+                .to_string(),
+        ]);
+    }
+
     if request.readme_injection_enabled {
         prepush_auto_injected_readme_async(&request, &cancel, &mut emit_progress).await?;
     }
@@ -1312,7 +1789,11 @@ pub(crate) async fn execute_release_now_async(
         crate::workflow::rls_now_mac::partition_mac_scripts(&request.scripts, &request.tag_name);
     let mut mac_ci_warning: Option<String> = None;
 
-    if let Some(mac_config) = mac_ci {
+    if let Some(mut mac_config) = mac_ci {
+        mac_config.github_repo = Some(crate::forge::resolve_github_repo_slug_for_actions(
+            &request.repo_root,
+            request.scope.secondary_remote_spec.as_deref(),
+        )?);
         let repo_root = request.repo_root.clone();
         let (session, trigger_lines) = crate::workflow::rls_now_mac::trigger_mac_ci_session(
             repo_root.clone(),
@@ -1493,18 +1974,93 @@ pub(crate) async fn execute_release_now_async(
         emit_progress(vec![format!("Warning: {}", warning)]);
     }
 
-    create_or_update_forge_release(
-        forge,
-        &request.repo_root,
-        &request.tag_name,
-        request.scope.remote_spec.as_deref(),
-        &request.release_title,
-        release_notes_for_github.as_deref(),
-        &artifact_files,
-        cancel.clone(),
-        &mut emit_progress,
-    )
-    .await?;
+    if request.integration_mode.is_dual_forge() {
+        let primary_url = request
+            .scope
+            .remote_spec
+            .as_deref()
+            .ok_or_else(|| anyhow!("GitLab+GitHub project is missing the GitLab remote URL"))?;
+        let secondary_url = request
+            .scope
+            .secondary_remote_spec
+            .as_deref()
+            .ok_or_else(|| anyhow!("GitLab+GitHub project is missing the GitHub remote URL"))?;
+
+        let mut gitlab_warnings = Vec::new();
+        let release_notes_for_gitlab = rls_now_qd::finalize_release_notes_with_quick_downloads(
+            request.release_notes_markdown.clone(),
+            Some(primary_url),
+            &request.tag_name,
+            &qd_artifacts,
+            &request.quick_downloads,
+            &mut gitlab_warnings,
+        );
+        for warning in gitlab_warnings {
+            emit_progress(vec![format!("Warning: {}", warning)]);
+        }
+
+        let mut github_warnings = Vec::new();
+        let release_notes_for_github_secondary =
+            rls_now_qd::finalize_release_notes_with_quick_downloads(
+                request.release_notes_markdown.clone(),
+                Some(secondary_url),
+                &request.tag_name,
+                &qd_artifacts,
+                &request.quick_downloads,
+                &mut github_warnings,
+            );
+        for warning in github_warnings {
+            emit_progress(vec![format!("Warning: {}", warning)]);
+        }
+
+        let primary_forge = request
+            .integration_mode
+            .forge_kind()
+            .ok_or_else(|| anyhow!("GitLab+GitHub project is missing a primary forge"))?;
+        let secondary_forge = request
+            .integration_mode
+            .secondary_forge_kind()
+            .ok_or_else(|| anyhow!("GitLab+GitHub project is missing a secondary forge"))?;
+
+        create_or_update_forge_release(
+            primary_forge,
+            &request.repo_root,
+            &request.tag_name,
+            Some(primary_url),
+            &request.release_title,
+            release_notes_for_gitlab.as_deref(),
+            &artifact_files,
+            cancel.clone(),
+            &mut emit_progress,
+        )
+        .await?;
+
+        create_or_update_forge_release(
+            secondary_forge,
+            &request.repo_root,
+            &request.tag_name,
+            Some(secondary_url),
+            &request.release_title,
+            release_notes_for_github_secondary.as_deref(),
+            &artifact_files,
+            cancel.clone(),
+            &mut emit_progress,
+        )
+        .await?;
+    } else {
+        create_or_update_forge_release(
+            forge,
+            &request.repo_root,
+            &request.tag_name,
+            request.scope.remote_spec.as_deref(),
+            &request.release_title,
+            release_notes_for_github.as_deref(),
+            &artifact_files,
+            cancel.clone(),
+            &mut emit_progress,
+        )
+        .await?;
+    }
 
     if request.changelog_enabled || request.readme_injection_enabled {
         ensure_not_cancelled(&cancel)?;
@@ -1660,6 +2216,16 @@ fn build_guided_error(summary: &str, guidance: &str, detail: Option<&str>) -> St
     }
 }
 
+fn repo_selector_from_cli_repo_args(repo_args: &[String]) -> Result<String> {
+    repo_args
+        .windows(2)
+        .find(|window| window[0] == "-R")
+        .map(|window| window[1].clone())
+        .ok_or_else(|| {
+            anyhow!("ReleaseNOW could not derive repository selector from forge CLI arguments")
+        })
+}
+
 fn extract_relevant_error_detail(message: &str) -> Option<String> {
     let cleaned = strip_terminal_control_sequences(message);
     let detail_source = cleaned
@@ -1667,27 +2233,48 @@ fn extract_relevant_error_detail(message: &str) -> Option<String> {
         .map(|(_, rest)| rest)
         .unwrap_or(cleaned.as_str());
 
-    let preferred = detail_source
+    let segments = detail_source
         .split(" | ")
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
-        .find(|segment| {
-            let lower = segment.to_ascii_lowercase();
-            lower.contains("fatal:")
-                || lower.contains("error:")
-                || lower.contains("denied")
-                || lower.contains("rejected")
-                || lower.contains("not found")
-                || lower.contains("failed")
-        })
-        .or_else(|| {
-            detail_source
-                .split(" | ")
-                .map(str::trim)
-                .find(|segment| !segment.is_empty())
-        })?;
+        .collect::<Vec<_>>();
 
-    Some(truncate_error_detail(preferred, 220))
+    if let Some(segment) = segments
+        .iter()
+        .rev()
+        .find(|segment| is_error_detail_segment(segment))
+    {
+        return Some(truncate_error_detail(segment, 220));
+    }
+
+    segments
+        .iter()
+        .rev()
+        .find(|segment| !is_progress_detail_segment(segment))
+        .map(|segment| truncate_error_detail(segment, 220))
+}
+
+fn is_error_detail_segment(segment: &str) -> bool {
+    let lower = segment.to_ascii_lowercase();
+    lower.contains("error")
+        || lower.contains("failed")
+        || lower.contains("fatal:")
+        || lower.contains("denied")
+        || lower.contains("rejected")
+        || lower.contains("not found")
+        || lower.contains("already been taken")
+        || lower.contains("validation failed")
+        || lower.contains("http 4")
+        || lower.contains("http 5")
+}
+
+fn is_progress_detail_segment(segment: &str) -> bool {
+    let lower = segment.to_ascii_lowercase();
+    lower.contains("validating tag")
+        || lower.contains("creating or updating release")
+        || lower.contains("uploading release assets")
+        || lower.contains("uploading to release")
+        || lower.contains("release updated")
 }
 
 fn truncate_error_detail(detail: &str, max_len: usize) -> String {
@@ -1788,6 +2375,7 @@ fn push_release_option(
         scripts: vec![ReleaseNowScript {
             label: label.to_string(),
             script_path: trimmed.to_string(),
+            artifact_dirs: artifact_dirs.iter().map(|dir| (*dir).to_string()).collect(),
         }],
         artifact_dirs: artifact_dirs.iter().map(|dir| (*dir).to_string()).collect(),
     });
@@ -2151,6 +2739,83 @@ fn discover_artifacts(repo_root: &str, artifact_dirs: &[String]) -> Result<Vec<S
     Ok(files)
 }
 
+pub(crate) fn release_version_from_tag(tag_name: &str) -> String {
+    tag_name
+        .trim()
+        .trim_start_matches(['v', 'V'])
+        .trim()
+        .to_string()
+}
+
+pub(crate) fn scan_artifacts_for_release_version(
+    repo_root: &str,
+    tag_name: &str,
+    option: &ReleaseNowRunOption,
+) -> Vec<ReleaseNowPlatformArtifactStatus> {
+    let version = release_version_from_tag(tag_name);
+    if version.is_empty() {
+        return Vec::new();
+    }
+
+    option
+        .scripts
+        .iter()
+        .map(|script| {
+            let existing_files =
+                discover_version_artifacts(repo_root, &script.artifact_dirs, &version);
+            let ready = !script.artifact_dirs.is_empty()
+                && script
+                    .artifact_dirs
+                    .iter()
+                    .all(|dir| dir_has_version_artifact(repo_root, dir, &version));
+            ReleaseNowPlatformArtifactStatus {
+                label: script.label.clone(),
+                script: script.clone(),
+                existing_files,
+                ready,
+            }
+        })
+        .collect()
+}
+
+fn discover_version_artifacts(
+    repo_root: &str,
+    artifact_dirs: &[String],
+    version: &str,
+) -> Vec<String> {
+    let mut files = Vec::new();
+    for dir in artifact_dirs {
+        let root = Path::new(repo_root).join("dist").join("latest").join(dir);
+        if !root.exists() {
+            continue;
+        }
+        let _ = collect_files_recursive(&root, &mut files);
+    }
+    files.retain(|path| file_matches_release_version(path, version));
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn dir_has_version_artifact(repo_root: &str, dir: &str, version: &str) -> bool {
+    let root = Path::new(repo_root).join("dist").join("latest").join(dir);
+    if !root.is_dir() {
+        return false;
+    }
+    let mut files = Vec::new();
+    collect_files_recursive(&root, &mut files).is_ok()
+        && files
+            .iter()
+            .any(|path| file_matches_release_version(path, version))
+}
+
+fn file_matches_release_version(path: &str, version: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(version))
+}
+
 fn collect_files_recursive(root: &Path, files: &mut Vec<String>) -> Result<()> {
     for entry in
         fs::read_dir(root).with_context(|| format!("failed to read '{}'", root.display()))?
@@ -2272,20 +2937,19 @@ async fn create_or_update_forge_release(
                     }
                 }
                 crate::forge::ForgeKind::GitLab => {
-                    // glab doesn't mirror gh upload/edit subcommands; use `release create`
-                    // to update an existing release while preserving metadata.
+                    let repo_selector = repo_selector_from_cli_repo_args(&repo_args)?;
+                    let asset_labels = artifact_files
+                        .iter()
+                        .map(|path| release_asset_label_from_path(path))
+                        .collect::<Vec<_>>();
+
                     let mut create_args = vec![
                         "release".to_string(),
                         "create".to_string(),
                         tag_name.to_string(),
+                        "--name".to_string(),
+                        release_title.to_string(),
                     ];
-                    create_args.extend(
-                        artifact_files
-                            .iter()
-                            .map(|path| gitlab_release_asset_argument(path)),
-                    );
-                    create_args.push("--name".to_string());
-                    create_args.push(release_title.to_string());
                     if let Some(notes_file) = &notes_file {
                         create_args.push("--notes-file".to_string());
                         create_args.push(notes_file.display().to_string());
@@ -2303,6 +2967,51 @@ async fn create_or_update_forge_release(
                                 &format!("{cli_name} release create"),
                                 cli_name,
                                 &create_cancel,
+                                &progress_tx,
+                            )
+                        },
+                        emit_progress,
+                    )
+                    .await?;
+
+                    let tag_name_owned = tag_name.to_string();
+                    let removed_assets = run_blocking_job(move || {
+                        crate::glab::release::remove_conflicting_release_assets(
+                            &repo_selector,
+                            &tag_name_owned,
+                            &asset_labels,
+                        )
+                    })
+                    .await?;
+                    for asset_name in removed_assets {
+                        emit_progress(vec![format!(
+                            "Removed existing GitLab release asset '{asset_name}' before re-upload."
+                        )]);
+                    }
+
+                    let mut upload_args = vec![
+                        "release".to_string(),
+                        "upload".to_string(),
+                        tag_name.to_string(),
+                    ];
+                    upload_args.extend(
+                        artifact_files
+                            .iter()
+                            .map(|path| gitlab_release_asset_argument(path)),
+                    );
+                    upload_args.extend(repo_args.clone());
+                    let repo_root_owned = repo_root.to_string();
+                    let upload_cancel = cancel.clone();
+                    run_blocking_streaming_operation(
+                        move |progress_tx| {
+                            run_command_with_streaming(
+                                &repo_root_owned,
+                                cli_name,
+                                &upload_args,
+                                RELEASE_NOW_TIMEOUT,
+                                &format!("{cli_name} release upload"),
+                                cli_name,
+                                &upload_cancel,
                                 &progress_tx,
                             )
                         },
@@ -2779,6 +3488,15 @@ mod tests {
     }
 
     #[test]
+    fn extract_relevant_error_detail_prefers_glab_asset_conflict() {
+        let message = "glab release create failed with exit code 1: [glab][stdout] • Validating tag v0.3.2 | [glab][stdout] ✓ Release updated | [glab][stdout] ERROR | [glab][stdout] Name has already been taken";
+
+        let detail = extract_relevant_error_detail(message).expect("detail");
+
+        assert!(detail.contains("already been taken") || detail.contains("ERROR"));
+    }
+
+    #[test]
     fn format_exit_code_removes_debug_option_wrapper() {
         assert_eq!(format_exit_code(Some(1)), "1");
         assert_eq!(format_exit_code(None), "unknown");
@@ -2988,5 +3706,124 @@ mod tests {
 
         fs::remove_dir_all(&local_dir).expect("remove local temp repo dir");
         fs::remove_dir_all(&remote_dir).expect("remove remote temp repo dir");
+    }
+
+    #[test]
+    fn release_version_from_tag_strips_v_prefix() {
+        assert_eq!(release_version_from_tag("v0.3.2"), "0.3.2");
+        assert_eq!(release_version_from_tag("1.0.0"), "1.0.0");
+    }
+
+    #[test]
+    fn scan_artifacts_for_release_version_detects_ready_platforms() {
+        let repo_dir = create_temp_repo_dir("release-now-artifact-scan");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        let artifact_path = repo_dir.join("dist").join("latest").join("linux-amd64");
+        fs::create_dir_all(&artifact_path).expect("create artifact dir");
+        fs::write(
+            artifact_path.join("snif-0.3.2-linux-amd64.tar.gz"),
+            b"artifact",
+        )
+        .expect("write artifact");
+
+        let option = ReleaseNowRunOption {
+            label: "All configured".to_string(),
+            scripts: vec![ReleaseNowScript {
+                label: "Linux AMD".to_string(),
+                script_path: "scripts/build.sh".to_string(),
+                artifact_dirs: vec!["linux-amd64".to_string()],
+            }],
+            artifact_dirs: vec!["linux-amd64".to_string()],
+        };
+
+        let statuses = scan_artifacts_for_release_version(&repo_root, "v0.3.2", &option);
+        assert_eq!(statuses.len(), 1);
+        assert!(statuses[0].ready);
+        assert_eq!(statuses[0].existing_files.len(), 1);
+
+        fs::remove_dir_all(&repo_dir).expect("remove temp repo dir");
+    }
+
+    #[test]
+    fn scripts_to_run_skips_ready_platforms_when_reusing_all() {
+        let script = ReleaseNowScript {
+            label: "Linux AMD".to_string(),
+            script_path: "scripts/build.sh".to_string(),
+            artifact_dirs: vec!["linux-amd64".to_string()],
+        };
+        let dialog = ReleaseNowDialog {
+            project_name: "Test".to_string(),
+            integration_mode: crate::config::IntegrationMode::GitHubEnabled,
+            scope_label: "main".to_string(),
+            scope: GitScopeContext {
+                display_name: "main".to_string(),
+                scope_kind: None,
+                repo_root: "/tmp".to_string(),
+                remote_spec: None,
+                secondary_remote_spec: None,
+                main_branch_name: Some("main".to_string()),
+                suggested_tag_name: "v0.3.2".to_string(),
+                path_filters: Vec::new(),
+                hide_pr_messages: false,
+                hide_bump_messages: false,
+                mini_commit_hashes: false,
+                changelog_wrap_detailed_if_top_picks: false,
+            },
+            changelog_enabled: false,
+            mirror_summary_to_root_changelog: false,
+            repo_root: "/tmp".to_string(),
+            tag_name: "v0.3.2".to_string(),
+            options: vec![ReleaseNowRunOption {
+                label: "All configured".to_string(),
+                scripts: vec![script.clone()],
+                artifact_dirs: vec!["linux-amd64".to_string()],
+            }],
+            selected_option: 0,
+            attach_changelog: false,
+            release_notes_markdown: String::new(),
+            release_notes_placeholder: String::new(),
+            warning_message: None,
+            mode: ReleaseNowMode::Configure,
+            running: false,
+            auto_follow: false,
+            cancel_requested: false,
+            warning_confirm_selected: false,
+            platform_artifact_statuses: vec![ReleaseNowPlatformArtifactStatus {
+                label: script.label.clone(),
+                script: script.clone(),
+                existing_files: vec![
+                    "dist/latest/linux-amd64/snif-0.3.2-linux-amd64.tar.gz".to_string(),
+                ],
+                ready: true,
+            }],
+            artifact_strategy: ReleaseNowArtifactStrategy::ReuseAll,
+            artifact_reuse_by_label: std::collections::HashMap::new(),
+            artifacts_choice_selected: 0,
+            customize_selected_platform: 0,
+            scroll: 0,
+            body_viewport_height: 0,
+            body_viewport_width: 0,
+            selection_anchor: None,
+            selection_focus: None,
+            summary: None,
+            summary_is_warning: false,
+            summary_is_error: false,
+            artifact_files: Vec::new(),
+            log_lines: Vec::new(),
+            quick_downloads: ReleaseNowQuickDownloadsSettings::default(),
+            readme_injection_enabled: false,
+            readme_inject_only_top_picks: false,
+            readme_inject_depth: crate::config::ReadmeInjectDepth::CurrentOnly,
+            readme_inject_at_row: 0,
+            release_title_template: String::new(),
+            mirror_sync_report: None,
+            mirror_sync_running: false,
+            mirror_sync_log_lines: Vec::new(),
+            started_at: None,
+            frozen_elapsed: None,
+        };
+
+        assert!(dialog.scripts_to_run().is_empty());
+        assert!(dialog.artifact_reuse_summary().is_some());
     }
 }

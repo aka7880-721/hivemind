@@ -39,6 +39,7 @@ pub(crate) struct ProjectWizard {
     pub(crate) viewport_rows: usize,
     pub(crate) repo_root: TextInput,
     pub(crate) remote_url: TextInput,
+    pub(crate) secondary_remote_url: TextInput,
     pub(crate) changelog_path: TextInput,
     pub(crate) tile_auto_rotation: bool,
     pub(crate) tile_rotates: TileRotationTarget,
@@ -64,6 +65,7 @@ impl Default for ProjectWizard {
             viewport_rows: 1,
             repo_root: TextInput::with_value(""),
             remote_url: TextInput::with_value(""),
+            secondary_remote_url: TextInput::with_value(""),
             changelog_path: TextInput::with_value(DEFAULT_CHANGELOG_PATH),
             tile_auto_rotation: true,
             tile_rotates: TileRotationTarget::Both,
@@ -87,6 +89,7 @@ impl ProjectWizard {
                 | WizardField::TargetPath
                 | WizardField::RepoRoot
                 | WizardField::RemoteUrl
+                | WizardField::SecondaryRemoteUrl
                 | WizardField::TileRotationTiming
         ) || (self.focus == WizardField::TargetKey && self.target_key_accepts_text())
     }
@@ -121,6 +124,9 @@ impl ProjectWizard {
         }
         if integration_mode.requires_remote() {
             fields.push(WizardField::RemoteUrl);
+        }
+        if integration_mode.requires_secondary_remote() {
+            fields.push(WizardField::SecondaryRemoteUrl);
         }
         fields.push(WizardField::TileAutoRotation);
         if self.tile_auto_rotation {
@@ -193,7 +199,14 @@ impl ProjectWizard {
                 HitAction::WizardScopeAction(ScopeAction::MoveDown),
             ),
             WizardField::RepoRoot => ("Repo root", HitAction::WizardField(field)),
-            WizardField::RemoteUrl => ("Remote URL", HitAction::WizardField(field)),
+            WizardField::RemoteUrl => {
+                if self.selected_integration_mode().requires_secondary_remote() {
+                    ("GitLab remote URL", HitAction::WizardField(field))
+                } else {
+                    ("Remote URL", HitAction::WizardField(field))
+                }
+            }
+            WizardField::SecondaryRemoteUrl => ("GitHub remote URL", HitAction::WizardField(field)),
             WizardField::TileAutoRotation => ("Auto-rotation", HitAction::WizardField(field)),
             WizardField::TileRotates => ("Rotates", HitAction::WizardField(field)),
             WizardField::TileRotationTiming => ("Rotation (s)", HitAction::WizardField(field)),
@@ -279,6 +292,9 @@ impl ProjectWizard {
             WizardField::MoveScopeDown => Line::from("Move the selected scope later"),
             WizardField::RepoRoot => self.repo_root.display_line_with_width(focused, max_width),
             WizardField::RemoteUrl => self.remote_url.display_line_with_width(focused, max_width),
+            WizardField::SecondaryRemoteUrl => self
+                .secondary_remote_url
+                .display_line_with_width(focused, max_width),
             WizardField::TileAutoRotation => Line::from(format!(
                 "< {} >",
                 if self.tile_auto_rotation { "Yes" } else { "No" }
@@ -411,6 +427,7 @@ impl ProjectWizard {
             }
             WizardField::RepoRoot => Some(&mut self.repo_root),
             WizardField::RemoteUrl => Some(&mut self.remote_url),
+            WizardField::SecondaryRemoteUrl => Some(&mut self.secondary_remote_url),
             WizardField::TileRotationTiming => Some(&mut self.tile_rotation_timing),
             _ => None,
         }
@@ -444,7 +461,10 @@ impl ProjectWizard {
             self.sync_target_key_preset_with_path();
             self.prefill_repo_root_from_target_path();
         }
-        if matches!(self.focus, WizardField::RepoRoot | WizardField::RemoteUrl) {
+        if matches!(
+            self.focus,
+            WizardField::RepoRoot | WizardField::RemoteUrl | WizardField::SecondaryRemoteUrl
+        ) {
             self.persist_scope_repo_inputs();
         }
     }
@@ -610,6 +630,7 @@ impl ProjectWizard {
                     IntegrationMode::GitLocalOnly => 1,
                     IntegrationMode::GitHubEnabled => 2,
                     IntegrationMode::GitLabEnabled => 3,
+                    IntegrationMode::GitLabGitHubEnabled => 4,
                 })
                 .unwrap_or(IntegrationMode::LocalOnly)
         } else {
@@ -629,7 +650,16 @@ impl ProjectWizard {
             let remote = if effective_integration_mode.requires_remote() {
                 let value = self.remote_url.value.trim();
                 if value.is_empty() {
-                    bail!("remote URL is required for GitHub-enabled projects");
+                    bail!("remote URL is required for forge-enabled projects");
+                }
+                Some(value.to_string())
+            } else {
+                None
+            };
+            let secondary_remote = if effective_integration_mode.requires_secondary_remote() {
+                let value = self.secondary_remote_url.value.trim();
+                if value.is_empty() {
+                    bail!("GitHub remote URL is required for GitLab+GitHub projects");
                 }
                 Some(value.to_string())
             } else {
@@ -638,6 +668,7 @@ impl ProjectWizard {
             Some(RepoConfig {
                 local_root: root.to_string(),
                 remote_url: remote,
+                secondary_remote_url: secondary_remote,
                 ..RepoConfig::default()
             })
         } else {
@@ -929,6 +960,7 @@ impl ProjectWizard {
         }
         let root = self.repo_root.value.trim().to_string();
         let remote = self.remote_url.value.trim().to_string();
+        let secondary_remote = self.secondary_remote_url.value.trim().to_string();
         if let Some(scope) = self.current_scope_mut() {
             scope.repo = match scope.integration_mode {
                 IntegrationMode::LocalOnly => None,
@@ -948,6 +980,20 @@ impl ProjectWizard {
                         ..RepoConfig::default()
                     })
                 }
+                IntegrationMode::GitLabGitHubEnabled => Some(RepoConfig {
+                    local_root: root,
+                    remote_url: if remote.is_empty() {
+                        None
+                    } else {
+                        Some(remote)
+                    },
+                    secondary_remote_url: if secondary_remote.is_empty() {
+                        None
+                    } else {
+                        Some(secondary_remote)
+                    },
+                    ..RepoConfig::default()
+                }),
             };
         }
     }
@@ -967,8 +1013,14 @@ impl ProjectWizard {
                 .as_ref()
                 .and_then(|r| r.remote_url.clone())
                 .unwrap_or_default();
+            let secondary_remote_url = scope
+                .repo
+                .as_ref()
+                .and_then(|r| r.secondary_remote_url.clone())
+                .unwrap_or_default();
             self.repo_root.set_value(repo_root);
             self.remote_url.set_value(remote_url);
+            self.secondary_remote_url.set_value(secondary_remote_url);
         }
     }
 }
@@ -991,6 +1043,7 @@ pub(crate) enum WizardField {
     MoveScopeDown,
     RepoRoot,
     RemoteUrl,
+    SecondaryRemoteUrl,
     TileAutoRotation,
     TileRotates,
     TileRotationTiming,

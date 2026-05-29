@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::{DateTime, Local};
 
 use crate::config::IntegrationMode;
@@ -278,6 +278,74 @@ pub fn integration_mode_for_remote_url(remote_url: &str) -> Option<IntegrationMo
         ForgeKind::GitHub => IntegrationMode::GitHubEnabled,
         ForgeKind::GitLab => IntegrationMode::GitLabEnabled,
     })
+}
+
+pub fn integration_mode_for_dual_remotes(
+    gitlab_remote_url: &str,
+    github_remote_url: &str,
+) -> Option<IntegrationMode> {
+    let gitlab = detect_forge_from_remote_url(gitlab_remote_url)?;
+    let github = detect_forge_from_remote_url(github_remote_url)?;
+    if gitlab == ForgeKind::GitLab && github == ForgeKind::GitHub {
+        Some(IntegrationMode::GitLabGitHubEnabled)
+    } else {
+        None
+    }
+}
+
+pub fn ensure_forge_clis(integration_mode: IntegrationMode) -> Result<Vec<ForgeKind>> {
+    match integration_mode {
+        IntegrationMode::GitLabGitHubEnabled => {
+            ForgeKind::GitLab.ensure_available()?;
+            ForgeKind::GitHub.ensure_available()?;
+            Ok(vec![ForgeKind::GitLab, ForgeKind::GitHub])
+        }
+        _ => Ok(vec![require_forge_cli(integration_mode)?]),
+    }
+}
+
+pub fn ensure_forge_authenticated(integration_mode: IntegrationMode) -> Result<()> {
+    for forge in ensure_forge_clis(integration_mode)? {
+        forge.ensure_authenticated()?;
+    }
+    Ok(())
+}
+
+pub fn github_repo_slug_from_remote_url(remote_url: &str) -> Option<String> {
+    let (owner, repo) = ForgeKind::GitHub.owner_repo_from_remote_url(remote_url)?;
+    Some(format!("{owner}/{repo}"))
+}
+
+pub fn resolve_github_repo_slug_for_actions(
+    repo_root: &str,
+    configured_secondary_remote: Option<&str>,
+) -> Result<String> {
+    if let Some(remote_url) = configured_secondary_remote
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(slug) = github_repo_slug_from_remote_url(remote_url) {
+            return Ok(slug);
+        }
+        if let Ok(remote_name) = crate::git::resolve_push_remote_name(repo_root, remote_url)
+            && let Ok(url) =
+                crate::git::run_git_checked(repo_root, &["remote", "get-url", &remote_name])
+            && let Some(slug) = github_repo_slug_from_remote_url(url.trim())
+        {
+            return Ok(slug);
+        }
+    }
+
+    for remote in crate::git::git_remote_names(repo_root)? {
+        let url = crate::git::run_git_checked(repo_root, &["remote", "get-url", &remote])?;
+        if let Some(slug) = github_repo_slug_from_remote_url(url.trim()) {
+            return Ok(slug);
+        }
+    }
+
+    bail!(
+        "could not resolve a GitHub repository for macOS CI; configure a GitHub remote URL in the project or add an origin remote pointing at github.com"
+    )
 }
 
 pub fn resolve_forge(integration_mode: IntegrationMode) -> Result<ForgeKind> {

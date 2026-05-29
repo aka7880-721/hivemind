@@ -30,10 +30,8 @@ impl App {
             return Ok(());
         }
 
-        if self.help_modal.is_some() {
-            if self.handle_help_key(key) {
-                return Ok(());
-            }
+        if self.help_modal.is_some() && self.handle_help_key(key) {
+            return Ok(());
         }
 
         if self.progress_dialog.is_some() {
@@ -255,6 +253,21 @@ impl App {
             .as_ref()
             .map(rls_now::ReleaseNowDialog::is_warning_mode)
             .unwrap_or(false);
+        let mirror_sync_mode = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_mirror_sync_mode)
+            .unwrap_or(false);
+        let existing_artifacts_mode = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_existing_artifacts_mode)
+            .unwrap_or(false);
+        let customize_mode = self
+            .release_now_dialog
+            .as_ref()
+            .map(rls_now::ReleaseNowDialog::is_artifacts_customize_mode)
+            .unwrap_or(false);
         let running = self
             .release_now_dialog
             .as_ref()
@@ -265,6 +278,31 @@ impl App {
             .as_ref()
             .map(rls_now::ReleaseNowDialog::is_completed)
             .unwrap_or(false);
+
+        if mirror_sync_mode {
+            let sync_running = self
+                .release_now_dialog
+                .as_ref()
+                .map(|dialog| dialog.mirror_sync_running)
+                .unwrap_or(false);
+            match key.code {
+                KeyCode::Enter if !sync_running => {
+                    return self.request_release_now_mirror_sync(true);
+                }
+                KeyCode::Char('r') | KeyCode::Char('R') if !sync_running => {
+                    return self.request_release_now_mirror_sync(false);
+                }
+                KeyCode::Esc if !sync_running => self.close_release_now_dialog(),
+                KeyCode::Up => self.scroll_release_now(-1),
+                KeyCode::Down => self.scroll_release_now(1),
+                KeyCode::PageUp => self.scroll_release_now(-6),
+                KeyCode::PageDown => self.scroll_release_now(6),
+                KeyCode::Home => self.scroll_release_now_to_start(),
+                KeyCode::End => self.scroll_release_now_to_end(),
+                _ => {}
+            }
+            return Ok(());
+        }
 
         if warning_mode {
             match key.code {
@@ -295,6 +333,80 @@ impl App {
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     self.close_release_now_dialog()
                 }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if customize_mode {
+            match key.code {
+                KeyCode::Up => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.cycle_customize_platform(-1);
+                    }
+                }
+                KeyCode::Down => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.cycle_customize_platform(1);
+                    }
+                }
+                KeyCode::Char(' ') => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.toggle_customize_platform_reuse();
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.confirm_artifacts_customize();
+                    }
+                }
+                KeyCode::Esc => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.back_from_artifacts_customize();
+                    }
+                }
+                KeyCode::PageUp => self.scroll_release_now(-6),
+                KeyCode::PageDown => self.scroll_release_now(6),
+                KeyCode::Home => self.scroll_release_now_to_start(),
+                KeyCode::End => self.scroll_release_now_to_end(),
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if existing_artifacts_mode {
+            match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                    if let Some(dialog) = &mut self.release_now_dialog {
+                        let delta = if matches!(key.code, KeyCode::Left | KeyCode::BackTab) {
+                            -1
+                        } else {
+                            1
+                        };
+                        dialog.cycle_artifacts_choice(delta);
+                    }
+                }
+                KeyCode::Enter => {
+                    let choice = self
+                        .release_now_dialog
+                        .as_ref()
+                        .map(|dialog| dialog.artifacts_choice_selected)
+                        .unwrap_or(0);
+                    if choice == 3 {
+                        self.close_release_now_dialog();
+                    } else if let Some(dialog) = &mut self.release_now_dialog {
+                        dialog.confirm_existing_artifacts_choice();
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.close_release_now_dialog()
+                }
+                KeyCode::Up => self.scroll_release_now(-1),
+                KeyCode::Down => self.scroll_release_now(1),
+                KeyCode::PageUp => self.scroll_release_now(-6),
+                KeyCode::PageDown => self.scroll_release_now(6),
+                KeyCode::Home => self.scroll_release_now_to_start(),
+                KeyCode::End => self.scroll_release_now_to_end(),
                 _ => {}
             }
             return Ok(());

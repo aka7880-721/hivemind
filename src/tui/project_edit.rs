@@ -39,6 +39,7 @@ pub(crate) struct ProjectEditDialog {
     pub(crate) viewport_rows: usize,
     pub(crate) repo_root: TextInput,
     pub(crate) remote_url: TextInput,
+    pub(crate) secondary_remote_url: TextInput,
     pub(crate) changelog_path: TextInput,
     pub(crate) tile_auto_rotation: bool,
     pub(crate) tile_rotates: TileRotationTarget,
@@ -85,32 +86,41 @@ impl ProjectEditDialog {
             vec![ScopeDraft::from_target("core", primary_target)]
         };
 
-        let (repo_root, remote_url) = if project.project_type == ProjectType::Branched {
-            let selected_repo = scopes
-                .get(selected_scope)
-                .and_then(|scope| scope.repo.as_ref());
-            (
-                selected_repo
-                    .map(|repo| repo.local_root.clone())
-                    .unwrap_or_default(),
-                selected_repo
-                    .and_then(|repo| repo.remote_url.clone())
-                    .unwrap_or_default(),
-            )
-        } else {
-            (
-                project
-                    .repo
-                    .as_ref()
-                    .map(|repo| repo.local_root.clone())
-                    .unwrap_or_default(),
-                project
-                    .repo
-                    .as_ref()
-                    .and_then(|repo| repo.remote_url.clone())
-                    .unwrap_or_default(),
-            )
-        };
+        let (repo_root, remote_url, secondary_remote_url) =
+            if project.project_type == ProjectType::Branched {
+                let selected_repo = scopes
+                    .get(selected_scope)
+                    .and_then(|scope| scope.repo.as_ref());
+                (
+                    selected_repo
+                        .map(|repo| repo.local_root.clone())
+                        .unwrap_or_default(),
+                    selected_repo
+                        .and_then(|repo| repo.remote_url.clone())
+                        .unwrap_or_default(),
+                    selected_repo
+                        .and_then(|repo| repo.secondary_remote_url.clone())
+                        .unwrap_or_default(),
+                )
+            } else {
+                (
+                    project
+                        .repo
+                        .as_ref()
+                        .map(|repo| repo.local_root.clone())
+                        .unwrap_or_default(),
+                    project
+                        .repo
+                        .as_ref()
+                        .and_then(|repo| repo.remote_url.clone())
+                        .unwrap_or_default(),
+                    project
+                        .repo
+                        .as_ref()
+                        .and_then(|repo| repo.secondary_remote_url.clone())
+                        .unwrap_or_default(),
+                )
+            };
 
         Ok(Self {
             project_index,
@@ -128,6 +138,7 @@ impl ProjectEditDialog {
             viewport_rows: 1,
             repo_root: TextInput::with_value(repo_root),
             remote_url: TextInput::with_value(remote_url),
+            secondary_remote_url: TextInput::with_value(secondary_remote_url),
             changelog_path: TextInput::with_value(project.changelog.effective_path().to_string()),
             tile_auto_rotation: project.tile_info.auto_rotation,
             tile_rotates: project.tile_info.rotates,
@@ -194,6 +205,7 @@ impl ProjectEditDialog {
                 | ProjectEditFocus::TargetPath
                 | ProjectEditFocus::RepoRoot
                 | ProjectEditFocus::RemoteUrl
+                | ProjectEditFocus::SecondaryRemoteUrl
                 | ProjectEditFocus::TileRotationTiming
         ) || (field == ProjectEditFocus::TargetKey && self.target_key_accepts_text())
     }
@@ -219,6 +231,9 @@ impl ProjectEditDialog {
         }
         if integration_mode.requires_remote() {
             fields.push(ProjectEditFocus::RemoteUrl);
+        }
+        if integration_mode.requires_secondary_remote() {
+            fields.push(ProjectEditFocus::SecondaryRemoteUrl);
         }
         fields.push(ProjectEditFocus::TileAutoRotation);
         if self.tile_auto_rotation {
@@ -284,7 +299,16 @@ impl ProjectEditDialog {
                 HitAction::ProjectEditScopeAction(ScopeAction::Remove),
             ),
             ProjectEditFocus::RepoRoot => ("Repo root", HitAction::EditProjectField(field)),
-            ProjectEditFocus::RemoteUrl => ("Remote URL", HitAction::EditProjectField(field)),
+            ProjectEditFocus::RemoteUrl => {
+                if self.selected_integration_mode().requires_secondary_remote() {
+                    ("GitLab remote URL", HitAction::EditProjectField(field))
+                } else {
+                    ("Remote URL", HitAction::EditProjectField(field))
+                }
+            }
+            ProjectEditFocus::SecondaryRemoteUrl => {
+                ("GitHub remote URL", HitAction::EditProjectField(field))
+            }
             ProjectEditFocus::TileAutoRotation => {
                 ("Auto-rotation", HitAction::EditProjectField(field))
             }
@@ -375,6 +399,9 @@ impl ProjectEditDialog {
             ProjectEditFocus::RemoteUrl => {
                 self.remote_url.display_line_with_width(focused, max_width)
             }
+            ProjectEditFocus::SecondaryRemoteUrl => self
+                .secondary_remote_url
+                .display_line_with_width(focused, max_width),
             ProjectEditFocus::TileAutoRotation => Line::from(format!(
                 "< {} >",
                 if self.tile_auto_rotation { "Yes" } else { "No" }
@@ -486,7 +513,9 @@ impl ProjectEditDialog {
             }
             if matches!(
                 self.focus,
-                ProjectEditFocus::RepoRoot | ProjectEditFocus::RemoteUrl
+                ProjectEditFocus::RepoRoot
+                    | ProjectEditFocus::RemoteUrl
+                    | ProjectEditFocus::SecondaryRemoteUrl
             ) {
                 self.persist_scope_repo_inputs();
             }
@@ -501,7 +530,9 @@ impl ProjectEditDialog {
             }
             if matches!(
                 self.focus,
-                ProjectEditFocus::RepoRoot | ProjectEditFocus::RemoteUrl
+                ProjectEditFocus::RepoRoot
+                    | ProjectEditFocus::RemoteUrl
+                    | ProjectEditFocus::SecondaryRemoteUrl
             ) {
                 self.persist_scope_repo_inputs();
             }
@@ -536,6 +567,7 @@ impl ProjectEditDialog {
             }
             ProjectEditFocus::RepoRoot => Some(&mut self.repo_root),
             ProjectEditFocus::RemoteUrl => Some(&mut self.remote_url),
+            ProjectEditFocus::SecondaryRemoteUrl => Some(&mut self.secondary_remote_url),
             ProjectEditFocus::TileRotationTiming => Some(&mut self.tile_rotation_timing),
             _ => None,
         }
@@ -714,6 +746,7 @@ impl ProjectEditDialog {
                     IntegrationMode::GitLocalOnly => 1,
                     IntegrationMode::GitHubEnabled => 2,
                     IntegrationMode::GitLabEnabled => 3,
+                    IntegrationMode::GitLabGitHubEnabled => 4,
                 })
                 .unwrap_or(IntegrationMode::LocalOnly)
         } else {
@@ -797,12 +830,22 @@ impl ProjectEditDialog {
             } else {
                 None
             };
+            let secondary_remote_url = if effective_integration_mode.requires_secondary_remote() {
+                let remote_url = self.secondary_remote_url.value.trim();
+                if remote_url.is_empty() {
+                    bail!("GitHub remote URL cannot be empty");
+                }
+                Some(remote_url.to_string())
+            } else {
+                None
+            };
 
             let existing_repo = project.repo.clone().unwrap_or_default();
 
             project.repo = Some(RepoConfig {
                 local_root: repo_root.to_string(),
                 remote_url,
+                secondary_remote_url,
                 has_custom_main_branch: existing_repo.has_custom_main_branch,
                 custom_main_branch: existing_repo.custom_main_branch,
             });
@@ -998,6 +1041,7 @@ impl ProjectEditDialog {
         }
         let root = self.repo_root.value.trim().to_string();
         let remote = self.remote_url.value.trim().to_string();
+        let secondary_remote = self.secondary_remote_url.value.trim().to_string();
         if let Some(scope) = self.current_scope_mut() {
             scope.repo = match scope.integration_mode {
                 IntegrationMode::LocalOnly => None,
@@ -1017,6 +1061,20 @@ impl ProjectEditDialog {
                         ..RepoConfig::default()
                     })
                 }
+                IntegrationMode::GitLabGitHubEnabled => Some(RepoConfig {
+                    local_root: root,
+                    remote_url: if remote.is_empty() {
+                        None
+                    } else {
+                        Some(remote)
+                    },
+                    secondary_remote_url: if secondary_remote.is_empty() {
+                        None
+                    } else {
+                        Some(secondary_remote)
+                    },
+                    ..RepoConfig::default()
+                }),
             };
         }
     }
@@ -1036,8 +1094,14 @@ impl ProjectEditDialog {
                 .as_ref()
                 .and_then(|r| r.remote_url.clone())
                 .unwrap_or_default();
+            let secondary_remote_url = scope
+                .repo
+                .as_ref()
+                .and_then(|r| r.secondary_remote_url.clone())
+                .unwrap_or_default();
             self.repo_root.set_value(repo_root);
             self.remote_url.set_value(remote_url);
+            self.secondary_remote_url.set_value(secondary_remote_url);
         }
     }
 }
@@ -1057,6 +1121,7 @@ pub(crate) enum ProjectEditFocus {
     RemoveScope,
     RepoRoot,
     RemoteUrl,
+    SecondaryRemoteUrl,
     TileAutoRotation,
     TileRotates,
     TileRotationTiming,

@@ -5,6 +5,7 @@
 
 pub(crate) mod bump;
 pub(crate) mod cli_init;
+pub(crate) mod cli_sync;
 pub(crate) mod dialogs;
 pub(crate) mod git_flow;
 pub(crate) mod rls_now;

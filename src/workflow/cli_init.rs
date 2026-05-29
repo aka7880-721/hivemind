@@ -35,7 +35,7 @@ use crate::{
         AdvancedAliasSettings, AppConfig, BranchConfig, BranchScopeKind, ConfigStore,
         IntegrationMode, ProjectConfig, ProjectType, ReleaseNowSettings, RepoConfig, TargetFormat,
     },
-    forge::integration_mode_for_remote_url,
+    forge::{integration_mode_for_dual_remotes, integration_mode_for_remote_url},
     tui::ProjectWizard,
     workflow::targets::{ProbeKind, TargetProbe, probe_target},
     workflow::versioning::VersionScheme,
@@ -165,6 +165,7 @@ struct DetectedManifest {
 struct ProjectDetection {
     integration_mode: IntegrationMode,
     remote_url: Option<String>,
+    secondary_remote_url: Option<String>,
     manifests: Vec<DetectedManifest>,
 }
 
@@ -329,9 +330,23 @@ fn build_scope_branch_from_detection(
                     .and_then(|repo| repo.remote_url.clone())
             })
             .unwrap_or_default();
-        Some(prompt_remote_url(&default)?)
+        Some(prompt_remote_url("GitLab remote URL", &default)?)
     } else {
         detection.remote_url
+    };
+    let secondary_remote_url = if detection.integration_mode.requires_secondary_remote() {
+        let default = detection
+            .secondary_remote_url
+            .or_else(|| {
+                parent
+                    .repo
+                    .as_ref()
+                    .and_then(|repo| repo.secondary_remote_url.clone())
+            })
+            .unwrap_or_default();
+        Some(prompt_remote_url("GitHub remote URL", &default)?)
+    } else {
+        detection.secondary_remote_url
     };
 
     let mut scope = ScopeDraft::new(scope_name);
@@ -346,6 +361,7 @@ fn build_scope_branch_from_detection(
         scope.repo = Some(RepoConfig {
             local_root: scope_repo_root,
             remote_url,
+            secondary_remote_url,
             ..RepoConfig::default()
         });
     }
@@ -642,6 +658,9 @@ fn detect_project_layout(cwd: &Path) -> Result<ProjectDetection> {
     } else if integration.integration_mode.requires_repo() {
         println!("  Remote URL:  {ANSI_DARK_GREY}(none configured){ANSI_RESET}");
     }
+    if let Some(remote) = integration.secondary_remote_url.as_deref() {
+        println!("  GitHub URL:  {ANSI_MAGENTA}{remote}{ANSI_RESET}");
+    }
 
     let manifests = detect_manifests(cwd)?;
     if manifests.is_empty() {
@@ -665,6 +684,7 @@ fn detect_project_layout(cwd: &Path) -> Result<ProjectDetection> {
     Ok(ProjectDetection {
         integration_mode: integration.integration_mode,
         remote_url: integration.remote_url,
+        secondary_remote_url: integration.secondary_remote_url,
         manifests,
     })
 }
@@ -673,6 +693,7 @@ fn detect_project_layout(cwd: &Path) -> Result<ProjectDetection> {
 struct IntegrationDetection {
     integration_mode: IntegrationMode,
     remote_url: Option<String>,
+    secondary_remote_url: Option<String>,
 }
 
 fn detect_integration_mode(cwd: &Path) -> Result<IntegrationDetection> {
@@ -683,10 +704,22 @@ fn detect_integration_mode(cwd: &Path) -> Result<IntegrationDetection> {
         return Ok(IntegrationDetection {
             integration_mode: IntegrationMode::LocalOnly,
             remote_url: None,
+            secondary_remote_url: None,
         });
     }
 
     println!("  {ANSI_GREEN}Git repository: detected{ANSI_RESET}");
+
+    if let Some((gitlab_url, github_url)) = read_dual_forge_remotes(cwd)
+        && integration_mode_for_dual_remotes(&gitlab_url, &github_url).is_some()
+    {
+        println!("  {ANSI_GREEN}Dual remotes: GitLab + GitHub detected{ANSI_RESET}");
+        return Ok(IntegrationDetection {
+            integration_mode: IntegrationMode::GitLabGitHubEnabled,
+            remote_url: Some(gitlab_url),
+            secondary_remote_url: Some(github_url),
+        });
+    }
 
     let remote_url = read_git_remote_url(cwd);
     if let Some(remote_url) = remote_url {
@@ -694,12 +727,14 @@ fn detect_integration_mode(cwd: &Path) -> Result<IntegrationDetection> {
             return Ok(IntegrationDetection {
                 integration_mode,
                 remote_url: Some(remote_url),
+                secondary_remote_url: None,
             });
         }
 
         return Ok(IntegrationDetection {
             integration_mode: IntegrationMode::GitLocalOnly,
             remote_url: Some(remote_url),
+            secondary_remote_url: None,
         });
     }
 
@@ -707,6 +742,7 @@ fn detect_integration_mode(cwd: &Path) -> Result<IntegrationDetection> {
     Ok(IntegrationDetection {
         integration_mode: mode,
         remote_url: None,
+        secondary_remote_url: None,
     })
 }
 
@@ -767,6 +803,46 @@ fn read_git_remote_url(cwd: &Path) -> Option<String> {
     }
 
     origin_fetch.or(first_fetch)
+}
+
+fn read_dual_forge_remotes(cwd: &Path) -> Option<(String, String)> {
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .args(["remote", "-v"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut gitlab_url = None;
+    let mut github_url = None;
+
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let remote = parts.next()?;
+        let url = parts.next()?;
+        let mode = parts.next()?;
+        if mode != "(fetch)" {
+            continue;
+        }
+        if crate::forge::detect_forge_from_remote_url(url) == Some(crate::forge::ForgeKind::GitLab)
+            && (gitlab_url.is_none() || remote == "gitlab")
+        {
+            gitlab_url = Some(url.to_string());
+        }
+        if crate::forge::detect_forge_from_remote_url(url) == Some(crate::forge::ForgeKind::GitHub)
+            && (github_url.is_none() || remote == "origin")
+        {
+            github_url = Some(url.to_string());
+        }
+    }
+
+    match (gitlab_url, github_url) {
+        (Some(gitlab), Some(github)) => Some((gitlab, github)),
+        _ => None,
+    }
 }
 
 fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
@@ -1036,9 +1112,15 @@ fn build_project_from_detection(
     let repo_root = cwd.display().to_string();
     let remote_url = if detection.integration_mode.requires_remote() {
         let default = detection.remote_url.unwrap_or_default();
-        Some(prompt_remote_url(&default)?)
+        Some(prompt_remote_url("GitLab remote URL", &default)?)
     } else {
         detection.remote_url
+    };
+    let secondary_remote_url = if detection.integration_mode.requires_secondary_remote() {
+        let default = detection.secondary_remote_url.unwrap_or_default();
+        Some(prompt_remote_url("GitHub remote URL", &default)?)
+    } else {
+        detection.secondary_remote_url
     };
 
     let mut wizard = ProjectWizard::default();
@@ -1052,6 +1134,9 @@ fn build_project_from_detection(
     wizard.repo_root.set_value(&repo_root);
     if let Some(remote_url) = remote_url.as_deref() {
         wizard.remote_url.set_value(remote_url);
+    }
+    if let Some(secondary_remote_url) = secondary_remote_url.as_deref() {
+        wizard.secondary_remote_url.set_value(secondary_remote_url);
     }
     wizard.last_probe = Some(probe);
 
@@ -1132,9 +1217,9 @@ fn prompt_target_key_confirmation(_target_path: &str, default_key: &str) -> Resu
     }
 }
 
-fn prompt_remote_url(default: &str) -> Result<String> {
+fn prompt_remote_url(label: &str, default: &str) -> Result<String> {
     loop {
-        print!("Git remote URL [{ANSI_MAGENTA}{default}{ANSI_RESET}]: ");
+        print!("{label} [{ANSI_MAGENTA}{default}{ANSI_RESET}]: ");
         io::stdout().flush().context("failed to flush prompt")?;
         let mut answer = String::new();
         io::stdin()
@@ -1147,7 +1232,7 @@ fn prompt_remote_url(default: &str) -> Result<String> {
             trimmed.to_string()
         };
         if value.is_empty() {
-            println!("Remote URL is required for GitHub-enabled projects.");
+            println!("{label} is required.");
             continue;
         }
         return Ok(value);

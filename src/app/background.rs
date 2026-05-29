@@ -101,6 +101,12 @@ pub(crate) enum BackgroundJobRequest {
     RunReleaseNow {
         request: rls_now::ReleaseNowExecutionRequest,
     },
+    ReleaseNowMirrorSync {
+        repo_root: String,
+        gitlab_remote: Option<String>,
+        github_remote: Option<String>,
+        push: bool,
+    },
     PrefetchRecentChanges {
         dialog: RecentChangesDialog,
     },
@@ -142,6 +148,7 @@ pub(crate) enum BackgroundJobOutput {
     ReleaseNowValidated(rls_now::ReleaseNowValidation),
     ReleaseNowLogChunk(Vec<String>),
     ReleaseNowCompleted(rls_now::ReleaseNowExecutionOutcome),
+    ReleaseNowMirrorSyncResult(rls_now::ReleaseNowMirrorSyncResult),
     CreateTag {
         summary: String,
         replay_notices: Vec<String>,
@@ -230,9 +237,9 @@ impl BackgroundJobRequest {
             Self::OpenDashboardChangelogPreview { .. }
             | Self::OpenOverviewWorkflowChangelog { .. } => BackgroundJobKind::ChangelogPreview,
             Self::RefreshOverviewActivity { .. } => BackgroundJobKind::OverviewActivity,
-            Self::ValidateReleaseNow { .. } | Self::RunReleaseNow { .. } => {
-                BackgroundJobKind::ReleaseNow
-            }
+            Self::ValidateReleaseNow { .. }
+            | Self::RunReleaseNow { .. }
+            | Self::ReleaseNowMirrorSync { .. } => BackgroundJobKind::ReleaseNow,
             Self::CreateTag { .. } => BackgroundJobKind::TagAction,
         }
     }
@@ -524,9 +531,9 @@ impl MainBranchWarningDialog {
 
     pub(crate) fn switch_label(&self) -> &'static str {
         match self.integration_mode {
-            IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled => {
-                "Switch to mainline & Sync & Bump"
-            }
+            IntegrationMode::GitHubEnabled
+            | IntegrationMode::GitLabEnabled
+            | IntegrationMode::GitLabGitHubEnabled => "Switch to mainline & Sync & Bump",
             IntegrationMode::GitLocalOnly => "Switch to mainline & Bump",
             IntegrationMode::LocalOnly => "Continue",
         }
@@ -1017,6 +1024,22 @@ async fn run_background_job(
                 .await?,
             ))
         }
+        BackgroundJobRequest::ReleaseNowMirrorSync {
+            repo_root,
+            gitlab_remote,
+            github_remote,
+            push,
+        } => Ok(BackgroundJobOutput::ReleaseNowMirrorSyncResult(
+            run_blocking_job(move || {
+                rls_now::run_mirror_sync_operation(
+                    &repo_root,
+                    gitlab_remote.as_deref(),
+                    github_remote.as_deref(),
+                    push,
+                )
+            })
+            .await?,
+        )),
         BackgroundJobRequest::PrefetchRecentChanges { dialog } => {
             let project_name = dialog.project_name.clone();
             let (
