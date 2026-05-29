@@ -20,6 +20,23 @@ impl App {
             return;
         }
 
+        if self.help_modal.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    if let Some(help) = &mut self.help_modal {
+                        help.scroll_wheel(-3);
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(help) = &mut self.help_modal {
+                        help.scroll_wheel(3);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.progress_dialog.is_some() {
             return;
         }
