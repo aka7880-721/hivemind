@@ -7,6 +7,7 @@ mod new;
 mod pr;
 mod reroot;
 mod status;
+mod sync;
 
 pub(crate) use alt::*;
 pub(crate) use branch::*;
@@ -17,6 +18,7 @@ pub(crate) use new::*;
 pub(crate) use pr::*;
 pub(crate) use reroot::*;
 pub(crate) use status::*;
+pub(crate) use sync::*;
 
 /// Git-related utilities for interacting with repositories, collecting activity summaries, and managing tags.
 use std::{
@@ -257,7 +259,7 @@ fn upstream_remote_name(upstream_ref: &str) -> Result<&str> {
         })
 }
 
-fn git_remote_names(repo_root: &str) -> Result<Vec<String>> {
+pub(crate) fn git_remote_names(repo_root: &str) -> Result<Vec<String>> {
     Ok(split_output_lines(&run_git_checked(
         repo_root,
         &["remote"],
@@ -431,6 +433,7 @@ pub(crate) struct GitScopeContext {
     pub(crate) scope_kind: Option<BranchScopeKind>,
     pub(crate) repo_root: String,
     pub(crate) remote_spec: Option<String>,
+    pub(crate) secondary_remote_spec: Option<String>,
     pub(crate) main_branch_name: Option<String>,
     pub(crate) suggested_tag_name: String,
     pub(crate) path_filters: Vec<String>,
@@ -561,11 +564,16 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             .repo
             .as_ref()
             .and_then(|repo| repo.remote_url.clone());
+        let secondary_remote_spec = project
+            .repo
+            .as_ref()
+            .and_then(|repo| repo.secondary_remote_url.clone());
         return Ok(vec![GitScopeContext {
             display_name: project.name.clone(),
             scope_kind: None,
             repo_root,
             remote_spec,
+            secondary_remote_spec,
             main_branch_name: project
                 .repo_main_branch_name_for_scope(0)
                 .map(str::to_string),
@@ -591,11 +599,17 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
             .as_ref()
             .or(project.repo.as_ref())
             .and_then(|repo| repo.remote_url.clone());
+        let secondary_remote_spec = branch
+            .repo
+            .as_ref()
+            .or(project.repo.as_ref())
+            .and_then(|repo| repo.secondary_remote_url.clone());
         return Ok(vec![GitScopeContext {
             display_name: project.name.clone(),
             scope_kind: None,
             repo_root,
             remote_spec,
+            secondary_remote_spec,
             main_branch_name: project
                 .repo_main_branch_name_for_scope(0)
                 .map(str::to_string),
@@ -625,6 +639,7 @@ pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<
                 scope_kind: Some(branch.scope_kind),
                 repo_root,
                 remote_spec: repo.and_then(|repo| repo.remote_url.clone()),
+                secondary_remote_spec: repo.and_then(|repo| repo.secondary_remote_url.clone()),
                 main_branch_name: project
                     .repo_main_branch_name_for_scope(index)
                     .map(str::to_string),
@@ -663,6 +678,7 @@ pub(crate) fn collect_all_branch_git_scope_contexts(
                 scope_kind: Some(branch.scope_kind),
                 repo_root,
                 remote_spec: repo.and_then(|repo| repo.remote_url.clone()),
+                secondary_remote_spec: repo.and_then(|repo| repo.secondary_remote_url.clone()),
                 main_branch_name: project
                     .repo_main_branch_name_for_scope(index)
                     .map(str::to_string),
@@ -1251,6 +1267,7 @@ mod tests {
             scope_kind: Some(BranchScopeKind::Module),
             repo_root: "C:/repo".to_string(),
             remote_spec: None,
+            secondary_remote_spec: None,
             main_branch_name: None,
             suggested_tag_name: "core-v1.2.3".to_string(),
             path_filters: vec!["C:/repo/core".to_string(), "core\\nested".to_string()],
