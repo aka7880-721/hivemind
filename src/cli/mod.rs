@@ -182,6 +182,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             crate::workflow::cli_init::run_init()?;
             Ok(StartupMode::Handled)
         }
+        [command] if is_sync_command(command) => {
+            crate::workflow::cli_sync::run_sync()?;
+            Ok(StartupMode::Handled)
+        }
         [command] if is_help(command) => {
             print_usage();
             Ok(StartupMode::Handled)
@@ -665,6 +669,10 @@ fn is_init_command(value: &str) -> bool {
     value == "init"
 }
 
+fn is_sync_command(value: &str) -> bool {
+    value == "sync"
+}
+
 fn is_help(value: &str) -> bool {
     matches!(value, "help" | "-h" | "--help")
 }
@@ -858,6 +866,7 @@ fn print_usage() {
     println!(
         "  cg init                    Register the current directory as a new ComfyGit project"
     );
+    println!("  cg sync                    Check GitLab/GitHub mirror sync and push both remotes");
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
