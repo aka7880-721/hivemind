@@ -29,7 +29,7 @@ use crate::{
     config::{AppConfig, ConfigStore, FooterContent, IntegrationMode, ProjectConfig, ProjectType},
     git::{GitCancellation, RepoActivitySummary, collect_all_branch_git_scope_contexts},
     tui::{
-        OverviewTab, OverviewTileData, PixelLogo, ProjectEditDialog, ProjectEditFocus,
+        HelpModal, OverviewTab, OverviewTileData, PixelLogo, ProjectEditDialog, ProjectEditFocus,
         ProjectWizard, TILE_WIDTH, WizardField, center_vertically, centered_rect,
         choose_header_content, overview_tab_rects, render_overview_tabs, render_overview_tile,
         tile_height,
@@ -41,6 +41,7 @@ use crate::{
     },
 };
 
+mod help_context;
 mod overview;
 mod project_settings;
 mod ps_alias;
@@ -148,6 +149,7 @@ pub(crate) struct App {
     project_edit_dialog: Option<ProjectEditDialog>,
     browser_dialog: Option<FileBrowserDialog>,
     pub(crate) snif_dialog: Option<crate::tui::SnifModal>,
+    help_modal: Option<HelpModal>,
     hit_targets: Vec<HitTarget>,
     last_text_input_click_target: Option<TextInputClickTarget>,
     last_text_input_click_at: Option<Instant>,
@@ -272,6 +274,7 @@ impl App {
             project_edit_dialog: None,
             browser_dialog: None,
             snif_dialog: None,
+            help_modal: None,
             hit_targets: Vec::new(),
             last_text_input_click_target: None,
             last_text_input_click_at: None,
@@ -316,6 +319,7 @@ mod tests {
     use super::*;
     use crate::changelog::build_document_from_git_log;
     use crate::config::{BranchConfig, BranchScopeKind, RepoConfig, TargetFormat, TargetSpec};
+    use crate::tui::HelpContext;
     use crate::workflow::dialogs::TextInput;
     use crate::workflow::targets::{BumpTarget, ProbeKind, TargetProbe};
     use crate::workflow::versioning::BumpAction;
@@ -1169,5 +1173,19 @@ mod tests {
         );
 
         assert_eq!(dialog.selected_action(), BumpAction::Patch);
+    }
+
+    #[test]
+    fn question_mark_toggles_context_help() -> Result<()> {
+        let mut app = App::new_for_tests()?;
+        assert!(app.help_modal.is_none());
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE))?;
+        let modal = app.help_modal.as_ref().expect("help should open");
+        assert_eq!(modal.context, HelpContext::DashboardProjects);
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
+        assert!(app.help_modal.is_none());
+        Ok(())
     }
 }
