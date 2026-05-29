@@ -134,6 +134,9 @@ mod tests {
             rendered.contains('│') || rendered.contains('|'),
             "expected table borders in:\n{rendered}"
         );
-        assert!(rendered.contains('?'), "expected cell content in:\n{rendered}");
+        assert!(
+            rendered.contains('?'),
+            "expected cell content in:\n{rendered}"
+        );
     }
 }

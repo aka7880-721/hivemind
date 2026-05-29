@@ -1179,7 +1179,10 @@ impl App {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let dialog = self.changelog_preview_dialog.as_ref().expect("checked above");
+        let dialog = self
+            .changelog_preview_dialog
+            .as_ref()
+            .expect("checked above");
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints(if dialog.workflow.is_some() {
@@ -1250,7 +1253,10 @@ impl App {
         frame.render_widget(body_block, sections[2]);
         let preview_width = body_inner.width.max(20);
         let preview_markdown = {
-            let dialog = self.changelog_preview_dialog.as_mut().expect("checked above");
+            let dialog = self
+                .changelog_preview_dialog
+                .as_mut()
+                .expect("checked above");
             dialog.preview_render_width = preview_width;
             dialog.combined_preview_markdown()
         };
@@ -1278,11 +1284,7 @@ impl App {
             sections[3],
             &[
                 DialogButton::new(
-                    if workflow_active {
-                        "Continue"
-                    } else {
-                        "Close"
-                    },
+                    if workflow_active { "Continue" } else { "Close" },
                     false,
                     HitAction::ConfirmChangelogPreview,
                     Style::default().fg(Color::Black).bg(Color::Green),
@@ -1302,11 +1304,7 @@ impl App {
                     Style::default().fg(Color::Black).bg(Color::Yellow),
                 ),
                 DialogButton::new(
-                    if workflow_active {
-                        "Cancel"
-                    } else {
-                        "Back"
-                    },
+                    if workflow_active { "Cancel" } else { "Back" },
                     false,
                     HitAction::CancelChangelogPreview,
                     Style::default().fg(Color::White).bg(Color::Red),

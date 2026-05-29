@@ -14,8 +14,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::tui::centered_rect;
 
 use super::content::markdown_for;
-use crate::tui::markdown_render::{markdown_line_count, render_markdown};
 use super::context::HelpContext;
+use crate::tui::markdown_render::{markdown_line_count, render_markdown};
 
 pub(crate) struct HelpModal {
     pub(crate) context: HelpContext,
