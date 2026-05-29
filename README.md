@@ -58,14 +58,33 @@ Enjoy!
 
 ---
 
-<details><summary>👀 What's new in v0.30.7 ...</summary>
+<details><summary>👀 What's new in v0.34.3 ...</summary>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
 
 <sup>💬 Intro:</sup>  
-<sup>_This release brings some bugfixes and most importantly enhances ComfyGit with support for over 20 eco-systems_</sup>  
+<sup>_This release brings a huge improvements, we focused on behind the scenes stuff as the whole app has been restructurized; however, it also brings HUGE functionality enhancements that will be hard to miss..._</sup>  
 
-#### **1. &nbsp;&nbsp;&nbsp;Added support for most mainstream programming languages / eco-systems.**
+#### **1. &nbsp;&nbsp;&nbsp;v0.32.x: From now on, ComfyGit supports GitLab!**
+#### **2. &nbsp;&nbsp;&nbsp;v0.33.1-8: Follows up and fixes many bugs introduced by GitLab implementation**
+#### **3. &nbsp;&nbsp;&nbsp;v0.33.9: Focuses on developers who use GitHub action for macOS releases**
+- For those who develop on Linux/Win machines, this is a big leap
+- ComfyGit now can manage releasing via GH actions for macOS artifacts (GitHub-Enabled projects)
+
+#### **4. &nbsp;&nbsp;&nbsp;v0.33.10: Introduced HELP modal in TUI**
+- you can use `?` keyboard anywhere within TUI
+- it brings up a help modal based on your position
+- NOTE: help pages will evolve, and will contain more info. They are in public-beta stage now
+
+#### **5. &nbsp;&nbsp;&nbsp;v0.34.x: Brings the following:**
+- multi-remote sync during ReleaseNOW pre-flight check if remotes are out-of-sync
+- multiple bugfixes to bug introduced since the last release
+- new project integration mode "GitLab+GitHub"!
+    - ComfyGit now fully support projects with two remotes (Lab+Hub)
+    - Extremely useful for those who use mainly GL, but use also GL as a mirror
+    - ReleaseNOW flow now can create releases for both platforms at the same time!
+    - ReleaseNOW also supports macOS artifact processing from GitHub Actions, so they are pushed to GitLab within the same flow!
+
 
 <sub>...  🎉 Enjoy!</sub>
 
@@ -73,6 +92,14 @@ Enjoy!
 
 <details><summary>👀 See previous changes...</summary>
 <br>
+<details><summary>v0-30-7 ...</summary>
+
+#### **1. &nbsp;&nbsp;&nbsp;Added support for most mainstream programming languages / eco-systems.**
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+</details>
 <details><summary>v0-29-5 ...</summary>
 
 #### **1. &nbsp;&nbsp;&nbsp;Advanced Alias Functionality!**
@@ -152,43 +179,16 @@ Enjoy!
 
 <br>
 </details>
-<details><summary>v0-25-4 ...</summary>
-
-#### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
-- Now you can add, and edit your TP from TUI
-    - Assigned shortcut `P`
-- Fully implemented keyboard shortcuts (ctrl+a/c/v)
-- Fully implemented mouse action shortcuts 
-    - rightClick to paste/copy, doubleClick to select word, click to position cursor, drag&hold to select
-
-#### **2. &nbsp;&nbsp;&nbsp;Auto-README changelog injection!**
-- You can now automatically inject an expandable one-liner with latest changes from the last release, amazing feature if you ask me...! 🤩
-- Make sure to check WIKI pages to understand it fully...
-
-#### **3. &nbsp;&nbsp;&nbsp;Misc**
-- Added support in Distro for "General" scripts
-    - Unlike Win/Arm/Amd/Mac, General is not required to produce any artifacts
-    - Useful for small projects (e.g. crates, plugins, etc)
-- Project reordering in Projects pane
-    - Now you can click&drag your projects to change their order
-    - Remember, you can do this for a while also with tiles within the project
-- Release Notes Editor in ReleaseNOW got enhanced
-    - added mouse and keyboard shortcuts
-
-
-<sub>...  🎉 Enjoy!</sub>
-
-<br>
-</details>
 </details>
 <br>
 
 ---
-<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://github.com/comfy-home/ComfyGit/releases/tag/v0.30.7)</sup>
+<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://gitlab.com/comfyhome/dist/ComfyGit/-/releases/v0.34.3)</sup>
 
 ---
 
 </details>
+
 
 
 
