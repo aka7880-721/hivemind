@@ -218,6 +218,9 @@ impl ProjectConfig {
             if let Some(remote) = &repo.remote_url {
                 lines.push(format!("Remote: {}", remote));
             }
+            if let Some(remote) = &repo.secondary_remote_url {
+                lines.push(format!("Secondary remote: {}", remote));
+            }
         }
 
         lines.push(format!(
@@ -819,6 +822,7 @@ pub enum IntegrationMode {
     GitLocalOnly,
     GitHubEnabled,
     GitLabEnabled,
+    GitLabGitHubEnabled,
 }
 
 impl IntegrationMode {
@@ -828,6 +832,7 @@ impl IntegrationMode {
             IntegrationMode::GitLocalOnly => "GitLocal-only",
             IntegrationMode::GitHubEnabled => "GitHub-enabled",
             IntegrationMode::GitLabEnabled => "GitLab-enabled",
+            IntegrationMode::GitLabGitHubEnabled => "GitLab+GitHub",
         }
     }
 
@@ -836,16 +841,18 @@ impl IntegrationMode {
             IntegrationMode::LocalOnly => IntegrationMode::GitLocalOnly,
             IntegrationMode::GitLocalOnly => IntegrationMode::GitHubEnabled,
             IntegrationMode::GitHubEnabled => IntegrationMode::GitLabEnabled,
-            IntegrationMode::GitLabEnabled => IntegrationMode::LocalOnly,
+            IntegrationMode::GitLabEnabled => IntegrationMode::GitLabGitHubEnabled,
+            IntegrationMode::GitLabGitHubEnabled => IntegrationMode::LocalOnly,
         }
     }
 
     pub fn previous(self) -> Self {
         match self {
-            IntegrationMode::LocalOnly => IntegrationMode::GitLabEnabled,
+            IntegrationMode::LocalOnly => IntegrationMode::GitLabGitHubEnabled,
             IntegrationMode::GitLocalOnly => IntegrationMode::LocalOnly,
             IntegrationMode::GitHubEnabled => IntegrationMode::GitLocalOnly,
             IntegrationMode::GitLabEnabled => IntegrationMode::GitHubEnabled,
+            IntegrationMode::GitLabGitHubEnabled => IntegrationMode::GitLabEnabled,
         }
     }
 
@@ -860,15 +867,34 @@ impl IntegrationMode {
     pub fn is_forge_enabled(self) -> bool {
         matches!(
             self,
-            IntegrationMode::GitHubEnabled | IntegrationMode::GitLabEnabled
+            IntegrationMode::GitHubEnabled
+                | IntegrationMode::GitLabEnabled
+                | IntegrationMode::GitLabGitHubEnabled
         )
+    }
+
+    pub fn is_dual_forge(self) -> bool {
+        matches!(self, IntegrationMode::GitLabGitHubEnabled)
+    }
+
+    pub fn requires_secondary_remote(self) -> bool {
+        self.is_dual_forge()
     }
 
     pub fn forge_kind(self) -> Option<crate::forge::ForgeKind> {
         match self {
             IntegrationMode::GitHubEnabled => Some(crate::forge::ForgeKind::GitHub),
-            IntegrationMode::GitLabEnabled => Some(crate::forge::ForgeKind::GitLab),
+            IntegrationMode::GitLabEnabled | IntegrationMode::GitLabGitHubEnabled => {
+                Some(crate::forge::ForgeKind::GitLab)
+            }
             IntegrationMode::LocalOnly | IntegrationMode::GitLocalOnly => None,
+        }
+    }
+
+    pub fn secondary_forge_kind(self) -> Option<crate::forge::ForgeKind> {
+        match self {
+            IntegrationMode::GitLabGitHubEnabled => Some(crate::forge::ForgeKind::GitHub),
+            _ => None,
         }
     }
 }
@@ -1035,6 +1061,8 @@ impl BranchScopeKind {
 pub struct RepoConfig {
     pub local_root: String,
     pub remote_url: Option<String>,
+    #[serde(default)]
+    pub secondary_remote_url: Option<String>,
     pub has_custom_main_branch: bool,
     pub custom_main_branch: String,
 }
