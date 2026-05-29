@@ -717,6 +717,7 @@ mod tests {
         let script = ReleaseNowScript {
             label: "MacOS".to_string(),
             script_path: "./scripts/releaseNOW.sh --mac --no-checks".to_string(),
+            artifact_dirs: Vec::new(),
         };
         let config = detect_external_mac_ci(&script, "v0.33.9");
         assert!(config.is_some());
@@ -731,6 +732,7 @@ mod tests {
             let script = ReleaseNowScript {
                 label: "MacOS".to_string(),
                 script_path: "./scripts/releaseNOW.sh --mac".to_string(),
+                artifact_dirs: Vec::new(),
             };
             assert!(detect_external_mac_ci(&script, "0.33.9").is_none());
         }

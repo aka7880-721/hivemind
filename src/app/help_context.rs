@@ -34,6 +34,12 @@ impl App {
             if dialog.is_warning_mode() {
                 return HelpContext::ModalReleaseNowWarning;
             }
+            if dialog.is_artifacts_customize_mode() {
+                return HelpContext::ModalReleaseNowConfigure;
+            }
+            if dialog.is_existing_artifacts_mode() {
+                return HelpContext::ModalReleaseNowConfigure;
+            }
             return HelpContext::ModalReleaseNowConfigure;
         }
         if self.delete_confirmation_dialog.is_some() {
