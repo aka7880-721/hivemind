@@ -55,7 +55,17 @@ pub fn fetch_mergeability(repo_root: &str, number: u64) -> Result<crate::forge::
     })
 }
 
-pub fn merge_merge_request(repo_root: &str, number: u64, subject: &str) -> Result<String> {
+pub fn merge_merge_request(
+    repo_root: &str,
+    number: u64,
+    subject: &str,
+    delete_remote_branch: bool,
+) -> Result<String> {
+    let remove_flag = if delete_remote_branch {
+        "--remove-source-branch=true"
+    } else {
+        "--remove-source-branch=false"
+    };
     let output = cli::run_in_repo(
         repo_root,
         &[
@@ -64,7 +74,7 @@ pub fn merge_merge_request(repo_root: &str, number: u64, subject: &str) -> Resul
             &number.to_string(),
             "--message",
             subject,
-            "--remove-source-branch=false",
+            remove_flag,
             "--yes",
         ],
     )?;
