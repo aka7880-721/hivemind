@@ -22,7 +22,10 @@ use super::{
     visible_field_width,
 };
 use crate::{
-    config::{DEFAULT_CHANGELOG_PATH, ProjectConfig, ProjectType, ReadmeInjectDepth},
+    config::{
+        DEFAULT_CHANGELOG_PATH, PostMergeSourceBranch, ProjectConfig, ProjectType,
+        ReadmeInjectDepth,
+    },
     tui::center_vertically,
     workflow::dialogs::TextInput,
 };
@@ -36,22 +39,36 @@ use super::ps_alias::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectSettingsTab {
     General,
+    Git,
     Changelogs,
     Distro,
     RlsQd,
 }
 
-impl ProjectSettingsTab {
-    fn tab_strip(release_now_enabled: bool) -> &'static [ProjectSettingsTab] {
-        if release_now_enabled {
-            &[Self::General, Self::Changelogs, Self::Distro, Self::RlsQd]
-        } else {
-            &[Self::General, Self::Changelogs, Self::Distro]
-        }
+pub(crate) fn project_settings_tab_strip(
+    project: &ProjectConfig,
+    release_now_enabled: bool,
+) -> Vec<ProjectSettingsTab> {
+    let mut tabs = vec![ProjectSettingsTab::General];
+    if project.integration_mode.requires_repo() {
+        tabs.push(ProjectSettingsTab::Git);
     }
+    tabs.push(ProjectSettingsTab::Changelogs);
+    tabs.push(ProjectSettingsTab::Distro);
+    if release_now_enabled {
+        tabs.push(ProjectSettingsTab::RlsQd);
+    }
+    tabs
+}
 
-    pub(crate) fn step(self, delta: isize, release_now_enabled: bool) -> Self {
-        let tabs = Self::tab_strip(release_now_enabled);
+impl ProjectSettingsTab {
+    pub(crate) fn step(
+        self,
+        delta: isize,
+        project: &ProjectConfig,
+        release_now_enabled: bool,
+    ) -> Self {
+        let tabs = project_settings_tab_strip(project, release_now_enabled);
         let index = tabs.iter().position(|tab| *tab == self).unwrap_or(0) as isize;
         tabs[(index + delta).rem_euclid(tabs.len() as isize) as usize]
     }
@@ -59,6 +76,7 @@ impl ProjectSettingsTab {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectSettingsFocus {
+    ComfyGitFlowEnabled,
     CustomMainBranchEnabled,
     CustomMainBranchName,
     Alias,
@@ -85,6 +103,7 @@ pub(crate) enum ProjectSettingsFocus {
     ReleaseNowMacOs,
     QuickDownloadsEnabled,
     QuickDownloadsPosition,
+    PostMergeSourceBranch,
     QuickDownloadsFooter,
     ReadmeInjectionEnabled,
     ReadmeInjectOnlyTopPicks,
@@ -123,6 +142,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) release_now_linux_amd: TextInput,
     pub(crate) release_now_macos: TextInput,
     pub(crate) quick_downloads_position: TextInput,
+    pub(crate) post_merge_source_branch: TextInput,
     pub(crate) quick_downloads_footer: TextInput,
     pub(crate) readme_inject_at_row: TextInput,
     pub(crate) release_title_template: TextInput,
@@ -132,7 +152,7 @@ impl Default for ProjectSettingsState {
     fn default() -> Self {
         Self {
             binding: None,
-            focus: ProjectSettingsFocus::CustomMainBranchEnabled,
+            focus: ProjectSettingsFocus::ComfyGitFlowEnabled,
             scroll: 0,
             viewport_height: 0,
             follow_focus: true,
@@ -156,6 +176,7 @@ impl Default for ProjectSettingsState {
             release_now_linux_amd: TextInput::with_value(""),
             release_now_macos: TextInput::with_value(""),
             quick_downloads_position: TextInput::with_value(""),
+            post_merge_source_branch: TextInput::with_value(""),
             quick_downloads_footer: TextInput::with_value(""),
             readme_inject_at_row: TextInput::with_value(""),
             release_title_template: TextInput::with_value(""),
@@ -207,6 +228,12 @@ impl ProjectSettingsState {
         let qd = &release_now.quick_downloads;
         self.quick_downloads_position
             .set_value(qd.position.display_name().to_string());
+        self.post_merge_source_branch.set_value(
+            project
+                .post_merge_source_branch_for_scope(scope_index)
+                .display_name()
+                .to_string(),
+        );
         self.quick_downloads_footer
             .set_value(qd.footer_message.clone());
         let rls = project.release_now_for_scope(scope_index);
@@ -229,7 +256,7 @@ impl ProjectSettingsState {
     ) -> Vec<ProjectSettingsFocus> {
         match tab {
             ProjectSettingsTab::General => {
-                let mut fields = Vec::new();
+                let mut fields = vec![ProjectSettingsFocus::ComfyGitFlowEnabled];
                 if project.integration_mode.requires_repo() {
                     fields.push(ProjectSettingsFocus::CustomMainBranchEnabled);
                     if project.repo_has_custom_main_branch_for_scope(scope_index) {
@@ -240,6 +267,7 @@ impl ProjectSettingsState {
                 append_alias_visible_fields(&mut fields, project, scope_index, self);
                 fields
             }
+            ProjectSettingsTab::Git => vec![ProjectSettingsFocus::PostMergeSourceBranch],
             ProjectSettingsTab::Changelogs => changelog_visible_fields(project, scope_index),
             ProjectSettingsTab::Distro => {
                 let mut fields = vec![ProjectSettingsFocus::ReleaseNowEnabled];
@@ -278,7 +306,9 @@ impl ProjectSettingsState {
     ) {
         let fields = self.visible_fields(tab, project, scope_index);
         if !fields.contains(&self.focus) {
-            self.focus = *fields.first().unwrap_or(&ProjectSettingsFocus::Alias);
+            self.focus = *fields
+                .first()
+                .unwrap_or(&ProjectSettingsFocus::ComfyGitFlowEnabled);
             self.follow_focus = true;
         }
     }
@@ -427,6 +457,10 @@ impl ProjectSettingsState {
                 "< {} >",
                 self.quick_downloads_position.value().trim()
             )),
+            ProjectSettingsFocus::PostMergeSourceBranch => Line::from(format!(
+                "< {} >",
+                self.post_merge_source_branch.value().trim()
+            )),
             ProjectSettingsFocus::QuickDownloadsFooter => self
                 .quick_downloads_footer
                 .display_line_with_width(focused, max_width),
@@ -520,6 +554,9 @@ pub(crate) fn render_project_settings(app: &mut App, frame: &mut Frame, area: Re
         ProjectSettingsTab::General => {
             render_general_settings(app, frame, sections[1], &project, scope_index)
         }
+        ProjectSettingsTab::Git => {
+            render_git_settings(app, frame, sections[1], &project, scope_index)
+        }
         ProjectSettingsTab::Changelogs => {
             render_changelogs_settings(app, frame, sections[1], &project, scope_index)
         }
@@ -537,6 +574,11 @@ pub(crate) fn sync_project_settings_state(app: &mut App) {
         return;
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    if app.project_settings_tab == ProjectSettingsTab::Git
+        && !project.integration_mode.requires_repo()
+    {
+        app.project_settings_tab = ProjectSettingsTab::General;
+    }
     if app.project_settings_tab == ProjectSettingsTab::RlsQd
         && !project.release_now_for_scope(scope_index).enabled
     {
@@ -560,7 +602,9 @@ pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
     let release_now_enabled = project.release_now_for_scope(scope_index).enabled;
-    app.project_settings_tab = app.project_settings_tab.step(delta, release_now_enabled);
+    app.project_settings_tab = app
+        .project_settings_tab
+        .step(delta, &project, release_now_enabled);
     app.project_settings_state.scroll = 0;
     app.project_settings_state.follow_focus = true;
     sync_project_settings_state(app);
@@ -670,6 +714,18 @@ pub(crate) fn try_handle_project_settings_key(app: &mut App, key: KeyEvent) -> R
             );
             Ok(true)
         }
+        KeyCode::Left
+            if app.project_settings_state.focus == ProjectSettingsFocus::PostMergeSourceBranch =>
+        {
+            adjust_post_merge_source_branch(app, PostMergeSourceBranch::previous)?;
+            Ok(true)
+        }
+        KeyCode::Right
+            if app.project_settings_state.focus == ProjectSettingsFocus::PostMergeSourceBranch =>
+        {
+            adjust_post_merge_source_branch(app, PostMergeSourceBranch::next)?;
+            Ok(true)
+        }
         KeyCode::Left | KeyCode::Right
             if app.project_settings_state.focus == ProjectSettingsFocus::QuickDownloadsPosition =>
         {
@@ -687,7 +743,11 @@ pub(crate) fn try_handle_project_settings_key(app: &mut App, key: KeyEvent) -> R
             Ok(true)
         }
         KeyCode::Enter | KeyCode::Char(' ')
-            if app.project_settings_state.focus != ProjectSettingsFocus::QuickDownloadsPosition =>
+            if !matches!(
+                app.project_settings_state.focus,
+                ProjectSettingsFocus::QuickDownloadsPosition
+                    | ProjectSettingsFocus::PostMergeSourceBranch
+            ) =>
         {
             toggle_focused_project_settings_control(app)?;
             Ok(true)
@@ -957,11 +1017,13 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
-    let strip = ProjectSettingsTab::tab_strip(project.release_now_for_scope(scope_index).enabled);
+    let strip =
+        project_settings_tab_strip(&project, project.release_now_for_scope(scope_index).enabled);
     let labels: Vec<&str> = strip
         .iter()
         .map(|t| match t {
             ProjectSettingsTab::General => "General",
+            ProjectSettingsTab::Git => "Git",
             ProjectSettingsTab::Changelogs => "Changelogs",
             ProjectSettingsTab::Distro => "Distro",
             ProjectSettingsTab::RlsQd => "RLS-QD",
@@ -983,6 +1045,7 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         .map(|tab| {
             Constraint::Length(match tab {
                 ProjectSettingsTab::General => 16,
+                ProjectSettingsTab::Git => 8,
                 ProjectSettingsTab::Changelogs => 20,
                 ProjectSettingsTab::Distro => 16,
                 ProjectSettingsTab::RlsQd => 18,
@@ -1186,6 +1249,7 @@ fn build_rows(
 ) -> Vec<ProjectSettingsRow> {
     match tab {
         ProjectSettingsTab::General => build_general_rows(project, scope_index, state),
+        ProjectSettingsTab::Git => build_git_rows(project, scope_index),
         ProjectSettingsTab::Changelogs => build_changelogs_rows(project, scope_index),
         ProjectSettingsTab::Distro => build_distro_rows(project, scope_index),
         ProjectSettingsTab::RlsQd => build_rls_qd_rows(project, scope_index),
@@ -1227,7 +1291,9 @@ fn build_general_rows(
     scope_index: usize,
     state: &ProjectSettingsState,
 ) -> Vec<ProjectSettingsRow> {
-    let mut rows = Vec::new();
+    let mut rows = vec![ProjectSettingsRow::Checkbox(
+        ProjectSettingsFocus::ComfyGitFlowEnabled,
+    )];
     if project.integration_mode.requires_repo() {
         if project.repo_has_custom_main_branch_for_scope(scope_index) {
             rows.push(ProjectSettingsRow::Path(
@@ -1251,6 +1317,47 @@ fn build_general_rows(
         )),
     ]);
     rows
+}
+
+fn build_git_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
+    let scope_label = format!("Project/Scope: {}", active_scope_name(project, scope_index));
+    let mut rows = vec![
+        ProjectSettingsRow::Text(Line::from(scope_label).bold()),
+        ProjectSettingsRow::Spacer(1),
+        ProjectSettingsRow::Text(Line::from(
+            "After successful MR/PR merge, the source branch should always be:",
+        )),
+        ProjectSettingsRow::Path(ProjectSettingsFocus::PostMergeSourceBranch),
+    ];
+    if !project.comfygitflow_enabled {
+        rows.push(ProjectSettingsRow::Spacer(1));
+        rows.push(ProjectSettingsRow::Text(
+            Line::from("More options are available for ComfyGitFlow-enabled projects!")
+                .style(Style::default().fg(Color::DarkGray)),
+        ));
+        rows.push(ProjectSettingsRow::Text(
+            Line::from("See line 1 in `Project Settings/General`...")
+                .style(Style::default().fg(Color::DarkGray)),
+        ));
+    }
+    rows
+}
+
+fn render_git_settings(
+    app: &mut App,
+    frame: &mut Frame,
+    area: Rect,
+    project: &ProjectConfig,
+    scope_index: usize,
+) {
+    render_scrollable_rows(
+        app,
+        frame,
+        area,
+        project,
+        scope_index,
+        &build_git_rows(project, scope_index),
+    );
 }
 
 fn build_changelogs_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
@@ -1484,6 +1591,7 @@ fn render_checkbox_row(
 ) {
     let inset = control_inset(area);
     let enabled = match field {
+        ProjectSettingsFocus::ComfyGitFlowEnabled => project.comfygitflow_enabled,
         ProjectSettingsFocus::CustomMainBranchEnabled => {
             project.repo_has_custom_main_branch_for_scope(scope_index)
         }
@@ -1772,6 +1880,7 @@ fn render_path_row(
         ProjectSettingsFocus::Alias
         | ProjectSettingsFocus::CustomMainBranchName
         | ProjectSettingsFocus::QuickDownloadsPosition
+        | ProjectSettingsFocus::PostMergeSourceBranch
         | ProjectSettingsFocus::QuickDownloadsFooter
         | ProjectSettingsFocus::ReadmeInjectAtRow
         | ProjectSettingsFocus::ReleaseTitleTemplate => None,
@@ -1813,6 +1922,9 @@ fn control_inset(area: Rect) -> Rect {
 
 fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
     match field {
+        ProjectSettingsFocus::ComfyGitFlowEnabled => {
+            "This project follows ComfyGitFlow guides & rules."
+        }
         ProjectSettingsFocus::CustomMainBranchEnabled => {
             "This repo has a custom named main branch."
         }
@@ -1852,6 +1964,7 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ReleaseNowLinuxAmd => "Linux AMD",
         ProjectSettingsFocus::ReleaseNowMacOs => "MacOS",
         ProjectSettingsFocus::QuickDownloadsPosition => "Position (←/→)",
+        ProjectSettingsFocus::PostMergeSourceBranch => "Policy (←/→)",
         ProjectSettingsFocus::QuickDownloadsFooter => "Footer",
         ProjectSettingsFocus::ReadmeInjectAtRow => "Inject at row:",
         ProjectSettingsFocus::ReleaseTitleTemplate => "Release title:",
@@ -1862,7 +1975,8 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
 fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
     matches!(
         field,
-        ProjectSettingsFocus::CustomMainBranchEnabled
+        ProjectSettingsFocus::ComfyGitFlowEnabled
+            | ProjectSettingsFocus::CustomMainBranchEnabled
             | ProjectSettingsFocus::ChangelogEnabled
             | ProjectSettingsFocus::ChangelogHidePrMessages
             | ProjectSettingsFocus::ChangelogHideBumpMessages
@@ -1875,6 +1989,35 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ReleaseNowEnabled
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
+}
+
+fn adjust_post_merge_source_branch(
+    app: &mut App,
+    step: fn(PostMergeSourceBranch) -> PostMergeSourceBranch,
+) -> Result<()> {
+    let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+        return Ok(());
+    };
+    let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    let scope_name = active_scope_name(&project, scope_index);
+    let active_project = app
+        .config
+        .projects
+        .get_mut(app.selected_project)
+        .expect("selected project checked above");
+    let current = active_project.post_merge_source_branch_for_scope(scope_index);
+    let next = step(current);
+    active_project.set_post_merge_source_branch_for_scope(scope_index, next)?;
+    app.project_settings_state
+        .post_merge_source_branch
+        .set_value(next.display_name().to_string());
+    app.status = super::StatusMessage::success(format!(
+        "After-merge source branch policy set to \"{}\" for {}.",
+        next.display_name(),
+        scope_name
+    ));
+    app.config_store.save(&app.config)?;
+    Ok(())
 }
 
 fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
@@ -1890,6 +2033,15 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
         .expect("selected project checked above");
 
     match app.project_settings_state.focus {
+        ProjectSettingsFocus::ComfyGitFlowEnabled => {
+            active_project.comfygitflow_enabled = !active_project.comfygitflow_enabled;
+            let enabled = active_project.comfygitflow_enabled;
+            app.status = super::StatusMessage::success(format!(
+                "ComfyGitFlow {} for {}.",
+                if enabled { "enabled" } else { "disabled" },
+                active_project.name
+            ));
+        }
         ProjectSettingsFocus::CustomMainBranchEnabled => {
             let next_enabled = !active_project.repo_has_custom_main_branch_for_scope(scope_index);
             let custom_main_branch = app
@@ -1956,6 +2108,9 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
                 next.display_name(),
                 scope_name
             ));
+        }
+        ProjectSettingsFocus::PostMergeSourceBranch => {
+            adjust_post_merge_source_branch(app, PostMergeSourceBranch::next)?;
         }
         ProjectSettingsFocus::ChangelogHidePrMessages => {
             let next = !app.project_settings_state.changelog_hide_pr_messages;
