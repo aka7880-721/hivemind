@@ -64,6 +64,7 @@ pub fn merge_merge_request(repo_root: &str, number: u64, subject: &str) -> Resul
             &number.to_string(),
             "--message",
             subject,
+            "--remove-source-branch=false",
             "--yes",
         ],
     )?;
@@ -89,6 +90,7 @@ pub fn create_merge_request(
             target_branch,
             "--source-branch",
             current_branch,
+            "--remove-source-branch=false",
             "--title",
             title,
             "--description",
