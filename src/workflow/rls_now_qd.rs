@@ -387,7 +387,11 @@ pub(crate) fn build_quick_downloads_section_html(
             msi.unwrap_or_else(|| sub_disabled_img(&format!("{}/msi1.svg", LOGO_BASE), "32"));
         let zip_s =
             zip.unwrap_or_else(|| sub_disabled_img(&format!("{}/zip.svg", LOGO_BASE), "32"));
-        format!("{msi_s}<br><br>{zip_s}")
+        let body = format!("{msi_s}<br><br>{zip_s}");
+        match forge {
+            crate::forge::ForgeKind::GitLab => format!("<br>{body}"),
+            crate::forge::ForgeKind::GitHub => body,
+        }
     };
 
     let linux_cell = format!(
@@ -510,22 +514,33 @@ pub(crate) fn build_quick_downloads_section_html(
     );
 
     let footer_esc = footer_message.trim();
+    let header_row = match forge {
+        crate::forge::ForgeKind::GitHub => format!(
+            r#"|   <sub><img src="{}/logo-win.svg" height="24" title="Should work also below Win11. Please open Issue if you have any problems."/></sub>   |✪|<sub><img src="{}/logo-linux.svg" height="30" /></sub> <sup>Linux Distributions</sup>|✪|<sub><img src="{}/logo-apple.svg" height="24" /></sub> <sub><sup>macOS</sup></sub>|"#,
+            LOGO_BASE, LOGO_BASE, LOGO_BASE
+        ),
+        crate::forge::ForgeKind::GitLab => format!(
+            r#"|   <sub><img src="{}/logo-win.svg" height="24" title="Should work also below Win11. Please open Issue if you have any problems."/></sub>   |<sub>✪</sub>|                   <img src="{}/logo-linux.svg" height="30" /> <sup><sup>Linux Distributions</sup></sup>|<sub>✪</sub>|      <sub><img src="{}/logo-apple.svg" height="24" /></sub> <sub><sup>macOS</sup></sub>|"#,
+            LOGO_BASE, LOGO_BASE, LOGO_BASE
+        ),
+    };
     let inner = format!(
         r#"
 
 |⟱  Q U I C K - D O W N L O A D S         A V A I L A B L E         H E R E  ⟱|
 |-|
 
-|   <sub><img src="{}/logo-win.svg" height="24" title="Should work also below Win11. Please open Issue if you have any problems."/></sub>   |✪|<sub><img src="{}/logo-linux.svg" height="30" /></sub> <sup>Linux Distributions</sup>|✪|<sub><img src="{}/logo-apple.svg" height="24" /></sub> <sub><sup>macOS</sup></sub>|
+{header_row}
 |:-:|:-:|-|:-:|:-:|
 |{win_cell}|‧<br>✦<br>‧<br>✦<br>‧<br>✦<br>‧|{linux_cell}|‧<br>✦<br>‧<br>✦<br>‧<br>✦<br>‧|{mac_cell}|
 
-<sub><sup>{} </sub></sup>
+<sub><sup>{footer_esc} </sub></sup>
 "#,
-        LOGO_BASE,
-        LOGO_BASE,
-        LOGO_BASE,
-        esc_attr(footer_esc)
+        header_row = header_row,
+        win_cell = win_cell,
+        linux_cell = linux_cell,
+        mac_cell = mac_cell,
+        footer_esc = esc_attr(footer_esc),
     );
     match forge {
         crate::forge::ForgeKind::GitHub => format!(r#"<div align="center">{inner}</div>"#),
@@ -650,6 +665,46 @@ mod tests {
         );
         assert!(html.contains("<div align=\"center\">"));
         assert!(html.contains(NOT_AVAILABLE_TITLE) || html.contains("&#x1f6ab;"));
+    }
+
+    #[test]
+    fn gitlab_quick_downloads_table_uses_gitlab_header_and_win_cell_layout() {
+        let slots = assign_artifacts_to_slots(&[
+            "comfygit-0.34.3-windows-x64.msi".to_string(),
+            "comfygit-0.34.3-windows-x64-portable.zip".to_string(),
+        ]);
+        let html = build_quick_downloads_section_html(
+            crate::forge::ForgeKind::GitLab,
+            "comfyhome",
+            "dist/ComfyGit",
+            "v0.34.3",
+            &slots,
+            DEFAULT_QUICK_DOWNLOADS_FOOTER,
+        );
+        assert!(!html.contains("<div align=\"center\">"));
+        assert!(html.contains("|<sub>✪</sub>|"));
+        assert!(!html.contains("|✪|<sub><img"));
+        assert!(html.contains("<sup><sup>Linux Distributions</sup></sup>"));
+        assert!(html.contains("|<br><sub><a href="));
+        assert!(html.contains("gitlab.com/comfyhome/"));
+        assert!(html.contains("downloads/comfygit-0.34.3-windows-x64.msi"));
+    }
+
+    #[test]
+    fn github_quick_downloads_table_keeps_center_wrap_and_github_header() {
+        let slots = assign_artifacts_to_slots(&["app-win.msi".to_string()]);
+        let html = build_quick_downloads_section_html(
+            crate::forge::ForgeKind::GitHub,
+            "comfy-home",
+            "ComfyGit",
+            "v1",
+            &slots,
+            DEFAULT_QUICK_DOWNLOADS_FOOTER,
+        );
+        assert!(html.contains("<div align=\"center\">"));
+        assert!(html.contains("|✪|<sub><img"));
+        assert!(html.contains("<sup>Linux Distributions</sup>"));
+        assert!(!html.contains("|<br><sub><a href="));
     }
 
     #[test]
