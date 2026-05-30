@@ -63,7 +63,7 @@ pub(crate) fn run_merge(
     )?;
 
     let selected = prompt_pull_request_selection(repo_root, forge, cancel.clone())?;
-    merge_pull_request(repo_root, forge, &selected)
+    merge_pull_request(repo_root, forge, &selected, cancel)
 }
 
 pub(crate) fn run_merge_for_pull_request(
@@ -86,9 +86,9 @@ pub(crate) fn run_merge_for_pull_request(
         cancel.clone(),
     )?;
 
-    let entries = fetch_open_pull_requests(repo_root, forge, cancel)?;
+    let entries = fetch_open_pull_requests(repo_root, forge, cancel.clone())?;
     let selected = select_pull_request_by_number(&entries, pr_number)?;
-    merge_pull_request(repo_root, forge, &selected)
+    merge_pull_request(repo_root, forge, &selected, cancel)
 }
 
 fn fetch_open_pull_requests(
@@ -622,7 +622,12 @@ fn format_table_header(layout: &PullRequestTableLayout) -> String {
     )
 }
 
-fn merge_pull_request(repo_root: &str, forge: ForgeKind, entry: &PullRequestEntry) -> Result<()> {
+fn merge_pull_request(
+    repo_root: &str,
+    forge: ForgeKind,
+    entry: &PullRequestEntry,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
     let refreshed = fetch_pull_request(repo_root, forge, entry.number)?;
     if !refreshed.is_mergeable() {
         let mut message = format!(
@@ -639,8 +644,16 @@ fn merge_pull_request(repo_root: &str, forge: ForgeKind, entry: &PullRequestEntr
         bail!("{}", message)
     }
 
+    let policy = resolve_post_merge_source_branch(repo_root);
     let subject = build_merge_commit_subject(refreshed.number);
-    let stdout = forge.merge_pull_request(repo_root, refreshed.number, &subject)?;
+    let stdout = forge.merge_pull_request(
+        repo_root,
+        refreshed.number,
+        &subject,
+        &refreshed.source_branch,
+        policy.delete_remote_on_merge(),
+        policy.delete_local_after_merge(),
+    )?;
     println!();
     if stdout.is_empty() {
         let label = forge.pull_request_label();
@@ -649,6 +662,34 @@ fn merge_pull_request(repo_root: &str, forge: ForgeKind, entry: &PullRequestEntr
         println!("{}", stdout);
     }
 
+    if policy.delete_local_after_merge() {
+        delete_local_source_branch(repo_root, &refreshed.source_branch, cancel)?;
+    }
+
+    Ok(())
+}
+
+fn resolve_post_merge_source_branch(repo_root: &str) -> crate::config::PostMergeSourceBranch {
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from(repo_root));
+    let config = crate::config::ConfigStore::locate()
+        .and_then(|store| store.load())
+        .map(|config| config.projects)
+        .unwrap_or_default();
+    crate::cli::post_merge_source_branch_for_repo(&config, repo_root, &cwd)
+}
+
+fn delete_local_source_branch(
+    repo_root: &str,
+    branch: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    run_git_checked_owned_with_cancel(
+        repo_root,
+        vec!["branch".to_string(), "-d".to_string(), branch.to_string()],
+        cancel,
+    )
+    .with_context(|| format!("failed to delete local branch '{branch}' after merge"))?;
+    println!("Local branch '{branch}' deleted.");
     Ok(())
 }
 
