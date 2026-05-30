@@ -848,6 +848,7 @@ impl ProjectEditDialog {
                 secondary_remote_url,
                 has_custom_main_branch: existing_repo.has_custom_main_branch,
                 custom_main_branch: existing_repo.custom_main_branch,
+                post_merge_source_branch: existing_repo.post_merge_source_branch,
             });
         } else {
             project.repo = None;
