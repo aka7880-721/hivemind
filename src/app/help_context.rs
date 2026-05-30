@@ -114,6 +114,7 @@ impl App {
             OverviewTab::ProjectDetail => HelpContext::OverviewProjectDetail,
             OverviewTab::ProjectSettings => match self.project_settings_tab {
                 ProjectSettingsTab::General => HelpContext::ProjectSettingsGeneral,
+                ProjectSettingsTab::Git => HelpContext::ProjectSettingsGit,
                 ProjectSettingsTab::Changelogs => HelpContext::ProjectSettingsChangelogs,
                 ProjectSettingsTab::Distro => HelpContext::ProjectSettingsDistro,
                 ProjectSettingsTab::RlsQd => HelpContext::ProjectSettingsRlsQd,

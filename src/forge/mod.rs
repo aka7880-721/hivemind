@@ -123,10 +123,27 @@ impl ForgeKind {
         }
     }
 
-    pub fn merge_pull_request(self, repo_root: &str, number: u64, subject: &str) -> Result<String> {
+    pub fn merge_pull_request(
+        self,
+        repo_root: &str,
+        number: u64,
+        subject: &str,
+        source_branch: &str,
+        delete_remote: bool,
+        delete_local: bool,
+    ) -> Result<String> {
         match self {
-            ForgeKind::GitHub => crate::ghub::pr::merge_pull_request(repo_root, number, subject),
-            ForgeKind::GitLab => crate::glab::mr::merge_merge_request(repo_root, number, subject),
+            ForgeKind::GitHub => crate::ghub::pr::merge_pull_request(
+                repo_root,
+                number,
+                subject,
+                source_branch,
+                delete_remote,
+                delete_local,
+            ),
+            ForgeKind::GitLab => {
+                crate::glab::mr::merge_merge_request(repo_root, number, subject, delete_remote)
+            }
         }
     }
 

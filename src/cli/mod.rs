@@ -3331,6 +3331,43 @@ fn find_repo_custom_main_branch(repo_root: &str) -> Option<String> {
     None
 }
 
+pub(crate) fn post_merge_source_branch_for_repo(
+    projects: &[crate::config::ProjectConfig],
+    repo_root: &str,
+    cwd: &Path,
+) -> crate::config::PostMergeSourceBranch {
+    let canonical_repo_root = best_effort_canonicalize(Path::new(repo_root));
+
+    for project in projects {
+        if project.project_type == ProjectType::AllInOne {
+            if let Some(repo) = project.repo.as_ref()
+                && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+            {
+                return project.post_merge_source_branch_for_scope(0);
+            }
+            continue;
+        }
+
+        for (index, branch) in project.branches.iter().enumerate() {
+            if let Some(repo) = branch.repo.as_ref()
+                && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+            {
+                let scope_index = find_scope_for_cwd(project, project, cwd).unwrap_or(index);
+                return project.post_merge_source_branch_for_scope(scope_index);
+            }
+        }
+
+        if let Some(repo) = project.repo.as_ref()
+            && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+        {
+            let scope_index = find_scope_for_cwd(project, project, cwd).unwrap_or(0);
+            return project.post_merge_source_branch_for_scope(scope_index);
+        }
+    }
+
+    crate::config::PostMergeSourceBranch::default()
+}
+
 fn all_configured_repo_roots(projects: &[ProjectConfig]) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let mut roots = Vec::new();

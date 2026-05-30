@@ -113,6 +113,9 @@ pub struct ProjectConfig {
     pub manual_top_picks: Vec<crate::changelog::top_picks::TopPick>,
     #[serde(default)]
     pub advanced_alias: AdvancedAliasSettings,
+    /// When true, ComfyGitFlow-specific settings and workflows apply to this project.
+    #[serde(default)]
+    pub comfygitflow_enabled: bool,
 }
 
 impl ProjectConfig {
@@ -529,6 +532,22 @@ impl ProjectConfig {
         } else {
             String::new()
         };
+        Ok(())
+    }
+
+    pub fn post_merge_source_branch_for_scope(&self, scope_index: usize) -> PostMergeSourceBranch {
+        self.repo_config_for_scope(scope_index)
+            .map(|repo| repo.post_merge_source_branch)
+            .unwrap_or_default()
+    }
+
+    pub fn set_post_merge_source_branch_for_scope(
+        &mut self,
+        scope_index: usize,
+        policy: PostMergeSourceBranch,
+    ) -> Result<()> {
+        let repo = self.repo_config_for_scope_mut_or_insert(scope_index)?;
+        repo.post_merge_source_branch = policy;
         Ok(())
     }
 
@@ -1065,6 +1084,51 @@ pub struct RepoConfig {
     pub secondary_remote_url: Option<String>,
     pub has_custom_main_branch: bool,
     pub custom_main_branch: String,
+    #[serde(default)]
+    pub post_merge_source_branch: PostMergeSourceBranch,
+}
+
+/// What happens to the source branch after a successful MR/PR merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PostMergeSourceBranch {
+    #[default]
+    KeptAsIs,
+    DeletedRemote,
+    DeletedRemoteAndLocal,
+}
+
+impl PostMergeSourceBranch {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            PostMergeSourceBranch::KeptAsIs => "Kept as is",
+            PostMergeSourceBranch::DeletedRemote => "DELETED (remote)",
+            PostMergeSourceBranch::DeletedRemoteAndLocal => "DELETED (remote+local)",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            PostMergeSourceBranch::KeptAsIs => PostMergeSourceBranch::DeletedRemote,
+            PostMergeSourceBranch::DeletedRemote => PostMergeSourceBranch::DeletedRemoteAndLocal,
+            PostMergeSourceBranch::DeletedRemoteAndLocal => PostMergeSourceBranch::KeptAsIs,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        self.next().next()
+    }
+
+    pub fn delete_remote_on_merge(self) -> bool {
+        matches!(
+            self,
+            PostMergeSourceBranch::DeletedRemote | PostMergeSourceBranch::DeletedRemoteAndLocal
+        )
+    }
+
+    pub fn delete_local_after_merge(self) -> bool {
+        matches!(self, PostMergeSourceBranch::DeletedRemoteAndLocal)
+    }
 }
 
 impl RepoConfig {
@@ -1305,6 +1369,52 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_merge_source_branch_cycles_three_policies() {
+        assert_eq!(
+            PostMergeSourceBranch::KeptAsIs.next(),
+            PostMergeSourceBranch::DeletedRemote
+        );
+        assert_eq!(
+            PostMergeSourceBranch::DeletedRemoteAndLocal.previous(),
+            PostMergeSourceBranch::DeletedRemote
+        );
+    }
+
+    #[test]
+    fn post_merge_source_branch_defaults_to_kept() {
+        let repo = RepoConfig::default();
+        assert_eq!(
+            repo.post_merge_source_branch,
+            PostMergeSourceBranch::KeptAsIs
+        );
+        assert!(!repo.post_merge_source_branch.delete_remote_on_merge());
+        assert!(!repo.post_merge_source_branch.delete_local_after_merge());
+    }
+
+    #[test]
+    fn project_comfygitflow_defaults_to_disabled() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::GitHubEnabled,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: ReleaseNowSettings::default(),
+            tile_info: TileInfoSettings::default(),
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+            variator_storage: Default::default(),
+            manual_top_picks: Vec::new(),
+            advanced_alias: Default::default(),
+            comfygitflow_enabled: false,
+        };
+        assert!(!project.comfygitflow_enabled);
+    }
 
     #[test]
     fn branch_display_name_falls_back_to_name() {
