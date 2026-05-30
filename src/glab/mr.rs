@@ -62,9 +62,9 @@ pub fn merge_merge_request(repo_root: &str, number: u64, subject: &str) -> Resul
             "mr",
             "merge",
             &number.to_string(),
-            "--merge-commit",
             "--message",
             subject,
+            "--yes",
         ],
     )?;
     if !output.status.success() {
