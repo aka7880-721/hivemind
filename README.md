@@ -359,7 +359,7 @@ Run **`cg init`** in a repo root to scan for manifests (including common monorep
 #### RPM (Fedora, SUSE, etc.)
 
 ##### Example video
-<a href="https://youtu.be/2aIsQ4Wk9hg"><img src="https://raw.github.com/comfy-home/comfygit/main/video-manuals/01-installation.gif" width="640" title="Click to see the video on YT (you can pause, make it faster/slower)"/></a>
+<a href="https://youtu.be/2aIsQ4Wk9hg"><img src="https://github.com/comfy-home/ComfyGit/raw/main/video-manuals/01-installation.gif" width="640" title="Click to see the video on YT (you can pause, make it faster/slower)"/></a>
 
 ```bash
 # Download (replace <> with actual version, OS, and architecture)
