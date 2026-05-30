@@ -21,6 +21,9 @@ pub(crate) fn markdown_for(context: HelpContext) -> &'static str {
         HelpContext::ProjectSettingsGeneral => {
             include_str!("pages/project_settings/general.md")
         }
+        HelpContext::ProjectSettingsGit => {
+            include_str!("pages/project_settings/git.md")
+        }
         HelpContext::ProjectSettingsChangelogs => {
             include_str!("pages/project_settings/changelogs.md")
         }
