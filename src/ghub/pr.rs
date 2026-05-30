@@ -81,20 +81,30 @@ pub fn fetch_mergeability(repo_root: &str, number: u64) -> Result<crate::forge::
     })
 }
 
-pub fn merge_pull_request(repo_root: &str, number: u64, subject: &str) -> Result<String> {
-    let output = cli::run_in_repo(
-        repo_root,
-        &[
-            "pr",
-            "merge",
-            &number.to_string(),
-            "--merge",
-            "--subject",
-            subject,
-        ],
-    )?;
+pub fn merge_pull_request(
+    repo_root: &str,
+    number: u64,
+    subject: &str,
+    source_branch: &str,
+    delete_remote: bool,
+    delete_local: bool,
+) -> Result<String> {
+    let number_arg = number.to_string();
+    let mut args = vec!["pr", "merge", &number_arg, "--merge", "--subject", subject];
+    if delete_remote && delete_local {
+        args.push("-d");
+    }
+    let output = cli::run_in_repo(repo_root, &args)?;
     if !output.status.success() {
         bail_cli_failure("pr merge", &output)?;
+    }
+    if delete_remote && !delete_local {
+        let remote = crate::git::default_push_remote_name(repo_root)?;
+        let delete_output =
+            cli::run_in_repo(repo_root, &["push", &remote, "--delete", source_branch])?;
+        if !delete_output.status.success() {
+            bail_cli_failure("push --delete", &delete_output)?;
+        }
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
