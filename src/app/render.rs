@@ -13,6 +13,9 @@ impl App {
         self.overview_tile_viewport = None;
         self.overview_recent_viewport = None;
         self.release_now_log_viewport = None;
+        self.overview_tab_strip_area = None;
+        self.project_settings_tab_strip_area = None;
+        self.recent_changes_tab_strip_area = None;
         self.overview_tile_rects.clear();
 
         self.update_footer_visibility(frame.area().height);
@@ -334,6 +337,7 @@ impl App {
         if !self.overview_show_recent_tab && self.overview_tab == OverviewTab::RecentChanges {
             self.overview_tab = OverviewTab::Overview;
         }
+        self.overview_tab_strip_area = Some(right_sections[0]);
         render_overview_tabs(
             frame,
             right_sections[0],
@@ -1366,25 +1370,22 @@ impl App {
         } else {
             1
         };
-        let tabs = TabNav::new(&tab_labels, tab_index)
-            .highlight_style(Style::default().fg(Color::Cyan))
-            .border_style(Style::default().fg(Color::DarkGray))
-            .style(Style::default().fg(Color::White))
-            .indicator(None);
-        frame.render_widget(tabs, sections[1]);
-
-        let tab_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(22), Constraint::Length(14)])
-            .split(sections[1]);
-        self.hit_targets.push(HitTarget::new(
-            tab_layout[0],
-            HitAction::SelectRecentChangesTab(RecentChangesTab::Recent),
-        ));
-        self.hit_targets.push(HitTarget::new(
-            tab_layout[1],
-            HitAction::SelectRecentChangesTab(RecentChangesTab::History),
-        ));
+        let nav = crate::tui::comfy_tab_nav(&tab_labels, tab_index);
+        self.recent_changes_tab_strip_area = Some(sections[1]);
+        let tab_rects = nav.tab_rects(sections[1]);
+        frame.render_widget(nav, sections[1]);
+        if let Some(rect) = tab_rects.first() {
+            self.hit_targets.push(HitTarget::new(
+                *rect,
+                HitAction::SelectRecentChangesTab(RecentChangesTab::Recent),
+            ));
+        }
+        if let Some(rect) = tab_rects.get(1) {
+            self.hit_targets.push(HitTarget::new(
+                *rect,
+                HitAction::SelectRecentChangesTab(RecentChangesTab::History),
+            ));
+        }
 
         let body_block = Block::default().borders(Borders::ALL).title(" git log ");
         let body_inner = body_block.inner(sections[2]);

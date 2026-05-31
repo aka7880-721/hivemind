@@ -7,10 +7,10 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Style},
 };
-use tui_tabs::TabNav;
+use ratatui_comfy_tabs::{TabNav, TabNavState, TabWheelDirection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OverviewTab {
@@ -41,6 +41,35 @@ pub(crate) fn overview_tabs(include_recent_changes: bool) -> &'static [OverviewT
     }
 }
 
+pub(crate) fn comfy_tab_nav<'a>(labels: &'a [&'a str], selected: usize) -> TabNav<'a> {
+    // mouse_wheel / mouse_click are opt-in at the widget level; the app must still
+    // forward wheel/click events to TabNavState::handle_mouse_wheel / handle_mouse_click.
+    TabNav::new(labels, selected)
+        .highlight_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(Color::White))
+        .indicator(None)
+        .mouse_wheel(true)
+        .mouse_click(true)
+}
+
+/// Apply one wheel step over `strip_area`. Returns the new selected index when consumed.
+pub(crate) fn wheel_tab_strip(
+    strip_area: Rect,
+    labels: &[&str],
+    active_index: usize,
+    mouse_column: u16,
+    mouse_row: u16,
+    direction: TabWheelDirection,
+) -> Option<usize> {
+    let nav = comfy_tab_nav(labels, active_index);
+    let mut state = TabNavState::new(active_index);
+    if !state.handle_mouse_wheel(&nav, strip_area, mouse_column, mouse_row, direction) {
+        return None;
+    }
+    Some(state.selected)
+}
+
 pub(crate) fn render_overview_tabs(
     frame: &mut Frame,
     area: Rect,
@@ -49,18 +78,13 @@ pub(crate) fn render_overview_tabs(
 ) {
     let labels = overview_tab_specs(include_recent_changes)
         .iter()
-        .map(|(_, label, _)| *label)
+        .map(|(_, label)| *label)
         .collect::<Vec<_>>();
     let active_index = overview_tab_specs(include_recent_changes)
         .iter()
-        .position(|(tab, _, _)| *tab == active_tab)
+        .position(|(tab, _)| *tab == active_tab)
         .unwrap_or(0);
-    let tabs = TabNav::new(&labels, active_index)
-        .highlight_style(Style::default().fg(Color::Cyan))
-        .border_style(Style::default().fg(Color::DarkGray))
-        .style(Style::default().fg(Color::White))
-        .indicator(None);
-    frame.render_widget(tabs, area);
+    frame.render_widget(comfy_tab_nav(&labels, active_index), area);
 }
 
 pub(crate) fn overview_tab_rects(
@@ -68,35 +92,55 @@ pub(crate) fn overview_tab_rects(
     include_recent_changes: bool,
 ) -> Vec<(OverviewTab, Rect)> {
     let specs = overview_tab_specs(include_recent_changes);
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(
-            specs
-                .iter()
-                .map(|(_, _, width)| Constraint::Length(*width))
-                .collect::<Vec<_>>(),
-        )
-        .split(area);
+    let labels: Vec<&str> = specs.iter().map(|(_, label)| *label).collect();
+    let nav = comfy_tab_nav(&labels, 0);
+    let rects = nav.tab_rects(area);
     specs
         .iter()
-        .enumerate()
-        .map(|(index, (tab, _, _))| (*tab, layout[index]))
+        .zip(rects)
+        .map(|((tab, _), rect)| (*tab, rect))
         .collect()
 }
 
-fn overview_tab_specs(include_recent_changes: bool) -> &'static [(OverviewTab, &'static str, u16)] {
+/// Returns the tab selected by a wheel step when the pointer is over `strip_area`.
+pub(crate) fn wheel_overview_tab(
+    strip_area: Rect,
+    include_recent_changes: bool,
+    active_tab: OverviewTab,
+    mouse_column: u16,
+    mouse_row: u16,
+    direction: TabWheelDirection,
+) -> Option<OverviewTab> {
+    let specs = overview_tab_specs(include_recent_changes);
+    let labels: Vec<&str> = specs.iter().map(|(_, label)| *label).collect();
+    let active_index = specs
+        .iter()
+        .position(|(tab, _)| *tab == active_tab)
+        .unwrap_or(0);
+    let selected = wheel_tab_strip(
+        strip_area,
+        &labels,
+        active_index,
+        mouse_column,
+        mouse_row,
+        direction,
+    )?;
+    specs.get(selected).map(|(tab, _)| *tab)
+}
+
+fn overview_tab_specs(include_recent_changes: bool) -> &'static [(OverviewTab, &'static str)] {
     if include_recent_changes {
         &[
-            (OverviewTab::Overview, "Overview", 16),
-            (OverviewTab::RecentChanges, "Recent Changes", 22),
-            (OverviewTab::ProjectDetail, "Project Detail", 22),
-            (OverviewTab::ProjectSettings, "Project Settings", 24),
+            (OverviewTab::Overview, "Overview"),
+            (OverviewTab::RecentChanges, "Recent Changes"),
+            (OverviewTab::ProjectDetail, "Project Detail"),
+            (OverviewTab::ProjectSettings, "Project Settings"),
         ]
     } else {
         &[
-            (OverviewTab::Overview, "Overview", 16),
-            (OverviewTab::ProjectDetail, "Project Detail", 22),
-            (OverviewTab::ProjectSettings, "Project Settings", 24),
+            (OverviewTab::Overview, "Overview"),
+            (OverviewTab::ProjectDetail, "Project Detail"),
+            (OverviewTab::ProjectSettings, "Project Settings"),
         ]
     }
 }
@@ -107,9 +151,24 @@ mod tests {
 
     #[test]
     fn overview_tab_rects_include_recent_tab_when_requested() {
-        let rects = overview_tab_rects(Rect::new(0, 0, 80, 3), true);
+        let rects = overview_tab_rects(Rect::new(0, 0, 120, 3), true);
         assert_eq!(rects.len(), 4);
         assert_eq!(rects[1].0, OverviewTab::RecentChanges);
         assert_eq!(rects[3].0, OverviewTab::ProjectSettings);
+    }
+
+    #[test]
+    fn wheel_tab_strip_advances_selection_when_hovering() {
+        let area = Rect::new(0, 0, 120, 3);
+        let labels = ["Overview", "Detail"];
+        let selected = wheel_tab_strip(
+            area,
+            &labels,
+            0,
+            5,
+            1,
+            TabWheelDirection::Down,
+        );
+        assert_eq!(selected, Some(1));
     }
 }

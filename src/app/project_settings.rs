@@ -15,7 +15,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use tui_checkbox::Checkbox;
-use tui_tabs::TabNav;
 
 use super::{
     App, BROWSE_BUTTON_WIDTH, BrowseTarget, FORM_LABEL_WIDTH, FormRowButton, HitAction, HitTarget,
@@ -26,7 +25,7 @@ use crate::{
         DEFAULT_CHANGELOG_PATH, PostMergeSourceBranch, ProjectConfig, ProjectType,
         ReadmeInjectDepth,
     },
-    tui::center_vertically,
+    tui::{center_vertically, comfy_tab_nav},
     workflow::dialogs::TextInput,
 };
 
@@ -1012,6 +1011,16 @@ pub(crate) fn apply_browser_selection(
     Ok(true)
 }
 
+pub(crate) fn project_settings_tab_label(tab: ProjectSettingsTab) -> &'static str {
+    match tab {
+        ProjectSettingsTab::General => "General",
+        ProjectSettingsTab::Git => "Git",
+        ProjectSettingsTab::Changelogs => "Changelogs",
+        ProjectSettingsTab::Distro => "Distro",
+        ProjectSettingsTab::RlsQd => "RLS-QD",
+    }
+}
+
 fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
     let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
         return;
@@ -1021,43 +1030,19 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         project_settings_tab_strip(&project, project.release_now_for_scope(scope_index).enabled);
     let labels: Vec<&str> = strip
         .iter()
-        .map(|t| match t {
-            ProjectSettingsTab::General => "General",
-            ProjectSettingsTab::Git => "Git",
-            ProjectSettingsTab::Changelogs => "Changelogs",
-            ProjectSettingsTab::Distro => "Distro",
-            ProjectSettingsTab::RlsQd => "RLS-QD",
-        })
+        .map(|tab| project_settings_tab_label(*tab))
         .collect();
     let active_index = strip
         .iter()
         .position(|tab| *tab == app.project_settings_tab)
         .unwrap_or(0);
-    let tabs = TabNav::new(&labels, active_index)
-        .highlight_style(Style::default().fg(Color::Cyan))
-        .border_style(Style::default().fg(Color::DarkGray))
-        .style(Style::default().fg(Color::White))
-        .indicator(None);
-    frame.render_widget(tabs, area);
+    app.project_settings_tab_strip_area = Some(area);
+    let nav = comfy_tab_nav(&labels, active_index);
+    let tab_rects = nav.tab_rects(area);
+    frame.render_widget(nav, area);
 
-    let constraints: Vec<Constraint> = strip
-        .iter()
-        .map(|tab| {
-            Constraint::Length(match tab {
-                ProjectSettingsTab::General => 16,
-                ProjectSettingsTab::Git => 8,
-                ProjectSettingsTab::Changelogs => 20,
-                ProjectSettingsTab::Distro => 16,
-                ProjectSettingsTab::RlsQd => 18,
-            })
-        })
-        .collect();
-    let rects = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(constraints)
-        .split(area);
     for (idx, tab) in strip.iter().enumerate() {
-        if let Some(rect) = rects.get(idx) {
+        if let Some(rect) = tab_rects.get(idx) {
             app.hit_targets.push(HitTarget::new(
                 *rect,
                 HitAction::SelectProjectSettingsTab(*tab),
@@ -2327,7 +2312,7 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     Ok(())
 }
 
-fn active_scope_index(project: &ProjectConfig, focused_scope: usize) -> usize {
+pub(crate) fn active_scope_index(project: &ProjectConfig, focused_scope: usize) -> usize {
     if project.project_type == ProjectType::Branched {
         focused_scope.min(project.branches.len().saturating_sub(1))
     } else {

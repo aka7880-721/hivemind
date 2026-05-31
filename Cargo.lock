@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "comfygit"
-version = "0.35.8"
+version = "0.35.9"
 dependencies = [
  "anyhow",
  "arboard",
@@ -269,6 +269,7 @@ dependencies = [
  "image",
  "ratatui 0.29.0",
  "ratatui 0.30.0",
+ "ratatui-comfy-tabs",
  "ratatui-comfy-toaster",
  "ratatui-explorer",
  "ratatui-markdown",
@@ -282,7 +283,6 @@ dependencies = [
  "toml_edit",
  "tui-checkbox",
  "tui-overlay",
- "tui-tabs",
  "tui-textarea",
  "unicode-segmentation",
  "unicode-width 0.2.0",
@@ -2070,6 +2070,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatui-comfy-tabs"
+version = "0.3.3"
+dependencies = [
+ "ratatui-core",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
 name = "ratatui-comfy-toaster"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3098,15 +3106,6 @@ checksum = "161772deae553f1c92bfd89f3a612a7b628a0b1cc0140720232c5bd9789474eb"
 dependencies = [
  "ratatui-core",
  "ratatui-widgets",
-]
-
-[[package]]
-name = "tui-tabs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c8451ff3e37e3418372d5ff99e654684f92639ed671b0317bf1f473693fda54"
-dependencies = [
- "ratatui-core",
 ]
 
 [[package]]
