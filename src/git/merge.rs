@@ -17,8 +17,8 @@ use crate::{
     git::{
         GitCancellation, current_branch_with_cancel, default_push_remote_name,
         ensure_clean_worktree_with_cancel, ensure_local_branch_published_and_in_sync_with_cancel,
-        run_git, run_git_checked_owned_with_cancel, split_output_lines,
-        switch_to_existing_branch,
+        ensure_pull_request_mergeable, finish_after_pull_request_merge, run_git,
+        run_git_checked_owned_with_cancel, split_output_lines, switch_to_existing_branch,
     },
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -630,20 +630,7 @@ fn merge_pull_request(
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
     let refreshed = fetch_pull_request(repo_root, forge, entry.number)?;
-    if !refreshed.is_mergeable() {
-        let mut message = format!(
-            "PR #{} is no longer mergeable (status: {}, mergeable: {}); refresh the list and resolve it before running cg merge",
-            refreshed.number, refreshed.status, refreshed.mergeable_state
-        );
-        if let Some(conflicts_url) = refreshed.issue_url.as_deref() {
-            message.push_str("\n\nTo see the issues, please visit:\n\n");
-            message.push_str(conflicts_url);
-            message.push_str(
-                "\n\nThen run cg merge, select this PR, and press V to open a disposable VS Code merge workspace. Press R there afterwards to refresh the status.\n",
-            );
-        }
-        bail!("{}", message)
-    }
+    ensure_pull_request_mergeable(repo_root, forge, refreshed.number)?;
 
     let policy = resolve_post_merge_source_branch(repo_root);
     let subject = build_merge_commit_subject(refreshed.number);
@@ -671,9 +658,11 @@ fn merge_pull_request(
             cancel.clone(),
         )?;
         if matches!(forge, ForgeKind::GitLab) {
-            delete_local_source_branch(repo_root, &refreshed.source_branch, cancel)?;
+            delete_local_source_branch(repo_root, &refreshed.source_branch, cancel.clone())?;
         }
     }
+
+    finish_after_pull_request_merge(repo_root, &refreshed.target_branch, cancel)?;
 
     Ok(())
 }
