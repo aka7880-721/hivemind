@@ -16,6 +16,8 @@ Per-repo Git workflow options for projects that use a remote (not **Local-only**
 
 Use **← / →** on the policy row to cycle options.
 
+`cg merge` and `cg br end` wait up to three times (5 seconds apart) when the forge reports merge checks still in progress (for example GitLab `checking`), then switch to the merge target branch and `git pull --ff-only` after a successful merge.
+
 ## ComfyGitFlow
 
 When **ComfyGitFlow** is disabled in **General**, hint lines point you there. Additional ComfyGitFlow-only Git settings will appear in a later release once ComfyGitFlow is enabled.
