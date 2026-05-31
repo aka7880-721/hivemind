@@ -315,7 +315,8 @@ fn is_pending_mergeability_token(value: &str) -> bool {
 fn is_blocked_mergeability_token(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
-        "conflicting"
+        "conflict"
+            | "conflicting"
             | "cannot_be_merged"
             | "cannot be merged"
             | "not_mergeable"
