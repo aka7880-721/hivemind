@@ -351,11 +351,10 @@ fn prompt_pull_request_selection(
                             }
                         }
 
-                        if entries[selected].is_mergeable() {
-                            dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
-                        } else if prepared_vscode_workspace
-                            .as_ref()
-                            .is_some_and(|prepared| prepared.pr_number != entries[selected].number)
+                        if entries[selected].is_mergeable()
+                            || prepared_vscode_workspace.as_ref().is_some_and(|prepared| {
+                                prepared.pr_number != entries[selected].number
+                            })
                         {
                             dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
                         }
