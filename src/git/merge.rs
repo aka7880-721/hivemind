@@ -308,7 +308,9 @@ fn prompt_pull_request_selection(
                                     &prepared,
                                     cancel.clone(),
                                 ) {
-                                    Ok(PreparedWorkspaceReloadOutcome::ConflictsRemaining(note)) => {
+                                    Ok(PreparedWorkspaceReloadOutcome::ConflictsRemaining(
+                                        note,
+                                    )) => {
                                         message = Some(note);
                                         needs_render = true;
                                         continue;
@@ -358,9 +360,10 @@ fn prompt_pull_request_selection(
                             dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
                         }
 
-                        message = Some(reload_note.unwrap_or_else(|| {
-                            "Pull request status reloaded.".to_string()
-                        }));
+                        message = Some(
+                            reload_note
+                                .unwrap_or_else(|| "Pull request status reloaded.".to_string()),
+                        );
                         needs_render = true;
                     }
                     KeyCode::Char('v' | 'V') => {
