@@ -36,6 +36,9 @@ exclude = ["src/components/comfy-toaster", "src/components/comfy-tabs"]
 ratatui-comfy-toaster = "0.4"
 #ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
 #
+## TABS
+ratatui-comfy-tabs = { path = "src/components/comfy-tabs" }
+#ratatui-comfy-tabs = "0.3.3"
 # E N D ----------------------------------------------------------
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
@@ -56,7 +59,6 @@ toml = "1"
 toml_edit = "0.25"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tui-textarea = "0.7"
-tui-tabs = "0.1.1"
 tui-overlay = "0.1.2"
 ratatui-markdown = { version = "0.3.6", default-features = false, features = ["markdown"] }
 # ratatui-markdown is built against ratatui 0.29; bridge lines into our ratatui 0.30 types.
