@@ -1627,6 +1627,191 @@ fn parse_quoted_assignment_value(token: &str) -> Option<String> {
     Some(bare.to_string())
 }
 
+pub(crate) fn is_python_version_filename(path: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    matches!(
+        file_name.as_str(),
+        "__init__.py" | "version.py" | "_version.py" | "__version__.py"
+    )
+}
+
+pub(crate) fn is_c_define_version_filename(path: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    if matches!(
+        file_name.as_str(),
+        "version.h" | "version.hpp" | "config.h" | "config.hpp"
+    ) {
+        return true;
+    }
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "h" | "hpp" | "hh" | "c" | "cc" | "cpp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn extract_python_version_value(content: &str, key_path: &str) -> Result<String> {
+    let name = normalize_python_version_name(key_path)?;
+    for line in content.lines() {
+        if let Some(value) = parse_python_version_assignment(line, name) {
+            return Ok(value);
+        }
+    }
+    Err(anyhow!(
+        "Python source does not define '{name}' (expected e.g. {name} = \"1.2.3\")"
+    ))
+}
+
+pub(crate) fn write_python_version_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
+    let name = normalize_python_version_name(key_path)?;
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_python_version_assignment(line, name).is_some() {
+            let indent = line
+                .chars()
+                .take_while(|ch| ch.is_whitespace())
+                .collect::<String>();
+            updated.push_str(&format!("{indent}{name} = \"{new_value}\""));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!("Python source does not define '{name}'"))
+    }
+}
+
+pub(crate) fn extract_c_define_value(content: &str, key_path: &str) -> Result<String> {
+    let macro_name = normalize_c_define_name(key_path)?;
+    for line in content.lines() {
+        if let Some(value) = parse_c_define_line(line, &macro_name) {
+            return Ok(value);
+        }
+    }
+    Err(anyhow!(
+        "C/C++ source does not define '#define {macro_name}'"
+    ))
+}
+
+pub(crate) fn write_c_define_value(
+    content: &str,
+    key_path: &str,
+    new_value: &str,
+) -> Result<String> {
+    let macro_name = normalize_c_define_name(key_path)?;
+    let mut updated = String::new();
+    let mut replaced = false;
+    for line in content.lines() {
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        if !replaced && parse_c_define_line(line, &macro_name).is_some() {
+            updated.push_str(&format!("#define {macro_name} \"{new_value}\""));
+            replaced = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if replaced {
+        if content.ends_with('\n') {
+            updated.push('\n');
+        }
+        Ok(updated)
+    } else {
+        Err(anyhow!(
+            "C/C++ source does not define '#define {macro_name}'"
+        ))
+    }
+}
+
+fn normalize_python_version_name(key_path: &str) -> Result<&'static str> {
+    let key_path = key_path.trim();
+    if key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case("version")
+        || key_path == "__version__"
+    {
+        return Ok("__version__");
+    }
+    bail!("Python version key path must be '__version__'");
+}
+
+fn normalize_c_define_name(key_path: &str) -> Result<String> {
+    let key_path = key_path.trim();
+    if key_path.is_empty()
+        || key_path == "@"
+        || key_path == "."
+        || key_path.eq_ignore_ascii_case("version")
+        || key_path.eq_ignore_ascii_case("VERSION")
+    {
+        return Ok("VERSION".to_string());
+    }
+    if key_path
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Ok(key_path.to_string());
+    }
+    bail!("C define key path must be a macro name such as 'VERSION'");
+}
+
+fn parse_python_version_assignment(line: &str, name: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let rest = trimmed.strip_prefix(name)?.trim_start();
+    if !rest.starts_with('=') {
+        return None;
+    }
+    parse_quoted_or_bare_token(strip_inline_comment(rest[1..].trim()))
+}
+
+fn parse_c_define_line(line: &str, macro_name: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("#define") {
+        return None;
+    }
+    let rest = trimmed.strip_prefix("#define")?.trim_start();
+    let (name, value) = rest.split_once(|ch: char| ch.is_whitespace())?;
+    if name.trim() != macro_name {
+        return None;
+    }
+    parse_quoted_or_bare_token(strip_inline_comment(value.trim()))
+}
+
+fn strip_inline_comment(value: &str) -> &str {
+    value.split('#').next().unwrap_or(value).trim()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1781,5 +1966,23 @@ mod tests {
         assert_eq!(read, "1.2.3");
         let updated = write_bazel_value(content, "module", "2.0.0").expect("write");
         assert!(updated.contains("version = \"2.0.0\""));
+    }
+
+    #[test]
+    fn python_version_round_trip() {
+        let content = "# package\n__version__ = \"1.2.3\"\n";
+        let read = extract_python_version_value(content, "__version__").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_python_version_value(content, "__version__", "2.0.0").expect("write");
+        assert!(updated.contains("__version__ = \"2.0.0\""));
+    }
+
+    #[test]
+    fn c_define_version_round_trip() {
+        let content = "#pragma once\n#define VERSION \"1.2.3\"\n";
+        let read = extract_c_define_value(content, "VERSION").expect("read");
+        assert_eq!(read, "1.2.3");
+        let updated = write_c_define_value(content, "VERSION", "2.0.0").expect("write");
+        assert!(updated.contains("#define VERSION \"2.0.0\""));
     }
 }
