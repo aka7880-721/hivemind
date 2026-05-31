@@ -17,7 +17,8 @@ use crate::{
     git::{
         GitCancellation, current_branch_with_cancel, default_push_remote_name,
         ensure_clean_worktree_with_cancel, ensure_local_branch_published_and_in_sync_with_cancel,
-        run_git_checked_owned_with_cancel, split_output_lines,
+        run_git, run_git_checked_owned_with_cancel, split_output_lines,
+        switch_to_existing_branch,
     },
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -663,10 +664,45 @@ fn merge_pull_request(
     }
 
     if policy.delete_local_after_merge() {
-        delete_local_source_branch(repo_root, &refreshed.source_branch, cancel)?;
+        switch_off_branch_for_deletion(
+            repo_root,
+            &refreshed.source_branch,
+            &refreshed.target_branch,
+            cancel.clone(),
+        )?;
+        if matches!(forge, ForgeKind::GitLab) {
+            delete_local_source_branch(repo_root, &refreshed.source_branch, cancel)?;
+        }
     }
 
     Ok(())
+}
+
+fn switch_off_branch_for_deletion(
+    repo_root: &str,
+    branch_to_delete: &str,
+    fallback_branch: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let current = current_branch_with_cancel(repo_root, cancel)?;
+    if current != branch_to_delete {
+        return Ok(());
+    }
+
+    switch_to_existing_branch(repo_root, fallback_branch).with_context(|| {
+        format!(
+            "failed to switch from '{branch_to_delete}' to '{fallback_branch}' before deleting the merged branch"
+        )
+    })?;
+    Ok(())
+}
+
+fn local_branch_exists(repo_root: &str, branch: &str) -> Result<bool> {
+    Ok(run_git(
+        repo_root,
+        &["show-ref", "--verify", &format!("refs/heads/{branch}")],
+    )?
+    .success)
 }
 
 fn resolve_post_merge_source_branch(repo_root: &str) -> crate::config::PostMergeSourceBranch {
@@ -683,6 +719,9 @@ fn delete_local_source_branch(
     branch: &str,
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
+    if !local_branch_exists(repo_root, branch)? {
+        return Ok(());
+    }
     run_git_checked_owned_with_cancel(
         repo_root,
         vec!["branch".to_string(), "-d".to_string(), branch.to_string()],

@@ -12,7 +12,7 @@ Per-repo Git workflow options for projects that use a remote (not **Local-only**
 |--------|----------------------|
 | **Kept as is** | Remote source branch is kept (GitLab: `--remove-source-branch=false`). |
 | **DELETED (remote)** | Remote source branch is removed after merge (GitLab: `--remove-source-branch=true`; GitHub: `git push <remote> --delete <branch>`). |
-| **DELETED (remote+local)** | Same as remote delete, then `git branch -d <source>` locally. |
+| **DELETED (remote+local)** | Same as remote delete, then switches to the merge target branch (when needed) and runs `git branch -d` on the source branch locally. |
 
 Use **← / →** on the policy row to cycle options.
 
