@@ -16,10 +16,8 @@ use anyhow::{Context, Result, bail};
 pub(crate) const MERGEABILITY_PENDING_RETRY_SECONDS: u64 = 5;
 pub(crate) const MERGEABILITY_PENDING_MAX_RETRIES: u32 = 3;
 
-pub(crate) const MERGEABILITY_UNKNOWN_MESSAGE: &str =
-    "Ooops, something's not right. Check this PR on GitHub for more info...";
-
-/// Waits for forge merge checks when the remote reports a pending state (e.g. GitLab `checking`).
+/// Waits for forge merge checks only while the remote reports a pending state (e.g. GitLab `checking`).
+/// Any other non-mergeable result fails immediately (conflicts, blocked, etc.).
 pub(crate) fn ensure_pull_request_mergeable(
     repo_root: &str,
     forge: ForgeKind,
@@ -40,7 +38,7 @@ pub(crate) fn ensure_pull_request_mergeable(
         if status.is_mergeable() {
             return Ok(());
         }
-        if status.is_definitively_not_mergeable() {
+        if !status.is_pending() {
             bail!(
                 "{}",
                 format_non_mergeable_pull_request_error(
@@ -53,23 +51,20 @@ pub(crate) fn ensure_pull_request_mergeable(
             );
         }
         if attempt == MERGEABILITY_PENDING_MAX_RETRIES {
-            if status.is_pending() {
-                bail!(
-                    "{}",
-                    format_non_mergeable_pull_request_error(
-                        forge,
-                        repo_root,
-                        pr_number,
-                        &status.mergeable,
-                        &status.merge_state_status,
-                    )
-                );
-            }
-            bail!(MERGEABILITY_UNKNOWN_MESSAGE);
+            bail!(
+                "{}",
+                format_non_mergeable_pull_request_error(
+                    forge,
+                    repo_root,
+                    pr_number,
+                    &status.mergeable,
+                    &status.merge_state_status,
+                )
+            );
         }
     }
 
-    bail!(MERGEABILITY_UNKNOWN_MESSAGE)
+    unreachable!("mergeability retry loop always returns or bails")
 }
 
 /// After a successful MR/PR merge: check out the integration target and fast-forward from remote.
@@ -162,6 +157,17 @@ mod tests {
         };
         assert!(!blocked.is_pending());
         assert!(blocked.is_definitively_not_mergeable());
+    }
+
+    #[test]
+    fn gitlab_conflict_status_is_not_pending() {
+        let conflict = ForgeMergeability {
+            mergeable: "conflict".to_string(),
+            merge_state_status: "conflict".to_string(),
+        };
+        assert!(!conflict.is_mergeable());
+        assert!(!conflict.is_pending());
+        assert!(conflict.is_definitively_not_mergeable());
     }
 
     #[test]
