@@ -179,8 +179,7 @@ fn semver_patch_dev_version_from_v_prefix(branch_name: &str) -> Option<String> {
 /// True when `branch` is a ComfyGitFlow dev source: semver `vM.m.p-dev` (optional `--suffix`),
 /// or any branch whose name ends with `-dev`.
 pub(crate) fn is_comfygit_dev_source_branch(branch: &str) -> bool {
-    semver_patch_dev_version_from_v_prefix(branch).is_some()
-        || branch.trim().ends_with("-dev")
+    semver_patch_dev_version_from_v_prefix(branch).is_some() || branch.trim().ends_with("-dev")
 }
 
 pub(crate) fn is_release_line_branch(scheme: VersionScheme, branch_name: &str) -> bool {

@@ -161,14 +161,7 @@ mod tests {
     fn wheel_tab_strip_advances_selection_when_hovering() {
         let area = Rect::new(0, 0, 120, 3);
         let labels = ["Overview", "Detail"];
-        let selected = wheel_tab_strip(
-            area,
-            &labels,
-            0,
-            5,
-            1,
-            TabWheelDirection::Down,
-        );
+        let selected = wheel_tab_strip(area, &labels, 0, 5, 1, TabWheelDirection::Down);
         assert_eq!(selected, Some(1));
     }
 }
