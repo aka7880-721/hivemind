@@ -262,6 +262,7 @@ pub struct ForgeMergeability {
 }
 
 impl ForgeMergeability {
+    #[allow(dead_code)]
     pub fn is_unknown(&self) -> bool {
         self.mergeable.eq_ignore_ascii_case("UNKNOWN")
             || self.merge_state_status.eq_ignore_ascii_case("UNKNOWN")
@@ -271,6 +272,59 @@ impl ForgeMergeability {
         self.mergeable.eq_ignore_ascii_case("MERGEABLE")
             || self.mergeable.eq_ignore_ascii_case("can_be_merged")
     }
+
+    /// Remote mergeability is still being computed (GitLab `checking`, GitHub `UNKNOWN`, etc.).
+    pub fn is_pending(&self) -> bool {
+        if self.is_mergeable() {
+            return false;
+        }
+        if self.is_definitively_not_mergeable() {
+            return false;
+        }
+        is_pending_mergeability_token(&self.mergeable)
+            || is_pending_mergeability_token(&self.merge_state_status)
+    }
+
+    /// A definitive failure state — do not wait/retry.
+    pub fn is_definitively_not_mergeable(&self) -> bool {
+        if self.is_mergeable() {
+            return false;
+        }
+        is_blocked_mergeability_token(&self.mergeable)
+            || is_blocked_mergeability_token(&self.merge_state_status)
+    }
+}
+
+fn is_pending_mergeability_token(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "checking"
+            | "unchecked"
+            | "preparing"
+            | "unknown"
+            | "not_ready"
+            | "not ready"
+            | "not_started"
+            | "not started"
+            | "in_progress"
+            | "in progress"
+            | "processing"
+    )
+}
+
+fn is_blocked_mergeability_token(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "conflicting"
+            | "cannot_be_merged"
+            | "cannot be merged"
+            | "not_mergeable"
+            | "not mergeable"
+            | "blocked"
+            | "dirty"
+            | "failed"
+            | "broken"
+    )
 }
 
 pub fn detect_forge_for_repo(repo_root: &str) -> Option<ForgeKind> {
