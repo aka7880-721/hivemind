@@ -6,3 +6,4 @@
 mod actions;
 mod keyboard;
 mod mouse;
+mod tab_wheel;
