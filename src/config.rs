@@ -1211,6 +1211,10 @@ pub enum TargetFormat {
     #[serde(rename = "makefile_pl")]
     MakefilePl,
     Bazel,
+    #[serde(rename = "python_version")]
+    PythonVersion,
+    #[serde(rename = "c_define")]
+    CDefine,
 }
 
 impl TargetFormat {
@@ -1241,6 +1245,8 @@ impl TargetFormat {
             TargetFormat::Rockspec => "LuaRocks (.rockspec)",
             TargetFormat::MakefilePl => "Perl (Makefile.PL)",
             TargetFormat::Bazel => "Bazel (MODULE.bazel)",
+            TargetFormat::PythonVersion => "Python (__version__)",
+            TargetFormat::CDefine => "C/C++ (#define)",
         }
     }
 }
