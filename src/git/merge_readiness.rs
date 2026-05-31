@@ -105,10 +105,10 @@ pub(crate) fn format_non_mergeable_pull_request_error(
         status
     );
     if let Some(conflicts_url) = forge.pull_conflicts_url(repo_root, pr_number) {
-        message.push_str("\n\nTo see the issues, please visit:\n\n");
+        message.push_str("\n\nTo see the issues in your browser, please visit:\n\n");
         message.push_str(&format!("\x1b[33m{}\x1b[0m", conflicts_url));
         message.push_str(&format!(
-            "\n\nThen run cg merge, select PR #{}, and press V to open a disposable VS Code merge workspace. Press R there afterwards to refresh the status.\n",
+            "\n\nYou can also run `cg mg` / `cg merge` now, the conflict resolving will be done in your IDE of choice (e.g. VSCode), and the conflict tool should be opened automatically.\n If not, just select PR #{} from the list, and press V (or click the button) to open a disposable IDE merge workspace. Press R there afterwards to refresh the status.\n\n REMEMBER: Up to date IDE's have its conflict resolving tool based on creating a disposable worktree/workspace, steps are across IDE's usually the same, or very similar:\n\n 1. Select conflicting file marked with `!` in newly created worktree/workspace in Source Control tab.\n 2. Resolve problems directly in editor, or click the button to open the conflict resolving tool.\n 3. Accept 'Current Changes' or 'Incoming Changes' (or combine) as needed, and save the file(s).\n 4. It is usually enough to stage changed/resolved files. Commit is not needed.",
             pr_number
         ));
     }
