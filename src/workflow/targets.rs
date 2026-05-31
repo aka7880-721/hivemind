@@ -330,6 +330,26 @@ pub(crate) fn write_target_version(target: &BumpTarget, new_version: &str) -> Re
                 .with_context(|| format!("failed to write {}", target.path))?;
             Ok(())
         }
+        TargetFormat::PythonVersion => {
+            let updated = crate::workflow::target_custom::write_python_version_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
+        TargetFormat::CDefine => {
+            let updated = crate::workflow::target_custom::write_c_define_value(
+                &content,
+                &target.key_path,
+                new_version,
+            )?;
+            fs::write(&target.path, updated)
+                .with_context(|| format!("failed to write {}", target.path))?;
+            Ok(())
+        }
         TargetFormat::Auto => bail!("cannot write target with unresolved format"),
     }
 }
@@ -398,6 +418,12 @@ fn read_target_value(path: &str, key_path: &str, hint: TargetFormat) -> Result<T
         }
         TargetFormat::Bazel => {
             crate::workflow::target_custom::extract_bazel_value(&content, key_path)?
+        }
+        TargetFormat::PythonVersion => {
+            crate::workflow::target_custom::extract_python_version_value(&content, key_path)?
+        }
+        TargetFormat::CDefine => {
+            crate::workflow::target_custom::extract_c_define_value(&content, key_path)?
         }
         TargetFormat::Auto => unreachable!(),
     };
@@ -527,6 +553,12 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
     if crate::workflow::target_custom::is_bazel_module_filename(path) {
         return Ok(TargetFormat::Bazel);
     }
+    if crate::workflow::target_custom::is_python_version_filename(path) {
+        return Ok(TargetFormat::PythonVersion);
+    }
+    if crate::workflow::target_custom::is_c_define_version_filename(path) {
+        return Ok(TargetFormat::CDefine);
+    }
 
     let extension = Path::new(path)
         .extension()
@@ -624,11 +656,22 @@ fn detect_format(path: &str, content: &str) -> Result<TargetFormat> {
             } else if crate::workflow::target_custom::extract_bazel_value(content, "module").is_ok()
             {
                 Ok(TargetFormat::Bazel)
+            } else if crate::workflow::target_custom::extract_python_version_value(
+                content,
+                "__version__",
+            )
+            .is_ok()
+            {
+                Ok(TargetFormat::PythonVersion)
+            } else if crate::workflow::target_custom::extract_c_define_value(content, "VERSION")
+                .is_ok()
+            {
+                Ok(TargetFormat::CDefine)
             } else if extract_plain_value(content, "").is_ok() {
                 Ok(TargetFormat::Plain)
             } else {
                 Err(anyhow!(
-                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, Swift, Elixir, Scala, Cabal, Autoconf, Meson, Nimble, LuaRocks rockspec, Makefile.PL, Bazel MODULE.bazel, plain version file)"
+                    "unable to detect target format (supported: JSON, TOML, YAML, XML, INI, go.mod, Ruby, DESCRIPTION, Gradle, CMake, Makefile, plist, Clojure, Swift, Elixir, Scala, Cabal, Autoconf, Meson, Nimble, LuaRocks rockspec, Makefile.PL, Bazel MODULE.bazel, Python __version__, C #define, plain version file)"
                 ))
             }
         }
