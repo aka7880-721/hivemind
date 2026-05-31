@@ -21,7 +21,6 @@ use tokio::{
     runtime::Runtime as TokioRuntime,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError},
 };
-use tui_tabs::TabNav;
 use tui_textarea::TextArea as TuiTextArea;
 
 use crate::{
@@ -150,6 +149,12 @@ pub(crate) struct App {
     browser_dialog: Option<FileBrowserDialog>,
     pub(crate) snif_dialog: Option<crate::tui::SnifModal>,
     help_modal: Option<HelpModal>,
+    overview_tab_strip_area: Option<Rect>,
+    project_settings_tab_strip_area: Option<Rect>,
+    recent_changes_tab_strip_area: Option<Rect>,
+    last_mouse_column: u16,
+    last_mouse_row: u16,
+    has_mouse_position: bool,
     hit_targets: Vec<HitTarget>,
     last_text_input_click_target: Option<TextInputClickTarget>,
     last_text_input_click_at: Option<Instant>,
@@ -275,6 +280,12 @@ impl App {
             browser_dialog: None,
             snif_dialog: None,
             help_modal: None,
+            overview_tab_strip_area: None,
+            project_settings_tab_strip_area: None,
+            recent_changes_tab_strip_area: None,
+            last_mouse_column: 0,
+            last_mouse_row: 0,
+            has_mouse_position: false,
             hit_targets: Vec::new(),
             last_text_input_click_target: None,
             last_text_input_click_at: None,
