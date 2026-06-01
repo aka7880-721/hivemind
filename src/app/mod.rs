@@ -61,6 +61,8 @@ const BUTTON_ROW_HEIGHT: u16 = 3;
 const BUTTON_GAP_HEIGHT: u16 = 3;
 pub(crate) const SHORTCUT_HINT_COLOR: Color = Color::Yellow;
 pub(crate) const ACTIVE_UI_TICK_INTERVAL: Duration = Duration::from_millis(100);
+/// Poll interval while tab selection-flash animation is running (~20 fps).
+pub(crate) const TAB_SELECTION_FLASH_POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub(crate) const IDLE_UI_POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub(crate) const GIT_BRANCH_COLORS: [Color; 6] = [
     Color::Green,

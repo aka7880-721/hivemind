@@ -588,6 +588,18 @@ fn toggle_focused_ui_settings_control(app: &mut App, delta: i32) -> Result<()> {
 }
 
 pub(crate) fn flash_overview_tab_selection(app: &mut App, include_recent_changes: bool) {
+    if !app.config.ui.tab_selection_flash_enabled {
+        return;
+    }
+    sync_tab_nav_flash_state(&mut app.overview_tab_nav_state, &app.config.ui);
     let index = crate::tui::overview_tab_index(app.overview_tab, include_recent_changes);
     app.overview_tab_nav_state.flash_selection(index);
+}
+
+pub(crate) fn flash_project_settings_tab_strip(app: &mut App) {
+    if !app.config.ui.tab_selection_flash_enabled {
+        return;
+    }
+    sync_tab_nav_flash_state(&mut app.project_settings_tab_nav_state, &app.config.ui);
+    app.flash_project_settings_tab_selection();
 }

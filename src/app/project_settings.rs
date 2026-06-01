@@ -645,7 +645,7 @@ pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
     app.project_settings_tab = app
         .project_settings_tab
         .step(delta, &project, release_now_enabled);
-    app.flash_project_settings_tab_selection();
+    crate::app::ui_settings::flash_project_settings_tab_strip(app);
     app.project_settings_state.scroll = 0;
     app.project_settings_state.follow_focus = true;
     sync_project_settings_state(app);
