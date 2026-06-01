@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.35.12"
+version = "0.35.13"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -37,8 +37,8 @@ ratatui-comfy-toaster = "0.4"
 #ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
 #
 ## TABS
-ratatui-comfy-tabs = { path = "src/components/comfy-tabs" }
-#ratatui-comfy-tabs = "0.3.3"
+#ratatui-comfy-tabs = { path = "src/components/comfy-tabs" }
+ratatui-comfy-tabs = "0.3"
 # E N D ----------------------------------------------------------
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
