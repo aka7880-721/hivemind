@@ -849,6 +849,7 @@ impl ProjectEditDialog {
                 has_custom_main_branch: existing_repo.has_custom_main_branch,
                 custom_main_branch: existing_repo.custom_main_branch,
                 post_merge_source_branch: existing_repo.post_merge_source_branch,
+                mirror_sync_after_merge: existing_repo.mirror_sync_after_merge,
             });
         } else {
             project.repo = None;
