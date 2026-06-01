@@ -125,9 +125,13 @@ impl App {
         };
         let scope_index =
             project_settings::active_scope_index(&project, self.overview_focused_scope);
-        let strip = project_settings::project_settings_tab_strip(
+        let default_strip = project_settings::project_settings_tab_strip(
             &project,
             project.release_now_for_scope(scope_index).enabled,
+        );
+        let strip = project_settings::merge_project_settings_tab_order(
+            &default_strip,
+            &self.project_settings_tab_order,
         );
         let labels: Vec<&str> = strip
             .iter()
@@ -148,6 +152,7 @@ impl App {
         };
         if tab != self.project_settings_tab {
             self.project_settings_tab = tab;
+            self.flash_project_settings_tab_selection();
             project_settings::sync_project_settings_state(self);
         }
         true
