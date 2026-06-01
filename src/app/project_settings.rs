@@ -22,8 +22,8 @@ use super::{
 };
 use crate::{
     config::{
-        DEFAULT_CHANGELOG_PATH, PostMergeSourceBranch, ProjectConfig, ProjectType,
-        ReadmeInjectDepth,
+        DEFAULT_CHANGELOG_PATH, MirrorSyncAfterMerge, PostMergeSourceBranch, ProjectConfig,
+        ProjectType, ReadmeInjectDepth,
     },
     tui::{center_vertically, comfy_tab_nav},
     workflow::dialogs::TextInput,
@@ -103,6 +103,7 @@ pub(crate) enum ProjectSettingsFocus {
     QuickDownloadsEnabled,
     QuickDownloadsPosition,
     PostMergeSourceBranch,
+    MirrorSyncAfterMerge,
     QuickDownloadsFooter,
     ReadmeInjectionEnabled,
     ReadmeInjectOnlyTopPicks,
@@ -142,6 +143,7 @@ pub(crate) struct ProjectSettingsState {
     pub(crate) release_now_macos: TextInput,
     pub(crate) quick_downloads_position: TextInput,
     pub(crate) post_merge_source_branch: TextInput,
+    pub(crate) mirror_sync_after_merge: TextInput,
     pub(crate) quick_downloads_footer: TextInput,
     pub(crate) readme_inject_at_row: TextInput,
     pub(crate) release_title_template: TextInput,
@@ -176,6 +178,7 @@ impl Default for ProjectSettingsState {
             release_now_macos: TextInput::with_value(""),
             quick_downloads_position: TextInput::with_value(""),
             post_merge_source_branch: TextInput::with_value(""),
+            mirror_sync_after_merge: TextInput::with_value(""),
             quick_downloads_footer: TextInput::with_value(""),
             readme_inject_at_row: TextInput::with_value(""),
             release_title_template: TextInput::with_value(""),
@@ -233,6 +236,12 @@ impl ProjectSettingsState {
                 .display_name()
                 .to_string(),
         );
+        self.mirror_sync_after_merge.set_value(
+            project
+                .mirror_sync_after_merge_for_scope(scope_index)
+                .display_name()
+                .to_string(),
+        );
         self.quick_downloads_footer
             .set_value(qd.footer_message.clone());
         let rls = project.release_now_for_scope(scope_index);
@@ -266,7 +275,7 @@ impl ProjectSettingsState {
                 append_alias_visible_fields(&mut fields, project, scope_index, self);
                 fields
             }
-            ProjectSettingsTab::Git => vec![ProjectSettingsFocus::PostMergeSourceBranch],
+            ProjectSettingsTab::Git => git_visible_fields(project, scope_index),
             ProjectSettingsTab::Changelogs => changelog_visible_fields(project, scope_index),
             ProjectSettingsTab::Distro => {
                 let mut fields = vec![ProjectSettingsFocus::ReleaseNowEnabled];
@@ -459,6 +468,10 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::PostMergeSourceBranch => Line::from(format!(
                 "< {} >",
                 self.post_merge_source_branch.value().trim()
+            )),
+            ProjectSettingsFocus::MirrorSyncAfterMerge => Line::from(format!(
+                "< {} >",
+                self.mirror_sync_after_merge.value().trim()
             )),
             ProjectSettingsFocus::QuickDownloadsFooter => self
                 .quick_downloads_footer
@@ -725,6 +738,18 @@ pub(crate) fn try_handle_project_settings_key(app: &mut App, key: KeyEvent) -> R
             adjust_post_merge_source_branch(app, PostMergeSourceBranch::next)?;
             Ok(true)
         }
+        KeyCode::Left
+            if app.project_settings_state.focus == ProjectSettingsFocus::MirrorSyncAfterMerge =>
+        {
+            adjust_mirror_sync_after_merge(app, MirrorSyncAfterMerge::previous)?;
+            Ok(true)
+        }
+        KeyCode::Right
+            if app.project_settings_state.focus == ProjectSettingsFocus::MirrorSyncAfterMerge =>
+        {
+            adjust_mirror_sync_after_merge(app, MirrorSyncAfterMerge::next)?;
+            Ok(true)
+        }
         KeyCode::Left | KeyCode::Right
             if app.project_settings_state.focus == ProjectSettingsFocus::QuickDownloadsPosition =>
         {
@@ -746,6 +771,7 @@ pub(crate) fn try_handle_project_settings_key(app: &mut App, key: KeyEvent) -> R
                 app.project_settings_state.focus,
                 ProjectSettingsFocus::QuickDownloadsPosition
                     | ProjectSettingsFocus::PostMergeSourceBranch
+                    | ProjectSettingsFocus::MirrorSyncAfterMerge
             ) =>
         {
             toggle_focused_project_settings_control(app)?;
@@ -1304,6 +1330,14 @@ fn build_general_rows(
     rows
 }
 
+fn git_visible_fields(project: &ProjectConfig, _scope_index: usize) -> Vec<ProjectSettingsFocus> {
+    let mut fields = vec![ProjectSettingsFocus::PostMergeSourceBranch];
+    if project.integration_mode.is_dual_forge() {
+        fields.push(ProjectSettingsFocus::MirrorSyncAfterMerge);
+    }
+    fields
+}
+
 fn build_git_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSettingsRow> {
     let scope_label = format!("Project/Scope: {}", active_scope_name(project, scope_index));
     let mut rows = vec![
@@ -1314,6 +1348,15 @@ fn build_git_rows(project: &ProjectConfig, scope_index: usize) -> Vec<ProjectSet
         )),
         ProjectSettingsRow::Path(ProjectSettingsFocus::PostMergeSourceBranch),
     ];
+    if project.integration_mode.is_dual_forge() {
+        rows.push(ProjectSettingsRow::Spacer(1));
+        rows.push(ProjectSettingsRow::Text(Line::from(
+            "This project should be kept in sync:",
+        )));
+        rows.push(ProjectSettingsRow::Path(
+            ProjectSettingsFocus::MirrorSyncAfterMerge,
+        ));
+    }
     if !project.comfygitflow_enabled {
         rows.push(ProjectSettingsRow::Spacer(1));
         rows.push(ProjectSettingsRow::Text(
@@ -1866,6 +1909,7 @@ fn render_path_row(
         | ProjectSettingsFocus::CustomMainBranchName
         | ProjectSettingsFocus::QuickDownloadsPosition
         | ProjectSettingsFocus::PostMergeSourceBranch
+        | ProjectSettingsFocus::MirrorSyncAfterMerge
         | ProjectSettingsFocus::QuickDownloadsFooter
         | ProjectSettingsFocus::ReadmeInjectAtRow
         | ProjectSettingsFocus::ReleaseTitleTemplate => None,
@@ -1950,6 +1994,7 @@ fn field_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ReleaseNowMacOs => "MacOS",
         ProjectSettingsFocus::QuickDownloadsPosition => "Position (←/→)",
         ProjectSettingsFocus::PostMergeSourceBranch => "Policy (←/→)",
+        ProjectSettingsFocus::MirrorSyncAfterMerge => "Policy (←/→)",
         ProjectSettingsFocus::QuickDownloadsFooter => "Footer",
         ProjectSettingsFocus::ReadmeInjectAtRow => "Inject at row:",
         ProjectSettingsFocus::ReleaseTitleTemplate => "Release title:",
@@ -1974,6 +2019,35 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ReleaseNowEnabled
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
+}
+
+fn adjust_mirror_sync_after_merge(
+    app: &mut App,
+    step: fn(MirrorSyncAfterMerge) -> MirrorSyncAfterMerge,
+) -> Result<()> {
+    let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
+        return Ok(());
+    };
+    let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    let scope_name = active_scope_name(&project, scope_index);
+    let active_project = app
+        .config
+        .projects
+        .get_mut(app.selected_project)
+        .expect("selected project checked above");
+    let current = active_project.mirror_sync_after_merge_for_scope(scope_index);
+    let next = step(current);
+    active_project.set_mirror_sync_after_merge_for_scope(scope_index, next)?;
+    app.project_settings_state
+        .mirror_sync_after_merge
+        .set_value(next.display_name().to_string());
+    app.status = super::StatusMessage::success(format!(
+        "Mirror sync policy set to \"{}\" for {}.",
+        next.display_name(),
+        scope_name
+    ));
+    app.config_store.save(&app.config)?;
+    Ok(())
 }
 
 fn adjust_post_merge_source_branch(
@@ -2096,6 +2170,9 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
         }
         ProjectSettingsFocus::PostMergeSourceBranch => {
             adjust_post_merge_source_branch(app, PostMergeSourceBranch::next)?;
+        }
+        ProjectSettingsFocus::MirrorSyncAfterMerge => {
+            adjust_mirror_sync_after_merge(app, MirrorSyncAfterMerge::next)?;
         }
         ProjectSettingsFocus::ChangelogHidePrMessages => {
             let next = !app.project_settings_state.changelog_hide_pr_messages;
