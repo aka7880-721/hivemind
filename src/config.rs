@@ -44,6 +44,10 @@ pub struct UiSettings {
     pub show_tab_hints: bool,
     pub hide_footer: bool,
     pub footer_content: FooterContent,
+    /// Border flash when a tab strip selection changes (ratatui-comfy-tabs).
+    pub tab_selection_flash_enabled: bool,
+    /// ANSI indexed foreground color for the tab selection flash (default **46**).
+    pub tab_selection_flash_color: u8,
 }
 
 impl Default for UiSettings {
@@ -54,8 +58,48 @@ impl Default for UiSettings {
             show_tab_hints: true,
             hide_footer: false,
             footer_content: FooterContent::Centered,
+            tab_selection_flash_enabled: true,
+            tab_selection_flash_color: 46,
         }
     }
+}
+
+impl UiSettings {
+    pub fn tab_selection_flash_color_label(&self) -> String {
+        tab_selection_flash_color_label(self.tab_selection_flash_color)
+    }
+}
+
+/// Preset indexed colors for the tab selection flash (stored value + label).
+pub const TAB_SELECTION_FLASH_COLORS: &[(u8, &str)] = &[
+    (46, "Green (46)"),
+    (51, "Cyan (51)"),
+    (226, "Yellow (226)"),
+    (201, "Pink (201)"),
+    (208, "Orange (208)"),
+    (99, "Blue (99)"),
+];
+
+pub fn tab_selection_flash_color_label(index: u8) -> String {
+    TAB_SELECTION_FLASH_COLORS
+        .iter()
+        .find(|(value, _)| *value == index)
+        .map(|(_, label)| (*label).to_string())
+        .unwrap_or_else(|| format!("Indexed ({index})"))
+}
+
+pub fn cycle_tab_selection_flash_color(current: u8, delta: i32) -> u8 {
+    let presets: Vec<u8> = TAB_SELECTION_FLASH_COLORS
+        .iter()
+        .map(|(value, _)| *value)
+        .collect();
+    let pos = presets
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or(0) as i32;
+    let len = presets.len() as i32;
+    let next = (pos + delta).rem_euclid(len) as usize;
+    presets[next]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
