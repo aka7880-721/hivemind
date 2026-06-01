@@ -26,7 +26,7 @@ impl App {
         let Some((labels, pinned, active_index)) = self.project_settings_tab_nav_inputs() else {
             return false;
         };
-        let nav = project_settings_tab_nav(&labels, active_index, &pinned);
+        let nav = project_settings_tab_nav(&labels, active_index, &pinned, &self.config.ui);
         self.project_settings_tab_nav_state
             .handle_mouse_reorder_press(&nav, area, mouse.column, mouse.row)
     }
@@ -44,7 +44,7 @@ impl App {
         else {
             return;
         };
-        let nav = project_settings_tab_nav(&labels, active_index, &pinned);
+        let nav = project_settings_tab_nav(&labels, active_index, &pinned, &self.config.ui);
         let prev_hover = drag.hover;
         self.project_settings_tab_nav_state.handle_mouse_reorder_drag(
             &nav,
@@ -85,7 +85,7 @@ impl App {
             self.project_settings_tab_nav_state.cancel_reorder_drag();
             return;
         };
-        let nav = project_settings_tab_nav(&labels, active_index, &pinned);
+        let nav = project_settings_tab_nav(&labels, active_index, &pinned, &self.config.ui);
         if let Some(reorder) = self
             .project_settings_tab_nav_state
             .handle_mouse_reorder_release(&nav)
@@ -111,7 +111,7 @@ impl App {
         else {
             return;
         };
-        let nav = project_settings_tab_nav(&labels, active_index, &pinned);
+        let nav = project_settings_tab_nav(&labels, active_index, &pinned, &self.config.ui);
         if !self.project_settings_tab_nav_state.handle_mouse_click(
             &nav,
             area,
@@ -128,6 +128,7 @@ impl App {
         };
         if tab != self.project_settings_tab {
             self.project_settings_tab = tab;
+            self.flash_project_settings_tab_selection();
             project_settings::sync_project_settings_state(self);
         }
     }

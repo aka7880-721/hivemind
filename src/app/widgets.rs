@@ -889,17 +889,17 @@ pub(crate) fn main_screens_shortcut_spans() -> Vec<Span<'static>> {
 pub(crate) fn ui_settings_footer_line() -> Line<'static> {
     let mut spans = main_screens_shortcut_spans();
     spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("T", "oggle Tab Hints"));
+    spans.extend(shortcut_key_label("[", "]"));
+    spans.push(Span::styled(" Tabs", Style::default().fg(SHORTCUT_HINT_COLOR)));
     spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("C", "ycle Footer Content"));
+    spans.extend(shortcut_key_label("Space", " Toggle"));
     spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("H", "ide Footer"));
+    spans.extend(shortcut_key_label("←", "→"));
+    spans.push(Span::styled(" Cycle", Style::default().fg(SHORTCUT_HINT_COLOR)));
+    spans.push(Span::raw(" | "));
+    spans.extend(shortcut_key_label("D", " Dashboard"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("?", " Help"));
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("N", "ew Project"));
-    spans.push(Span::raw(" | "));
-    spans.extend(shortcut_key_label("S", "ettings"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("Q", "uit"));
     Line::from(spans)

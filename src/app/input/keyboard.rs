@@ -588,23 +588,8 @@ impl App {
     }
 
     pub(crate) fn handle_ui_settings_key(&mut self, key: KeyEvent) -> Result<()> {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('D') => {
-                self.screen = Screen::Dashboard;
-                self.dashboard_focus = DashboardPane::Projects;
-            }
-            KeyCode::Char('n') => self.open_wizard(),
-            KeyCode::Char('h') | KeyCode::Char('H') => {
-                self.toggle_footer()?;
-            }
-            KeyCode::Char('t') | KeyCode::Enter | KeyCode::Char(' ') => {
-                self.toggle_tab_hints()?;
-            }
-            KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Right => {
-                self.cycle_footer_content(1)?
-            }
-            KeyCode::Left => self.cycle_footer_content(-1)?,
-            _ => {}
+        if crate::app::ui_settings::try_handle_ui_settings_key(self, key)? {
+            return Ok(());
         }
         Ok(())
     }
