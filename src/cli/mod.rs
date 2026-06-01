@@ -38,11 +38,12 @@ use crate::{
     },
     git::{
         BranchNameOption, GitCancellation, RerootMode, collect_all_branch_git_scope_contexts,
-        current_branch_with_cancel, fixed_branch_name_option_with_value, is_release_line_branch,
-        last_bump_time, latest_local_tag_with_cancel, resolve_main_branch_name, run_branch_cd,
-        run_branch_done, run_git, run_git_checked, run_git_checked_owned_with_cancel,
-        run_git_checked_with_cancel, run_local_merge, run_merge, run_merge_for_pull_request,
-        run_pr, run_reroot, split_output_lines, suggest_branch_name_options,
+        current_branch_with_cancel, fixed_branch_name_option_with_value,
+        is_comfygit_dev_source_branch, is_release_line_branch, last_bump_time,
+        latest_local_tag_with_cancel, resolve_main_branch_name, run_branch_cd, run_branch_done,
+        run_git, run_git_checked, run_git_checked_owned_with_cancel, run_git_checked_with_cancel,
+        run_local_merge, run_merge, run_merge_for_pull_request, run_pr, run_reroot,
+        split_output_lines, suggest_branch_name_options, switch_or_create_branch,
         switch_to_existing_branch, switch_to_main_branch,
     },
     workflow::targets::{
@@ -1216,9 +1217,18 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
             &branch_prompt_source.current_branch,
             branch_prompt_source.custom_main_branch.as_deref(),
         ) {
-            let selected_dev_branch = prompt_patch_release_line_branch(
-                &branch_prompt_source.unmerged_release_line_branches,
+            let release_line_branches = collect_patch_release_line_branch_candidates(
+                scheme,
+                preferred_repo_root_from_operations(&repo_operations)?,
+                &current_version,
                 &branch_prompt_source.existing_branches,
+                branch_prompt_source.custom_main_branch.as_deref(),
+            )?;
+            let selected_dev_branch = prompt_patch_release_line_branch(
+                &release_line_branches,
+                &branch_prompt_source.existing_branches,
+                &current_version,
+                today,
             )?;
             let release_line_branch = semver_release_line_branch_from_dev_branch(
                 &selected_dev_branch,
@@ -1229,7 +1239,7 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                     selected_dev_branch
                 )
             })?;
-            switch_repo_operations_to_existing_branch(&repo_operations, &release_line_branch)?;
+            switch_repo_operations_to_release_line_branch(&repo_operations, &release_line_branch)?;
 
             let refreshed_scopes = collect_bump_scopes(&resolved_project)?;
             current_version =
@@ -1363,22 +1373,120 @@ fn should_use_selected_release_line_for_semver_version(
         && crate::git::is_mainline_branch_name(current_branch, custom_main_branch)
 }
 
+fn preferred_repo_root_from_operations(
+    operations: &[crate::workflow::RepoBumpOperation],
+) -> Result<&str> {
+    operations
+        .first()
+        .map(|operation| operation.repo_root.as_str())
+        .ok_or_else(|| anyhow!("the selected workflow requires a git-backed repository"))
+}
+
+fn collect_patch_release_line_branch_candidates(
+    scheme: VersionScheme,
+    repo_root: &str,
+    current_version: &str,
+    existing_branches: &[String],
+    custom_main_branch: Option<&str>,
+) -> Result<Vec<String>> {
+    if scheme != VersionScheme::SemVer {
+        return Ok(Vec::new());
+    }
+
+    let main_branch = resolve_main_branch_name(repo_root, custom_main_branch)?;
+    let unmerged_branches = split_output_lines(&run_git_checked(
+        repo_root,
+        &[
+            "branch",
+            "--format=%(refname:short)",
+            "--no-merged",
+            &main_branch,
+        ],
+    )?);
+
+    Ok(merge_patch_release_line_branch_candidates(
+        scheme,
+        &unmerged_branches,
+        existing_branches,
+        current_version,
+    ))
+}
+
+fn merge_patch_release_line_branch_candidates(
+    scheme: VersionScheme,
+    unmerged_branches: &[String],
+    existing_branches: &[String],
+    current_version: &str,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    for branch in unmerged_branches {
+        if is_release_line_branch(scheme, branch) {
+            push_unique_release_line_branch(&mut candidates, branch);
+        } else if is_comfygit_dev_source_branch(branch)
+            && let Some(line) = semver_release_line_branch_from_dev_branch(branch)
+        {
+            push_unique_release_line_branch(&mut candidates, &line);
+        }
+    }
+
+    for branch in existing_branches {
+        if is_release_line_branch(scheme, branch) {
+            push_unique_release_line_branch(&mut candidates, branch);
+        }
+    }
+
+    if let Some(line) = semver_release_line_from_version(current_version) {
+        push_unique_release_line_branch(&mut candidates, &line);
+    }
+
+    candidates.sort_by_cached_key(|branch| normalize_release_line_branch(branch));
+    candidates
+}
+
+fn push_unique_release_line_branch(candidates: &mut Vec<String>, branch: &str) {
+    if candidates
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(branch))
+    {
+        return;
+    }
+    candidates.push(branch.to_string());
+}
+
+fn semver_release_line_from_version(version: &str) -> Option<String> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let _patch = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{}.{}.x", major, minor))
+}
+
 fn prompt_patch_release_line_branch(
     release_line_branches: &[String],
     existing_branches: &[String],
+    current_version: &str,
+    today: chrono::NaiveDate,
 ) -> Result<String> {
     if release_line_branches.is_empty() {
         bail!(
-            "patch bumps from the main branch require at least one unmerged local '.x' release branch; switch to that release line first or create one before running cg bmp patch 4/5"
+            "patch bumps from the main branch could not determine a release line; ensure the project version on main is valid semver (major.minor.patch)"
         )
     }
 
     let options = release_line_branches
         .iter()
         .map(|branch| {
-            let next_dev_branch =
-                next_available_semver_dev_branch_for_release_line(branch, existing_branches)
-                    .unwrap_or_else(|_| format!("{} -> invalid", branch));
+            let next_dev_branch = next_available_semver_dev_branch_for_release_line(
+                branch,
+                existing_branches,
+                current_version,
+                today,
+            )
+            .unwrap_or_else(|_| format!("{} -> invalid", branch));
             fixed_branch_name_option_with_value(
                 format!(
                     "{} -> create the next -dev patch branch ({})",
@@ -1445,23 +1553,24 @@ fn semver_version_from_dev_branch(branch_name: &str) -> Option<String> {
 fn next_available_semver_dev_branch_for_release_line(
     release_line_branch: &str,
     existing_branches: &[String],
+    current_version: &str,
+    today: chrono::NaiveDate,
 ) -> Result<String> {
-    let mut next_version = semver_release_version_from_branch_name(release_line_branch)
-        .ok_or_else(|| {
+    let start_version = if semver_release_line_from_version(current_version)
+        .is_some_and(|line| line.eq_ignore_ascii_case(release_line_branch))
+    {
+        current_version.to_string()
+    } else {
+        semver_release_version_from_branch_name(release_line_branch).ok_or_else(|| {
             anyhow!(
                 "'{}' is not a valid semver release line branch",
                 release_line_branch
             )
-        })?;
-
-    loop {
-        next_version = VersionScheme::SemVer
-            .bump(&next_version, BumpAction::Patch, Local::now().date_naive())
-            .map_err(anyhow::Error::msg)?;
-        if !semver_dev_branch_version_exists(existing_branches, &next_version) {
-            return Ok(format!("v{}-dev", next_version));
-        }
-    }
+        })?
+    };
+    let next_version =
+        next_available_patch_version_for_release_line(&start_version, existing_branches, today)?;
+    Ok(format!("v{}-dev", next_version))
 }
 
 fn next_available_patch_version_for_release_line(
@@ -1491,12 +1600,12 @@ fn semver_dev_branch_version_exists(existing_branches: &[String], version: &str)
     })
 }
 
-fn switch_repo_operations_to_existing_branch(
+fn switch_repo_operations_to_release_line_branch(
     operations: &[crate::workflow::RepoBumpOperation],
     branch_name: &str,
 ) -> Result<()> {
     for operation in operations {
-        switch_to_existing_branch(&operation.repo_root, branch_name)?;
+        switch_or_create_branch(&operation.repo_root, branch_name)?;
     }
     Ok(())
 }
@@ -2364,7 +2473,6 @@ struct BranchPromptSource {
     current_branch: String,
     custom_main_branch: Option<String>,
     existing_branches: Vec<String>,
-    unmerged_release_line_branches: Vec<String>,
 }
 
 struct CliRawModeGuard;
@@ -2430,29 +2538,10 @@ fn resolve_branch_prompt_source(
     }
     existing_branches.sort_by_cached_key(|branch| normalize_lookup(branch));
 
-    let main_branch =
-        resolve_main_branch_name(preferred_repo_root, context.main_branch_name.as_deref())?;
-    let mut unmerged_release_line_branches = split_output_lines(&run_git_checked(
-        preferred_repo_root,
-        &[
-            "branch",
-            "--format=%(refname:short)",
-            "--no-merged",
-            &main_branch,
-        ],
-    )?)
-    .into_iter()
-    .filter(|branch| is_release_line_branch(scheme, branch))
-    .collect::<Vec<_>>();
-    unmerged_release_line_branches
-        .sort_by_cached_key(|branch| normalize_release_line_branch(branch));
-    unmerged_release_line_branches.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
-
     Ok(BranchPromptSource {
         current_branch,
         custom_main_branch: context.main_branch_name.clone(),
         existing_branches,
-        unmerged_release_line_branches,
     })
 }
 
@@ -4528,6 +4617,7 @@ mod tests {
 
     #[test]
     fn next_available_semver_dev_branch_skips_existing_patch_branches() {
+        let today = Local::now().date_naive();
         let next_branch = next_available_semver_dev_branch_for_release_line(
             "0.1.x",
             &[
@@ -4535,10 +4625,22 @@ mod tests {
                 "v0.1.1-dev".to_string(),
                 "v0.1.1-dev--specific".to_string(),
             ],
+            "0.1.0",
+            today,
         )
         .expect("next dev branch");
 
         assert_eq!(next_branch, "v0.1.2-dev");
+    }
+
+    #[test]
+    fn next_available_semver_dev_branch_uses_current_version_on_matching_release_line() {
+        let today = Local::now().date_naive();
+        let next_branch =
+            next_available_semver_dev_branch_for_release_line("0.3.x", &[], "0.3.3", today)
+                .expect("next dev branch");
+
+        assert_eq!(next_branch, "v0.3.4-dev");
     }
 
     #[test]
@@ -4551,6 +4653,47 @@ mod tests {
         .expect("next patch version");
 
         assert_eq!(next_version, "0.1.2");
+    }
+
+    #[test]
+    fn semver_release_line_from_version_uses_current_minor() {
+        assert_eq!(
+            semver_release_line_from_version("0.35.9"),
+            Some("0.35.x".to_string())
+        );
+        assert_eq!(
+            semver_release_line_from_version("1.0.0"),
+            Some("1.0.x".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_patch_release_line_candidates_includes_current_version_line_when_x_deleted() {
+        let candidates =
+            merge_patch_release_line_branch_candidates(VersionScheme::SemVer, &[], &[], "0.35.9");
+        assert_eq!(candidates, vec!["0.35.x".to_string()]);
+    }
+
+    #[test]
+    fn merge_patch_release_line_candidates_derives_line_from_unmerged_dev_branch() {
+        let candidates = merge_patch_release_line_branch_candidates(
+            VersionScheme::SemVer,
+            &["v0.35.8-dev--bugfix".to_string()],
+            &[],
+            "0.35.9",
+        );
+        assert!(candidates.iter().any(|line| line == "0.35.x"));
+    }
+
+    #[test]
+    fn merge_patch_release_line_candidates_dedupes_sources() {
+        let candidates = merge_patch_release_line_branch_candidates(
+            VersionScheme::SemVer,
+            &["0.35.x".to_string(), "v0.35.9-dev".to_string()],
+            &["0.35.x".to_string()],
+            "0.35.9",
+        );
+        assert_eq!(candidates, vec!["0.35.x".to_string()]);
     }
 
     #[test]
