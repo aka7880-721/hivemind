@@ -48,6 +48,7 @@ impl App {
                 self.overview_tab = OverviewTab::ProjectSettings;
                 self.project_settings_tab = tab;
                 self.dashboard_focus = DashboardPane::Overview;
+                self.flash_project_settings_tab_selection();
                 project_settings::sync_project_settings_state(self);
             }
             HitAction::SelectProjectSettingsField(field) => {
@@ -1155,6 +1156,7 @@ impl App {
         had_toast
             || self.toaster.has_toast() != had_toast
             || overview::tick_dashboard_tile_rotation(self)
+            || self.project_settings_tab_nav_state.selection_flash_active()
     }
 
     pub(crate) fn sync_dashboard_overview_after_repo_change(&mut self) {
