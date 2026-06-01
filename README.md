@@ -20,7 +20,7 @@ Hi all 👋
 <br>  
 I'm Tom, lead developer here at ComfyHome — also known as “the guy who keeps accidentally starting new projects”.
 
-We’ve got a bunch of exciting things coming later in 2026, but before all that… let’s talk about ComfyGit.
+We’ve got a bunch of exciting things coming later in 2026 / early 2027, but before all that… let’s introduce ComfyGit.
 
 Before I dive into the technical wizardry, let me tell you how this whole thing accidentally happened.
 
@@ -38,7 +38,7 @@ Step one was research. As always.
 To my surprise, I couldn’t find anything even remotely close to what our mini‑app did. Ideally, I’d just send my friends a couple of links and call it a day.
 But no. The universe said: “Build it yourself.”
 
-So here we are — roughly 450 work‑hours later — and I’m releasing ComfyGit v0.26 as a Public Release Beta.
+So here we are — roughly 600 work‑hours later (June 2026) — and I’m releasing ComfyGit v0.36 as a Public Release Beta.
 
 As far as I’m concerned, ComfyGit is a unique tool. I’m pretty sure some of its features don’t exist anywhere else — and there’s plenty more coming. 
 Out of all, I'll mention `cg cd <alias>`. A very simple feature that completely changed my workflow.
@@ -50,7 +50,7 @@ If that happens, I’ll simply pretend I didn’t see the message and go lie fac
 
 There are definitely still some kinks to iron out in ComfyGit, so if you’ve got feedback, I’d love to hear it. I promise, I'll look into any meaningful feedback... 
 
-Feature‑wise, ComfyGit is about 60% of what I want it to be for v1.0 — which means the fun is just getting started!
+Feature‑wise, ComfyGit is now about 66% of what I want it to be for v1.0 — which means a lot has been done, but there is still a lot to do either!
 
 Enjoy!
 
