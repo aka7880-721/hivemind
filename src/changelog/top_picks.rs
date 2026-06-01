@@ -80,16 +80,12 @@ pub(crate) const PRIORITY_QUICK_DOWNLOADS_BOTTOM: u16 = 100;
 /// Leading spaces before `-` that mark a nested bullet in editor / `.tp_edits.md` text.
 pub(crate) const TOP_PICK_NESTED_INDENT_SPACES: usize = 2;
 
-fn top_pick_nested_indent(level: usize) -> &'static str {
-    if level == 0 { "" } else { "  " }
+fn top_pick_nested_indent(level: usize) -> String {
+    " ".repeat(level * TOP_PICK_NESTED_INDENT_SPACES)
 }
 
 fn top_pick_indent_level(leading_spaces: usize) -> usize {
-    if leading_spaces >= TOP_PICK_NESTED_INDENT_SPACES {
-        1
-    } else {
-        0
-    }
+    leading_spaces / TOP_PICK_NESTED_INDENT_SPACES
 }
 
 /// Extract Top Picks from parsed commits
@@ -401,9 +397,8 @@ fn render_bullets_hierarchical(lines: &mut Vec<String>, bullets: &[TopPickBullet
     while i < bullets.len() {
         let bullet = &bullets[i];
 
-        // Level 0 = ** (first bullet level) -> no indent; level 1 = *** (nested) -> 2 spaces
         let indent = top_pick_nested_indent(bullet.level);
-        lines.push(format!("{}- {}", indent, bullet.text));
+        lines.push(format!("{indent}- {}", bullet.text));
 
         i += 1;
     }
@@ -584,7 +579,7 @@ impl TopPicksEditorDialog {
             return None;
         }
 
-        // Level 0 = top-level (`-`); level 1 = nested (`  -` or `    -`, etc.)
+        // Each 2 leading spaces is one nesting level (`-`, `  -`, `    -`, …).
         let level = top_pick_indent_level(leading_spaces);
 
         Some(TopPickBullet { level, text })
@@ -902,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_bullet_line_accepts_two_or_four_space_nested_indent() {
+    fn parse_bullet_line_maps_indent_to_nesting_level() {
         let two =
             TopPicksEditorDialog::parse_bullet_line("  - nested two").expect("two-space nested");
         assert_eq!(two.level, 1);
@@ -910,10 +905,39 @@ mod tests {
 
         let four = TopPicksEditorDialog::parse_bullet_line("    - nested four")
             .expect("four-space nested");
-        assert_eq!(four.level, 1);
+        assert_eq!(four.level, 2);
 
         let top = TopPicksEditorDialog::parse_bullet_line("- top level").expect("top");
         assert_eq!(top.level, 0);
+    }
+
+    #[test]
+    fn deep_nested_bullets_preserve_hierarchy_in_release_notes() {
+        let text = r#"1. Group
+- test
+  - test
+    - test
+      - test
+- test2
+    - test2
+        - test2
+            - test2"#;
+        let picks = TopPicksEditorDialog::text_to_picks(text);
+        assert_eq!(picks.len(), 1);
+        assert_eq!(
+            picks[0].bullets.iter().map(|b| b.level).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 0, 2, 4, 6]
+        );
+
+        let lines = render_top_picks_section(&picks, None);
+        assert!(lines.iter().any(|line| line == "- test"));
+        assert!(lines.iter().any(|line| line == "  - test"));
+        assert!(lines.iter().any(|line| line == "    - test"));
+        assert!(lines.iter().any(|line| line == "      - test"));
+        assert!(lines.iter().any(|line| line == "- test2"));
+        assert!(lines.iter().any(|line| line == "    - test2"));
+        assert!(lines.iter().any(|line| line == "        - test2"));
+        assert!(lines.iter().any(|line| line == "            - test2"));
     }
 
     #[test]
