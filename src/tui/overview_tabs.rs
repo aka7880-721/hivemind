@@ -11,6 +11,9 @@ use ratatui::{
     style::{Color, Style},
 };
 use ratatui_comfy_tabs::{TabNav, TabNavState, TabReorderPolicy, TabWheelDirection};
+use ratatui::widgets::StatefulWidget;
+
+use crate::config::UiSettings;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OverviewTab {
@@ -45,11 +48,25 @@ pub(crate) fn project_settings_tab_nav<'a>(
     labels: &'a [&'a str],
     selected: usize,
     tab_pinned: &'a [bool],
+    ui: &UiSettings,
 ) -> TabNav<'a> {
-    comfy_tab_nav(labels, selected)
-        .reorder_policy(TabReorderPolicy::SomePinned)
-        .tab_pinned(tab_pinned)
-        .mouse_reorder(true)
+    apply_tab_selection_flash(
+        comfy_tab_nav(labels, selected)
+            .reorder_policy(TabReorderPolicy::SomePinned)
+            .tab_pinned(tab_pinned)
+            .mouse_reorder(true),
+        ui,
+    )
+}
+
+pub(crate) fn apply_tab_selection_flash<'a>(nav: TabNav<'a>, ui: &UiSettings) -> TabNav<'a> {
+    nav.selection_flash(ui.tab_selection_flash_enabled).selection_flash_style(
+        Style::default().fg(Color::Indexed(ui.tab_selection_flash_color)),
+    )
+}
+
+pub(crate) fn sync_tab_nav_flash_state(state: &mut TabNavState, ui: &UiSettings) {
+    state.selection_flash_enabled = ui.tab_selection_flash_enabled;
 }
 
 pub(crate) fn comfy_tab_nav<'a>(labels: &'a [&'a str], selected: usize) -> TabNav<'a> {
@@ -86,6 +103,8 @@ pub(crate) fn render_overview_tabs(
     area: Rect,
     active_tab: OverviewTab,
     include_recent_changes: bool,
+    ui: &UiSettings,
+    state: &mut TabNavState,
 ) {
     let labels = overview_tab_specs(include_recent_changes)
         .iter()
@@ -95,7 +114,10 @@ pub(crate) fn render_overview_tabs(
         .iter()
         .position(|(tab, _)| *tab == active_tab)
         .unwrap_or(0);
-    frame.render_widget(comfy_tab_nav(&labels, active_index), area);
+    state.selected = active_index;
+    sync_tab_nav_flash_state(state, ui);
+    let nav = apply_tab_selection_flash(comfy_tab_nav(&labels, active_index), ui);
+    StatefulWidget::render(nav, area, frame.buffer_mut(), state);
 }
 
 pub(crate) fn overview_tab_rects(
@@ -137,6 +159,13 @@ pub(crate) fn wheel_overview_tab(
         direction,
     )?;
     specs.get(selected).map(|(tab, _)| *tab)
+}
+
+pub(crate) fn overview_tab_index(tab: OverviewTab, include_recent_changes: bool) -> usize {
+    overview_tab_specs(include_recent_changes)
+        .iter()
+        .position(|(candidate, _)| *candidate == tab)
+        .unwrap_or(0)
 }
 
 fn overview_tab_specs(include_recent_changes: bool) -> &'static [(OverviewTab, &'static str)] {
