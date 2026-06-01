@@ -380,6 +380,21 @@ fn find_commit_hash_range(line: &str) -> Option<(usize, usize)> {
     None
 }
 
+/// Scroll a custom-rendered textarea by moving the cursor (viewport follows cursor).
+pub(crate) fn scroll_textarea_by_lines(editor: &mut TuiTextArea<'_>, delta_lines: i16) {
+    if delta_lines == 0 {
+        return;
+    }
+    let step = if delta_lines < 0 {
+        tui_textarea::CursorMove::Up
+    } else {
+        tui_textarea::CursorMove::Down
+    };
+    for _ in 0..delta_lines.unsigned_abs() {
+        editor.move_cursor(step);
+    }
+}
+
 pub(crate) fn convert_to_textarea_input(key: KeyEvent) -> Option<TextAreaInput> {
     let text_key = match key.code {
         KeyCode::Backspace => TextAreaKey::Backspace,

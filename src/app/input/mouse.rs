@@ -297,6 +297,18 @@ impl App {
                     self.paste_from_clipboard();
                     return;
                 }
+                MouseEventKind::ScrollUp => {
+                    if let Some(dialog) = &mut self.top_picks_editor_dialog {
+                        scroll_textarea_by_lines(&mut dialog.editor, -3);
+                    }
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(dialog) = &mut self.top_picks_editor_dialog {
+                        scroll_textarea_by_lines(&mut dialog.editor, 3);
+                    }
+                    return;
+                }
                 _ => return,
             }
         }

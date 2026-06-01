@@ -3096,6 +3096,10 @@ impl App {
             Line::from("1-9 or Up/Down choose action | Enter run | Esc cancel")
         } else if self.overview_bump_warning_dialog.is_some() {
             Line::from("1-3 or Up/Down choose warning action | Enter confirm | Esc cancel")
+        } else if self.top_picks_editor_dialog.is_some() {
+            Line::from(
+                "Edit Top Picks | Mouse wheel or PgUp/PgDn scroll | Ctrl+S or F2 save | Esc close",
+            )
         } else {
             match self.screen {
                 Screen::Dashboard => self.dashboard_footer_line(),
