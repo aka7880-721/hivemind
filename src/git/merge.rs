@@ -814,11 +814,7 @@ fn delete_local_source_branch(
     if !local_branch_exists(repo_root, branch)? {
         return Ok(());
     }
-    let delete_args = vec![
-        "branch".to_string(),
-        "-d".to_string(),
-        branch.to_string(),
-    ];
+    let delete_args = vec!["branch".to_string(), "-d".to_string(), branch.to_string()];
     if run_git_checked_owned_with_cancel(repo_root, delete_args, cancel.clone()).is_ok() {
         println!("Local branch '{branch}' deleted.");
         return Ok(());

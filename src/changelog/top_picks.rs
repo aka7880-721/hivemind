@@ -81,11 +81,7 @@ pub(crate) const PRIORITY_QUICK_DOWNLOADS_BOTTOM: u16 = 100;
 pub(crate) const TOP_PICK_NESTED_INDENT_SPACES: usize = 2;
 
 fn top_pick_nested_indent(level: usize) -> &'static str {
-    if level == 0 {
-        ""
-    } else {
-        "  "
-    }
+    if level == 0 { "" } else { "  " }
 }
 
 fn top_pick_indent_level(leading_spaces: usize) -> usize {
@@ -907,8 +903,8 @@ mod tests {
 
     #[test]
     fn parse_bullet_line_accepts_two_or_four_space_nested_indent() {
-        let two = TopPicksEditorDialog::parse_bullet_line("  - nested two")
-            .expect("two-space nested");
+        let two =
+            TopPicksEditorDialog::parse_bullet_line("  - nested two").expect("two-space nested");
         assert_eq!(two.level, 1);
         assert_eq!(two.text, "nested two");
 
