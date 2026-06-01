@@ -200,9 +200,6 @@ impl App {
             HitAction::CloseReleaseNow => self.close_release_now_dialog(),
             HitAction::ConfirmDeleteRequest => return self.confirm_delete_request(),
             HitAction::CancelDeleteRequest => self.cancel_delete_request(),
-            HitAction::ToggleTabHints => return self.toggle_tab_hints(),
-            HitAction::ToggleFooter => return self.toggle_footer(),
-            HitAction::CycleFooterContent(delta) => return self.cycle_footer_content(delta),
             HitAction::BrowseWizardTargetPath => {
                 return self.open_browser(BrowseTarget::WizardTargetPath);
             }
@@ -2626,6 +2623,12 @@ impl App {
             DashboardPane::Projects => DashboardPane::Overview,
             DashboardPane::Overview => DashboardPane::Projects,
         };
+        if self.dashboard_focus == DashboardPane::Overview {
+            crate::app::ui_settings::flash_overview_tab_selection(
+                self,
+                self.overview_show_recent_tab,
+            );
+        }
     }
 
     pub(crate) fn scroll_dashboard_recent_changes(&mut self, delta: i16) -> bool {

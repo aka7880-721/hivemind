@@ -39,19 +39,14 @@ impl App {
         let Some(area) = self.project_settings_tab_strip_area else {
             return;
         };
-        let Some((mut strip, labels, pinned, active_index)) =
-            self.project_settings_tab_nav_pack()
+        let Some((mut strip, labels, pinned, active_index)) = self.project_settings_tab_nav_pack()
         else {
             return;
         };
         let nav = project_settings_tab_nav(&labels, active_index, &pinned, &self.config.ui);
         let prev_hover = drag.hover;
-        self.project_settings_tab_nav_state.handle_mouse_reorder_drag(
-            &nav,
-            area,
-            mouse.column,
-            mouse.row,
-        );
+        self.project_settings_tab_nav_state
+            .handle_mouse_reorder_drag(&nav, area, mouse.column, mouse.row);
         let Some(drag) = self.project_settings_tab_nav_state.reorder_drag else {
             return;
         };
@@ -79,8 +74,7 @@ impl App {
         if !self.project_settings_tab_nav_state.is_reorder_dragging() {
             return;
         }
-        let Some((mut strip, labels, pinned, active_index)) =
-            self.project_settings_tab_nav_pack()
+        let Some((mut strip, labels, pinned, active_index)) = self.project_settings_tab_nav_pack()
         else {
             self.project_settings_tab_nav_state.cancel_reorder_drag();
             return;
@@ -159,15 +153,17 @@ impl App {
         self.project_settings_tab_nav_state.selected = index;
     }
 
+    #[allow(clippy::type_complexity)]
     fn project_settings_tab_nav_pack(
         &self,
     ) -> Option<(Vec<ProjectSettingsTab>, Vec<&'static str>, Vec<bool>, usize)> {
         let project = self.config.projects.get(self.selected_project)?;
         let scope_index =
-            project_settings::active_scope_index(&project, self.overview_focused_scope);
+            project_settings::active_scope_index(project, self.overview_focused_scope);
         let release_now = project.release_now_for_scope(scope_index).enabled;
-        let default_strip = project_settings_tab_strip(&project, release_now);
-        let strip = merge_project_settings_tab_order(&default_strip, &self.project_settings_tab_order);
+        let default_strip = project_settings_tab_strip(project, release_now);
+        let strip =
+            merge_project_settings_tab_order(&default_strip, &self.project_settings_tab_order);
         let labels: Vec<&str> = strip
             .iter()
             .map(|tab| project_settings_tab_label(*tab))
