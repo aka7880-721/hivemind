@@ -749,6 +749,11 @@ fn merge_pull_request(
         println!("{}", stdout);
     }
 
+    // Sync the integration branch before deleting the source locally: `git branch -d`
+    // requires the source to be merged into the current target, which is only true after
+    // we fast-forward the target from the remote merge.
+    finish_after_pull_request_merge(repo_root, &refreshed.target_branch, cancel.clone())?;
+
     if policy.delete_local_after_merge() {
         switch_off_branch_for_deletion(
             repo_root,
@@ -757,11 +762,9 @@ fn merge_pull_request(
             cancel.clone(),
         )?;
         if matches!(forge, ForgeKind::GitLab) {
-            delete_local_source_branch(repo_root, &refreshed.source_branch, cancel.clone())?;
+            delete_local_source_branch(repo_root, &refreshed.source_branch, cancel)?;
         }
     }
-
-    finish_after_pull_request_merge(repo_root, &refreshed.target_branch, cancel)?;
     cleanup_merge_workspaces_for_pr(repo_root, refreshed.number)?;
 
     Ok(())
@@ -811,13 +814,24 @@ fn delete_local_source_branch(
     if !local_branch_exists(repo_root, branch)? {
         return Ok(());
     }
+    let delete_args = vec![
+        "branch".to_string(),
+        "-d".to_string(),
+        branch.to_string(),
+    ];
+    if run_git_checked_owned_with_cancel(repo_root, delete_args, cancel.clone()).is_ok() {
+        println!("Local branch '{branch}' deleted.");
+        return Ok(());
+    }
     run_git_checked_owned_with_cancel(
         repo_root,
-        vec!["branch".to_string(), "-d".to_string(), branch.to_string()],
+        vec!["branch".to_string(), "-D".to_string(), branch.to_string()],
         cancel,
     )
     .with_context(|| format!("failed to delete local branch '{branch}' after merge"))?;
-    println!("Local branch '{branch}' deleted.");
+    eprintln!(
+        "Local branch '{branch}' was not fully merged locally; deleted with -D after remote merge."
+    );
     Ok(())
 }
 
