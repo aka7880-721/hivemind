@@ -45,8 +45,10 @@ mod overview;
 mod project_settings;
 mod ps_alias;
 mod render;
+mod ui_settings;
 
 use self::project_settings::{ProjectSettingsState, ProjectSettingsTab};
+use self::ui_settings::UiSettingsState;
 use crate::changelog::top_picks as changelog_tp;
 pub(crate) use crate::workflow::rls_now;
 pub(crate) use crate::workflow::{OverviewBumpWorkflow, git_flow, overview_bump_workflow_options};
@@ -86,7 +88,11 @@ pub(crate) struct App {
     project_settings_tab: ProjectSettingsTab,
     project_settings_tab_order: Vec<ProjectSettingsTab>,
     project_settings_tab_nav_state: ratatui_comfy_tabs::TabNavState,
+    overview_tab_nav_state: ratatui_comfy_tabs::TabNavState,
     project_settings_state: ProjectSettingsState,
+    ui_settings_state: UiSettingsState,
+    ui_settings_tab_nav_state: ratatui_comfy_tabs::TabNavState,
+    ui_settings_tab_strip_area: Option<Rect>,
     overview_focused_scope: usize,
     overview_recent_changes: Option<RecentChangesDialog>,
     overview_recent_project: Option<usize>,
@@ -219,7 +225,11 @@ impl App {
             project_settings_tab: ProjectSettingsTab::General,
             project_settings_tab_order: Vec::new(),
             project_settings_tab_nav_state: ratatui_comfy_tabs::TabNavState::default(),
+            overview_tab_nav_state: ratatui_comfy_tabs::TabNavState::default(),
             project_settings_state: ProjectSettingsState::default(),
+            ui_settings_state: UiSettingsState::default(),
+            ui_settings_tab_nav_state: ratatui_comfy_tabs::TabNavState::default(),
+            ui_settings_tab_strip_area: None,
             overview_focused_scope: 0,
             overview_recent_changes: None,
             overview_recent_project: None,

@@ -1100,7 +1100,7 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
     app.project_settings_tab_nav_state.selected = active_index;
     let tab_pins = project_settings_tab_pins(&strip);
     app.project_settings_tab_strip_area = Some(area);
-    let nav = project_settings_tab_nav(&labels, active_index, &tab_pins);
+    let nav = project_settings_tab_nav(&labels, active_index, &tab_pins, &app.config.ui);
     let tab_rects = nav.tab_rects(area);
     StatefulWidget::render(nav, area, frame.buffer_mut(), &mut app.project_settings_tab_nav_state);
 
