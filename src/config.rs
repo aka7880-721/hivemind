@@ -551,6 +551,22 @@ impl ProjectConfig {
         Ok(())
     }
 
+    pub fn mirror_sync_after_merge_for_scope(&self, scope_index: usize) -> MirrorSyncAfterMerge {
+        self.repo_config_for_scope(scope_index)
+            .map(|repo| repo.mirror_sync_after_merge)
+            .unwrap_or_default()
+    }
+
+    pub fn set_mirror_sync_after_merge_for_scope(
+        &mut self,
+        scope_index: usize,
+        policy: MirrorSyncAfterMerge,
+    ) -> Result<()> {
+        let repo = self.repo_config_for_scope_mut_or_insert(scope_index)?;
+        repo.mirror_sync_after_merge = policy;
+        Ok(())
+    }
+
     fn repo_config_for_scope_mut_or_insert(
         &mut self,
         scope_index: usize,
@@ -1086,6 +1102,43 @@ pub struct RepoConfig {
     pub custom_main_branch: String,
     #[serde(default)]
     pub post_merge_source_branch: PostMergeSourceBranch,
+    #[serde(default)]
+    pub mirror_sync_after_merge: MirrorSyncAfterMerge,
+}
+
+/// When GitLab+GitHub mirror sync runs after ComfyGit merges an MR/PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MirrorSyncAfterMerge {
+    #[default]
+    AutomaticallyAfterMerge,
+    Manual,
+}
+
+impl MirrorSyncAfterMerge {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge => "Automatically after each merge",
+            MirrorSyncAfterMerge::Manual => {
+                "Manually, or using external service (e.g. GitLab repo mirroring)"
+            }
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge => MirrorSyncAfterMerge::Manual,
+            MirrorSyncAfterMerge::Manual => MirrorSyncAfterMerge::AutomaticallyAfterMerge,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        self.next()
+    }
+
+    pub fn runs_automatically_after_merge(self) -> bool {
+        matches!(self, MirrorSyncAfterMerge::AutomaticallyAfterMerge)
+    }
 }
 
 /// What happens to the source branch after a successful MR/PR merge.
@@ -1397,6 +1450,31 @@ mod tests {
         );
         assert!(!repo.post_merge_source_branch.delete_remote_on_merge());
         assert!(!repo.post_merge_source_branch.delete_local_after_merge());
+    }
+
+    #[test]
+    fn mirror_sync_after_merge_defaults_to_automatic() {
+        let repo = RepoConfig::default();
+        assert_eq!(
+            repo.mirror_sync_after_merge,
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge
+        );
+        assert!(
+            repo.mirror_sync_after_merge
+                .runs_automatically_after_merge()
+        );
+    }
+
+    #[test]
+    fn mirror_sync_after_merge_toggles_between_two_policies() {
+        assert_eq!(
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge.next(),
+            MirrorSyncAfterMerge::Manual
+        );
+        assert_eq!(
+            MirrorSyncAfterMerge::Manual.next(),
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge
+        );
     }
 
     #[test]

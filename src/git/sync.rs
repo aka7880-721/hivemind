@@ -22,20 +22,27 @@ pub struct MirrorSyncReport {
     pub github_tracking: bool,
 }
 
+const ANSI_STATUS_IN_SYNC: &str = "\x1b[38;5;46m";
+const ANSI_STATUS_OUT_OF_SYNC: &str = "\x1b[38;5;196m";
+const ANSI_RESET: &str = "\x1b[0m";
+
 impl MirrorSyncReport {
     pub fn in_sync(&self) -> bool {
         self.gitlab_tracking && self.github_tracking
     }
 
-    pub fn summary_lines(&self) -> Vec<String> {
-        let status = if self.in_sync() {
-            "in sync"
+    pub fn status_colored(&self) -> String {
+        if self.in_sync() {
+            format!("{ANSI_STATUS_IN_SYNC}in sync{ANSI_RESET}")
         } else {
-            "out of sync"
-        };
+            format!("{ANSI_STATUS_OUT_OF_SYNC}out of sync{ANSI_RESET}")
+        }
+    }
+
+    pub fn summary_lines(&self) -> Vec<String> {
         let mut lines = vec![
             format!("Branch: {}", self.branch),
-            format!("Status: {status}"),
+            format!("Status: {}", self.status_colored()),
             format!(
                 "GitLab remote '{}': {}",
                 self.gitlab_remote,
@@ -200,5 +207,26 @@ mod tests {
             github_tracking: false,
         };
         assert!(!report.in_sync());
+    }
+
+    #[test]
+    fn mirror_sync_status_colored_uses_palette_codes() {
+        let in_sync = MirrorSyncReport {
+            branch: "main".to_string(),
+            head_line: String::new(),
+            gitlab_remote: "gitlab".to_string(),
+            github_remote: "origin".to_string(),
+            gitlab_tracking: true,
+            github_tracking: true,
+        };
+        assert!(in_sync.status_colored().contains("38;5;46m"));
+        assert!(in_sync.status_colored().contains("in sync"));
+
+        let out_of_sync = MirrorSyncReport {
+            github_tracking: false,
+            ..in_sync
+        };
+        assert!(out_of_sync.status_colored().contains("38;5;196m"));
+        assert!(out_of_sync.status_colored().contains("out of sync"));
     }
 }

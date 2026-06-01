@@ -190,6 +190,10 @@ fn dispatch_args(args: &[String]) -> Result<StartupMode> {
             crate::workflow::cli_sync::run_sync()?;
             Ok(StartupMode::Handled)
         }
+        [command, flag] if is_sync_command(command) && is_sync_yes_flag(flag) => {
+            crate::workflow::cli_sync::run_sync_with_options(true)?;
+            Ok(StartupMode::Handled)
+        }
         [command] if is_help(command) => {
             print_usage();
             Ok(StartupMode::Handled)
@@ -677,6 +681,10 @@ fn is_sync_command(value: &str) -> bool {
     value == "sync"
 }
 
+fn is_sync_yes_flag(value: &str) -> bool {
+    value == "--yes"
+}
+
 fn is_help(value: &str) -> bool {
     matches!(value, "help" | "-h" | "--help")
 }
@@ -870,7 +878,7 @@ fn print_usage() {
     println!(
         "  cg init                    Register the current directory as a new ComfyGit project"
     );
-    println!("  cg sync                    Check GitLab/GitHub mirror sync and push both remotes");
+    println!("  cg sync [--yes]            Check GitLab/GitHub mirror sync and push both remotes");
     println!("  cg branch                  Show the current branch and a compact branch tree");
     println!("  cg branch up | ..          Switch to the parent branch in the current tree");
     println!("  cg branch main | ~         Switch to main/master/custom main for the project");
@@ -3418,6 +3426,43 @@ fn find_repo_custom_main_branch(repo_root: &str) -> Option<String> {
     }
 
     None
+}
+
+pub(crate) fn mirror_sync_after_merge_for_repo(
+    projects: &[crate::config::ProjectConfig],
+    repo_root: &str,
+    cwd: &Path,
+) -> crate::config::MirrorSyncAfterMerge {
+    let canonical_repo_root = best_effort_canonicalize(Path::new(repo_root));
+
+    for project in projects {
+        if project.project_type == ProjectType::AllInOne {
+            if let Some(repo) = project.repo.as_ref()
+                && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+            {
+                return project.mirror_sync_after_merge_for_scope(0);
+            }
+            continue;
+        }
+
+        for (index, branch) in project.branches.iter().enumerate() {
+            if let Some(repo) = branch.repo.as_ref()
+                && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+            {
+                let scope_index = find_scope_for_cwd(project, project, cwd).unwrap_or(index);
+                return project.mirror_sync_after_merge_for_scope(scope_index);
+            }
+        }
+
+        if let Some(repo) = project.repo.as_ref()
+            && best_effort_canonicalize(&repo_root_path(repo)) == canonical_repo_root
+        {
+            let scope_index = find_scope_for_cwd(project, project, cwd).unwrap_or(0);
+            return project.mirror_sync_after_merge_for_scope(scope_index);
+        }
+    }
+
+    crate::config::MirrorSyncAfterMerge::default()
 }
 
 pub(crate) fn post_merge_source_branch_for_repo(
