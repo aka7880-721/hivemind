@@ -12,7 +12,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, StatefulWidget},
 };
 use tui_checkbox::Checkbox;
 
@@ -25,7 +25,7 @@ use crate::{
         DEFAULT_CHANGELOG_PATH, MirrorSyncAfterMerge, PostMergeSourceBranch, ProjectConfig,
         ProjectType, ReadmeInjectDepth,
     },
-    tui::{center_vertically, comfy_tab_nav},
+    tui::{center_vertically, project_settings_tab_nav},
     workflow::dialogs::TextInput,
 };
 
@@ -58,6 +58,34 @@ pub(crate) fn project_settings_tab_strip(
         tabs.push(ProjectSettingsTab::RlsQd);
     }
     tabs
+}
+
+/// Merges a saved tab order with the default strip (drops removed tabs, appends new ones).
+pub(crate) fn merge_project_settings_tab_order(
+    default: &[ProjectSettingsTab],
+    saved: &[ProjectSettingsTab],
+) -> Vec<ProjectSettingsTab> {
+    if saved.is_empty() {
+        return default.to_vec();
+    }
+    let mut order: Vec<_> = saved
+        .iter()
+        .copied()
+        .filter(|tab| default.contains(tab))
+        .collect();
+    for tab in default {
+        if !order.contains(tab) {
+            order.push(*tab);
+        }
+    }
+    order
+}
+
+pub(crate) fn project_settings_tab_pins(strip: &[ProjectSettingsTab]) -> Vec<bool> {
+    strip
+        .iter()
+        .map(|tab| *tab == ProjectSettingsTab::General)
+        .collect()
 }
 
 impl ProjectSettingsTab {
@@ -617,6 +645,7 @@ pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
     app.project_settings_tab = app
         .project_settings_tab
         .step(delta, &project, release_now_enabled);
+    app.flash_project_settings_tab_selection();
     app.project_settings_state.scroll = 0;
     app.project_settings_state.follow_focus = true;
     sync_project_settings_state(app);
@@ -1052,8 +1081,14 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
-    let strip =
-        project_settings_tab_strip(&project, project.release_now_for_scope(scope_index).enabled);
+    let default_strip = project_settings_tab_strip(
+        &project,
+        project.release_now_for_scope(scope_index).enabled,
+    );
+    let strip = merge_project_settings_tab_order(
+        &default_strip,
+        &app.project_settings_tab_order,
+    );
     let labels: Vec<&str> = strip
         .iter()
         .map(|tab| project_settings_tab_label(*tab))
@@ -1062,10 +1097,12 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         .iter()
         .position(|tab| *tab == app.project_settings_tab)
         .unwrap_or(0);
+    app.project_settings_tab_nav_state.selected = active_index;
+    let tab_pins = project_settings_tab_pins(&strip);
     app.project_settings_tab_strip_area = Some(area);
-    let nav = comfy_tab_nav(&labels, active_index);
+    let nav = project_settings_tab_nav(&labels, active_index, &tab_pins);
     let tab_rects = nav.tab_rects(area);
-    frame.render_widget(nav, area);
+    StatefulWidget::render(nav, area, frame.buffer_mut(), &mut app.project_settings_tab_nav_state);
 
     for (idx, tab) in strip.iter().enumerate() {
         if let Some(rect) = tab_rects.get(idx) {

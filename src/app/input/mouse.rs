@@ -845,6 +845,13 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::ProjectSettings
+                    && self.try_start_project_settings_tab_drag(&mouse)
+                {
+                    return;
+                }
+
                 if self.overview_bump_workflow_dialog.is_none()
                     && self.screen == Screen::Dashboard
                     && self.overview_tab == OverviewTab::Overview
@@ -1022,6 +1029,13 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::ProjectSettings
+                {
+                    self.update_project_settings_tab_drag(&mouse);
+                    return;
+                }
+
                 if let Some(from_scope) = self.overview_drag_scope {
                     let target_scope =
                         self.overview_tile_rects
@@ -1069,6 +1083,11 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::ProjectSettings
+                {
+                    self.finish_project_settings_tab_drag(&mouse);
+                }
                 self.overview_drag_scope = None;
                 self.drag_project = None;
             }

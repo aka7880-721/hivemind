@@ -10,7 +10,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
 };
-use ratatui_comfy_tabs::{TabNav, TabNavState, TabWheelDirection};
+use ratatui_comfy_tabs::{TabNav, TabNavState, TabReorderPolicy, TabWheelDirection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OverviewTab {
@@ -39,6 +39,17 @@ pub(crate) fn overview_tabs(include_recent_changes: bool) -> &'static [OverviewT
     } else {
         &OVERVIEW_TABS_WITHOUT_RECENT
     }
+}
+
+pub(crate) fn project_settings_tab_nav<'a>(
+    labels: &'a [&'a str],
+    selected: usize,
+    tab_pinned: &'a [bool],
+) -> TabNav<'a> {
+    comfy_tab_nav(labels, selected)
+        .reorder_policy(TabReorderPolicy::SomePinned)
+        .tab_pinned(tab_pinned)
+        .mouse_reorder(true)
 }
 
 pub(crate) fn comfy_tab_nav<'a>(labels: &'a [&'a str], selected: usize) -> TabNav<'a> {

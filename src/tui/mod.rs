@@ -18,8 +18,8 @@ pub(crate) use branding::{PixelLogo, choose_header_content};
 pub(crate) use help::{HelpContext, HelpModal};
 pub(crate) use markdown_render::{markdown_line_count, render_markdown};
 pub(crate) use overview_tabs::{
-    OverviewTab, comfy_tab_nav, overview_tab_rects, overview_tabs, render_overview_tabs,
-    wheel_overview_tab, wheel_tab_strip,
+    OverviewTab, comfy_tab_nav, overview_tab_rects, overview_tabs, project_settings_tab_nav,
+    render_overview_tabs, wheel_overview_tab, wheel_tab_strip,
 };
 pub(crate) use project_edit::{ProjectEditDialog, ProjectEditFocus};
 pub(crate) use project_wizard::{ProjectWizard, WizardField};
