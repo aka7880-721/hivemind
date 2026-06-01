@@ -1162,9 +1162,17 @@ impl App {
         let _ = self.schedule_prefetch_overview_activity_cache();
     }
 
+    pub(crate) fn any_tab_selection_flash_active(&self) -> bool {
+        self.project_settings_tab_nav_state.selection_flash_active()
+            || self.overview_tab_nav_state.selection_flash_active()
+            || self.ui_settings_tab_nav_state.selection_flash_active()
+    }
+
     pub(crate) fn next_poll_timeout(&self) -> Duration {
         if self.background_jobs_inflight > 0 || self.toaster.has_toast() {
             ACTIVE_UI_TICK_INTERVAL
+        } else if self.any_tab_selection_flash_active() {
+            crate::app::TAB_SELECTION_FLASH_POLL_INTERVAL
         } else {
             IDLE_UI_POLL_INTERVAL
         }
@@ -1177,9 +1185,7 @@ impl App {
         had_toast
             || self.toaster.has_toast() != had_toast
             || overview::tick_dashboard_tile_rotation(self)
-            || self.project_settings_tab_nav_state.selection_flash_active()
-            || self.overview_tab_nav_state.selection_flash_active()
-            || self.ui_settings_tab_nav_state.selection_flash_active()
+            || self.any_tab_selection_flash_active()
     }
 
     pub(crate) fn sync_dashboard_overview_after_repo_change(&mut self) {

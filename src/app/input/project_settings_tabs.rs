@@ -139,6 +139,13 @@ impl App {
     }
 
     pub(crate) fn flash_project_settings_tab_selection(&mut self) {
+        if !self.config.ui.tab_selection_flash_enabled {
+            return;
+        }
+        crate::tui::sync_tab_nav_flash_state(
+            &mut self.project_settings_tab_nav_state,
+            &self.config.ui,
+        );
         let Some((strip, _, _, _)) = self.project_settings_tab_nav_pack() else {
             return;
         };
