@@ -41,8 +41,29 @@ impl App {
     pub(crate) fn handle_hit_action(&mut self, action: HitAction) -> Result<()> {
         match action {
             HitAction::SelectOverviewTab(tab) => {
-                self.overview_tab = tab;
+                if self.overview_tab != tab {
+                    self.overview_tab = tab;
+                    crate::app::ui_settings::flash_overview_tab_selection(
+                        self,
+                        self.overview_show_recent_tab,
+                    );
+                }
                 self.dashboard_focus = DashboardPane::Overview;
+            }
+            HitAction::SelectUiSettingsTab(tab) => {
+                if self.ui_settings_state.tab != tab {
+                    self.ui_settings_state.tab = tab;
+                    self.ui_settings_state.scroll = 0;
+                    self.ui_settings_state.follow_focus = true;
+                    let fields = self.ui_settings_state.visible_fields(tab);
+                    if let Some(first) = fields.first() {
+                        self.ui_settings_state.focus = *first;
+                    }
+                    crate::app::ui_settings::flash_ui_settings_tab_selection(self);
+                }
+            }
+            HitAction::SelectUiSettingsField(field) => {
+                return crate::app::ui_settings::activate_ui_settings_field(self, field);
             }
             HitAction::SelectProjectSettingsTab(tab) => {
                 self.overview_tab = OverviewTab::ProjectSettings;
@@ -1157,6 +1178,8 @@ impl App {
             || self.toaster.has_toast() != had_toast
             || overview::tick_dashboard_tile_rotation(self)
             || self.project_settings_tab_nav_state.selection_flash_active()
+            || self.overview_tab_nav_state.selection_flash_active()
+            || self.ui_settings_tab_nav_state.selection_flash_active()
     }
 
     pub(crate) fn sync_dashboard_overview_after_repo_change(&mut self) {
@@ -2541,6 +2564,7 @@ impl App {
     pub(crate) fn toggle_tab_hints(&mut self) -> Result<()> {
         self.config.ui.show_tab_hints = !self.config.ui.show_tab_hints;
         self.config_store.save(&self.config)?;
+        crate::app::ui_settings::sync_ui_settings_tab_nav(self);
         self.status = StatusMessage::success(if self.config.ui.show_tab_hints {
             "Tab hints enabled."
         } else {
@@ -2568,6 +2592,7 @@ impl App {
         self.footer_manual_override = true;
         self.config.ui.hide_footer = !self.config.ui.hide_footer;
         self.config_store.save(&self.config)?;
+        crate::app::ui_settings::sync_ui_settings_tab_nav(self);
         self.status = StatusMessage::success(if self.config.ui.hide_footer {
             "Footer hidden. Press H to show it again."
         } else {
