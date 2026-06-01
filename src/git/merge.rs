@@ -767,6 +767,10 @@ fn merge_pull_request(
     }
     cleanup_merge_workspaces_for_pr(repo_root, refreshed.number)?;
 
+    if let Err(error) = crate::workflow::cli_sync::run_mirror_sync_after_comfygit_merge(repo_root) {
+        eprintln!("Warning: mirror sync after merge failed: {error:#}. Run `cg sync` to retry.");
+    }
+
     Ok(())
 }
 
