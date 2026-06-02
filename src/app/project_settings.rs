@@ -645,7 +645,7 @@ pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
     app.project_settings_tab = app
         .project_settings_tab
         .step(delta, &project, release_now_enabled);
-    app.flash_project_settings_tab_selection();
+    crate::app::ui_settings::flash_project_settings_tab_strip(app);
     app.project_settings_state.scroll = 0;
     app.project_settings_state.follow_focus = true;
     sync_project_settings_state(app);
@@ -1081,14 +1081,9 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
-    let default_strip = project_settings_tab_strip(
-        &project,
-        project.release_now_for_scope(scope_index).enabled,
-    );
-    let strip = merge_project_settings_tab_order(
-        &default_strip,
-        &app.project_settings_tab_order,
-    );
+    let default_strip =
+        project_settings_tab_strip(&project, project.release_now_for_scope(scope_index).enabled);
+    let strip = merge_project_settings_tab_order(&default_strip, &app.project_settings_tab_order);
     let labels: Vec<&str> = strip
         .iter()
         .map(|tab| project_settings_tab_label(*tab))
@@ -1102,7 +1097,12 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
     app.project_settings_tab_strip_area = Some(area);
     let nav = project_settings_tab_nav(&labels, active_index, &tab_pins, &app.config.ui);
     let tab_rects = nav.tab_rects(area);
-    StatefulWidget::render(nav, area, frame.buffer_mut(), &mut app.project_settings_tab_nav_state);
+    StatefulWidget::render(
+        nav,
+        area,
+        frame.buffer_mut(),
+        &mut app.project_settings_tab_nav_state,
+    );
 
     for (idx, tab) in strip.iter().enumerate() {
         if let Some(rect) = tab_rects.get(idx) {

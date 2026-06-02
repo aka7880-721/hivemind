@@ -890,12 +890,18 @@ pub(crate) fn ui_settings_footer_line() -> Line<'static> {
     let mut spans = main_screens_shortcut_spans();
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("[", "]"));
-    spans.push(Span::styled(" Tabs", Style::default().fg(SHORTCUT_HINT_COLOR)));
+    spans.push(Span::styled(
+        " Tabs",
+        Style::default().fg(SHORTCUT_HINT_COLOR),
+    ));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("Space", " Toggle"));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("←", "→"));
-    spans.push(Span::styled(" Cycle", Style::default().fg(SHORTCUT_HINT_COLOR)));
+    spans.push(Span::styled(
+        " Cycle",
+        Style::default().fg(SHORTCUT_HINT_COLOR),
+    ));
     spans.push(Span::raw(" | "));
     spans.extend(shortcut_key_label("D", " Dashboard"));
     spans.push(Span::raw(" | "));

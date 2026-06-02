@@ -16,9 +16,7 @@ use ratatui::{
 };
 use tui_checkbox::Checkbox;
 
-use super::{
-    App, DashboardPane, FORM_LABEL_WIDTH, HitAction, HitTarget, Screen, StatusMessage,
-};
+use super::{App, DashboardPane, FORM_LABEL_WIDTH, HitAction, HitTarget, Screen, StatusMessage};
 use crate::{
     config::{cycle_tab_selection_flash_color, tab_selection_flash_color_label},
     tui::{apply_tab_selection_flash, comfy_tab_nav, sync_tab_nav_flash_state},
@@ -167,10 +165,7 @@ pub(crate) fn render_ui_settings(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_ui_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
-    let labels: Vec<&str> = UiSettingsTab::ALL
-        .iter()
-        .map(|tab| tab.label())
-        .collect();
+    let labels: Vec<&str> = UiSettingsTab::ALL.iter().map(|tab| tab.label()).collect();
     let active_index = UiSettingsTab::ALL
         .iter()
         .position(|tab| *tab == app.ui_settings_state.tab)
@@ -189,10 +184,8 @@ fn render_ui_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
 
     for (idx, tab) in UiSettingsTab::ALL.iter().enumerate() {
         if let Some(rect) = tab_rects.get(idx) {
-            app.hit_targets.push(HitTarget::new(
-                *rect,
-                HitAction::SelectUiSettingsTab(*tab),
-            ));
+            app.hit_targets
+                .push(HitTarget::new(*rect, HitAction::SelectUiSettingsTab(*tab)));
         }
     }
 }
@@ -223,17 +216,17 @@ fn render_ui_settings_rows(app: &mut App, frame: &mut Frame, area: Rect, rows: &
     };
     app.ui_settings_state.viewport_height = content_area.height;
     let total_height = rows.iter().map(|row| row.height()).sum();
-    if app.ui_settings_state.follow_focus {
-        if let Some((top, height)) = focused_row_bounds(rows, app.ui_settings_state.focus) {
-            let viewport_top = app.ui_settings_state.scroll;
-            let viewport_bottom = viewport_top.saturating_add(content_area.height);
-            if top < viewport_top {
-                app.ui_settings_state.scroll = top;
-            } else if top.saturating_add(height) > viewport_bottom {
-                app.ui_settings_state.scroll = top
-                    .saturating_add(height)
-                    .saturating_sub(content_area.height);
-            }
+    if app.ui_settings_state.follow_focus
+        && let Some((top, height)) = focused_row_bounds(rows, app.ui_settings_state.focus)
+    {
+        let viewport_top = app.ui_settings_state.scroll;
+        let viewport_bottom = viewport_top.saturating_add(content_area.height);
+        if top < viewport_top {
+            app.ui_settings_state.scroll = top;
+        } else if top.saturating_add(height) > viewport_bottom {
+            app.ui_settings_state.scroll = top
+                .saturating_add(height)
+                .saturating_sub(content_area.height);
         }
     }
     app.ui_settings_state
@@ -393,8 +386,10 @@ fn render_checkbox_row(
             Style::default().fg(Color::White)
         });
     frame.render_widget(checkbox, inset);
-    app.hit_targets
-        .push(HitTarget::new(inset, HitAction::SelectUiSettingsField(field)));
+    app.hit_targets.push(HitTarget::new(
+        inset,
+        HitAction::SelectUiSettingsField(field),
+    ));
 }
 
 fn render_cycle_row(
@@ -417,9 +412,7 @@ fn render_cycle_row(
     };
     let value = match field {
         UiSettingsFocus::FooterContent => app.config.ui.footer_content.display_name().to_string(),
-        UiSettingsFocus::TabSelectionFlashColor => {
-            app.config.ui.tab_selection_flash_color_label()
-        }
+        UiSettingsFocus::TabSelectionFlashColor => app.config.ui.tab_selection_flash_color_label(),
         _ => String::new(),
     };
     frame.render_widget(
@@ -436,15 +429,19 @@ fn render_cycle_row(
             ..row[1]
         },
     );
-    app.hit_targets
-        .push(HitTarget::new(inset, HitAction::SelectUiSettingsField(field)));
+    app.hit_targets.push(HitTarget::new(
+        inset,
+        HitAction::SelectUiSettingsField(field),
+    ));
 }
 
 pub(crate) fn step_ui_settings_tab(app: &mut App, delta: isize) {
     app.ui_settings_state.tab = app.ui_settings_state.tab.step(delta);
     app.ui_settings_state.scroll = 0;
     app.ui_settings_state.follow_focus = true;
-    let fields = app.ui_settings_state.visible_fields(app.ui_settings_state.tab);
+    let fields = app
+        .ui_settings_state
+        .visible_fields(app.ui_settings_state.tab);
     if let Some(first) = fields.first() {
         app.ui_settings_state.focus = *first;
     }
@@ -544,11 +541,6 @@ pub(crate) fn try_handle_ui_settings_key(app: &mut App, key: KeyEvent) -> Result
     Ok(false)
 }
 
-pub(crate) fn set_ui_settings_focus(app: &mut App, focus: UiSettingsFocus) {
-    app.ui_settings_state.focus = focus;
-    app.ui_settings_state.follow_focus = true;
-}
-
 pub(crate) fn activate_ui_settings_field(app: &mut App, focus: UiSettingsFocus) -> Result<()> {
     app.ui_settings_state.focus = focus;
     app.ui_settings_state.follow_focus = true;
@@ -561,8 +553,7 @@ fn toggle_focused_ui_settings_control(app: &mut App, delta: i32) -> Result<()> {
         UiSettingsFocus::HideFooter => app.toggle_footer()?,
         UiSettingsFocus::FooterContent => app.cycle_footer_content(delta)?,
         UiSettingsFocus::TabSelectionFlashEnabled => {
-            app.config.ui.tab_selection_flash_enabled =
-                !app.config.ui.tab_selection_flash_enabled;
+            app.config.ui.tab_selection_flash_enabled = !app.config.ui.tab_selection_flash_enabled;
             app.config_store.save(&app.config)?;
             sync_ui_settings_tab_nav(app);
             app.status = StatusMessage::success(if app.config.ui.tab_selection_flash_enabled {
@@ -572,10 +563,8 @@ fn toggle_focused_ui_settings_control(app: &mut App, delta: i32) -> Result<()> {
             });
         }
         UiSettingsFocus::TabSelectionFlashColor => {
-            app.config.ui.tab_selection_flash_color = cycle_tab_selection_flash_color(
-                app.config.ui.tab_selection_flash_color,
-                delta,
-            );
+            app.config.ui.tab_selection_flash_color =
+                cycle_tab_selection_flash_color(app.config.ui.tab_selection_flash_color, delta);
             app.config_store.save(&app.config)?;
             sync_ui_settings_tab_nav(app);
             app.status = StatusMessage::success(format!(
@@ -588,6 +577,18 @@ fn toggle_focused_ui_settings_control(app: &mut App, delta: i32) -> Result<()> {
 }
 
 pub(crate) fn flash_overview_tab_selection(app: &mut App, include_recent_changes: bool) {
+    if !app.config.ui.tab_selection_flash_enabled {
+        return;
+    }
+    sync_tab_nav_flash_state(&mut app.overview_tab_nav_state, &app.config.ui);
     let index = crate::tui::overview_tab_index(app.overview_tab, include_recent_changes);
     app.overview_tab_nav_state.flash_selection(index);
+}
+
+pub(crate) fn flash_project_settings_tab_strip(app: &mut App) {
+    if !app.config.ui.tab_selection_flash_enabled {
+        return;
+    }
+    sync_tab_nav_flash_state(&mut app.project_settings_tab_nav_state, &app.config.ui);
+    app.flash_project_settings_tab_selection();
 }
