@@ -13,6 +13,8 @@ use crate::workflow::dialogs::TextInput;
 
 impl App {
     pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) {
+        self.update_mouse_position(&mouse);
+
         if self.snif_dialog.is_some() {
             return;
         }
@@ -293,6 +295,18 @@ impl App {
                         }
                     }
                     self.paste_from_clipboard();
+                    return;
+                }
+                MouseEventKind::ScrollUp => {
+                    if let Some(dialog) = &mut self.top_picks_editor_dialog {
+                        scroll_textarea_by_lines(&mut dialog.editor, -3);
+                    }
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(dialog) = &mut self.top_picks_editor_dialog {
+                        scroll_textarea_by_lines(&mut dialog.editor, 3);
+                    }
                     return;
                 }
                 _ => return,
@@ -581,12 +595,22 @@ impl App {
             && self.tag_annotation_dialog.is_none()
         {
             match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    self.scroll_recent_changes(-2);
-                    return;
-                }
-                MouseEventKind::ScrollDown => {
-                    self.scroll_recent_changes(2);
+                MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight => {
+                    if self.try_handle_tab_wheel(&mouse) {
+                        return;
+                    }
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollLeft => {
+                            self.scroll_recent_changes(-2);
+                        }
+                        MouseEventKind::ScrollDown | MouseEventKind::ScrollRight => {
+                            self.scroll_recent_changes(2);
+                        }
+                        _ => {}
+                    }
                     return;
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -704,61 +728,71 @@ impl App {
         }
 
         match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                if self.project_edit_dialog.is_some() {
-                    self.scroll_project_edit_body(-1);
-                } else if self.changelog_preview_dialog.is_some() {
-                    self.scroll_changelog_preview(-2);
-                } else if self.overview_bump_workflow_dialog.is_some() || self.tag_dialog.is_some()
-                {
-                } else if self.recent_changes_dialog.is_some() {
-                    self.scroll_recent_changes(-2);
-                } else if self.bump_dialog.is_some() {
-                    self.rotate_bump_action(-1);
-                } else if self.screen == Screen::Wizard {
-                    self.scroll_wizard_body(-1);
-                } else if self.screen == Screen::Dashboard
-                    && self.overview_tab == OverviewTab::ProjectSettings
-                {
-                    self.scroll_project_settings(-1);
-                } else if self.screen == Screen::Dashboard
-                    && self.overview_tab == OverviewTab::Overview
-                {
-                    if self
-                        .overview_recent_viewport
-                        .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
-                        .unwrap_or(false)
+            MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => {
+                if self.try_handle_tab_wheel(&mouse) {
+                    return;
+                }
+                let scroll_up = matches!(
+                    mouse.kind,
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollLeft
+                );
+                if scroll_up {
+                    if self.project_edit_dialog.is_some() {
+                        self.scroll_project_edit_body(-1);
+                    } else if self.changelog_preview_dialog.is_some() {
+                        self.scroll_changelog_preview(-2);
+                    } else if self.overview_bump_workflow_dialog.is_some()
+                        || self.tag_dialog.is_some()
                     {
-                        if let Some(dialog) = &mut self.overview_recent_changes {
+                    } else if self.recent_changes_dialog.is_some() {
+                        self.scroll_recent_changes(-2);
+                    } else if self.bump_dialog.is_some() {
+                        self.rotate_bump_action(-1);
+                    } else if self.screen == Screen::Wizard {
+                        self.scroll_wizard_body(-1);
+                    } else if self.screen == Screen::Dashboard
+                        && self.overview_tab == OverviewTab::ProjectSettings
+                    {
+                        self.scroll_project_settings(-1);
+                    } else if self.screen == Screen::Dashboard
+                        && self.overview_tab == OverviewTab::Overview
+                    {
+                        if self
+                            .overview_recent_viewport
+                            .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
+                            .unwrap_or(false)
+                        {
+                            if let Some(dialog) = &mut self.overview_recent_changes {
+                                dialog.scroll_by(-2);
+                            } else {
+                                self.move_project_selection(-1);
+                            }
+                        } else if self
+                            .overview_tile_viewport
+                            .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
+                            .unwrap_or(false)
+                        {
+                            if let Err(error) = self.scroll_dashboard_tiles(-1) {
+                                self.status = StatusMessage::error(error.to_string());
+                            }
+                        } else if let Some(dialog) = &mut self.overview_recent_changes {
                             dialog.scroll_by(-2);
                         } else {
                             self.move_project_selection(-1);
                         }
-                    } else if self
-                        .overview_tile_viewport
-                        .map(|viewport| rect_contains(viewport, mouse.column, mouse.row))
-                        .unwrap_or(false)
+                    } else if self.screen == Screen::Dashboard
+                        && self.overview_tab == OverviewTab::RecentChanges
                     {
-                        if let Err(error) = self.scroll_dashboard_tiles(-1) {
-                            self.status = StatusMessage::error(error.to_string());
+                        if let Some(dialog) = &mut self.overview_recent_changes {
+                            dialog.scroll_by(-2);
                         }
-                    } else if let Some(dialog) = &mut self.overview_recent_changes {
-                        dialog.scroll_by(-2);
-                    } else {
+                    } else if self.screen == Screen::Dashboard {
                         self.move_project_selection(-1);
                     }
-                } else if self.screen == Screen::Dashboard
-                    && self.overview_tab == OverviewTab::RecentChanges
-                {
-                    if let Some(dialog) = &mut self.overview_recent_changes {
-                        dialog.scroll_by(-2);
-                    }
-                } else if self.screen == Screen::Dashboard {
-                    self.move_project_selection(-1);
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if self.project_edit_dialog.is_some() {
+                } else if self.project_edit_dialog.is_some() {
                     self.scroll_project_edit_body(1);
                 } else if self.changelog_preview_dialog.is_some() {
                     self.scroll_changelog_preview(2);
@@ -811,6 +845,29 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::ProjectSettings
+                    && self.try_start_project_settings_tab_drag(&mouse)
+                {
+                    return;
+                }
+
+                // Move dashboard focus on any click inside the pane bodies.
+                // (Previously, Projects/Overview focus only changed when clicking specific elements.)
+                if self.screen == Screen::Dashboard {
+                    let in_rect = |rect: ratatui::layout::Rect| {
+                        mouse.column >= rect.x
+                            && mouse.column < rect.x + rect.width
+                            && mouse.row >= rect.y
+                            && mouse.row < rect.y + rect.height
+                    };
+                    if in_rect(self.projects_pane_rect) {
+                        self.dashboard_focus = DashboardPane::Projects;
+                    } else if in_rect(self.overview_pane_rect) {
+                        self.dashboard_focus = DashboardPane::Overview;
+                    }
+                }
+
                 if self.overview_bump_workflow_dialog.is_none()
                     && self.screen == Screen::Dashboard
                     && self.overview_tab == OverviewTab::Overview
@@ -988,6 +1045,13 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::ProjectSettings
+                {
+                    self.update_project_settings_tab_drag(&mouse);
+                    return;
+                }
+
                 if let Some(from_scope) = self.overview_drag_scope {
                     let target_scope =
                         self.overview_tile_rects
@@ -1035,6 +1099,11 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.screen == Screen::Dashboard
+                    && self.overview_tab == OverviewTab::ProjectSettings
+                {
+                    self.finish_project_settings_tab_drag(&mouse);
+                }
                 self.overview_drag_scope = None;
                 self.drag_project = None;
             }

@@ -77,6 +77,17 @@ pub(crate) const PRIORITY_PLAIN_CATEGORY: u16 = 500;
 #[allow(dead_code)]
 pub(crate) const PRIORITY_QUICK_DOWNLOADS_BOTTOM: u16 = 100;
 
+/// Leading spaces before `-` that mark a nested bullet in editor / `.tp_edits.md` text.
+pub(crate) const TOP_PICK_NESTED_INDENT_SPACES: usize = 2;
+
+fn top_pick_nested_indent(level: usize) -> String {
+    " ".repeat(level * TOP_PICK_NESTED_INDENT_SPACES)
+}
+
+fn top_pick_indent_level(leading_spaces: usize) -> usize {
+    leading_spaces / TOP_PICK_NESTED_INDENT_SPACES
+}
+
 /// Extract Top Picks from parsed commits
 pub(crate) fn extract_top_picks(commits: &[&ParsedCommit]) -> Vec<TopPick> {
     // Collect all top picks (both headers with * and bullets-only with **)
@@ -386,10 +397,8 @@ fn render_bullets_hierarchical(lines: &mut Vec<String>, bullets: &[TopPickBullet
     while i < bullets.len() {
         let bullet = &bullets[i];
 
-        // Level 0 = ** (first bullet level) -> no indent (just "- ")
-        // Level 1 = *** (nested) -> 4 spaces indent ("    - ")
-        let indent = if bullet.level == 0 { "" } else { "    " };
-        lines.push(format!("{}- {}", indent, bullet.text));
+        let indent = top_pick_nested_indent(bullet.level);
+        lines.push(format!("{indent}- {}", bullet.text));
 
         i += 1;
     }
@@ -440,14 +449,14 @@ impl TopPicksEditorDialog {
     pub fn with_text(text: &str) -> Self {
         let editor_text = if text.trim().is_empty() {
             // Provide template for new users
-            "// Top Picks - highlight key features for this release\n\nINTRO:\nThis release focuses on:\n- key theme one\n- key theme two\n\n1. First key feature or improvement\n- What this does for users\n- Why it matters\n  - Technical detail if needed\n\n2. Second highlight\n- Bullet describing the benefit\n\n// Lines starting with // are ignored\n// INTRO: block is optional; use '1. Header' then '- Bullet' (indent with 4 spaces for nested)"
+            "// Top Picks - highlight key features for this release\n\nINTRO:\nThis release focuses on:\n- key theme one\n- key theme two\n\n1. First key feature or improvement\n- What this does for users\n- Why it matters\n  - Technical detail if needed\n\n2. Second highlight\n- Bullet describing the benefit\n\n// Lines starting with // are ignored\n// INTRO: block is optional; use '1. Header' then '- Bullet' (indent nested lines with 2+ spaces)"
                 .lines()
                 .collect::<Vec<_>>()
         } else {
             text.lines().collect::<Vec<_>>()
         };
         let mut editor = TuiTextArea::from(editor_text);
-        editor.set_placeholder_text("Define Top Picks using the format:\nINTRO:\nOptional intro line\n- Optional intro bullet\n\n1. Header text\n- Bullet point\n    - Nested bullet (4 spaces)\n\n2. Another header\n- Another bullet\n\n// Lines starting with // are ignored");
+        editor.set_placeholder_text("Define Top Picks using the format:\nINTRO:\nOptional intro line\n- Optional intro bullet\n\n1. Header text\n- Bullet point\n  - Nested bullet (2+ spaces)\n\n2. Another header\n- Another bullet\n\n// Lines starting with // are ignored");
         editor.set_tab_length(2);
         editor.set_max_histories(100);
         Self {
@@ -468,11 +477,7 @@ impl TopPicksEditorDialog {
             lines.push(format!("{}. {}", number, pick.header));
 
             for bullet in &pick.bullets {
-                let indent = if bullet.level == 0 {
-                    ""
-                } else {
-                    "    " // 4 spaces for nested
-                };
+                let indent = top_pick_nested_indent(bullet.level);
                 lines.push(format!("{}- {}", indent, bullet.text));
             }
 
@@ -574,8 +579,8 @@ impl TopPicksEditorDialog {
             return None;
         }
 
-        // Level 0 = no indent (4 or less spaces), Level 1 = more indent
-        let level = if leading_spaces >= 4 { 1 } else { 0 };
+        // Each 2 leading spaces is one nesting level (`-`, `  -`, `    -`, …).
+        let level = top_pick_indent_level(leading_spaces);
 
         Some(TopPickBullet { level, text })
     }
@@ -889,5 +894,85 @@ mod tests {
         assert_eq!(merged[0].header, "Manual only");
         let intro = intro.expect("intro");
         assert_eq!(intro.lines.len(), 1);
+    }
+
+    #[test]
+    fn parse_bullet_line_maps_indent_to_nesting_level() {
+        let two =
+            TopPicksEditorDialog::parse_bullet_line("  - nested two").expect("two-space nested");
+        assert_eq!(two.level, 1);
+        assert_eq!(two.text, "nested two");
+
+        let four = TopPicksEditorDialog::parse_bullet_line("    - nested four")
+            .expect("four-space nested");
+        assert_eq!(four.level, 2);
+
+        let top = TopPicksEditorDialog::parse_bullet_line("- top level").expect("top");
+        assert_eq!(top.level, 0);
+    }
+
+    #[test]
+    fn deep_nested_bullets_preserve_hierarchy_in_release_notes() {
+        let text = r#"1. Group
+- test
+  - test
+    - test
+      - test
+- test2
+    - test2
+        - test2
+            - test2"#;
+        let picks = TopPicksEditorDialog::text_to_picks(text);
+        assert_eq!(picks.len(), 1);
+        assert_eq!(
+            picks[0].bullets.iter().map(|b| b.level).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 0, 2, 4, 6]
+        );
+
+        let lines = render_top_picks_section(&picks, None);
+        assert!(lines.iter().any(|line| line == "- test"));
+        assert!(lines.iter().any(|line| line == "  - test"));
+        assert!(lines.iter().any(|line| line == "    - test"));
+        assert!(lines.iter().any(|line| line == "      - test"));
+        assert!(lines.iter().any(|line| line == "- test2"));
+        assert!(lines.iter().any(|line| line == "    - test2"));
+        assert!(lines.iter().any(|line| line == "        - test2"));
+        assert!(lines.iter().any(|line| line == "            - test2"));
+    }
+
+    #[test]
+    fn text_to_picks_round_trip_nested_two_space_indent() {
+        let text = "1. Feature\n- parent\n  - child";
+        let picks = TopPicksEditorDialog::text_to_picks(text);
+        assert_eq!(picks.len(), 1);
+        assert_eq!(picks[0].bullets.len(), 2);
+        assert_eq!(picks[0].bullets[0].level, 0);
+        assert_eq!(picks[0].bullets[1].level, 1);
+
+        let rendered = TopPicksEditorDialog::picks_to_text(&picks);
+        assert!(rendered.contains("- parent"));
+        assert!(rendered.contains("  - child"));
+    }
+
+    #[test]
+    fn render_nested_bullets_with_two_space_indent() {
+        let picks = vec![TopPick {
+            priority: Some(1),
+            header: "Header".to_string(),
+            bullets: vec![
+                TopPickBullet {
+                    level: 0,
+                    text: "parent".to_string(),
+                },
+                TopPickBullet {
+                    level: 1,
+                    text: "child".to_string(),
+                },
+            ],
+            commit_hash: String::new(),
+            is_reference: false,
+        }];
+        let lines = render_top_picks_section(&picks, None);
+        assert!(lines.iter().any(|line| line == "  - child"));
     }
 }

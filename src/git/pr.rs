@@ -14,8 +14,9 @@ use crate::{
     forge::ForgeKind,
     git::{
         GitCancellation, current_branch_with_cancel, ensure_clean_worktree_with_cancel,
-        ensure_local_branch_published_and_in_sync_with_cancel, is_mainline_branch_name,
-        resolve_main_branch_name, run_git_checked_with_cancel, split_output_lines,
+        ensure_local_branch_published_and_in_sync_with_cancel, is_comfygit_dev_source_branch,
+        is_mainline_branch_name, resolve_main_branch_name, run_git_checked_with_cancel,
+        split_output_lines,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -88,7 +89,7 @@ pub(crate) fn run_pr_and_capture(
         "cg pr",
         cancel.clone(),
     )?;
-    let target_upstream_ref = ensure_local_branch_published_and_in_sync_with_cancel(
+    ensure_local_branch_published_and_in_sync_with_cancel(
         repo_root,
         &target_branch,
         "target branch",
@@ -96,7 +97,6 @@ pub(crate) fn run_pr_and_capture(
         cancel.clone(),
     )?;
     let current_pr_branch = pull_request_branch_name_from_upstream_ref(&current_upstream_ref)?;
-    let target_pr_branch = pull_request_branch_name_from_upstream_ref(&target_upstream_ref)?;
 
     let title = format!("{} (via ComfyGit)", current_branch);
     let body = build_pr_body(repo_root, &target_branch, &current_branch, cancel.clone())?;
@@ -164,6 +164,16 @@ pub(crate) fn run_pr_and_capture(
             DevToMainChoice::Cancel => bail!("cancelled by user"),
         }
     }
+
+    let target_upstream_ref = ensure_local_branch_published_and_in_sync_with_cancel(
+        repo_root,
+        &target_branch,
+        "target branch",
+        "cg pr",
+        cancel.clone(),
+    )?;
+    let target_pr_branch = pull_request_branch_name_from_upstream_ref(&target_upstream_ref)?;
+
     let body_path = write_temp_changelog_markdown(repo_root, &body)?;
     let create_output = forge.create_pull_request(
         repo_root,
@@ -228,7 +238,8 @@ fn is_dev_to_main_scenario(
     target_branch: &str,
     custom_main_branch: Option<&str>,
 ) -> bool {
-    current_branch.ends_with("-dev") && is_mainline_branch_name(target_branch, custom_main_branch)
+    is_comfygit_dev_source_branch(current_branch)
+        && is_mainline_branch_name(target_branch, custom_main_branch)
 }
 
 fn preview_pr(
@@ -1593,6 +1604,12 @@ mod tests {
         assert!(is_dev_to_main_scenario("feature-dev", "main", None));
         assert!(is_dev_to_main_scenario("my-branch-dev", "master", None));
         assert!(is_dev_to_main_scenario("some-dev", "trunk", Some("trunk")));
+        assert!(is_dev_to_main_scenario(
+            "v0.35.4-dev--bugfix-foo",
+            "main",
+            None
+        ));
+        assert!(is_dev_to_main_scenario("v1.2.3-dev", "master", None));
         assert!(!is_dev_to_main_scenario(
             "feature-dev",
             "release/1.0.x",

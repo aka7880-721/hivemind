@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::{
-    App, BROWSE_BUTTON_WIDTH, FORM_LABEL_WIDTH, HitAction, HitTarget,
+    App, BROWSE_BUTTON_WIDTH, FORM_LABEL_WIDTH, HitAction, HitTarget, normalize_path_for_repo_root,
     project_settings::{ProjectSettingsFocus, ProjectSettingsRow, ProjectSettingsState},
     visible_field_width,
 };
@@ -40,16 +40,27 @@ pub(crate) fn sync_alias_state_from_project(
     project: &ProjectConfig,
     scope_index: usize,
 ) {
+    let repo_root = project
+        .repo_config_for_scope(scope_index)
+        .map(|repo| repo.local_root.clone())
+        .unwrap_or_default();
     let settings = project.advanced_alias_for_scope(scope_index);
     state.advanced_alias_enabled = settings.enabled;
-    state.alias_dist_path.set_value(settings.dist_path.clone());
-    state.alias_ui_path.set_value(settings.ui_path.clone());
+    state
+        .alias_dist_path
+        .set_value(normalize_path_for_repo_root(
+            &settings.dist_path,
+            &repo_root,
+        ));
+    state
+        .alias_ui_path
+        .set_value(normalize_path_for_repo_root(&settings.ui_path, &repo_root));
     state.alias_custom = settings
         .custom
         .iter()
         .map(|entry| AliasCustomEntryState {
             name: entry.name.clone(),
-            path: TextInput::with_value(entry.path.clone()),
+            path: TextInput::with_value(normalize_path_for_repo_root(&entry.path, &repo_root)),
         })
         .collect();
     state.alias_custom_draft_active = false;
@@ -61,16 +72,20 @@ pub(crate) fn persist_alias_state_to_project(
     scope_index: usize,
     state: &ProjectSettingsState,
 ) {
+    let repo_root = project
+        .repo_config_for_scope(scope_index)
+        .map(|repo| repo.local_root.clone())
+        .unwrap_or_default();
     let settings = project.advanced_alias_for_scope_mut(scope_index);
     settings.enabled = state.advanced_alias_enabled;
-    settings.dist_path = state.alias_dist_path.value().trim().to_string();
-    settings.ui_path = state.alias_ui_path.value().trim().to_string();
+    settings.dist_path = normalize_alias_path(state.alias_dist_path.value(), &repo_root);
+    settings.ui_path = normalize_alias_path(state.alias_ui_path.value(), &repo_root);
     settings.custom = state
         .alias_custom
         .iter()
         .map(|entry| CustomAliasEntry {
             name: entry.name.clone(),
-            path: entry.path.value().trim().to_string(),
+            path: normalize_alias_path(entry.path.value(), &repo_root),
         })
         .collect();
 }
@@ -215,7 +230,7 @@ fn render_alias_custom_row(
     };
     let value = entry
         .path
-        .display_line_with_width(path_focused, visible_field_width(row[1].width, true));
+        .display_line_with_width(path_focused, visible_field_width(row[1].width, false));
     frame.render_widget(Paragraph::new(value).block(block), field_area);
 
     let browse_area = center_vertically(row[3], area.height.min(3));
@@ -309,7 +324,7 @@ fn render_alias_custom_draft_row(
     let value = app
         .project_settings_state
         .alias_custom_draft_name
-        .display_line_with_width(name_focused, visible_field_width(row[1].width, true));
+        .display_line_with_width(name_focused, visible_field_width(row[1].width, false));
     frame.render_widget(Paragraph::new(value).block(block), field_area);
 
     let confirm_area = center_vertically(row[3], area.height.min(3));
@@ -441,6 +456,28 @@ pub(crate) fn set_alias_path_from_browse(
         }
         _ => {}
     }
+}
+
+fn normalize_alias_path(value: &str, repo_root: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let normalized = trimmed.replace('\\', "/");
+
+    // If we don't know repo root, treat leading `/` as "relative input".
+    if repo_root.trim().is_empty() {
+        return normalized.trim_start_matches(['/', '\\']).to_string();
+    }
+
+    // First try to strip repo_root prefix (absolute pasted paths).
+    let converted = normalize_path_for_repo_root(&normalized, repo_root);
+    if converted == normalized && (normalized.starts_with('/') || normalized.starts_with('\\')) {
+        // Not under repo_root: interpret as repo-root-relative input.
+        let stripped = normalized.trim_start_matches(['/', '\\']).to_string();
+        return normalize_path_for_repo_root(&stripped, repo_root);
+    }
+    converted
 }
 
 fn control_inset(area: Rect) -> Rect {

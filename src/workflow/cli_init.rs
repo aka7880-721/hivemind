@@ -865,8 +865,11 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
         ("CMakeLists.txt", TargetFormat::CMake, "project"),
         ("meson.build", TargetFormat::Meson, "project"),
         ("Makefile", TargetFormat::Makefile, "VERSION"),
+        ("GNUmakefile", TargetFormat::Makefile, "VERSION"),
         ("build.gradle", TargetFormat::Gradle, "version"),
         ("build.gradle.kts", TargetFormat::Gradle, "version"),
+        ("settings.gradle", TargetFormat::Gradle, "version"),
+        ("settings.gradle.kts", TargetFormat::Gradle, "version"),
         ("project.clj", TargetFormat::Clojure, "defproject"),
         ("Package.swift", TargetFormat::SwiftPackage, "version"),
         ("mix.exs", TargetFormat::ElixirMix, "version"),
@@ -943,6 +946,7 @@ fn detect_manifests(cwd: &Path) -> Result<Vec<DetectedManifest>> {
     }
 
     detect_nested_manifests(cwd, &mut manifests)?;
+    detect_embedded_source_version_manifests(cwd, &mut manifests)?;
 
     manifests.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(manifests)
@@ -959,7 +963,98 @@ const NESTED_MANIFEST_CANDIDATES: &[(&str, TargetFormat, &str)] = &[
     ("pubspec.yaml", TargetFormat::Yaml, "version"),
     ("build.gradle", TargetFormat::Gradle, "version"),
     ("build.gradle.kts", TargetFormat::Gradle, "version"),
+    ("settings.gradle", TargetFormat::Gradle, "version"),
+    ("settings.gradle.kts", TargetFormat::Gradle, "version"),
 ];
+
+const EMBEDDED_SOURCE_VERSION_CANDIDATES: &[(&str, TargetFormat, &str)] = &[
+    ("__init__.py", TargetFormat::PythonVersion, "__version__"),
+    ("version.py", TargetFormat::PythonVersion, "__version__"),
+    ("_version.py", TargetFormat::PythonVersion, "__version__"),
+    ("version.h", TargetFormat::CDefine, "VERSION"),
+];
+
+fn detect_embedded_source_version_manifests(
+    cwd: &Path,
+    manifests: &mut Vec<DetectedManifest>,
+) -> Result<()> {
+    for (file_name, format, default_key) in EMBEDDED_SOURCE_VERSION_CANDIDATES {
+        try_push_embedded_source_manifest(cwd, file_name, *format, default_key, manifests)?;
+    }
+
+    let src_dir = cwd.join("src");
+    if src_dir.is_dir() {
+        for entry in fs::read_dir(&src_dir)
+            .with_context(|| format!("failed to read {}", src_dir.display()))?
+        {
+            let entry = entry.context("failed to read src directory entry")?;
+            if !entry
+                .file_type()
+                .context("failed to read file type")?
+                .is_dir()
+            {
+                continue;
+            }
+            let package_name = entry.file_name();
+            let Some(package_name) = package_name.to_str() else {
+                continue;
+            };
+            let relative_path = format!("src/{package_name}/__init__.py");
+            try_push_embedded_source_manifest(
+                cwd,
+                &relative_path,
+                TargetFormat::PythonVersion,
+                "__version__",
+                manifests,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn try_push_embedded_source_manifest(
+    cwd: &Path,
+    relative_path: &str,
+    format: TargetFormat,
+    default_key: &str,
+    manifests: &mut Vec<DetectedManifest>,
+) -> Result<()> {
+    if manifests
+        .iter()
+        .any(|manifest| manifest.relative_path == relative_path)
+    {
+        return Ok(());
+    }
+
+    let path = cwd.join(relative_path);
+    if !path.is_file() {
+        return Ok(());
+    }
+
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let readable = match format {
+        TargetFormat::PythonVersion => {
+            crate::workflow::target_custom::extract_python_version_value(&content, default_key)
+                .is_ok()
+        }
+        TargetFormat::CDefine => {
+            crate::workflow::target_custom::extract_c_define_value(&content, default_key).is_ok()
+        }
+        _ => false,
+    };
+    if !readable {
+        return Ok(());
+    }
+
+    manifests.push(DetectedManifest {
+        relative_path: relative_path.to_string(),
+        format,
+        default_key: default_key.to_string(),
+    });
+    Ok(())
+}
 
 /// Single-segment app folders (Electron, monorepo packages, etc.).
 const NESTED_APP_DIRS: &[&str] = &[
@@ -1767,6 +1862,56 @@ mod tests {
             manifests
                 .iter()
                 .any(|manifest| manifest.relative_path == "MODULE.bazel")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_manifests_finds_gradle_settings_and_gnu_makefile() {
+        let dir = std::env::temp_dir().join(format!(
+            "comfygit-init-gradle-settings-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::write(dir.join("settings.gradle"), "version = \"1.0.0\"\n").expect("write settings");
+        fs::write(dir.join("GNUmakefile"), "VERSION := 1.0.0\n").expect("write makefile");
+
+        let manifests = detect_manifests(&dir).expect("detect manifests");
+        assert!(
+            manifests
+                .iter()
+                .any(|manifest| manifest.relative_path == "settings.gradle")
+        );
+        assert!(
+            manifests
+                .iter()
+                .any(|manifest| manifest.relative_path == "GNUmakefile")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_manifests_finds_python_version_in_package_init() {
+        let dir = std::env::temp_dir().join(format!(
+            "comfygit-init-python-version-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src/demo")).expect("create package dir");
+        fs::write(
+            dir.join("src/demo/__init__.py"),
+            "__version__ = \"0.4.2\"\n",
+        )
+        .expect("write init");
+
+        let manifests = detect_manifests(&dir).expect("detect manifests");
+        assert!(
+            manifests
+                .iter()
+                .any(|manifest| manifest.relative_path == "src/demo/__init__.py")
         );
 
         let _ = fs::remove_dir_all(&dir);

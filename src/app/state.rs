@@ -102,6 +102,8 @@ pub(crate) struct RecentChangeClickTarget {
 #[derive(Clone)]
 pub(crate) enum HitAction {
     SelectOverviewTab(OverviewTab),
+    SelectUiSettingsTab(super::ui_settings::UiSettingsTab),
+    SelectUiSettingsField(super::ui_settings::UiSettingsFocus),
     SelectProjectSettingsTab(ProjectSettingsTab),
     SelectProjectSettingsField(ProjectSettingsFocus),
     SelectProject(usize),
@@ -150,9 +152,6 @@ pub(crate) enum HitAction {
     CloseReleaseNow,
     ConfirmDeleteRequest,
     CancelDeleteRequest,
-    ToggleTabHints,
-    ToggleFooter,
-    CycleFooterContent(i32),
     BrowseWizardTargetPath,
     BrowseWizardRepoRoot,
     BrowseProjectTargetPath,

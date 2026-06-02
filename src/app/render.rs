@@ -13,6 +13,11 @@ impl App {
         self.overview_tile_viewport = None;
         self.overview_recent_viewport = None;
         self.release_now_log_viewport = None;
+        self.overview_tab_strip_area = None;
+        self.project_settings_tab_strip_area = None;
+        self.ui_settings_tab_strip_area = None;
+        self.recent_changes_tab_strip_area = None;
+        self.sync_tab_selection_flash_config();
         self.overview_tile_rects.clear();
 
         self.update_footer_visibility(frame.area().height);
@@ -272,6 +277,8 @@ impl App {
                 Style::default()
             });
         let left_inner = left_block.inner(chunks[0]);
+        // Used by mouse handling to move focus based on clicks anywhere inside panes.
+        self.projects_pane_rect = chunks[0];
         frame.render_widget(left_block, chunks[0]);
         if self.config.projects.is_empty() {
             let onboarding = vec![
@@ -330,15 +337,19 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(8)])
             .split(chunks[1]);
+        self.overview_pane_rect = right_sections[1];
         self.overview_show_recent_tab = self.should_use_recent_changes_tab(right_sections[1]);
         if !self.overview_show_recent_tab && self.overview_tab == OverviewTab::RecentChanges {
             self.overview_tab = OverviewTab::Overview;
         }
+        self.overview_tab_strip_area = Some(right_sections[0]);
         render_overview_tabs(
             frame,
             right_sections[0],
             self.overview_tab,
             self.overview_show_recent_tab,
+            &self.config.ui,
+            &mut self.overview_tab_nav_state,
         );
         for (tab, rect) in overview_tab_rects(right_sections[0], self.overview_show_recent_tab) {
             self.hit_targets
@@ -1366,25 +1377,22 @@ impl App {
         } else {
             1
         };
-        let tabs = TabNav::new(&tab_labels, tab_index)
-            .highlight_style(Style::default().fg(Color::Cyan))
-            .border_style(Style::default().fg(Color::DarkGray))
-            .style(Style::default().fg(Color::White))
-            .indicator(None);
-        frame.render_widget(tabs, sections[1]);
-
-        let tab_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(22), Constraint::Length(14)])
-            .split(sections[1]);
-        self.hit_targets.push(HitTarget::new(
-            tab_layout[0],
-            HitAction::SelectRecentChangesTab(RecentChangesTab::Recent),
-        ));
-        self.hit_targets.push(HitTarget::new(
-            tab_layout[1],
-            HitAction::SelectRecentChangesTab(RecentChangesTab::History),
-        ));
+        let nav = crate::tui::comfy_tab_nav(&tab_labels, tab_index);
+        self.recent_changes_tab_strip_area = Some(sections[1]);
+        let tab_rects = nav.tab_rects(sections[1]);
+        frame.render_widget(nav, sections[1]);
+        if let Some(rect) = tab_rects.first() {
+            self.hit_targets.push(HitTarget::new(
+                *rect,
+                HitAction::SelectRecentChangesTab(RecentChangesTab::Recent),
+            ));
+        }
+        if let Some(rect) = tab_rects.get(1) {
+            self.hit_targets.push(HitTarget::new(
+                *rect,
+                HitAction::SelectRecentChangesTab(RecentChangesTab::History),
+            ));
+        }
 
         let body_block = Block::default().borders(Borders::ALL).title(" git log ");
         let body_inner = body_block.inner(sections[2]);
@@ -1748,90 +1756,11 @@ impl App {
     }
 
     fn render_ui_settings(&mut self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" UI Settings ");
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        super::ui_settings::render_ui_settings(self, frame, area);
+    }
 
-        let sections = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(8), Constraint::Length(BUTTON_ROW_HEIGHT)])
-            .split(inner);
-
-        let lines = vec![
-            Line::from("Adjust interface preferences for the current config.".bold()),
-            Line::raw(""),
-            Line::from(format!(
-                "Tab hints: {}",
-                if self.config.ui.show_tab_hints {
-                    "visible"
-                } else {
-                    "hidden"
-                }
-            )),
-            Line::from(format!(
-                "Footer: {}",
-                if self.config.ui.hide_footer {
-                    "hidden"
-                } else {
-                    "visible"
-                }
-            )),
-            Line::from(format!(
-                "Footer content: {}",
-                self.config.ui.footer_content.display_name()
-            )),
-            Line::raw(""),
-            Line::from("D or Esc returns to the dashboard."),
-            Line::from("T, Enter, or Space toggles the tab hints option (stored in config)."),
-            Line::from("C, Left, or Right changes footer content alignment."),
-            Line::from("H toggles footer visibility."),
-        ];
-        frame.render_widget(
-            Paragraph::new(lines).wrap(Wrap { trim: false }),
-            sections[0],
-        );
-
-        self.render_button_row(
-            frame,
-            sections[1],
-            &[
-                DialogButton::new(
-                    if self.config.ui.show_tab_hints {
-                        "Hide Tab Hints"
-                    } else {
-                        "Show Tab Hints"
-                    },
-                    true,
-                    HitAction::ToggleTabHints,
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(140, 220, 180)),
-                ),
-                DialogButton::new(
-                    format!(
-                        "Footer Content: < {} >",
-                        self.config.ui.footer_content.display_name()
-                    ),
-                    false,
-                    HitAction::CycleFooterContent(1),
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(180, 205, 255)),
-                ),
-                DialogButton::new(
-                    if self.config.ui.hide_footer {
-                        "Show Footer"
-                    } else {
-                        "Hide Footer"
-                    },
-                    false,
-                    HitAction::ToggleFooter,
-                    Style::default().fg(Color::Black).bg(Color::Yellow),
-                ),
-            ],
-        );
+    pub(crate) fn sync_tab_selection_flash_config(&mut self) {
+        super::ui_settings::sync_ui_settings_tab_nav(self);
     }
 
     fn render_progress_dialog(&mut self, frame: &mut Frame, area: Rect) {
@@ -3095,6 +3024,10 @@ impl App {
             Line::from("1-9 or Up/Down choose action | Enter run | Esc cancel")
         } else if self.overview_bump_warning_dialog.is_some() {
             Line::from("1-3 or Up/Down choose warning action | Enter confirm | Esc cancel")
+        } else if self.top_picks_editor_dialog.is_some() {
+            Line::from(
+                "Edit Top Picks | Mouse wheel or PgUp/PgDn scroll | Ctrl+S or F2 save | Esc close",
+            )
         } else {
             match self.screen {
                 Screen::Dashboard => self.dashboard_footer_line(),

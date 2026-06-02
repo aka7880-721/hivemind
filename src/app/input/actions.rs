@@ -41,13 +41,35 @@ impl App {
     pub(crate) fn handle_hit_action(&mut self, action: HitAction) -> Result<()> {
         match action {
             HitAction::SelectOverviewTab(tab) => {
-                self.overview_tab = tab;
+                if self.overview_tab != tab {
+                    self.overview_tab = tab;
+                    crate::app::ui_settings::flash_overview_tab_selection(
+                        self,
+                        self.overview_show_recent_tab,
+                    );
+                }
                 self.dashboard_focus = DashboardPane::Overview;
+            }
+            HitAction::SelectUiSettingsTab(tab) => {
+                if self.ui_settings_state.tab != tab {
+                    self.ui_settings_state.tab = tab;
+                    self.ui_settings_state.scroll = 0;
+                    self.ui_settings_state.follow_focus = true;
+                    let fields = self.ui_settings_state.visible_fields(tab);
+                    if let Some(first) = fields.first() {
+                        self.ui_settings_state.focus = *first;
+                    }
+                    crate::app::ui_settings::flash_ui_settings_tab_selection(self);
+                }
+            }
+            HitAction::SelectUiSettingsField(field) => {
+                return crate::app::ui_settings::activate_ui_settings_field(self, field);
             }
             HitAction::SelectProjectSettingsTab(tab) => {
                 self.overview_tab = OverviewTab::ProjectSettings;
                 self.project_settings_tab = tab;
                 self.dashboard_focus = DashboardPane::Overview;
+                self.flash_project_settings_tab_selection();
                 project_settings::sync_project_settings_state(self);
             }
             HitAction::SelectProjectSettingsField(field) => {
@@ -178,9 +200,6 @@ impl App {
             HitAction::CloseReleaseNow => self.close_release_now_dialog(),
             HitAction::ConfirmDeleteRequest => return self.confirm_delete_request(),
             HitAction::CancelDeleteRequest => self.cancel_delete_request(),
-            HitAction::ToggleTabHints => return self.toggle_tab_hints(),
-            HitAction::ToggleFooter => return self.toggle_footer(),
-            HitAction::CycleFooterContent(delta) => return self.cycle_footer_content(delta),
             HitAction::BrowseWizardTargetPath => {
                 return self.open_browser(BrowseTarget::WizardTargetPath);
             }
@@ -1140,9 +1159,17 @@ impl App {
         let _ = self.schedule_prefetch_overview_activity_cache();
     }
 
+    pub(crate) fn any_tab_selection_flash_active(&self) -> bool {
+        self.project_settings_tab_nav_state.selection_flash_active()
+            || self.overview_tab_nav_state.selection_flash_active()
+            || self.ui_settings_tab_nav_state.selection_flash_active()
+    }
+
     pub(crate) fn next_poll_timeout(&self) -> Duration {
         if self.background_jobs_inflight > 0 || self.toaster.has_toast() {
             ACTIVE_UI_TICK_INTERVAL
+        } else if self.any_tab_selection_flash_active() {
+            crate::app::TAB_SELECTION_FLASH_POLL_INTERVAL
         } else {
             IDLE_UI_POLL_INTERVAL
         }
@@ -1155,6 +1182,7 @@ impl App {
         had_toast
             || self.toaster.has_toast() != had_toast
             || overview::tick_dashboard_tile_rotation(self)
+            || self.any_tab_selection_flash_active()
     }
 
     pub(crate) fn sync_dashboard_overview_after_repo_change(&mut self) {
@@ -2539,6 +2567,7 @@ impl App {
     pub(crate) fn toggle_tab_hints(&mut self) -> Result<()> {
         self.config.ui.show_tab_hints = !self.config.ui.show_tab_hints;
         self.config_store.save(&self.config)?;
+        crate::app::ui_settings::sync_ui_settings_tab_nav(self);
         self.status = StatusMessage::success(if self.config.ui.show_tab_hints {
             "Tab hints enabled."
         } else {
@@ -2566,6 +2595,7 @@ impl App {
         self.footer_manual_override = true;
         self.config.ui.hide_footer = !self.config.ui.hide_footer;
         self.config_store.save(&self.config)?;
+        crate::app::ui_settings::sync_ui_settings_tab_nav(self);
         self.status = StatusMessage::success(if self.config.ui.hide_footer {
             "Footer hidden. Press H to show it again."
         } else {
@@ -2593,6 +2623,12 @@ impl App {
             DashboardPane::Projects => DashboardPane::Overview,
             DashboardPane::Overview => DashboardPane::Projects,
         };
+        if self.dashboard_focus == DashboardPane::Overview {
+            crate::app::ui_settings::flash_overview_tab_selection(
+                self,
+                self.overview_show_recent_tab,
+            );
+        }
     }
 
     pub(crate) fn scroll_dashboard_recent_changes(&mut self, delta: i16) -> bool {

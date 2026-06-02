@@ -6,3 +6,5 @@
 mod actions;
 mod keyboard;
 mod mouse;
+mod project_settings_tabs;
+mod tab_wheel;

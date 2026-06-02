@@ -17,7 +17,8 @@ use crate::{
     git::{
         GitCancellation, current_branch_with_cancel, default_push_remote_name,
         ensure_clean_worktree_with_cancel, ensure_local_branch_published_and_in_sync_with_cancel,
-        run_git_checked_owned_with_cancel, split_output_lines,
+        ensure_pull_request_mergeable, finish_after_pull_request_merge, run_git,
+        run_git_checked_owned_with_cancel, split_output_lines, switch_to_existing_branch,
     },
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -63,7 +64,7 @@ pub(crate) fn run_merge(
     )?;
 
     let selected = prompt_pull_request_selection(repo_root, forge, cancel.clone())?;
-    merge_pull_request(repo_root, forge, &selected)
+    merge_pull_request(repo_root, forge, &selected, cancel)
 }
 
 pub(crate) fn run_merge_for_pull_request(
@@ -86,9 +87,9 @@ pub(crate) fn run_merge_for_pull_request(
         cancel.clone(),
     )?;
 
-    let entries = fetch_open_pull_requests(repo_root, forge, cancel)?;
+    let entries = fetch_open_pull_requests(repo_root, forge, cancel.clone())?;
     let selected = select_pull_request_by_number(&entries, pr_number)?;
-    merge_pull_request(repo_root, forge, &selected)
+    merge_pull_request(repo_root, forge, &selected, cancel)
 }
 
 fn fetch_open_pull_requests(
@@ -117,7 +118,46 @@ fn fetch_open_pull_requests(
         bail!("no open {label}s are available for this repository")
     }
 
-    Ok(entries)
+    refresh_pull_request_entries(repo_root, forge, entries, cancel)
+}
+
+fn refresh_pull_request_entries(
+    repo_root: &str,
+    forge: ForgeKind,
+    entries: Vec<PullRequestEntry>,
+    cancel: Option<GitCancellation>,
+) -> Result<Vec<PullRequestEntry>> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            if cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
+                bail!("cancelled by user")
+            }
+            fetch_pull_request(repo_root, forge, entry.number)
+        })
+        .collect()
+}
+
+fn reload_pull_request_picker_entries(
+    repo_root: &str,
+    forge: ForgeKind,
+    entries: &[PullRequestEntry],
+    selected_number: u64,
+    cancel: Option<GitCancellation>,
+) -> Result<(Vec<PullRequestEntry>, usize)> {
+    let mut reloaded_entries =
+        refresh_pull_request_entries(repo_root, forge, entries.to_vec(), cancel)?;
+    reloaded_entries.sort_by(|left, right| {
+        right
+            .created_at_unix
+            .cmp(&left.created_at_unix)
+            .then_with(|| right.number.cmp(&left.number))
+    });
+    let selected = reloaded_entries
+        .iter()
+        .position(|entry| entry.number == selected_number)
+        .unwrap_or(0);
+    Ok((reloaded_entries, selected))
 }
 
 fn fetch_pull_request(
@@ -205,11 +245,13 @@ fn prompt_pull_request_selection(
             Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                 match key.code {
                     KeyCode::Esc => {
+                        dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
                         drop(raw_mode.take());
                         println!();
                         bail!("cancelled by user")
                     }
                     KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
                         drop(raw_mode.take());
                         println!();
                         bail!("cancelled by user")
@@ -227,22 +269,80 @@ fn prompt_pull_request_selection(
                         needs_render = true;
                     }
                     KeyCode::Char('r' | 'R') => {
+                        let selected_number = entries[selected].number;
                         let mut reload_note = None::<String>;
+
+                        match reload_pull_request_picker_entries(
+                            repo_root,
+                            forge,
+                            &entries,
+                            selected_number,
+                            cancel.clone(),
+                        ) {
+                            Ok((reloaded_entries, reloaded_selected)) => {
+                                entries = reloaded_entries;
+                                selected = reloaded_selected;
+                            }
+                            Err(error) => {
+                                message = Some(format!("Reload failed: {}", error));
+                                needs_render = true;
+                                continue;
+                            }
+                        }
+
+                        if entries[selected].is_mergeable() {
+                            dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
+                            message = Some(format!(
+                                "PR #{} is mergeable now. Press Enter to merge it.",
+                                entries[selected].number
+                            ));
+                            needs_render = true;
+                            continue;
+                        }
+
                         if let Some(prepared) = prepared_vscode_workspace.clone() {
-                            match finalize_prepared_vscode_merge_workspace(
-                                &prepared,
+                            if prepared.pr_number != entries[selected].number {
+                                dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
+                            } else {
+                                match finalize_prepared_vscode_merge_workspace(
+                                    &prepared,
+                                    cancel.clone(),
+                                ) {
+                                    Ok(PreparedWorkspaceReloadOutcome::ConflictsRemaining(
+                                        note,
+                                    )) => {
+                                        message = Some(note);
+                                        needs_render = true;
+                                        continue;
+                                    }
+                                    Ok(PreparedWorkspaceReloadOutcome::Pushed(note)) => {
+                                        prepared_vscode_workspace = None;
+                                        reload_note = Some(note);
+                                    }
+                                    Ok(PreparedWorkspaceReloadOutcome::ReadyToReload) => {
+                                        prepared_vscode_workspace = None;
+                                    }
+                                    Err(error) => {
+                                        message = Some(format!("Reload failed: {}", error));
+                                        needs_render = true;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+
+                        if reload_note.is_some() {
+                            match reload_pull_request_picker_entries(
+                                repo_root,
+                                forge,
+                                &entries,
+                                selected_number,
                                 cancel.clone(),
                             ) {
-                                Ok(PreparedWorkspaceReloadOutcome::ConflictsRemaining(note)) => {
-                                    message = Some(note);
-                                    needs_render = true;
-                                    continue;
+                                Ok((reloaded_entries, reloaded_selected)) => {
+                                    entries = reloaded_entries;
+                                    selected = reloaded_selected;
                                 }
-                                Ok(PreparedWorkspaceReloadOutcome::Pushed(note)) => {
-                                    prepared_vscode_workspace = None;
-                                    reload_note = Some(note);
-                                }
-                                Ok(PreparedWorkspaceReloadOutcome::ReadyToReload) => {}
                                 Err(error) => {
                                     message = Some(format!("Reload failed: {}", error));
                                     needs_render = true;
@@ -251,19 +351,18 @@ fn prompt_pull_request_selection(
                             }
                         }
 
-                        match fetch_open_pull_requests(repo_root, forge, cancel.clone()) {
-                            Ok(reloaded_entries) => {
-                                entries = reloaded_entries;
-                                prepared_vscode_workspace = None;
-                                selected = selected.min(entries.len().saturating_sub(1));
-                                message = Some(reload_note.unwrap_or_else(|| {
-                                    "Pull request status reloaded.".to_string()
-                                }));
-                            }
-                            Err(error) => {
-                                message = Some(format!("Reload failed: {}", error));
-                            }
+                        if entries[selected].is_mergeable()
+                            || prepared_vscode_workspace.as_ref().is_some_and(|prepared| {
+                                prepared.pr_number != entries[selected].number
+                            })
+                        {
+                            dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
                         }
+
+                        message = Some(
+                            reload_note
+                                .unwrap_or_else(|| "Pull request status reloaded.".to_string()),
+                        );
                         needs_render = true;
                     }
                     KeyCode::Char('v' | 'V') => {
@@ -325,6 +424,7 @@ fn prompt_pull_request_selection(
                             continue;
                         }
 
+                        dismiss_prepared_vscode_workspace(prepared_vscode_workspace.take());
                         drop(raw_mode.take());
                         println!();
                         return Ok(entry);
@@ -622,25 +722,25 @@ fn format_table_header(layout: &PullRequestTableLayout) -> String {
     )
 }
 
-fn merge_pull_request(repo_root: &str, forge: ForgeKind, entry: &PullRequestEntry) -> Result<()> {
+fn merge_pull_request(
+    repo_root: &str,
+    forge: ForgeKind,
+    entry: &PullRequestEntry,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
     let refreshed = fetch_pull_request(repo_root, forge, entry.number)?;
-    if !refreshed.is_mergeable() {
-        let mut message = format!(
-            "PR #{} is no longer mergeable (status: {}, mergeable: {}); refresh the list and resolve it before running cg merge",
-            refreshed.number, refreshed.status, refreshed.mergeable_state
-        );
-        if let Some(conflicts_url) = refreshed.issue_url.as_deref() {
-            message.push_str("\n\nTo see the issues, please visit:\n\n");
-            message.push_str(conflicts_url);
-            message.push_str(
-                "\n\nThen run cg merge, select this PR, and press V to open a disposable VS Code merge workspace. Press R there afterwards to refresh the status.\n",
-            );
-        }
-        bail!("{}", message)
-    }
+    ensure_pull_request_mergeable(repo_root, forge, refreshed.number)?;
 
+    let policy = resolve_post_merge_source_branch(repo_root);
     let subject = build_merge_commit_subject(refreshed.number);
-    let stdout = forge.merge_pull_request(repo_root, refreshed.number, &subject)?;
+    let stdout = forge.merge_pull_request(
+        repo_root,
+        refreshed.number,
+        &subject,
+        &refreshed.source_branch,
+        policy.delete_remote_on_merge(),
+        policy.delete_local_after_merge(),
+    )?;
     println!();
     if stdout.is_empty() {
         let label = forge.pull_request_label();
@@ -649,7 +749,97 @@ fn merge_pull_request(repo_root: &str, forge: ForgeKind, entry: &PullRequestEntr
         println!("{}", stdout);
     }
 
+    // Sync the integration branch before deleting the source locally: `git branch -d`
+    // requires the source to be merged into the current target, which is only true after
+    // we fast-forward the target from the remote merge.
+    finish_after_pull_request_merge(repo_root, &refreshed.target_branch, cancel.clone())?;
+
+    if policy.delete_local_after_merge() {
+        switch_off_branch_for_deletion(
+            repo_root,
+            &refreshed.source_branch,
+            &refreshed.target_branch,
+            cancel.clone(),
+        )?;
+        if matches!(forge, ForgeKind::GitLab) {
+            delete_local_source_branch(repo_root, &refreshed.source_branch, cancel)?;
+        }
+    }
+    cleanup_merge_workspaces_for_pr(repo_root, refreshed.number)?;
+
+    if let Err(error) = crate::workflow::cli_sync::run_mirror_sync_after_comfygit_merge(repo_root) {
+        eprintln!("Warning: mirror sync after merge failed: {error:#}. Run `cg sync` to retry.");
+    }
+
     Ok(())
+}
+
+fn switch_off_branch_for_deletion(
+    repo_root: &str,
+    branch_to_delete: &str,
+    fallback_branch: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let current = current_branch_with_cancel(repo_root, cancel)?;
+    if current != branch_to_delete {
+        return Ok(());
+    }
+
+    switch_to_existing_branch(repo_root, fallback_branch).with_context(|| {
+        format!(
+            "failed to switch from '{branch_to_delete}' to '{fallback_branch}' before deleting the merged branch"
+        )
+    })?;
+    Ok(())
+}
+
+fn local_branch_exists(repo_root: &str, branch: &str) -> Result<bool> {
+    Ok(run_git(
+        repo_root,
+        &["show-ref", "--verify", &format!("refs/heads/{branch}")],
+    )?
+    .success)
+}
+
+fn resolve_post_merge_source_branch(repo_root: &str) -> crate::config::PostMergeSourceBranch {
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from(repo_root));
+    let config = crate::config::ConfigStore::locate()
+        .and_then(|store| store.load())
+        .map(|config| config.projects)
+        .unwrap_or_default();
+    crate::cli::post_merge_source_branch_for_repo(&config, repo_root, &cwd)
+}
+
+fn delete_local_source_branch(
+    repo_root: &str,
+    branch: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    if !local_branch_exists(repo_root, branch)? {
+        return Ok(());
+    }
+    let delete_args = vec!["branch".to_string(), "-d".to_string(), branch.to_string()];
+    if run_git_checked_owned_with_cancel(repo_root, delete_args, cancel.clone()).is_ok() {
+        println!("Local branch '{branch}' deleted.");
+        return Ok(());
+    }
+    run_git_checked_owned_with_cancel(
+        repo_root,
+        vec!["branch".to_string(), "-D".to_string(), branch.to_string()],
+        cancel,
+    )
+    .with_context(|| format!("failed to delete local branch '{branch}' after merge"))?;
+    eprintln!(
+        "Local branch '{branch}' was not fully merged locally; deleted with -D after remote merge."
+    );
+    Ok(())
+}
+
+fn is_mergeable_pull_request_state(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "mergeable" | "can_be_merged" | "can be merged"
+    )
 }
 
 fn capitalize_first(value: &str) -> String {
@@ -864,6 +1054,47 @@ fn launch_vscode_uri(uri: &str) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .context("failed to launch VS Code URI")?;
+    Ok(())
+}
+
+fn dismiss_prepared_vscode_workspace(prepared: Option<PreparedVscodeMergeWorkspace>) {
+    if let Some(prepared) = prepared {
+        let _ = cleanup_prepared_vscode_merge_workspace(&prepared);
+    }
+}
+
+fn cleanup_merge_workspaces_for_pr(repo_root: &str, pr_number: u64) -> Result<()> {
+    let prefix = format!("comfygit-merge-pr-{pr_number}-");
+    let temp = env::temp_dir();
+    let Ok(read_dir) = fs::read_dir(&temp) else {
+        return Ok(());
+    };
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        if !name.to_string_lossy().starts_with(&prefix) {
+            continue;
+        }
+
+        let path_string = path.to_string_lossy().to_string();
+        let _ = run_git_checked_owned_with_cancel(
+            repo_root,
+            vec![
+                "worktree".to_string(),
+                "remove".to_string(),
+                "--force".to_string(),
+                path_string.clone(),
+            ],
+            None,
+        );
+        if path.exists() {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
+
     Ok(())
 }
 
@@ -1111,8 +1342,8 @@ impl PullRequestEntry {
     }
 
     fn is_mergeable(&self) -> bool {
-        self.mergeable_state.eq_ignore_ascii_case("MERGEABLE")
-            || self.mergeable_state.eq_ignore_ascii_case("can_be_merged")
+        is_mergeable_pull_request_state(&self.mergeable_state)
+            || is_mergeable_pull_request_state(&self.status)
     }
 
     fn mergeable_label(&self) -> &'static str {
@@ -1187,6 +1418,24 @@ mod tests {
 
         assert!(error.to_string().contains("PR #67"));
         assert!(error.to_string().contains("open pull request"));
+    }
+
+    #[test]
+    fn pull_request_entry_treats_gitlab_mergeable_status_as_true() {
+        let entry = PullRequestEntry {
+            number: 3,
+            title: "feature".to_string(),
+            target_branch: "main".to_string(),
+            source_branch: "feature/x".to_string(),
+            created_label: "2026-04-25 17:06".to_string(),
+            created_at_unix: 0,
+            author: "alice".to_string(),
+            status: "mergeable".to_string(),
+            mergeable_state: "mergeable".to_string(),
+            issue_url: None,
+        };
+
+        assert!(entry.is_mergeable());
     }
 
     #[test]

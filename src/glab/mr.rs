@@ -18,16 +18,7 @@ pub fn list_open_merge_requests(repo_root: &str, limit: usize) -> Result<Vec<For
     let limit = limit.to_string();
     let output = cli::run_in_repo(
         repo_root,
-        &[
-            "mr",
-            "list",
-            "--state",
-            "opened",
-            "--per-page",
-            &limit,
-            "--output",
-            "json",
-        ],
+        &["mr", "list", "--per-page", &limit, "--output", "json"],
     )?;
     if !output.status.success() {
         bail_cli_failure("mr list", &output)?;
@@ -64,16 +55,27 @@ pub fn fetch_mergeability(repo_root: &str, number: u64) -> Result<crate::forge::
     })
 }
 
-pub fn merge_merge_request(repo_root: &str, number: u64, subject: &str) -> Result<String> {
+pub fn merge_merge_request(
+    repo_root: &str,
+    number: u64,
+    subject: &str,
+    delete_remote_branch: bool,
+) -> Result<String> {
+    let remove_flag = if delete_remote_branch {
+        "--remove-source-branch=true"
+    } else {
+        "--remove-source-branch=false"
+    };
     let output = cli::run_in_repo(
         repo_root,
         &[
             "mr",
             "merge",
             &number.to_string(),
-            "--merge-commit",
             "--message",
             subject,
+            remove_flag,
+            "--yes",
         ],
     )?;
     if !output.status.success() {
@@ -98,6 +100,7 @@ pub fn create_merge_request(
             target_branch,
             "--source-branch",
             current_branch,
+            "--remove-source-branch=false",
             "--title",
             title,
             "--description",
@@ -127,8 +130,6 @@ pub fn lookup_created_merge_request(
             "list",
             "--source-branch",
             current_branch,
-            "--state",
-            "opened",
             "--per-page",
             "20",
             "--output",
@@ -168,7 +169,6 @@ fn bail_cli_failure(action: &str, output: &std::process::Output) -> Result<()> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct GlabMergeRequest {
     iid: u64,
     title: String,
@@ -188,25 +188,29 @@ struct GlabAuthor {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct GlabMergeRequestLookup {
     iid: u64,
     web_url: String,
     target_branch: String,
 }
 
+fn is_mergeable_status(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "can_be_merged" | "mergeable"
+    )
+}
+
 impl GlabMergeRequest {
     fn into_forge(self, repository_issue_root: Option<&str>) -> ForgePullRequest {
         let mergeable_state = self
-            .merge_status
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        let status = self
             .detailed_merge_status
             .clone()
-            .unwrap_or_else(|| mergeable_state.clone());
+            .or(self.merge_status.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        let status = mergeable_state.clone();
         let issue_url = repository_issue_root
-            .filter(|_| !mergeable_state.eq_ignore_ascii_case("can_be_merged"))
+            .filter(|_| !is_mergeable_status(&mergeable_state))
             .map(|root| format!("{root}/-/merge_requests/{}/conflicts", self.iid));
         let author = self
             .author
@@ -228,5 +232,48 @@ impl GlabMergeRequest {
             mergeable_state,
             issue_url: issue_url.or(self.web_url),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MR_VIEW_JSON: &str = r#"{
+        "iid": 140,
+        "title": "feature",
+        "target_branch": "0.35.x",
+        "source_branch": "v0.35.1-dev",
+        "created_at": "2026-05-30T11:00:53.045Z",
+        "author": { "username": "dev-ComfyHome", "name": "Tom" },
+        "detailed_merge_status": "mergeable",
+        "web_url": "https://gitlab.com/comfyhome/dist/ComfyGit/-/merge_requests/140"
+    }"#;
+
+    const MR_LIST_JSON: &str = r#"[{
+        "iid": 140,
+        "web_url": "https://gitlab.com/comfyhome/dist/ComfyGit/-/merge_requests/140",
+        "target_branch": "0.35.x",
+        "source_branch": "v0.35.1-dev"
+    }]"#;
+
+    #[test]
+    fn parses_glab_mr_view_snake_case_json() {
+        let mr: GlabMergeRequest = serde_json::from_str(MR_VIEW_JSON).expect("parse mr view");
+        let forge = mr.into_forge(Some("https://gitlab.com/comfyhome/dist/ComfyGit"));
+        assert_eq!(forge.number, 140);
+        assert_eq!(forge.target_branch, "0.35.x");
+        assert_eq!(forge.source_branch, "v0.35.1-dev");
+        assert_eq!(forge.mergeable_state, "mergeable");
+        assert_eq!(forge.author, "dev-ComfyHome");
+    }
+
+    #[test]
+    fn parses_glab_mr_list_lookup_snake_case_json() {
+        let listed: Vec<GlabMergeRequestLookup> =
+            serde_json::from_str(MR_LIST_JSON).expect("parse mr list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].iid, 140);
+        assert_eq!(listed[0].target_branch, "0.35.x");
     }
 }

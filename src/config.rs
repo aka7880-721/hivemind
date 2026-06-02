@@ -44,6 +44,10 @@ pub struct UiSettings {
     pub show_tab_hints: bool,
     pub hide_footer: bool,
     pub footer_content: FooterContent,
+    /// Border flash when a tab strip selection changes (ratatui-comfy-tabs).
+    pub tab_selection_flash_enabled: bool,
+    /// ANSI indexed foreground color for the tab selection flash (default **51** / cyan).
+    pub tab_selection_flash_color: u8,
 }
 
 impl Default for UiSettings {
@@ -54,8 +58,48 @@ impl Default for UiSettings {
             show_tab_hints: true,
             hide_footer: false,
             footer_content: FooterContent::Centered,
+            tab_selection_flash_enabled: true,
+            tab_selection_flash_color: 51,
         }
     }
+}
+
+impl UiSettings {
+    pub fn tab_selection_flash_color_label(&self) -> String {
+        tab_selection_flash_color_label(self.tab_selection_flash_color)
+    }
+}
+
+/// Preset indexed colors for the tab selection flash (stored value + label).
+pub const TAB_SELECTION_FLASH_COLORS: &[(u8, &str)] = &[
+    (51, "Cyan (51)"),
+    (46, "Green (46)"),
+    (226, "Yellow (226)"),
+    (201, "Pink (201)"),
+    (208, "Orange (208)"),
+    (99, "Blue (99)"),
+];
+
+pub fn tab_selection_flash_color_label(index: u8) -> String {
+    TAB_SELECTION_FLASH_COLORS
+        .iter()
+        .find(|(value, _)| *value == index)
+        .map(|(_, label)| (*label).to_string())
+        .unwrap_or_else(|| format!("Indexed ({index})"))
+}
+
+pub fn cycle_tab_selection_flash_color(current: u8, delta: i32) -> u8 {
+    let presets: Vec<u8> = TAB_SELECTION_FLASH_COLORS
+        .iter()
+        .map(|(value, _)| *value)
+        .collect();
+    let pos = presets
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or(0) as i32;
+    let len = presets.len() as i32;
+    let next = (pos + delta).rem_euclid(len) as usize;
+    presets[next]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -113,6 +157,9 @@ pub struct ProjectConfig {
     pub manual_top_picks: Vec<crate::changelog::top_picks::TopPick>,
     #[serde(default)]
     pub advanced_alias: AdvancedAliasSettings,
+    /// When true, ComfyGitFlow-specific settings and workflows apply to this project.
+    #[serde(default)]
+    pub comfygitflow_enabled: bool,
 }
 
 impl ProjectConfig {
@@ -149,6 +196,7 @@ impl ProjectConfig {
     }
 
     pub fn detail_lines(&self) -> Vec<String> {
+        let mut repo_root_line_added = false;
         let mut lines = vec![
             format!("Name: {}", self.name),
             format!("Project type: {}", self.project_type.display_name()),
@@ -164,10 +212,14 @@ impl ProjectConfig {
                 "Version scheme: {}",
                 self.version_scheme.display_name()
             ));
+            if let Some(repo) = &self.repo {
+                lines.push(format!("Repo root: {}", repo.local_root));
+                repo_root_line_added = true;
+            }
             for target in &self.targets {
                 lines.push(format!(
                     "Target: {} -> {} [{}]",
-                    target.path,
+                    path_relative_to_repo_root(&target.path, self.repo.as_ref()),
                     target.key_path,
                     target.format.display_name()
                 ));
@@ -205,7 +257,7 @@ impl ProjectConfig {
                 for target in &branch.targets {
                     lines.push(format!(
                         "  {} -> {} [{}]",
-                        target.path,
+                        path_relative_to_repo_root(&target.path, branch.repo.as_ref()),
                         target.key_path,
                         target.format.display_name()
                     ));
@@ -214,7 +266,9 @@ impl ProjectConfig {
         }
 
         if let Some(repo) = &self.repo {
-            lines.push(format!("Repo root: {}", repo.local_root));
+            if !repo_root_line_added {
+                lines.push(format!("Repo root: {}", repo.local_root));
+            }
             if let Some(remote) = &repo.remote_url {
                 lines.push(format!("Remote: {}", remote));
             }
@@ -529,6 +583,38 @@ impl ProjectConfig {
         } else {
             String::new()
         };
+        Ok(())
+    }
+
+    pub fn post_merge_source_branch_for_scope(&self, scope_index: usize) -> PostMergeSourceBranch {
+        self.repo_config_for_scope(scope_index)
+            .map(|repo| repo.post_merge_source_branch)
+            .unwrap_or_default()
+    }
+
+    pub fn set_post_merge_source_branch_for_scope(
+        &mut self,
+        scope_index: usize,
+        policy: PostMergeSourceBranch,
+    ) -> Result<()> {
+        let repo = self.repo_config_for_scope_mut_or_insert(scope_index)?;
+        repo.post_merge_source_branch = policy;
+        Ok(())
+    }
+
+    pub fn mirror_sync_after_merge_for_scope(&self, scope_index: usize) -> MirrorSyncAfterMerge {
+        self.repo_config_for_scope(scope_index)
+            .map(|repo| repo.mirror_sync_after_merge)
+            .unwrap_or_default()
+    }
+
+    pub fn set_mirror_sync_after_merge_for_scope(
+        &mut self,
+        scope_index: usize,
+        policy: MirrorSyncAfterMerge,
+    ) -> Result<()> {
+        let repo = self.repo_config_for_scope_mut_or_insert(scope_index)?;
+        repo.mirror_sync_after_merge = policy;
         Ok(())
     }
 
@@ -988,6 +1074,25 @@ fn non_empty_path(value: &str) -> Option<&str> {
     }
 }
 
+fn path_relative_to_repo_root(path: &str, repo: Option<&RepoConfig>) -> String {
+    let Some(repo) = repo else {
+        return path.to_string();
+    };
+    let normalized_path = path.trim().replace('\\', "/");
+    let normalized_root = repo.local_root.trim().replace('\\', "/");
+    let root = normalized_root.trim_end_matches('/');
+    if root.is_empty() {
+        return normalized_path;
+    }
+    let lower_path = normalized_path.to_ascii_lowercase();
+    let lower_root = root.to_ascii_lowercase();
+    if let Some(rest) = lower_path.strip_prefix(&(lower_root + "/")) {
+        let keep_len = rest.len();
+        return normalized_path[normalized_path.len() - keep_len..].to_string();
+    }
+    normalized_path
+}
+
 impl ProjectConfig {
     pub fn supports_advanced_alias_for_scope(&self, scope_index: usize) -> bool {
         match self.project_type {
@@ -1065,6 +1170,88 @@ pub struct RepoConfig {
     pub secondary_remote_url: Option<String>,
     pub has_custom_main_branch: bool,
     pub custom_main_branch: String,
+    #[serde(default)]
+    pub post_merge_source_branch: PostMergeSourceBranch,
+    #[serde(default)]
+    pub mirror_sync_after_merge: MirrorSyncAfterMerge,
+}
+
+/// When GitLab+GitHub mirror sync runs after ComfyGit merges an MR/PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MirrorSyncAfterMerge {
+    #[default]
+    AutomaticallyAfterMerge,
+    Manual,
+}
+
+impl MirrorSyncAfterMerge {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge => "Automatically after each merge",
+            MirrorSyncAfterMerge::Manual => {
+                "Manually, or using external service (e.g. GitLab repo mirroring)"
+            }
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge => MirrorSyncAfterMerge::Manual,
+            MirrorSyncAfterMerge::Manual => MirrorSyncAfterMerge::AutomaticallyAfterMerge,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        self.next()
+    }
+
+    pub fn runs_automatically_after_merge(self) -> bool {
+        matches!(self, MirrorSyncAfterMerge::AutomaticallyAfterMerge)
+    }
+}
+
+/// What happens to the source branch after a successful MR/PR merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PostMergeSourceBranch {
+    #[default]
+    KeptAsIs,
+    DeletedRemote,
+    DeletedRemoteAndLocal,
+}
+
+impl PostMergeSourceBranch {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            PostMergeSourceBranch::KeptAsIs => "Kept as is",
+            PostMergeSourceBranch::DeletedRemote => "DELETED (remote)",
+            PostMergeSourceBranch::DeletedRemoteAndLocal => "DELETED (remote+local)",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            PostMergeSourceBranch::KeptAsIs => PostMergeSourceBranch::DeletedRemote,
+            PostMergeSourceBranch::DeletedRemote => PostMergeSourceBranch::DeletedRemoteAndLocal,
+            PostMergeSourceBranch::DeletedRemoteAndLocal => PostMergeSourceBranch::KeptAsIs,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        self.next().next()
+    }
+
+    pub fn delete_remote_on_merge(self) -> bool {
+        matches!(
+            self,
+            PostMergeSourceBranch::DeletedRemote | PostMergeSourceBranch::DeletedRemoteAndLocal
+        )
+    }
+
+    pub fn delete_local_after_merge(self) -> bool {
+        matches!(self, PostMergeSourceBranch::DeletedRemoteAndLocal)
+    }
 }
 
 impl RepoConfig {
@@ -1147,6 +1334,10 @@ pub enum TargetFormat {
     #[serde(rename = "makefile_pl")]
     MakefilePl,
     Bazel,
+    #[serde(rename = "python_version")]
+    PythonVersion,
+    #[serde(rename = "c_define")]
+    CDefine,
 }
 
 impl TargetFormat {
@@ -1177,6 +1368,8 @@ impl TargetFormat {
             TargetFormat::Rockspec => "LuaRocks (.rockspec)",
             TargetFormat::MakefilePl => "Perl (Makefile.PL)",
             TargetFormat::Bazel => "Bazel (MODULE.bazel)",
+            TargetFormat::PythonVersion => "Python (__version__)",
+            TargetFormat::CDefine => "C/C++ (#define)",
         }
     }
 }
@@ -1305,6 +1498,77 @@ fn migrate_loaded_config(mut config: AppConfig) -> Result<(AppConfig, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_merge_source_branch_cycles_three_policies() {
+        assert_eq!(
+            PostMergeSourceBranch::KeptAsIs.next(),
+            PostMergeSourceBranch::DeletedRemote
+        );
+        assert_eq!(
+            PostMergeSourceBranch::DeletedRemoteAndLocal.previous(),
+            PostMergeSourceBranch::DeletedRemote
+        );
+    }
+
+    #[test]
+    fn post_merge_source_branch_defaults_to_kept() {
+        let repo = RepoConfig::default();
+        assert_eq!(
+            repo.post_merge_source_branch,
+            PostMergeSourceBranch::KeptAsIs
+        );
+        assert!(!repo.post_merge_source_branch.delete_remote_on_merge());
+        assert!(!repo.post_merge_source_branch.delete_local_after_merge());
+    }
+
+    #[test]
+    fn mirror_sync_after_merge_defaults_to_automatic() {
+        let repo = RepoConfig::default();
+        assert_eq!(
+            repo.mirror_sync_after_merge,
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge
+        );
+        assert!(
+            repo.mirror_sync_after_merge
+                .runs_automatically_after_merge()
+        );
+    }
+
+    #[test]
+    fn mirror_sync_after_merge_toggles_between_two_policies() {
+        assert_eq!(
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge.next(),
+            MirrorSyncAfterMerge::Manual
+        );
+        assert_eq!(
+            MirrorSyncAfterMerge::Manual.next(),
+            MirrorSyncAfterMerge::AutomaticallyAfterMerge
+        );
+    }
+
+    #[test]
+    fn project_comfygitflow_defaults_to_disabled() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::GitHubEnabled,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: ReleaseNowSettings::default(),
+            tile_info: TileInfoSettings::default(),
+            targets: Vec::new(),
+            branches: Vec::new(),
+            repo: None,
+            variator_storage: Default::default(),
+            manual_top_picks: Vec::new(),
+            advanced_alias: Default::default(),
+            comfygitflow_enabled: false,
+        };
+        assert!(!project.comfygitflow_enabled);
+    }
 
     #[test]
     fn branch_display_name_falls_back_to_name() {

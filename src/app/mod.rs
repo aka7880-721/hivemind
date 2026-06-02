@@ -21,7 +21,6 @@ use tokio::{
     runtime::Runtime as TokioRuntime,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError},
 };
-use tui_tabs::TabNav;
 use tui_textarea::TextArea as TuiTextArea;
 
 use crate::{
@@ -46,8 +45,10 @@ mod overview;
 mod project_settings;
 mod ps_alias;
 mod render;
+mod ui_settings;
 
 use self::project_settings::{ProjectSettingsState, ProjectSettingsTab};
+use self::ui_settings::UiSettingsState;
 use crate::changelog::top_picks as changelog_tp;
 pub(crate) use crate::workflow::rls_now;
 pub(crate) use crate::workflow::{OverviewBumpWorkflow, git_flow, overview_bump_workflow_options};
@@ -60,6 +61,8 @@ const BUTTON_ROW_HEIGHT: u16 = 3;
 const BUTTON_GAP_HEIGHT: u16 = 3;
 pub(crate) const SHORTCUT_HINT_COLOR: Color = Color::Yellow;
 pub(crate) const ACTIVE_UI_TICK_INTERVAL: Duration = Duration::from_millis(100);
+/// Poll interval while tab selection-flash animation is running (~20 fps).
+pub(crate) const TAB_SELECTION_FLASH_POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub(crate) const IDLE_UI_POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub(crate) const GIT_BRANCH_COLORS: [Color; 6] = [
     Color::Green,
@@ -85,7 +88,13 @@ pub(crate) struct App {
     overview_tab: OverviewTab,
     overview_show_recent_tab: bool,
     project_settings_tab: ProjectSettingsTab,
+    project_settings_tab_order: Vec<ProjectSettingsTab>,
+    project_settings_tab_nav_state: ratatui_comfy_tabs::TabNavState,
+    overview_tab_nav_state: ratatui_comfy_tabs::TabNavState,
     project_settings_state: ProjectSettingsState,
+    ui_settings_state: UiSettingsState,
+    ui_settings_tab_nav_state: ratatui_comfy_tabs::TabNavState,
+    ui_settings_tab_strip_area: Option<Rect>,
     overview_focused_scope: usize,
     overview_recent_changes: Option<RecentChangesDialog>,
     overview_recent_project: Option<usize>,
@@ -105,6 +114,8 @@ pub(crate) struct App {
     overview_tile_rects: Vec<(Rect, usize)>,
     overview_drag_scope: Option<usize>,
     project_rects: Vec<(Rect, usize)>,
+    projects_pane_rect: Rect,
+    overview_pane_rect: Rect,
     drag_project: Option<usize>,
     wizard: ProjectWizard,
     bump_dialog: Option<BumpDialog>,
@@ -150,6 +161,12 @@ pub(crate) struct App {
     browser_dialog: Option<FileBrowserDialog>,
     pub(crate) snif_dialog: Option<crate::tui::SnifModal>,
     help_modal: Option<HelpModal>,
+    overview_tab_strip_area: Option<Rect>,
+    project_settings_tab_strip_area: Option<Rect>,
+    recent_changes_tab_strip_area: Option<Rect>,
+    last_mouse_column: u16,
+    last_mouse_row: u16,
+    has_mouse_position: bool,
     hit_targets: Vec<HitTarget>,
     last_text_input_click_target: Option<TextInputClickTarget>,
     last_text_input_click_at: Option<Instant>,
@@ -210,7 +227,13 @@ impl App {
             overview_tab: OverviewTab::Overview,
             overview_show_recent_tab: false,
             project_settings_tab: ProjectSettingsTab::General,
+            project_settings_tab_order: Vec::new(),
+            project_settings_tab_nav_state: ratatui_comfy_tabs::TabNavState::default(),
+            overview_tab_nav_state: ratatui_comfy_tabs::TabNavState::default(),
             project_settings_state: ProjectSettingsState::default(),
+            ui_settings_state: UiSettingsState::default(),
+            ui_settings_tab_nav_state: ratatui_comfy_tabs::TabNavState::default(),
+            ui_settings_tab_strip_area: None,
             overview_focused_scope: 0,
             overview_recent_changes: None,
             overview_recent_project: None,
@@ -230,6 +253,8 @@ impl App {
             overview_tile_rects: Vec::new(),
             overview_drag_scope: None,
             project_rects: Vec::new(),
+            projects_pane_rect: Rect::default(),
+            overview_pane_rect: Rect::default(),
             drag_project: None,
             wizard: ProjectWizard::default(),
             bump_dialog: None,
@@ -275,6 +300,12 @@ impl App {
             browser_dialog: None,
             snif_dialog: None,
             help_modal: None,
+            overview_tab_strip_area: None,
+            project_settings_tab_strip_area: None,
+            recent_changes_tab_strip_area: None,
+            last_mouse_column: 0,
+            last_mouse_row: 0,
+            has_mouse_position: false,
             hit_targets: Vec::new(),
             last_text_input_click_target: None,
             last_text_input_click_at: None,

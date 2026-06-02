@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "comfygit"
-version = "0.34.3"
+version = "0.35.20"
 dependencies = [
  "anyhow",
  "arboard",
@@ -269,6 +269,7 @@ dependencies = [
  "image",
  "ratatui 0.29.0",
  "ratatui 0.30.0",
+ "ratatui-comfy-tabs",
  "ratatui-comfy-toaster",
  "ratatui-explorer",
  "ratatui-markdown",
@@ -282,7 +283,6 @@ dependencies = [
  "toml_edit",
  "tui-checkbox",
  "tui-overlay",
- "tui-tabs",
  "tui-textarea",
  "unicode-segmentation",
  "unicode-width 0.2.0",
@@ -2070,6 +2070,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatui-comfy-tabs"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f85e75dfc721c90f125e9771b5b0a39c2c7ab4876b4bdf63390c542f8b5e4bc"
+dependencies = [
+ "ratatui-core",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
 name = "ratatui-comfy-toaster"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2335,9 +2345,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-native-certs"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
+checksum = "dab5152771c58876a2146916e53e35057e1a4dfa2b9df0f0305b07f611fdea4d"
 dependencies = [
  "openssl-probe",
  "rustls-pki-types",
@@ -3101,15 +3111,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tui-tabs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c8451ff3e37e3418372d5ff99e654684f92639ed671b0317bf1f473693fda54"
-dependencies = [
- "ratatui-core",
-]
-
-[[package]]
 name = "tui-textarea"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3146,9 +3147,9 @@ checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.13.2"
+version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9629274872b2bfaf8d66f5f15725007f635594914870f65218920345aa11aa8c"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-truncate"
