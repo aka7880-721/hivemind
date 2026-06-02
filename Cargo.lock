@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "ratatui-comfy-tabs"
-version = "0.4.2"
+version = "0.4.4"
 dependencies = [
  "ratatui-core",
  "unicode-width 0.2.0",
