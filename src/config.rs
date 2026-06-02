@@ -46,7 +46,7 @@ pub struct UiSettings {
     pub footer_content: FooterContent,
     /// Border flash when a tab strip selection changes (ratatui-comfy-tabs).
     pub tab_selection_flash_enabled: bool,
-    /// ANSI indexed foreground color for the tab selection flash (default **46**).
+    /// ANSI indexed foreground color for the tab selection flash (default **51** / cyan).
     pub tab_selection_flash_color: u8,
 }
 
@@ -59,7 +59,7 @@ impl Default for UiSettings {
             hide_footer: false,
             footer_content: FooterContent::Centered,
             tab_selection_flash_enabled: true,
-            tab_selection_flash_color: 46,
+            tab_selection_flash_color: 51,
         }
     }
 }
@@ -72,8 +72,8 @@ impl UiSettings {
 
 /// Preset indexed colors for the tab selection flash (stored value + label).
 pub const TAB_SELECTION_FLASH_COLORS: &[(u8, &str)] = &[
-    (46, "Green (46)"),
     (51, "Cyan (51)"),
+    (46, "Green (46)"),
     (226, "Yellow (226)"),
     (201, "Pink (201)"),
     (208, "Orange (208)"),

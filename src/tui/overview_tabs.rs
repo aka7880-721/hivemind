@@ -5,13 +5,13 @@
 //
 // For details, see the LICENSE file in the repository root.
 
+use ratatui::widgets::StatefulWidget;
 use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
 };
 use ratatui_comfy_tabs::{TabNav, TabNavState, TabReorderPolicy, TabWheelDirection};
-use ratatui::widgets::StatefulWidget;
 
 use crate::config::UiSettings;
 
@@ -60,9 +60,8 @@ pub(crate) fn project_settings_tab_nav<'a>(
 }
 
 pub(crate) fn apply_tab_selection_flash<'a>(nav: TabNav<'a>, ui: &UiSettings) -> TabNav<'a> {
-    nav.selection_flash(ui.tab_selection_flash_enabled).selection_flash_style(
-        Style::default().fg(Color::Indexed(ui.tab_selection_flash_color)),
-    )
+    nav.selection_flash(ui.tab_selection_flash_enabled)
+        .selection_flash_style(Style::default().fg(Color::Indexed(ui.tab_selection_flash_color)))
 }
 
 pub(crate) fn sync_tab_nav_flash_state(state: &mut TabNavState, ui: &UiSettings) {

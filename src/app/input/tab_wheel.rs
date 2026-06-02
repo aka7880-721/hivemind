@@ -108,7 +108,10 @@ impl App {
 
         if tab != self.overview_tab {
             self.overview_tab = tab;
-            crate::app::ui_settings::flash_overview_tab_selection(self, self.overview_show_recent_tab);
+            crate::app::ui_settings::flash_overview_tab_selection(
+                self,
+                self.overview_show_recent_tab,
+            );
             self.dashboard_focus = DashboardPane::Overview;
         }
         true

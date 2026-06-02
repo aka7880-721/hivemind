@@ -1567,7 +1567,13 @@ impl App {
                 None
             };
             if let Some(target) = target {
-                self.overview_tab = target;
+                if self.overview_tab != target {
+                    self.overview_tab = target;
+                    crate::app::ui_settings::flash_overview_tab_selection(
+                        self,
+                        self.overview_show_recent_tab,
+                    );
+                }
                 return true;
             }
         }
