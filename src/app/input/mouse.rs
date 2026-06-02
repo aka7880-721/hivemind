@@ -852,6 +852,22 @@ impl App {
                     return;
                 }
 
+                // Move dashboard focus on any click inside the pane bodies.
+                // (Previously, Projects/Overview focus only changed when clicking specific elements.)
+                if self.screen == Screen::Dashboard {
+                    let in_rect = |rect: ratatui::layout::Rect| {
+                        mouse.column >= rect.x
+                            && mouse.column < rect.x + rect.width
+                            && mouse.row >= rect.y
+                            && mouse.row < rect.y + rect.height
+                    };
+                    if in_rect(self.projects_pane_rect) {
+                        self.dashboard_focus = DashboardPane::Projects;
+                    } else if in_rect(self.overview_pane_rect) {
+                        self.dashboard_focus = DashboardPane::Overview;
+                    }
+                }
+
                 if self.overview_bump_workflow_dialog.is_none()
                     && self.screen == Screen::Dashboard
                     && self.overview_tab == OverviewTab::Overview
