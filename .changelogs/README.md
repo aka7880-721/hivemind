@@ -2,6 +2,372 @@
 
 Newest archived changelogs first. When multiple archived files represent the same version, only the newest archive is included here.
 
+## Changelog `v0.35.20` <sup><div align="end">🗓️ 2026-06-02</div></sup>
+
+### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
+
+#### **1. &nbsp;&nbsp;&nbsp;v0.35.3: ComfyGitFlow declaration**
+#### **2. &nbsp;&nbsp;&nbsp;v0.35.3: New "Git" tab in `Project Settings`**
+- first entry: merge branch deletion setup
+
+#### **3. &nbsp;&nbsp;&nbsp;c0.35.4-7: Bugfixes and enhancements**
+- Discovered and fixed issues within GitLab merging flow
+
+#### **4. &nbsp;&nbsp;&nbsp;v.0.35.8: Auto-detection enhancements (`cg init` / wizard)**
+- Added to root manifest candidates:
+    - `settings.gradle` / `settings.gradle.kts` → Gradle (`version`)
+    - `GNUmakefile` → Makefile (`VERSION`)
+- Also added `settings.gradle*` to nested workspace detection (monorepos).
+- Source-embedded versions
+- New target formats:
+    - **`python_version`** — `__version__ = "x.y.z"` in `.py` files  
+    - **`c_define`** — `#define VERSION "x.y.z"` in headers/sources  
+- Auto-detected when the file exists and contains a readable version:
+    - Root: `__init__.py`, `version.py`, `_version.py`, `version.h`
+    - `src/<package>/__init__.py` (one level under `src/`)
+- **Usage notes**
+    - For Python, key path should be `__version__` (or leave default from init).  
+    - For C/C++, key path should be `VERSION` (or another macro name like `PROJECT_VERSION` if you configure it manually).  
+    - `settings.gradle` / `GNUmakefile` use the same parsers as `build.gradle` / `Makefile` (already supported in `target_custom.rs`).
+
+#### **5. &nbsp;&nbsp;&nbsp;Misc:**
+- v0.35.9-11:
+    - tabs within TUI were upgraded to use ratatui-comfy-tabs crate from crates.io
+    - bugfixes to "branch verifications" and "target change" during `cg br end`/`cg branch end`
+    - bugfixes to PATCH branch creation from MAIN branch
+- v0.35.12: Top Picks Editor enhacements:
+    - TPE now supports mouse wheel scroll
+    - TPE now accepts 4(as before) and 2(new) space indentation
+- v0.35.14: Improvements to `cg sync`
+    - applies only to "GitLab+GitHub" project type
+    - in `Project Settings/Git` now user can change two behaviours:
+        - manual or external sync (as it was before this version)
+        - automatic sync after each merge
+- v0.35.15-20:
+  - fixed nesting in Top Picks Editor
+  - implemented new ratatui-comfy-tabs features
+  - TUI now can use both, ABSOLUTE and RELATIVE paths!
+  - bugfix: mouse pane focus
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br>
+
+### 💫 _Changed in:_ **Quick-Downloads**
+
+#### 💎 Enhancements
+
+* enhance quick downloads section for GitLab and GitHub with conditional formatting and new header layout <sub><sup><sup>_cd27441_</sup></sup></sub>
+* adds more GitLab-related conditions <sub><sup><sup>_cd27441_</sup></sup></sub>
+
+---
+
+### 💫 _Changed in:_ **GitLab**
+
+#### 🧩 Features
+
+* add '--remove-source-branch=false' option to merge and create merge request commands <sub><sup><sup>_5069f80_</sup></sup></sub>
+
+---
+
+### 💫 _Changed in:_ **`cg sync`**
+
+#### 🧩 Features
+
+* add MirrorSyncAfterMerge setting to project settings and update related functionality <sub><sup><sup>_21a231c_</sup></sup></sub>
+
+* add support for `--yes` flag and implement mirror sync after merge functionality <sub><sup><sup>_8f9a150_</sup></sup></sub>
+
+* add error handling for mirror sync after merge in `merge_pull_request` function <sub><sup><sup>_4a602ca_</sup></sup></sub>
+
+* enhance MirrorSyncReport with colored status output and add tests for status coloring <sub><sup><sup>_5165c9d_</sup></sup></sub>
+
+* include mirror_sync_after_merge in project edit dialog initialization <sub><sup><sup>_69cd65a_</sup></sup></sub>
+
+* refactor sync functions to support options and enhance mirror sync after merge functionality <sub><sup><sup>_adfe59a_</sup></sup></sub>
+
+* implement mirror_sync_after_merge methods and tests for toggling policies <sub><sup><sup>_a6a86a8_</sup></sup></sub>
+
+---
+
+## 💬 General Improvements & Fixes:
+
+### 🧩 Features
+
+* add Git settings tab to project settings help context <sub><sup><sup>_97f2a49_</sup></sup></sub>
+
+* enhance project settings with Git tab and related configurations <sub><sup><sup>_e254e1c_</sup></sup></sub>
+
+* implement post-merge source branch retrieval for project configurations <sub><sup><sup>_e9514c8_</sup></sup></sub>
+
+* extend merge_pull_request to include source branch and delete options for GitHub and GitLab <sub><sup><sup>_6430392_</sup></sup></sub>
+
+* enhance merge_pull_request function to support source branch deletion options <sub><sup><sup>_0555e2d_</sup></sup></sub>
+
+* update merge_pull_request to handle cancellation and improve source branch deletion logic <sub><sup><sup>_b83c64c_</sup></sup></sub>
+
+* update merge_merge_request to accept delete_remote_branch parameter for improved source branch deletion control <sub><sup><sup>_2203f44_</sup></sup></sub>
+
+* add post-merge source branch to project edit dialog for improved repository configuration <sub><sup><sup>_a29a38a_</sup></sup></sub>
+
+* introduce ComfyGitFlow settings and post-merge source branch management in project configuration <sub><sup><sup>_6af327d_</sup></sup></sub>
+
+* enhance merge_pull_request logic to switch branches before deletion and check for local branch existence <sub><sup><sup>_9204b81_</sup></sup></sub>
+
+* add mergeability status checks to ForgeMergeability struct <sub><sup><sup>_a327d78_</sup></sup></sub>
+
+* implement pull request mergeability checks and post-merge branch management <sub><sup><sup>_05afbf0_</sup></sup></sub>
+
+* add merge_readiness module to enhance mergeability checks <sub><sup><sup>_278d200_</sup></sup></sub>
+
+* add support for detecting GNUmakefile and Gradle settings files, and implement embedded source version manifest detection for Python <sub><sup><sup>_c1c4c12_</sup></sup></sub>
+
+* add functions for handling Python and C/C++ version definitions, including extraction and writing capabilities <sub><sup><sup>_c9fdb67_</sup></sup></sub>
+
+* extend target handling to support Python and C/C++ version formats with extraction and writing capabilities <sub><sup><sup>_406040f_</sup></sup></sub>
+
+* add Python version and C/C++ define formats to TargetFormat enum <sub><sup><sup>_1cbd9d3_</sup></sup></sub>
+
+* add tab_wheel module to input handling <sub><sup><sup>_f406de8_</sup></sup></sub>
+
+* enhance mouse input handling with unified scroll event processing <sub><sup><sup>_a033652_</sup></sup></sub>
+
+* implement tab wheel navigation for mouse input in the tab_wheel module <sub><sup><sup>_9cd4b1b_</sup></sup></sub>
+
+* add mouse position tracking and tab strip areas to App struct <sub><sup><sup>_389f81c_</sup></sup></sub>
+
+* refactor project settings tab rendering and add tab label function <sub><sup><sup>_d4ff7c8_</sup></sup></sub>
+
+* update recent changes tab rendering and manage tab strip areas in App struct <sub><sup><sup>_753aa9a_</sup></sup></sub>
+
+* add comfy tab navigation and wheel tab strip to TUI module <sub><sup><sup>_9e096fd_</sup></sup></sub>
+
+* integrate comfy tab navigation and enhance wheel navigation functionality in overview tabs <sub><sup><sup>_be97708_</sup></sup></sub>
+
+* add ratatui-comfy-tabs dependency and remove tui-tabs from project <sub><sup><sup>_43b0859_</sup></sup></sub>
+
+* add function to identify ComfyGitFlow dev source branches <sub><sup><sup>_cc9e9db_</sup></sup></sub>
+
+* enhance release line branch handling and add utility functions for version management <sub><sup><sup>_f4e10ec_</sup></sup></sub>
+
+* implement mouse scroll functionality for top picks editor dialog <sub><sup><sup>_7b17a0b_</sup></sup></sub>
+
+* add footer line instructions for Top Picks editor dialog <sub><sup><sup>_0dd1a27_</sup></sup></sub>
+
+* implement scrolling functionality for custom-rendered textarea <sub><sup><sup>_ab6cdce_</sup></sup></sub>
+
+* update Top Picks editor instructions to include scrolling and saving shortcuts <sub><sup><sup>_8b01363_</sup></sup></sub>
+
+* enhance Top Picks editor with two-space nested bullet indentation and update related tests <sub><sup><sup>_e3e716c_</sup></sup></sub>
+
+* add flash effect for project settings tab selection and update dashboard overview sync logic <sub><sup><sup>_e6893ee_</sup></sup></sub>
+
+* add project_settings_tabs module to input handling <sub><sup><sup>_3b5ee4b_</sup></sup></sub>
+
+* enhance mouse input handling for project settings tab drag functionality <sub><sup><sup>_66219a9_</sup></sup></sub>
+
+* implement project settings tab drag-and-drop functionality with mouse input handling <sub><sup><sup>_64a433d_</sup></sup></sub>
+
+* integrate project settings tab order merging and enhance tab selection feedback <sub><sup><sup>_1d499a9_</sup></sup></sub>
+
+* add project settings tab order and navigation state to enhance tab management <sub><sup><sup>_5957e18_</sup></sup></sub>
+
+* implement merging of project settings tab order and enhance tab pinning functionality <sub><sup><sup>_8ec02e5_</sup></sup></sub>
+
+* add project settings tab navigation to overview tabs for improved user experience <sub><sup><sup>_87dfa21_</sup></sup></sub>
+
+* introduce tab navigation with pinned tab support for project settings in overview tabs <sub><sup><sup>_93eda19_</sup></sup></sub>
+
+* enhance UI settings tab navigation and selection feedback <sub><sup><sup>_6222c96_</sup></sup></sub>
+
+* add UI settings module with navigation and rendering functionality <sub><sup><sup>_18e1adc_</sup></sup></sub>
+
+* enhance overview tab navigation with selection flash and state synchronization <sub><sup><sup>_bf76aca_</sup></sup></sub>
+
+* add tab selection flash configuration and color cycling functionality to UI settings <sub><sup><sup>_e2445ba_</sup></sup></sub>
+
+* implement tab selection flash state management and synchronization across UI components <sub><sup><sup>_e7ce0b2_</sup></sup></sub>
+
+* introduce tab selection flash polling interval and refactor project settings tab flash functionality <sub><sup><sup>_0eeeb0a_</sup></sup></sub>
+
+* add path normalization functions for repository root handling <sub><sup><sup>_2106112_</sup></sup></sub>
+
+* add TabBarEnd configuration to overview tabs for improved navigation <sub><sup><sup>_3cddc12_</sup></sup></sub>
+
+* update mouse input handling to change dashboard focus on clicks within pane bodies <sub><sup><sup>_3926e73_</sup></sup></sub>
+
+* add projects and overview pane rectangles to App struct for improved layout management <sub><sup><sup>_fc00b05_</sup></sup></sub>
+
+### 🐛 Fix(es)
+
+* update video link in README to use the correct GitHub repository raw path <sub><sup><sup>_4dd32dd_</sup></sup></sub>
+
+* update merge request command to include '--yes' flag and remove '--merge-commit' <sub><sup><sup>_f9d1398_</sup></sup></sub>
+
+* update blocked mergeability token to use "conflict" for consistency in merge checks <sub><sup><sup>_830a314_</sup></sup></sub>
+
+* ensure local source branch deletion handles unmerged branches correctly and sync integration branch before deletion <sub><sup><sup>_d86dbbf_</sup></sup></sub>
+
+* update ratatui-comfy-tabs dependency to version 0.3 and adjust path configuration <sub><sup><sup>_1c4bea6_</sup></sup></sub>
+
+### 🔧 Maintenance
+
+* CG app version bump to v0.35.0 <sub><sup><sup>_f6cb0f8_</sup></sup></sub>
+
+* CG app version bump to v0.35.1 <sub><sup><sup>_7997345_</sup></sup></sub>
+
+* CG app version bump to v0.35.2 <sub><sup><sup>_3b2e896_</sup></sup></sub>
+
+* CG app version bump to v0.35.3 <sub><sup><sup>_1db3a9b_</sup></sup></sub>
+
+* CG app version bump to v0.35.4 <sub><sup><sup>_8e1e8cb_</sup></sup></sub>
+
+* CG app version bump to v0.35.5 <sub><sup><sup>_748c646_</sup></sup></sub>
+
+* CG app version bump to v0.35.6 <sub><sup><sup>_ebe3e56_</sup></sup></sub>
+
+* CG app version bump to v0.35.7 <sub><sup><sup>_8ef5dc9_</sup></sup></sub>
+
+* CG app version bump to v0.35.8 <sub><sup><sup>_88732f3_</sup></sup></sub>
+
+* CG app version bump to v0.35.9 <sub><sup><sup>_f0bfc1f_</sup></sup></sub>
+
+* CG app version bump to v0.35.10 <sub><sup><sup>_b984cf3_</sup></sup></sub>
+
+* CG app version bump to v0.35.11 <sub><sup><sup>_c9463ff_</sup></sup></sub>
+
+* CG app version bump to v0.35.12 <sub><sup><sup>_b3a5c3e_</sup></sup></sub>
+
+* CG app version bump to v0.35.13 <sub><sup><sup>_5f606f5_</sup></sup></sub>
+
+* CG app version bump to v0.35.14 <sub><sup><sup>_8bff53d_</sup></sup></sub>
+
+* CG app version bump to v0.35.15 <sub><sup><sup>_c6a318c_</sup></sup></sub>
+
+* CG app version bump to v0.35.16 <sub><sup><sup>_1ada0e1_</sup></sup></sub>
+
+* CG app version bump to v0.35.17 <sub><sup><sup>_145bb5c_</sup></sup></sub>
+
+* CG app version bump to v0.35.18 <sub><sup><sup>_72e2bc4_</sup></sup></sub>
+
+* CG app version bump to v0.35.19 <sub><sup><sup>_c077831_</sup></sup></sub>
+
+* CG app version bump to v0.35.20 <sub><sup><sup>_0a26eaf_</sup></sup></sub>
+
+* update ratatui-comfy-tabs dependency to version 0.4 and add source and checksum to Cargo.lock <sub><sup><sup>_8f3b0ac_</sup></sup></sub>
+
+### ℹ️ Documentation
+
+* update README to include 'Release Manager' in feature list <sub><sup><sup>_7055cf6_</sup></sup></sub>
+
+* add ComfyGitFlow opt-in option to project settings help documentation <sub><sup><sup>_fbc1fdd_</sup></sup></sub>
+
+* add Git workflow options and navigation details to project settings help documentation <sub><sup><sup>_44e4527_</sup></sup></sub>
+
+* add Git settings help documentation for project settings <sub><sup><sup>_7de697b_</sup></sup></sub>
+
+* add Project Settings Git context to help documentation <sub><sup><sup>_eb7a690_</sup></sup></sub>
+
+* update git.md to include wait times for merge checks during `cg merge` and `cg br end` operations <sub><sup><sup>_970afad_</sup></sup></sub>
+
+* add GitLab+GitHub mirror sync section with policy options and sync status reporting <sub><sup><sup>_7f8df4e_</sup></sup></sub>
+
+* update README with new project timeline and version details <sub><sup><sup>_26aaeff_</sup></sup></sub>
+* enhance distro.md with release title guidance <sub><sup><sup>_26aaeff_</sup></sup></sub>
+
+* update README with revised project timeline, version bump to v0.36, and progress towards v1.0 features <sub><sup><sup>_f2d3135_</sup></sup></sub>
+
+* update UI settings documentation with layout, shortcuts, and tab details <sub><sup><sup>_af1a8d9_</sup></sup></sub>
+
+* update distro.md to clarify usage of general scripts for publishing and changelog generation <sub><sup><sup>_673182c_</sup></sup></sub>
+
+### ♻️ Refactor
+
+* streamline merge request CLI commands and enhance JSON parsing for GlabMergeRequest <sub><sup><sup>_9e5bf52_</sup></sup></sub>
+
+* remove unused mergeability checks and related functions from branch_end.rs <sub><sup><sup>_6bfa0f9_</sup></sup></sub>
+
+* streamline pull request merging by consolidating mergeability checks and enhancing post-merge handling <sub><sup><sup>_bc06a0c_</sup></sup></sub>
+
+* improve mergeability check logic to fail on non-pending states and enhance error handling <sub><sup><sup>_abdf1b0_</sup></sup></sub>
+
+* enhance error messaging for non-mergeable pull requests with clearer instructions and IDE integration details <sub><sup><sup>_c93ec5a_</sup></sup></sub>
+
+* implement pull request entry refreshing and reloading logic for improved user experience during selection <sub><sup><sup>_7088f5c_</sup></sup></sub>
+
+* simplify mergeability check logic in pull request selection prompt <sub><sup><sup>_0e8f0be_</sup></sup></sub>
+
+* streamline PR handling and enhance dev branch identification <sub><sup><sup>_fb9df08_</sup></sup></sub>
+
+* improve nested bullet indentation logic and enhance tests for hierarchy preservation <sub><sup><sup>_77c2846_</sup></sup></sub>
+
+* streamline tab navigation and selection flash functionality across components <sub><sup><sup>_aa5c80b_</sup></sup></sub>
+
+* improve code readability and consistency in project and UI settings rendering <sub><sup><sup>_e1871c2_</sup></sup></sub>
+
+* enhance code organization and readability in overview tabs and TUI module <sub><sup><sup>_edb1ad0_</sup></sup></sub>
+
+* update default tab selection flash color to cyan and adjust documentation <sub><sup><sup>_a6b6467_</sup></sup></sub>
+
+* normalize target path handling in ProjectEditDialog for improved consistency <sub><sup><sup>_bf27261_</sup></sup></sub>
+
+* streamline target path normalization in ProjectWizard for consistency and clarity <sub><sup><sup>_4b45c35_</sup></sup></sub>
+
+* enhance alias path normalization in ProjectSettings for improved consistency <sub><sup><sup>_bf328c9_</sup></sup></sub>
+
+* implement path normalization for various fields in ProjectSettings to enhance consistency <sub><sup><sup>_d85d112_</sup></sup></sub>
+
+* improve repo root path handling in ProjectConfig for consistency and clarity <sub><sup><sup>_4ba9dfd_</sup></sup></sub>
+
+### 📝 Other
+
+* Merge pull request #142 (via ComfyGit) <sub><sup><sup>_52d7ddd_</sup></sup></sub>
+
+* Merge pull request #143 (via ComfyGit) <sub><sup><sup>_4607154_</sup></sup></sub>
+
+* Merge pull request #144 (via ComfyGit) <sub><sup><sup>_2222b17_</sup></sup></sub>
+
+* Merge pull request #145 (via ComfyGit) <sub><sup><sup>_76e2abe_</sup></sup></sub>
+
+* Merge pull request #146 (via ComfyGit) <sub><sup><sup>_cb43203_</sup></sup></sub>
+
+* Merge pull request #147 (via ComfyGit) <sub><sup><sup>_eb79d51_</sup></sup></sub>
+
+* Merge pull request #148 (via ComfyGit) <sub><sup><sup>_63d2c03_</sup></sup></sub>
+
+* Merge pull request #149 (via ComfyGit) <sub><sup><sup>_6f1d039_</sup></sup></sub>
+
+* Merge pull request #150 (via ComfyGit) <sub><sup><sup>_c94563e_</sup></sup></sub>
+
+* Merge pull request #151 (via ComfyGit) <sub><sup><sup>_d627907_</sup></sup></sub>
+
+* Merge pull request #152 (via ComfyGit) <sub><sup><sup>_0a4cf7d_</sup></sup></sub>
+
+* Merge pull request #153 (via ComfyGit) <sub><sup><sup>_2ccb089_</sup></sup></sub>
+
+* Merge pull request #154 (via ComfyGit) <sub><sup><sup>_e79b896_</sup></sup></sub>
+
+* Merge pull request #155 (via ComfyGit) <sub><sup><sup>_a4e344c_</sup></sup></sub>
+
+* Merge pull request #156 (via ComfyGit) <sub><sup><sup>_754f912_</sup></sup></sub>
+
+* Merge pull request #157 (via ComfyGit) <sub><sup><sup>_01c8ecf_</sup></sup></sub>
+
+* Merge pull request #158 (via ComfyGit) <sub><sup><sup>_89f8831_</sup></sup></sub>
+
+* Merge pull request #159 (via ComfyGit) <sub><sup><sup>_c58cd0b_</sup></sup></sub>
+
+* Merge remote-tracking branch 'refs/remotes/gitLAB/0.35.x' into 0.35.x <sub><sup><sup>_be3aec9_</sup></sup></sub>
+
+* Merge pull request #160 (via ComfyGit) <sub><sup><sup>_e0681e8_</sup></sup></sub>
+
+* Merge pull request #161 (via ComfyGit) <sub><sup><sup>_61ef626_</sup></sup></sub>
+
+* Merge pull request #162 (via ComfyGit) <sub><sup><sup>_636c9f4_</sup></sup></sub>
+
+---
+
 ## Changelog `v0.34.3` <sup><div align="end">🗓️ 2026-05-29</div></sup>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
