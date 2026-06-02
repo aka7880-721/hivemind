@@ -196,6 +196,7 @@ impl ProjectConfig {
     }
 
     pub fn detail_lines(&self) -> Vec<String> {
+        let mut repo_root_line_added = false;
         let mut lines = vec![
             format!("Name: {}", self.name),
             format!("Project type: {}", self.project_type.display_name()),
@@ -211,10 +212,14 @@ impl ProjectConfig {
                 "Version scheme: {}",
                 self.version_scheme.display_name()
             ));
+            if let Some(repo) = &self.repo {
+                lines.push(format!("Repo root: {}", repo.local_root));
+                repo_root_line_added = true;
+            }
             for target in &self.targets {
                 lines.push(format!(
                     "Target: {} -> {} [{}]",
-                    target.path,
+                    path_relative_to_repo_root(&target.path, self.repo.as_ref()),
                     target.key_path,
                     target.format.display_name()
                 ));
@@ -252,7 +257,7 @@ impl ProjectConfig {
                 for target in &branch.targets {
                     lines.push(format!(
                         "  {} -> {} [{}]",
-                        target.path,
+                        path_relative_to_repo_root(&target.path, branch.repo.as_ref()),
                         target.key_path,
                         target.format.display_name()
                     ));
@@ -261,7 +266,9 @@ impl ProjectConfig {
         }
 
         if let Some(repo) = &self.repo {
-            lines.push(format!("Repo root: {}", repo.local_root));
+            if !repo_root_line_added {
+                lines.push(format!("Repo root: {}", repo.local_root));
+            }
             if let Some(remote) = &repo.remote_url {
                 lines.push(format!("Remote: {}", remote));
             }
@@ -1065,6 +1072,25 @@ fn non_empty_path(value: &str) -> Option<&str> {
     } else {
         Some(trimmed)
     }
+}
+
+fn path_relative_to_repo_root(path: &str, repo: Option<&RepoConfig>) -> String {
+    let Some(repo) = repo else {
+        return path.to_string();
+    };
+    let normalized_path = path.trim().replace('\\', "/");
+    let normalized_root = repo.local_root.trim().replace('\\', "/");
+    let root = normalized_root.trim_end_matches('/');
+    if root.is_empty() {
+        return normalized_path;
+    }
+    let lower_path = normalized_path.to_ascii_lowercase();
+    let lower_root = root.to_ascii_lowercase();
+    if let Some(rest) = lower_path.strip_prefix(&(lower_root + "/")) {
+        let keep_len = rest.len();
+        return normalized_path[normalized_path.len() - keep_len..].to_string();
+    }
+    normalized_path
 }
 
 impl ProjectConfig {
