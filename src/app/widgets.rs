@@ -265,6 +265,50 @@ pub(crate) fn derive_repo_root_from_target_path(path: &str) -> Option<String> {
         .map(|parent| parent.display().to_string())
 }
 
+fn normalized_path_string(path: &str) -> String {
+    path.trim().replace('\\', "/")
+}
+
+fn is_absolute_path_string(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.starts_with('/')
+        || path.starts_with("//")
+        || path.starts_with("\\\\")
+        || (bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'/' || bytes[2] == b'\\'))
+}
+
+/// Keep non-root paths relative to repo root for storage/display.
+pub(crate) fn normalize_path_for_repo_root(path: &str, repo_root: &str) -> String {
+    let mut value = normalized_path_string(path);
+    if value.is_empty() {
+        return value;
+    }
+
+    if !is_absolute_path_string(&value) {
+        return value.trim_start_matches('/').to_string();
+    }
+
+    let root = normalized_path_string(repo_root)
+        .trim_end_matches('/')
+        .to_string();
+    if root.is_empty() {
+        return value;
+    }
+
+    let value_lower = value.to_ascii_lowercase();
+    let root_lower = root.to_ascii_lowercase();
+    if value_lower == root_lower {
+        return String::new();
+    }
+    if let Some(rest) = value_lower.strip_prefix(&(root_lower + "/")) {
+        let keep_len = rest.len();
+        value = value[value.len() - keep_len..].to_string();
+        return value.trim_start_matches('/').to_string();
+    }
+
+    value
+}
+
 pub(crate) fn git_graph_base_column(lines: &[String]) -> usize {
     lines
         .iter()
