@@ -15,7 +15,7 @@ use crate::{
     app::{
         HitAction, ScopeAction, ScopeDraft, clamp_dialog_scroll, cycle_target_key_preset,
         default_target_key_for_path, derive_repo_root_from_target_path, dialog_form_row_height,
-        dialog_visible_rows, rotate_scope_kind,
+        dialog_visible_rows, normalize_path_for_repo_root, rotate_scope_kind,
     },
     config::{
         BranchConfig, BranchScopeKind, ChangelogSettings, DEFAULT_CHANGELOG_PATH, IntegrationMode,
@@ -104,12 +104,12 @@ impl ProjectWizard {
                 WizardField::UnifiedVersioning,
             ]);
         }
-        fields.extend([
-            WizardField::VersionScheme,
-            WizardField::IntegrationMode,
-            WizardField::TargetPath,
-            WizardField::TargetKey,
-        ]);
+        fields.extend([WizardField::VersionScheme, WizardField::IntegrationMode]);
+        let integration_mode = self.selected_integration_mode();
+        if integration_mode.requires_repo() {
+            fields.push(WizardField::RepoRoot);
+        }
+        fields.extend([WizardField::TargetPath, WizardField::TargetKey]);
         if self.project_type == ProjectType::Branched {
             fields.extend([
                 WizardField::AddScope,
@@ -119,9 +119,6 @@ impl ProjectWizard {
             ]);
         }
         let integration_mode = self.selected_integration_mode();
-        if integration_mode.requires_repo() {
-            fields.push(WizardField::RepoRoot);
-        }
         if integration_mode.requires_remote() {
             fields.push(WizardField::RemoteUrl);
         }
@@ -260,13 +257,25 @@ impl ProjectWizard {
                 if self.project_type == ProjectType::Branched {
                     self.current_scope()
                         .map(|scope| {
-                            scope
-                                .target_path
-                                .display_line_with_width(focused, max_width)
+                            if focused {
+                                scope.target_path.display_line_with_width(true, max_width)
+                            } else {
+                                Line::from(normalize_path_for_repo_root(
+                                    scope.target_path.value(),
+                                    self.repo_root.value(),
+                                ))
+                            }
                         })
                         .unwrap_or_else(|| Line::from(String::new()))
                 } else {
-                    self.target_path.display_line_with_width(focused, max_width)
+                    if focused {
+                        self.target_path.display_line_with_width(true, max_width)
+                    } else {
+                        Line::from(normalize_path_for_repo_root(
+                            self.target_path.value(),
+                            self.repo_root.value(),
+                        ))
+                    }
                 }
             }
             WizardField::TargetKey => {
@@ -537,9 +546,10 @@ impl ProjectWizard {
     }
 
     pub(crate) fn set_target_path_from_browse(&mut self, path: String) {
+        let normalized = normalize_path_for_repo_root(&path, self.repo_root.value());
         if self.project_type == ProjectType::Branched {
             if let Some(scope) = self.current_scope_mut() {
-                scope.target_path.set_value(path);
+                scope.target_path.set_value(normalized);
                 if !scope.target_key_custom {
                     scope
                         .target_key
@@ -548,7 +558,7 @@ impl ProjectWizard {
                 scope.last_probe = None;
             }
         } else {
-            self.target_path.set_value(path);
+            self.target_path.set_value(normalized);
             if !self.target_key_custom {
                 self.target_key
                     .set_value(default_target_key_for_path(self.target_path.value()));
@@ -692,7 +702,10 @@ impl ProjectWizard {
 
             let target = TargetSpec {
                 label: "Version".to_string(),
-                path: self.target_path.value.trim().to_string(),
+                path: normalize_path_for_repo_root(
+                    self.target_path.value.trim(),
+                    self.repo_root.value.trim(),
+                ),
                 key_path: self.target_key.value.trim().to_string(),
                 format: self
                     .last_probe
