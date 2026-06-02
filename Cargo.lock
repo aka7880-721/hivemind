@@ -2072,6 +2072,8 @@ dependencies = [
 [[package]]
 name = "ratatui-comfy-tabs"
 version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f85e75dfc721c90f125e9771b5b0a39c2c7ab4876b4bdf63390c542f8b5e4bc"
 dependencies = [
  "ratatui-core",
  "unicode-width 0.2.0",
