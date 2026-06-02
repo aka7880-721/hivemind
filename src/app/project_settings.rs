@@ -18,7 +18,7 @@ use tui_checkbox::Checkbox;
 
 use super::{
     App, BROWSE_BUTTON_WIDTH, BrowseTarget, FORM_LABEL_WIDTH, FormRowButton, HitAction, HitTarget,
-    visible_field_width,
+    normalize_path_for_repo_root, visible_field_width,
 };
 use crate::{
     config::{
@@ -451,22 +451,44 @@ impl ProjectSettingsState {
         field: ProjectSettingsFocus,
         focused: bool,
         max_width: usize,
+        repo_root: &str,
     ) -> Line<'static> {
         match field {
             ProjectSettingsFocus::CustomMainBranchName => self
                 .custom_main_branch_name
                 .display_line_with_width(focused, max_width),
             ProjectSettingsFocus::Alias => self.alias.display_line_with_width(focused, max_width),
-            ProjectSettingsFocus::AliasDistPath => self
-                .alias_dist_path
-                .display_line_with_width(focused, max_width),
-            ProjectSettingsFocus::AliasUiPath => self
-                .alias_ui_path
-                .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::AliasDistPath => {
+                if focused {
+                    self.alias_dist_path
+                        .display_line_with_width(true, max_width)
+                } else {
+                    Line::from(normalize_non_root_path(
+                        self.alias_dist_path.value(),
+                        repo_root,
+                    ))
+                }
+            }
+            ProjectSettingsFocus::AliasUiPath => {
+                if focused {
+                    self.alias_ui_path.display_line_with_width(true, max_width)
+                } else {
+                    Line::from(normalize_non_root_path(
+                        self.alias_ui_path.value(),
+                        repo_root,
+                    ))
+                }
+            }
             ProjectSettingsFocus::AliasCustomPath(index) => self
                 .alias_custom
                 .get(index as usize)
-                .map(|entry| entry.path.display_line_with_width(focused, max_width))
+                .map(|entry| {
+                    if focused {
+                        entry.path.display_line_with_width(true, max_width)
+                    } else {
+                        Line::from(normalize_non_root_path(entry.path.value(), repo_root))
+                    }
+                })
                 .unwrap_or_else(|| Line::from(String::new())),
             ProjectSettingsFocus::AliasCustomDraftName => self
                 .alias_custom_draft_name
@@ -474,21 +496,61 @@ impl ProjectSettingsState {
             ProjectSettingsFocus::ChangelogPath => self
                 .changelog_path
                 .display_line_with_width(focused, max_width),
-            ProjectSettingsFocus::ReleaseNowGeneral => self
-                .release_now_general
-                .display_line_with_width(focused, max_width),
-            ProjectSettingsFocus::ReleaseNowWindows => self
-                .release_now_windows
-                .display_line_with_width(focused, max_width),
-            ProjectSettingsFocus::ReleaseNowLinuxArm => self
-                .release_now_linux_arm
-                .display_line_with_width(focused, max_width),
-            ProjectSettingsFocus::ReleaseNowLinuxAmd => self
-                .release_now_linux_amd
-                .display_line_with_width(focused, max_width),
-            ProjectSettingsFocus::ReleaseNowMacOs => self
-                .release_now_macos
-                .display_line_with_width(focused, max_width),
+            ProjectSettingsFocus::ReleaseNowGeneral => {
+                if focused {
+                    self.release_now_general
+                        .display_line_with_width(true, max_width)
+                } else {
+                    Line::from(normalize_non_root_path(
+                        self.release_now_general.value(),
+                        repo_root,
+                    ))
+                }
+            }
+            ProjectSettingsFocus::ReleaseNowWindows => {
+                if focused {
+                    self.release_now_windows
+                        .display_line_with_width(true, max_width)
+                } else {
+                    Line::from(normalize_non_root_path(
+                        self.release_now_windows.value(),
+                        repo_root,
+                    ))
+                }
+            }
+            ProjectSettingsFocus::ReleaseNowLinuxArm => {
+                if focused {
+                    self.release_now_linux_arm
+                        .display_line_with_width(true, max_width)
+                } else {
+                    Line::from(normalize_non_root_path(
+                        self.release_now_linux_arm.value(),
+                        repo_root,
+                    ))
+                }
+            }
+            ProjectSettingsFocus::ReleaseNowLinuxAmd => {
+                if focused {
+                    self.release_now_linux_amd
+                        .display_line_with_width(true, max_width)
+                } else {
+                    Line::from(normalize_non_root_path(
+                        self.release_now_linux_amd.value(),
+                        repo_root,
+                    ))
+                }
+            }
+            ProjectSettingsFocus::ReleaseNowMacOs => {
+                if focused {
+                    self.release_now_macos
+                        .display_line_with_width(true, max_width)
+                } else {
+                    Line::from(normalize_non_root_path(
+                        self.release_now_macos.value(),
+                        repo_root,
+                    ))
+                }
+            }
             ProjectSettingsFocus::QuickDownloadsPosition => Line::from(format!(
                 "< {} >",
                 self.quick_downloads_position.value().trim()
@@ -1233,7 +1295,7 @@ fn render_scrollable_rows(
             }
             ProjectSettingsRow::Path(field) if row_area.height >= 3 => {
                 let focused = *field == app.project_settings_state.focus;
-                render_path_row(app, frame, row_area, *field, focused);
+                render_path_row(app, frame, row_area, *field, focused, project, scope_index);
             }
             ProjectSettingsRow::InjectDepth if row_area.height >= 2 => {
                 render_inject_depth_row(app, frame, row_area, project, scope_index);
@@ -1939,6 +2001,8 @@ fn render_path_row(
     area: Rect,
     field: ProjectSettingsFocus,
     focused: bool,
+    project: &ProjectConfig,
+    scope_index: usize,
 ) {
     let inset = control_inset(area);
     let side_button = match field {
@@ -1955,10 +2019,15 @@ fn render_path_row(
             HitAction::BrowseProjectSettingsField(field),
         )),
     };
+    let repo_root = project
+        .repo_config_for_scope(scope_index)
+        .map(|repo| repo.local_root.as_str())
+        .unwrap_or("");
     let value = app.project_settings_state.display_value_for_field(
         field,
         focused,
         visible_field_width(inset.width, side_button.is_some()),
+        repo_root,
     );
     let button_rect = render_path_form_row(
         frame,
@@ -2337,6 +2406,10 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
         return Ok(());
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
+    let repo_root = project
+        .repo_config_for_scope(scope_index)
+        .map(|repo| repo.local_root.as_str())
+        .unwrap_or("");
     let custom_main_branch = app
         .project_settings_state
         .custom_main_branch_name
@@ -2400,11 +2473,11 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     persist_alias_state_to_project(active_project, scope_index, &app.project_settings_state);
     active_project.set_changelog_path_for_scope(scope_index, changelog_path);
     let release_now = active_project.release_now_for_scope_mut(scope_index);
-    release_now.general_script = general_script;
-    release_now.windows_script = windows_script;
-    release_now.linux_arm_script = linux_arm_script;
-    release_now.linux_amd_script = linux_amd_script;
-    release_now.macos_script = macos_script;
+    release_now.general_script = normalize_non_root_path(&general_script, repo_root);
+    release_now.windows_script = normalize_non_root_path(&windows_script, repo_root);
+    release_now.linux_arm_script = normalize_non_root_path(&linux_arm_script, repo_root);
+    release_now.linux_amd_script = normalize_non_root_path(&linux_amd_script, repo_root);
+    release_now.macos_script = normalize_non_root_path(&macos_script, repo_root);
     release_now.release_title_template = app
         .project_settings_state
         .release_title_template
@@ -2424,6 +2497,31 @@ fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     }
     app.config_store.save(&app.config)?;
     Ok(())
+}
+
+fn normalize_non_root_path(value: &str, repo_root: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    // Always normalize separators; flags (e.g. `--win64`) are part of the string.
+    let normalized = trimmed.replace('\\', "/");
+
+    // If we don't know the repo root yet, treat leading `/` or `\` as "relative".
+    if repo_root.trim().is_empty() {
+        return normalized.trim_start_matches(['/', '\\']).to_string();
+    }
+
+    // First try to strip the repo_root prefix (absolute pasted paths).
+    let converted = normalize_path_for_repo_root(&normalized, repo_root);
+    if converted == normalized && (normalized.starts_with('/') || normalized.starts_with('\\')) {
+        // If it didn't match repo_root, interpret it as a "repo-root-relative" path input
+        // (e.g. `/dist/...` -> `dist/...`).
+        let stripped = normalized.trim_start_matches(['/', '\\']).to_string();
+        return normalize_path_for_repo_root(&stripped, repo_root);
+    }
+    converted
 }
 
 pub(crate) fn active_scope_index(project: &ProjectConfig, focused_scope: usize) -> usize {

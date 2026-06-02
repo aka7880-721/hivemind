@@ -11,7 +11,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
 };
-use ratatui_comfy_tabs::{TabNav, TabNavState, TabReorderPolicy, TabWheelDirection};
+use ratatui_comfy_tabs::{TabBarEnd, TabNav, TabNavState, TabReorderPolicy, TabWheelDirection};
 
 use crate::config::UiSettings;
 
@@ -52,6 +52,7 @@ pub(crate) fn project_settings_tab_nav<'a>(
 ) -> TabNav<'a> {
     apply_tab_selection_flash(
         comfy_tab_nav(labels, selected)
+            .tab_bar_end(TabBarEnd::NoEnd)
             .reorder_policy(TabReorderPolicy::SomePinned)
             .tab_pinned(tab_pinned)
             .mouse_reorder(true),
@@ -72,6 +73,7 @@ pub(crate) fn comfy_tab_nav<'a>(labels: &'a [&'a str], selected: usize) -> TabNa
     // mouse_wheel / mouse_click are opt-in at the widget level; the app must still
     // forward wheel/click events to TabNavState::handle_mouse_wheel / handle_mouse_click.
     TabNav::new(labels, selected)
+        .tab_bar_end(TabBarEnd::NoEnd) // Rnd/NoEnd end to the main Overview tab bar
         .highlight_style(Style::default().fg(Color::Cyan))
         .border_style(Style::default().fg(Color::DarkGray))
         .style(Style::default().fg(Color::White))
