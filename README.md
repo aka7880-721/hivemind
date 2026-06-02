@@ -58,12 +58,61 @@ Enjoy!
 
 ---
 
-<details><summary>👀 What's new in v0.34.3 ...</summary>
+<details><summary>👀 What's new in v0.35.20 ...</summary>
 
 ### 💥 💥 💥 This Release's Top Picks ...  💥 💥 💥
 
-<sup>💬 Intro:</sup>  
-<sup>_This release brings a huge improvements, we focused on behind the scenes stuff as the whole app has been restructurized; however, it also brings HUGE functionality enhancements that will be hard to miss..._</sup>  
+#### **1. &nbsp;&nbsp;&nbsp;v0.35.3: ComfyGitFlow declaration**
+#### **2. &nbsp;&nbsp;&nbsp;v0.35.3: New "Git" tab in `Project Settings`**
+- first entry: merge branch deletion setup
+
+#### **3. &nbsp;&nbsp;&nbsp;c0.35.4-7: Bugfixes and enhancements**
+- Discovered and fixed issues within GitLab merging flow
+
+#### **4. &nbsp;&nbsp;&nbsp;v.0.35.8: Auto-detection enhancements (`cg init` / wizard)**
+- Added to root manifest candidates:
+    - `settings.gradle` / `settings.gradle.kts` → Gradle (`version`)
+    - `GNUmakefile` → Makefile (`VERSION`)
+- Also added `settings.gradle*` to nested workspace detection (monorepos).
+- Source-embedded versions
+- New target formats:
+    - **`python_version`** — `__version__ = "x.y.z"` in `.py` files  
+    - **`c_define`** — `#define VERSION "x.y.z"` in headers/sources  
+- Auto-detected when the file exists and contains a readable version:
+    - Root: `__init__.py`, `version.py`, `_version.py`, `version.h`
+    - `src/<package>/__init__.py` (one level under `src/`)
+- **Usage notes**
+    - For Python, key path should be `__version__` (or leave default from init).  
+    - For C/C++, key path should be `VERSION` (or another macro name like `PROJECT_VERSION` if you configure it manually).  
+    - `settings.gradle` / `GNUmakefile` use the same parsers as `build.gradle` / `Makefile` (already supported in `target_custom.rs`).
+
+#### **5. &nbsp;&nbsp;&nbsp;Misc:**
+- v0.35.9-11:
+    - tabs within TUI were upgraded to use ratatui-comfy-tabs crate from crates.io
+    - bugfixes to "branch verifications" and "target change" during `cg br end`/`cg branch end`
+    - bugfixes to PATCH branch creation from MAIN branch
+- v0.35.12: Top Picks Editor enhacements:
+    - TPE now supports mouse wheel scroll
+    - TPE now accepts 4(as before) and 2(new) space indentation
+- v0.35.14: Improvements to `cg sync`
+    - applies only to "GitLab+GitHub" project type
+    - in `Project Settings/Git` now user can change two behaviours:
+        - manual or external sync (as it was before this version)
+        - automatic sync after each merge
+- v0.35.15-20:
+  - fixed nesting in Top Picks Editor
+  - implemented new ratatui-comfy-tabs features
+  - TUI now can use both, ABSOLUTE and RELATIVE paths!
+  - bugfix: mouse pane focus
+
+
+<sub>...  🎉 Enjoy!</sub>
+
+<br><br>
+
+<details><summary>👀 See previous changes...</summary>
+<br>
+<details><summary>v0-34-3 ...</summary>
 
 #### **1. &nbsp;&nbsp;&nbsp;v0.32.x: From now on, ComfyGit supports GitLab!**
 #### **2. &nbsp;&nbsp;&nbsp;v0.33.1-8: Follows up and fixes many bugs introduced by GitLab implementation**
@@ -88,10 +137,8 @@ Enjoy!
 
 <sub>...  🎉 Enjoy!</sub>
 
-<br><br>
-
-<details><summary>👀 See previous changes...</summary>
 <br>
+</details>
 <details><summary>v0-30-7 ...</summary>
 
 #### **1. &nbsp;&nbsp;&nbsp;Added support for most mainstream programming languages / eco-systems.**
@@ -138,56 +185,16 @@ Enjoy!
 
 <br>
 </details>
-<details><summary>v0-27-7 ...</summary>
-
-#### **1. &nbsp;&nbsp;&nbsp;TOP PICKS EDITOR!**
-- Now you can add, and edit your TP from TUI
-- Assigned shortcut `P`
-- New modal with full MD support
-- Fully implemented keyboard shortcuts (ctrl+a/c/v)
-- Fully implemented mouse action shortcuts (rightClick to paste/copy, doubleClick, click, drag&hold)
-
-#### **2. &nbsp;&nbsp;&nbsp;New ALT branch type!**
-- We all know the situation: 
-    - you "hit the wall", an obstacle to overcome to finish the feature in `dev` branch...
-    - you're on a junction, there are multiple possible approaches to take.
-- With the new `atl` type branch you can try them all
-- Fully implemented within ComfyGit eco-system
-    - easy to create via `cg new alt 1` (synced)
-    - or `cg new alt 2` (local-only)
-    - and even easier to merge via `cg br end`
-- To sum it up: ComfyGit now recognizes 4 type of branches:
-    - `x`
-    - `dev`
-    - `alt`
-    - `sub-alt`, that's right - sometimes there are obstactles within an obstacle :)
-
-#### **3. &nbsp;&nbsp;&nbsp;New `cg init` CLI command!**
-- adding a new project to ComfyGit have never been easier.
-- now it can be done from CLI via `cg init`!
-
-#### **4. &nbsp;&nbsp;&nbsp;New `cg merge local` CLI command!**
-- example synonyms: `cg mg ll`, `cg mrg loc`, `cg mg lcl`
-- there are use cases when local merge is needed, now it can be done via ComfyGit
-- `cg mg ll` starts an easy to navigate wizard where is hard to make any mistake
-
-#### **5. &nbsp;&nbsp;&nbsp;Misc**
-- fixed bad render within project tiles in Windows 11 terminals caused by win-specific unicode width.
-
-
-<sub>...  🎉 Enjoy!</sub>
-
-<br>
-</details>
 </details>
 <br>
 
 ---
-<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://gitlab.com/comfyhome/dist/ComfyGit/-/releases/v0.34.3)</sup>
+<sup>... ✨ auto-injected by [ComfyGit](https://github.com/comfy-home/ComfyGit)       |       For detailed changelog [CLICK HERE](https://gitlab.com/comfyhome/dist/ComfyGit/-/releases/v0.35.20)</sup>
 
 ---
 
 </details>
+
 
 
 
