@@ -277,6 +277,8 @@ impl App {
                 Style::default()
             });
         let left_inner = left_block.inner(chunks[0]);
+        // Used by mouse handling to move focus based on clicks anywhere inside panes.
+        self.projects_pane_rect = chunks[0];
         frame.render_widget(left_block, chunks[0]);
         if self.config.projects.is_empty() {
             let onboarding = vec![
@@ -335,6 +337,7 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(8)])
             .split(chunks[1]);
+        self.overview_pane_rect = right_sections[1];
         self.overview_show_recent_tab = self.should_use_recent_changes_tab(right_sections[1]);
         if !self.overview_show_recent_tab && self.overview_tab == OverviewTab::RecentChanges {
             self.overview_tab = OverviewTab::Overview;
