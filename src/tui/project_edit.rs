@@ -15,7 +15,7 @@ use crate::{
     app::{
         HitAction, ScopeAction, ScopeDraft, clamp_dialog_scroll, cycle_target_key_preset,
         default_target_key_for_path, derive_repo_root_from_target_path, dialog_form_row_height,
-        dialog_visible_rows, rotate_scope_kind,
+        dialog_visible_rows, normalize_path_for_repo_root, rotate_scope_kind,
     },
     config::{
         BranchConfig, BranchScopeKind, ChangelogSettings, DEFAULT_CHANGELOG_PATH, IntegrationMode,
@@ -222,13 +222,13 @@ impl ProjectEditDialog {
         fields.extend([
             ProjectEditFocus::VersionScheme,
             ProjectEditFocus::IntegrationMode,
-            ProjectEditFocus::TargetPath,
-            ProjectEditFocus::TargetKey,
         ]);
         let integration_mode = self.selected_integration_mode();
         if integration_mode.requires_repo() {
             fields.push(ProjectEditFocus::RepoRoot);
         }
+        fields.extend([ProjectEditFocus::TargetPath, ProjectEditFocus::TargetKey]);
+        let integration_mode = self.selected_integration_mode();
         if integration_mode.requires_remote() {
             fields.push(ProjectEditFocus::RemoteUrl);
         }
@@ -365,13 +365,25 @@ impl ProjectEditDialog {
                 if self.project_type == ProjectType::Branched {
                     self.current_scope()
                         .map(|scope| {
-                            scope
-                                .target_path
-                                .display_line_with_width(focused, max_width)
+                            if focused {
+                                scope.target_path.display_line_with_width(true, max_width)
+                            } else {
+                                Line::from(normalize_path_for_repo_root(
+                                    scope.target_path.value(),
+                                    self.repo_root.value(),
+                                ))
+                            }
                         })
                         .unwrap_or_else(|| Line::from(String::new()))
                 } else {
-                    self.target_path.display_line_with_width(focused, max_width)
+                    if focused {
+                        self.target_path.display_line_with_width(true, max_width)
+                    } else {
+                        Line::from(normalize_path_for_repo_root(
+                            self.target_path.value(),
+                            self.repo_root.value(),
+                        ))
+                    }
                 }
             }
             ProjectEditFocus::TargetKey => {
@@ -641,9 +653,10 @@ impl ProjectEditDialog {
     }
 
     pub(crate) fn set_target_path_from_browse(&mut self, path: String) {
+        let normalized = normalize_path_for_repo_root(&path, self.repo_root.value());
         if self.project_type == ProjectType::Branched {
             if let Some(scope) = self.current_scope_mut() {
-                scope.target_path.set_value(path);
+                scope.target_path.set_value(normalized);
                 if !scope.target_key_custom {
                     scope
                         .target_key
@@ -651,7 +664,7 @@ impl ProjectEditDialog {
                 }
             }
         } else {
-            self.target_path.set_value(path);
+            self.target_path.set_value(normalized);
             if !self.target_key_custom {
                 self.target_key
                     .set_value(default_target_key_for_path(self.target_path.value()));
@@ -786,7 +799,7 @@ impl ProjectEditDialog {
 
             let target = TargetSpec {
                 label: existing_target.label,
-                path: target_path.to_string(),
+                path: normalize_path_for_repo_root(target_path, self.repo_root.value.trim()),
                 key_path: target_key.to_string(),
                 format: existing_target.format,
             };
