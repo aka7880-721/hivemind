@@ -14,7 +14,7 @@ use ratatui::text::{Line, Text};
 
 use ratatui_image::picker::Picker;
 
-use crate::tui::help::assets::HelpImageResolver;
+use crate::tui::help::assets::{HELP_IMAGE_MAX_WIDTH, HELP_LAYOUT_WIDTH, HelpImageResolver};
 
 /// Stateful markdown view (supports interactive `<details>` toggles, links, and images).
 pub(crate) struct MarkdownView {
@@ -23,7 +23,6 @@ pub(crate) struct MarkdownView {
     resolved_images: Vec<ResolvedImage>,
     asset_resolver: Option<HelpImageResolver>,
     details_state: MarkdownInteractiveState,
-    width: u16,
 }
 
 impl MarkdownView {
@@ -33,9 +32,8 @@ impl MarkdownView {
         asset_dir: Option<&str>,
         picker: &Picker,
     ) -> Self {
-        let view_width = width.max(20);
-        let render_width = usize::from(view_width);
-        let renderer = MarkdownRenderer::new(render_width);
+        let layout_width = width.clamp(20, HELP_LAYOUT_WIDTH);
+        let renderer = MarkdownRenderer::new(usize::from(layout_width));
         let mut asset_resolver = asset_dir.map(|dir| HelpImageResolver::new(dir, picker));
         let (blocks, resolved_images) = if let Some(resolver) = asset_resolver.as_mut() {
             renderer.parse_with_images(markdown, resolver)
@@ -48,13 +46,7 @@ impl MarkdownView {
             resolved_images,
             asset_resolver,
             details_state: MarkdownInteractiveState::default(),
-            width: view_width,
         }
-    }
-
-    pub(crate) fn set_width(&mut self, width: u16) {
-        self.width = width.max(20);
-        self.renderer.set_max_width(self.width as usize);
     }
 
     pub(crate) fn render(&self) -> RenderedMarkdown {
@@ -67,8 +59,8 @@ impl MarkdownView {
                 &self.details_state,
                 &self.resolved_images,
                 &mut resolver,
-                self.width,
-                120,
+                HELP_IMAGE_MAX_WIDTH,
+                200,
             )
         } else {
             self.renderer
@@ -115,6 +107,50 @@ fn render_markdown_lines(markdown: &str, width: u16) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn dashboard_projects_help_renders_embedded_images() {
+        let md = "![logo](logo-protected.webp)\n\n![Demo](demo.webp)\n";
+        let picker = crate::tui::help::assets::create_help_picker();
+        let view = MarkdownView::new(md, HELP_LAYOUT_WIDTH, Some("pages/dashboard"), &picker);
+        let rendered = view.render();
+        let text: String = rendered
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            !text.contains("[image: logo]"),
+            "logo should resolve, text snippet:\n{text}"
+        );
+        assert!(
+            rendered.images.len() >= 2,
+            "expected demo + logo placements, got {}",
+            rendered.images.len()
+        );
+        assert!(
+            rendered
+                .images
+                .iter()
+                .any(|p| p.width_cells > 0 && p.height_cells > 0),
+            "image placements should have non-zero size"
+        );
+    }
+
+    #[test]
+    fn resolves_logo_protected_webp_png_bytes() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/tui/help/pages/dashboard/logo-protected.webp");
+        assert!(path.is_file());
+        let img = image::ImageReader::open(&path)
+            .expect("open")
+            .with_guessed_format()
+            .expect("guess format")
+            .decode()
+            .expect("logo bytes should decode regardless of extension");
+        assert_eq!(img.width(), 512);
+    }
 
     #[test]
     fn renders_markdown_table_with_box_drawing() {
