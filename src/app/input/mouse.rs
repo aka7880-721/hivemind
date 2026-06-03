@@ -34,6 +34,11 @@ impl App {
                         help.scroll_wheel(3);
                     }
                 }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(help) = &mut self.help_modal {
+                        help.handle_mouse(mouse);
+                    }
+                }
                 _ => {}
             }
             return;
