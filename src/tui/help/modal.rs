@@ -7,7 +7,6 @@
 use std::process::Stdio;
 
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-use image::imageops::FilterType;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -16,37 +15,55 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 use ratatui_image::{Image, Resize, picker::Picker, protocol::Protocol};
 
 use crate::tui::centered_rect;
+use crate::tui::help::assets::{
+    HELP_LAYOUT_WIDTH, create_help_picker, safe_font_size, scale_image_to_cells,
+};
 use crate::tui::markdown_render::MarkdownView;
 
-use super::assets::create_help_picker;
 use super::content::markdown_for;
 use super::context::HelpContext;
+
+struct PreparedImage {
+    width_cells: u16,
+    height_cells: u16,
+    protocol: Protocol,
+}
+
+fn frozen_text_area(body: Rect) -> Rect {
+    Rect::new(
+        body.x,
+        body.y,
+        HELP_LAYOUT_WIDTH.min(body.width),
+        body.height,
+    )
+}
 
 pub(crate) struct HelpModal {
     pub(crate) context: HelpContext,
     scroll: u16,
-    body_width: u16,
     markdown: MarkdownView,
     body_area: Rect,
     picker: Picker,
-    image_protocols: Vec<Option<Protocol>>,
-    image_protocol_width: u16,
+    prepared_images: Vec<PreparedImage>,
 }
 
 impl HelpModal {
     pub(crate) fn new(context: HelpContext) -> Self {
         let picker = create_help_picker();
-        let markdown = MarkdownView::new(markdown_for(context), 80, context.asset_dir(), &picker);
-        let image_protocols = Self::build_image_protocols(&picker, &markdown.render());
+        let markdown = MarkdownView::new(
+            markdown_for(context),
+            HELP_LAYOUT_WIDTH,
+            context.asset_dir(),
+            &picker,
+        );
+        let prepared_images = Self::prepare_images(&picker, &markdown.render());
         Self {
             context,
             scroll: 0,
-            body_width: 80,
             markdown,
             body_area: Rect::default(),
             picker,
-            image_protocols,
-            image_protocol_width: 80,
+            prepared_images,
         }
     }
 
@@ -125,12 +142,12 @@ impl HelpModal {
         frame.render_widget(body_block, sections[1]);
         self.body_area = body_inner;
 
-        self.body_width = body_inner.width.max(20);
-        self.markdown.set_width(self.body_width);
+        // Layout width is frozen at modal open — terminal resize only clips, never rescales.
         let rendered = self.markdown.render();
-        if self.body_width != self.image_protocol_width {
-            self.image_protocols = Self::build_image_protocols(&self.picker, &rendered);
-            self.image_protocol_width = self.body_width;
+        let text_area = frozen_text_area(body_inner);
+
+        if self.prepared_images.len() != rendered.images.len() {
+            self.prepared_images = Self::prepare_images(&self.picker, &rendered);
         }
 
         let body = Text::from(rendered.lines);
@@ -138,17 +155,17 @@ impl HelpModal {
             Paragraph::new(body)
                 .wrap(Wrap { trim: false })
                 .scroll((self.scroll, 0)),
-            body_inner,
+            text_area,
         );
 
         for (idx, placement) in rendered.images.iter().enumerate() {
-            let Some(protocol) = self.image_protocols.get(idx).and_then(|p| p.as_ref()) else {
+            let Some(prepared) = self.prepared_images.get(idx) else {
                 continue;
             };
-            let top = body_inner.y as i32 + placement.row as i32 - self.scroll as i32;
-            let bottom = top + placement.height_cells as i32;
-            let viewport_top = body_inner.y as i32;
-            let viewport_bottom = body_inner.y as i32 + body_inner.height as i32;
+            let top = text_area.y as i32 + placement.row as i32 - self.scroll as i32;
+            let bottom = top + prepared.height_cells as i32;
+            let viewport_top = text_area.y as i32;
+            let viewport_bottom = text_area.y as i32 + text_area.height as i32;
             if bottom <= viewport_top || top >= viewport_bottom {
                 continue;
             }
@@ -159,32 +176,32 @@ impl HelpModal {
                 continue;
             }
             let rect = Rect::new(
-                body_inner.x.saturating_add(placement.col as u16),
+                text_area.x.saturating_add(placement.col as u16),
                 clip_top,
-                placement.width_cells.min(body_inner.width),
+                prepared.width_cells,
                 vis_h,
             );
-            Image::new(protocol).render(rect, frame.buffer_mut());
+            Image::new(&prepared.protocol).render(rect, frame.buffer_mut());
         }
     }
 
-    fn build_image_protocols(
+    fn prepare_images(
         picker: &Picker,
         rendered: &comfy_txt_engine::markdown::RenderedMarkdown,
-    ) -> Vec<Option<Protocol>> {
-        let (font_w, font_h) = font_size(picker);
+    ) -> Vec<PreparedImage> {
+        let (font_w, font_h) = safe_font_size(picker);
         let proto = picker.protocol_type();
         rendered
             .images
             .iter()
-            .map(|placement| {
-                let target_w = (placement.width_cells as u32).saturating_mul(font_w as u32);
-                let target_h =
-                    (placement.height_cells as u32).saturating_mul(row_pixel_height(font_h, proto));
-                let scaled = placement.image.resize_exact(
-                    target_w.max(1),
-                    target_h.max(1),
-                    FilterType::Triangle,
+            .filter_map(|placement| {
+                let scaled = scale_image_to_cells(
+                    &placement.image,
+                    placement.width_cells,
+                    placement.height_cells,
+                    font_w,
+                    font_h,
+                    proto,
                 );
                 picker
                     .new_protocol(
@@ -193,6 +210,11 @@ impl HelpModal {
                         Resize::Fit(None),
                     )
                     .ok()
+                    .map(|protocol| PreparedImage {
+                        width_cells: placement.width_cells,
+                        height_cells: placement.height_cells,
+                        protocol,
+                    })
             })
             .collect()
     }
@@ -211,22 +233,6 @@ impl HelpModal {
             self.scroll = self.scroll.saturating_add(delta as u16);
         }
         self.scroll = self.scroll.min(self.max_scroll());
-    }
-}
-
-fn font_size(picker: &Picker) -> (u16, u16) {
-    let font = picker.font_size();
-    if font.width == 0 || font.height == 0 {
-        (8, 16)
-    } else {
-        (font.width, font.height)
-    }
-}
-
-fn row_pixel_height(font_h: u16, proto: ratatui_image::picker::ProtocolType) -> u32 {
-    match proto {
-        ratatui_image::picker::ProtocolType::Halfblocks => (font_h as u32) * 2,
-        _ => font_h as u32,
     }
 }
 
