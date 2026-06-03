@@ -4,7 +4,10 @@
 // Licensed under the ComfyGit SA-PS License
 // For details, see the LICENSE file in the repository root.
 
+use std::process::Stdio;
+
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use image::imageops::FilterType;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -15,6 +18,7 @@ use ratatui_image::{Image, Resize, picker::Picker, protocol::Protocol};
 use crate::tui::centered_rect;
 use crate::tui::markdown_render::MarkdownView;
 
+use super::assets::create_help_picker;
 use super::content::markdown_for;
 use super::context::HelpContext;
 
@@ -26,12 +30,13 @@ pub(crate) struct HelpModal {
     body_area: Rect,
     picker: Picker,
     image_protocols: Vec<Option<Protocol>>,
+    image_protocol_width: u16,
 }
 
 impl HelpModal {
     pub(crate) fn new(context: HelpContext) -> Self {
-        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
-        let markdown = MarkdownView::new(markdown_for(context), 80, context.asset_dir());
+        let picker = create_help_picker();
+        let markdown = MarkdownView::new(markdown_for(context), 80, context.asset_dir(), &picker);
         let image_protocols = Self::build_image_protocols(&picker, &markdown.render());
         Self {
             context,
@@ -41,6 +46,7 @@ impl HelpModal {
             body_area: Rect::default(),
             picker,
             image_protocols,
+            image_protocol_width: 80,
         }
     }
 
@@ -52,16 +58,16 @@ impl HelpModal {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return false;
         }
-        if !self.body_area.contains(Position::new(mouse.column, mouse.row)) {
+        if !self
+            .body_area
+            .contains(Position::new(mouse.column, mouse.row))
+        {
             return false;
         }
         let rel_row = mouse.row.saturating_sub(self.body_area.y) as usize;
         let document_line = self.scroll as usize + rel_row;
         let column = mouse.column.saturating_sub(self.body_area.x);
-        if let Some(url) = self
-            .markdown
-            .link_at_document_line(document_line, column)
-        {
+        if let Some(url) = self.markdown.link_at_document_line(document_line, column) {
             open_url(&url);
             return true;
         }
@@ -122,7 +128,10 @@ impl HelpModal {
         self.body_width = body_inner.width.max(20);
         self.markdown.set_width(self.body_width);
         let rendered = self.markdown.render();
-        self.image_protocols = Self::build_image_protocols(&self.picker, &rendered);
+        if self.body_width != self.image_protocol_width {
+            self.image_protocols = Self::build_image_protocols(&self.picker, &rendered);
+            self.image_protocol_width = self.body_width;
+        }
 
         let body = Text::from(rendered.lines);
         frame.render_widget(
@@ -133,7 +142,7 @@ impl HelpModal {
         );
 
         for (idx, placement) in rendered.images.iter().enumerate() {
-            let Some(proto) = self.image_protocols.get(idx).and_then(|p| p.as_ref()) else {
+            let Some(protocol) = self.image_protocols.get(idx).and_then(|p| p.as_ref()) else {
                 continue;
             };
             let top = body_inner.y as i32 + placement.row as i32 - self.scroll as i32;
@@ -152,10 +161,10 @@ impl HelpModal {
             let rect = Rect::new(
                 body_inner.x.saturating_add(placement.col as u16),
                 clip_top,
-                placement.width_cells,
+                placement.width_cells.min(body_inner.width),
                 vis_h,
             );
-            Image::new(proto).render(rect, frame.buffer_mut());
+            Image::new(protocol).render(rect, frame.buffer_mut());
         }
     }
 
@@ -163,13 +172,23 @@ impl HelpModal {
         picker: &Picker,
         rendered: &comfy_txt_engine::markdown::RenderedMarkdown,
     ) -> Vec<Option<Protocol>> {
+        let (font_w, font_h) = font_size(picker);
+        let proto = picker.protocol_type();
         rendered
             .images
             .iter()
             .map(|placement| {
+                let target_w = (placement.width_cells as u32).saturating_mul(font_w as u32);
+                let target_h =
+                    (placement.height_cells as u32).saturating_mul(row_pixel_height(font_h, proto));
+                let scaled = placement.image.resize_exact(
+                    target_w.max(1),
+                    target_h.max(1),
+                    FilterType::Triangle,
+                );
                 picker
                     .new_protocol(
-                        placement.image.clone(),
+                        scaled,
                         Rect::new(0, 0, placement.width_cells, placement.height_cells).into(),
                         Resize::Fit(None),
                     )
@@ -195,27 +214,53 @@ impl HelpModal {
     }
 }
 
+fn font_size(picker: &Picker) -> (u16, u16) {
+    let font = picker.font_size();
+    if font.width == 0 || font.height == 0 {
+        (8, 16)
+    } else {
+        (font.width, font.height)
+    }
+}
+
+fn row_pixel_height(font_h: u16, proto: ratatui_image::picker::ProtocolType) -> u32 {
+    match proto {
+        ratatui_image::picker::ProtocolType::Halfblocks => (font_h as u32) * 2,
+        _ => font_h as u32,
+    }
+}
+
 fn open_url(url: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
-        return std::process::Command::new("xdg-open")
+        std::process::Command::new("xdg-open")
             .arg(url)
+            .env_remove("DRI_PRIME")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
-            .is_ok();
+            .is_ok()
     }
     #[cfg(target_os = "macos")]
     {
-        return std::process::Command::new("open")
+        std::process::Command::new("open")
             .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
-            .is_ok();
+            .is_ok()
     }
     #[cfg(windows)]
     {
-        return std::process::Command::new("cmd")
+        std::process::Command::new("cmd")
             .args(["/C", "start", "", url])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
-            .is_ok();
+            .is_ok()
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
