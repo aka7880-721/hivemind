@@ -4,24 +4,25 @@
 // Licensed under the ComfyGit SA-PS License
 // For details, see the LICENSE file in the repository root.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::tui::centered_rect;
+use crate::tui::markdown_render::MarkdownView;
 
 use super::content::markdown_for;
 use super::context::HelpContext;
-use crate::tui::markdown_render::{markdown_line_count, render_markdown};
 
 pub(crate) struct HelpModal {
     pub(crate) context: HelpContext,
     scroll: u16,
-    /// Updated each frame so scroll limits match the rendered layout width.
     body_width: u16,
+    markdown: MarkdownView,
+    body_area: Rect,
 }
 
 impl HelpModal {
@@ -30,11 +31,25 @@ impl HelpModal {
             context,
             scroll: 0,
             body_width: 80,
+            markdown: MarkdownView::new(markdown_for(context), 80),
+            body_area: Rect::default(),
         }
     }
 
     pub(crate) fn scroll_wheel(&mut self, delta: i16) {
         self.scroll_by(delta);
+    }
+
+    pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return false;
+        }
+        if !self.body_area.contains(Position::new(mouse.column, mouse.row)) {
+            return false;
+        }
+        let rel_row = mouse.row.saturating_sub(self.body_area.y) as usize;
+        let document_line = self.scroll as usize + rel_row;
+        self.markdown.toggle_details_at_document_line(document_line)
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> bool {
@@ -49,6 +64,10 @@ impl HelpModal {
             KeyCode::Down if key.modifiers.is_empty() => self.scroll_by(1),
             KeyCode::Home => self.scroll = 0,
             KeyCode::End => self.scroll = self.max_scroll(),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let document_line = self.scroll as usize;
+                self.markdown.toggle_details_at_document_line(document_line);
+            }
             _ => {}
         }
         false
@@ -73,7 +92,7 @@ impl HelpModal {
 
         frame.render_widget(
             Paragraph::new(Line::from(
-                "? or Esc close  |  ↑/↓ PgUp/PgDn or wheel scroll  |  Home/End jump",
+                "? or Esc close  |  ↑/↓ PgUp/PgDn or wheel scroll  |  Home/End jump  |  click summary to expand",
             ))
             .style(Style::default().fg(Color::DarkGray)),
             sections[0],
@@ -82,9 +101,13 @@ impl HelpModal {
         let body_block = Block::default().borders(Borders::ALL);
         let body_inner = body_block.inner(sections[1]);
         frame.render_widget(body_block, sections[1]);
+        self.body_area = body_inner;
 
         self.body_width = body_inner.width.max(20);
-        let body = render_markdown(markdown_for(self.context), self.body_width);
+        self.markdown
+            .set_width(self.body_width);
+        let rendered = self.markdown.render();
+        let body = Text::from(rendered.lines);
         frame.render_widget(
             Paragraph::new(body)
                 .wrap(Wrap { trim: false })
@@ -94,7 +117,8 @@ impl HelpModal {
     }
 
     fn max_scroll(&self) -> u16 {
-        markdown_line_count(markdown_for(self.context), self.body_width)
+        self.markdown
+            .line_count()
             .saturating_sub(1)
             .min(u16::MAX as usize) as u16
     }
