@@ -12,6 +12,8 @@ use comfy_txt_engine::{
 };
 use ratatui::text::{Line, Text};
 
+use ratatui_image::picker::Picker;
+
 use crate::tui::help::assets::HelpImageResolver;
 
 /// Stateful markdown view (supports interactive `<details>` toggles, links, and images).
@@ -25,11 +27,16 @@ pub(crate) struct MarkdownView {
 }
 
 impl MarkdownView {
-    pub(crate) fn new(markdown: &str, width: u16, asset_dir: Option<&str>) -> Self {
+    pub(crate) fn new(
+        markdown: &str,
+        width: u16,
+        asset_dir: Option<&str>,
+        picker: &Picker,
+    ) -> Self {
         let view_width = width.max(20);
         let render_width = usize::from(view_width);
         let renderer = MarkdownRenderer::new(render_width);
-        let mut asset_resolver = asset_dir.map(HelpImageResolver::new);
+        let mut asset_resolver = asset_dir.map(|dir| HelpImageResolver::new(dir, picker));
         let (blocks, resolved_images) = if let Some(resolver) = asset_resolver.as_mut() {
             renderer.parse_with_images(markdown, resolver)
         } else {
@@ -47,8 +54,7 @@ impl MarkdownView {
 
     pub(crate) fn set_width(&mut self, width: u16) {
         self.width = width.max(20);
-        self.renderer
-            .set_max_width(self.width as usize);
+        self.renderer.set_max_width(self.width as usize);
     }
 
     pub(crate) fn render(&self) -> RenderedMarkdown {
@@ -62,7 +68,7 @@ impl MarkdownView {
                 &self.resolved_images,
                 &mut resolver,
                 self.width,
-                400,
+                120,
             )
         } else {
             self.renderer
@@ -100,7 +106,10 @@ pub(crate) fn markdown_line_count(markdown: &str, width: u16) -> usize {
 }
 
 fn render_markdown_lines(markdown: &str, width: u16) -> Vec<Line<'static>> {
-    MarkdownView::new(markdown, width, None).render().lines
+    let picker = crate::tui::help::assets::create_help_picker();
+    MarkdownView::new(markdown, width, None, &picker)
+        .render()
+        .lines
 }
 
 #[cfg(test)]
@@ -147,7 +156,8 @@ mod tests {
     #[test]
     fn details_toggle_reveals_body() {
         let md = "<details>\n<summary>Tips</summary>\n\n-hidden-\n</details>";
-        let mut view = MarkdownView::new(md, 40, None);
+        let picker = crate::tui::help::assets::create_help_picker();
+        let mut view = MarkdownView::new(md, 40, None, &picker);
         assert!(view.toggle_details_at_document_line(0));
         let text: String = view
             .render()
@@ -161,7 +171,8 @@ mod tests {
     #[test]
     fn records_link_hit_for_markdown_link() {
         let md = "See [ComfyHome](https://comfyhome.io) today.";
-        let rendered = MarkdownView::new(md, 60, None).render();
+        let picker = crate::tui::help::assets::create_help_picker();
+        let rendered = MarkdownView::new(md, 60, None, &picker).render();
         assert!(
             rendered
                 .link_hits
