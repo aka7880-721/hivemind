@@ -9,7 +9,8 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui_image::{Image, Resize, picker::Picker, protocol::Protocol};
 
 use crate::tui::centered_rect;
 use crate::tui::markdown_render::MarkdownView;
@@ -23,16 +24,23 @@ pub(crate) struct HelpModal {
     body_width: u16,
     markdown: MarkdownView,
     body_area: Rect,
+    picker: Picker,
+    image_protocols: Vec<Option<Protocol>>,
 }
 
 impl HelpModal {
     pub(crate) fn new(context: HelpContext) -> Self {
+        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+        let markdown = MarkdownView::new(markdown_for(context), 80, context.asset_dir());
+        let image_protocols = Self::build_image_protocols(&picker, &markdown.render());
         Self {
             context,
             scroll: 0,
             body_width: 80,
-            markdown: MarkdownView::new(markdown_for(context), 80),
+            markdown,
             body_area: Rect::default(),
+            picker,
+            image_protocols,
         }
     }
 
@@ -49,6 +57,14 @@ impl HelpModal {
         }
         let rel_row = mouse.row.saturating_sub(self.body_area.y) as usize;
         let document_line = self.scroll as usize + rel_row;
+        let column = mouse.column.saturating_sub(self.body_area.x);
+        if let Some(url) = self
+            .markdown
+            .link_at_document_line(document_line, column)
+        {
+            open_url(&url);
+            return true;
+        }
         self.markdown.toggle_details_at_document_line(document_line)
     }
 
@@ -92,7 +108,7 @@ impl HelpModal {
 
         frame.render_widget(
             Paragraph::new(Line::from(
-                "? or Esc close  |  ↑/↓ PgUp/PgDn or wheel scroll  |  Home/End jump  |  click summary to expand",
+                "? or Esc close  |  scroll  |  click links / summary  |  Home/End",
             ))
             .style(Style::default().fg(Color::DarkGray)),
             sections[0],
@@ -104,9 +120,10 @@ impl HelpModal {
         self.body_area = body_inner;
 
         self.body_width = body_inner.width.max(20);
-        self.markdown
-            .set_width(self.body_width);
+        self.markdown.set_width(self.body_width);
         let rendered = self.markdown.render();
+        self.image_protocols = Self::build_image_protocols(&self.picker, &rendered);
+
         let body = Text::from(rendered.lines);
         frame.render_widget(
             Paragraph::new(body)
@@ -114,6 +131,51 @@ impl HelpModal {
                 .scroll((self.scroll, 0)),
             body_inner,
         );
+
+        for (idx, placement) in rendered.images.iter().enumerate() {
+            let Some(proto) = self.image_protocols.get(idx).and_then(|p| p.as_ref()) else {
+                continue;
+            };
+            let top = body_inner.y as i32 + placement.row as i32 - self.scroll as i32;
+            let bottom = top + placement.height_cells as i32;
+            let viewport_top = body_inner.y as i32;
+            let viewport_bottom = body_inner.y as i32 + body_inner.height as i32;
+            if bottom <= viewport_top || top >= viewport_bottom {
+                continue;
+            }
+            let clip_top = top.max(viewport_top) as u16;
+            let clip_bottom = bottom.min(viewport_bottom) as u16;
+            let vis_h = clip_bottom.saturating_sub(clip_top);
+            if vis_h == 0 {
+                continue;
+            }
+            let rect = Rect::new(
+                body_inner.x.saturating_add(placement.col as u16),
+                clip_top,
+                placement.width_cells,
+                vis_h,
+            );
+            Image::new(proto).render(rect, frame.buffer_mut());
+        }
+    }
+
+    fn build_image_protocols(
+        picker: &Picker,
+        rendered: &comfy_txt_engine::markdown::RenderedMarkdown,
+    ) -> Vec<Option<Protocol>> {
+        rendered
+            .images
+            .iter()
+            .map(|placement| {
+                picker
+                    .new_protocol(
+                        placement.image.clone(),
+                        Rect::new(0, 0, placement.width_cells, placement.height_cells).into(),
+                        Resize::Fit(None),
+                    )
+                    .ok()
+            })
+            .collect()
     }
 
     fn max_scroll(&self) -> u16 {
@@ -130,5 +192,34 @@ impl HelpModal {
             self.scroll = self.scroll.saturating_add(delta as u16);
         }
         self.scroll = self.scroll.min(self.max_scroll());
+    }
+}
+
+fn open_url(url: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        return std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .is_ok();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .is_ok();
+    }
+    #[cfg(windows)]
+    {
+        return std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .is_ok();
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = url;
+        false
     }
 }
