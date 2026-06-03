@@ -1,6 +1,6 @@
 [package]
 name = "comfygit"
-version = "0.35.20"
+version = "0.36.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Ratatui public edition of the original Comfy Version Bumper"
@@ -26,7 +26,11 @@ name = "ComfyGit"
 path = "src/bin/cg-bin.rs"
 
 [workspace]
-exclude = ["src/components/comfy-toaster", "src/components/comfy-tabs"]
+exclude = [
+    "src/components/comfy-toaster",
+    "src/components/comfy-tabs",
+    "src/components/comfy-text-engine",
+]
 
 [dependencies]
 # Comfy dependencies
@@ -39,6 +43,10 @@ ratatui-comfy-toaster = "0.4"
 ## TABS
 #ratatui-comfy-tabs = { path = "src/components/comfy-tabs" }
 ratatui-comfy-tabs = "0.4"
+#
+## TEXT ENGINE
+ratatui-comfy-text-engine = { path = "src/components/comfy-text-engine", default-features = false, features = ["markdown"] }
+#ratatui-comfy-text-engine = "0"
 # E N D ----------------------------------------------------------
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
@@ -60,9 +68,6 @@ toml_edit = "0.25"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tui-textarea = "0.7"
 tui-overlay = "0.1.2"
-ratatui-markdown = { version = "0.3.6", default-features = false, features = ["markdown"] }
-# ratatui-markdown is built against ratatui 0.29; bridge lines into our ratatui 0.30 types.
-ratatui29 = { package = "ratatui", version = "=0.29.0", default-features = false }
 tui-checkbox = "0.4.4"
 unicode-segmentation = "1"
 unicode-width = "0.2"
