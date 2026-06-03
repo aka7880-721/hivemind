@@ -2080,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "ratatui-comfy-text-engine"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "ratatui 0.30.0",
  "unicode-width 0.2.0",
