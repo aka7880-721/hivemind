@@ -4,6 +4,7 @@
 // Licensed under the ComfyGit SA-PS License
 // For details, see the LICENSE file in the repository root.
 
+pub(crate) mod assets;
 mod content;
 mod context;
 mod modal;
