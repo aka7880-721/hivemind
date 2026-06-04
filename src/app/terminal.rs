@@ -80,7 +80,11 @@ pub(crate) fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>>
         EnableBracketedPaste
     )
     .context("failed to enter the alternate screen")?;
-    Terminal::new(CrosstermBackend::new(stdout)).context("failed to create terminal")
+    let terminal =
+        Terminal::new(CrosstermBackend::new(stdout)).context("failed to create terminal")?;
+    // Probe graphics protocols once (after alt screen) for sharp help images.
+    crate::tui::init_help_picker();
+    Ok(terminal)
 }
 
 pub(crate) fn restore_terminal(
