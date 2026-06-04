@@ -11,7 +11,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui_image::{
     Resize,
     picker::Picker,
@@ -20,9 +20,8 @@ use ratatui_image::{
 
 use crate::tui::centered_rect;
 use crate::tui::help::assets::{
-    HELP_LAYOUT_WIDTH, erase_terminal_cells, help_picker, help_terminal_bg, help_uses_sixel,
-    paint_sixel_backdrop, safe_font_size, scale_image_to_cells, screen_row_below_image,
-    seal_sixel_spill_row,
+    erase_terminal_cells, help_picker, help_terminal_bg, help_uses_sixel, paint_sixel_backdrop,
+    safe_font_size, scale_image_to_cells, screen_row_below_image, seal_sixel_spill_row,
 };
 use crate::tui::markdown_render::MarkdownView;
 
@@ -33,21 +32,12 @@ struct PreparedImage {
     sliced: SlicedProtocol,
 }
 
-fn frozen_text_area(body: Rect) -> Rect {
-    Rect::new(
-        body.x,
-        body.y,
-        HELP_LAYOUT_WIDTH.min(body.width),
-        body.height,
-    )
-}
-
 pub(crate) struct HelpModal {
     pub(crate) context: HelpContext,
     scroll: u16,
     last_scroll: u16,
     markdown: MarkdownView,
-    body_area: Rect,
+    text_area: Rect,
     picker: Picker,
     prepared_images: Vec<PreparedImage>,
 }
@@ -55,19 +45,14 @@ pub(crate) struct HelpModal {
 impl HelpModal {
     pub(crate) fn new(context: HelpContext) -> Self {
         let picker = help_picker();
-        let markdown = MarkdownView::new(
-            markdown_for(context),
-            HELP_LAYOUT_WIDTH,
-            context.asset_dir(),
-            &picker,
-        );
+        let markdown = MarkdownView::new(markdown_for(context), 120, context.asset_dir(), &picker);
         let prepared_images = Self::prepare_images(&picker, &markdown.render());
         Self {
             context,
             scroll: 0,
             last_scroll: 0,
             markdown,
-            body_area: Rect::default(),
+            text_area: Rect::default(),
             picker,
             prepared_images,
         }
@@ -82,14 +67,14 @@ impl HelpModal {
             return false;
         }
         if !self
-            .body_area
+            .text_area
             .contains(Position::new(mouse.column, mouse.row))
         {
             return false;
         }
-        let rel_row = mouse.row.saturating_sub(self.body_area.y) as usize;
+        let rel_row = mouse.row.saturating_sub(self.text_area.y) as usize;
         let document_line = self.scroll as usize + rel_row;
-        let column = mouse.column.saturating_sub(self.body_area.x);
+        let column = mouse.column.saturating_sub(self.text_area.x);
         if let Some(url) = self.markdown.link_at_document_line(document_line, column) {
             open_url(&url);
             return true;
@@ -146,10 +131,12 @@ impl HelpModal {
         let body_block = Block::default().borders(Borders::ALL);
         let body_inner = body_block.inner(sections[1]);
         frame.render_widget(body_block, sections[1]);
-        self.body_area = body_inner;
+        self.text_area = body_inner;
+        let layout_w = body_inner.width.saturating_sub(2).max(20);
+        self.markdown.set_layout_width(layout_w);
 
         let rendered = self.markdown.render();
-        let text_area = frozen_text_area(body_inner);
+        let text_area = body_inner;
 
         if self.prepared_images.len() != rendered.images.len() {
             self.prepared_images = Self::prepare_images(&self.picker, &rendered);
@@ -160,7 +147,6 @@ impl HelpModal {
         let body = Text::from(rendered.lines);
         frame.render_widget(
             Paragraph::new(body)
-                .wrap(Wrap { trim: false })
                 .scroll((self.scroll, 0))
                 .style(Style::default().bg(term_bg)),
             text_area,
