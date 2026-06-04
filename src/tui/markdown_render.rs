@@ -14,7 +14,7 @@ use ratatui::text::{Line, Text};
 
 use ratatui_image::picker::Picker;
 
-use crate::tui::help::assets::{HELP_IMAGE_MAX_WIDTH, HELP_LAYOUT_WIDTH, HelpImageResolver};
+use crate::tui::help::assets::{HELP_IMAGE_MAX_WIDTH, HelpImageResolver};
 
 /// Stateful markdown view (supports interactive `<details>` toggles, links, and images).
 pub(crate) struct MarkdownView {
@@ -32,7 +32,7 @@ impl MarkdownView {
         asset_dir: Option<&str>,
         picker: &Picker,
     ) -> Self {
-        let layout_width = width.clamp(20, HELP_LAYOUT_WIDTH);
+        let layout_width = width.max(20);
         let renderer = MarkdownRenderer::new(usize::from(layout_width));
         let mut asset_resolver = asset_dir.map(|dir| HelpImageResolver::new(dir, picker));
         let (blocks, resolved_images) = if let Some(resolver) = asset_resolver.as_mut() {
@@ -47,6 +47,10 @@ impl MarkdownView {
             asset_resolver,
             details_state: MarkdownInteractiveState::default(),
         }
+    }
+
+    pub(crate) fn set_layout_width(&mut self, width: u16) {
+        self.renderer.set_max_width(usize::from(width.max(20)));
     }
 
     pub(crate) fn render(&self) -> RenderedMarkdown {
@@ -113,7 +117,7 @@ mod tests {
     fn dashboard_projects_help_renders_embedded_images() {
         let md = "![logo](logo-protected.webp)\n\n![Demo](demo.webp)\n";
         let picker = crate::tui::help::assets::create_help_picker();
-        let view = MarkdownView::new(md, HELP_LAYOUT_WIDTH, Some("pages/dashboard"), &picker);
+        let view = MarkdownView::new(md, 120, Some("pages/dashboard"), &picker);
         let rendered = view.render();
         let text: String = rendered
             .lines
