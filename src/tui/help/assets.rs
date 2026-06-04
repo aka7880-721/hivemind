@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 
 use comfy_txt_engine::markdown::ImageResolver;
 use image::imageops::FilterType;
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui_image::picker::{Capability, Picker, ProtocolType, cap_parser::QueryStdioOptions};
 
@@ -105,8 +106,9 @@ fn apply_help_protocol_preference(picker: &mut Picker) {
     }
 
     if is_konsole() {
-        // Konsole: Sixel when advertised (enable in profile Advanced → Sixel).
-        picker.set_protocol_type(ProtocolType::Sixel);
+        // Konsole Sixel does not clear correctly in a scrolling TUI (ghost bands, wrong rows,
+        // multi-second cleanup). Halfblocks render in the cell buffer and scroll cleanly.
+        picker.set_protocol_type(ProtocolType::Halfblocks);
         return;
     }
 
@@ -176,12 +178,15 @@ pub(crate) fn paint_sixel_backdrop(
         let doc_row = scroll as usize + (y - text_area.y) as usize;
         for x in text_area.x..text_area.x.saturating_add(text_area.width) {
             let col = (x - text_area.x) as usize;
-            if placements.iter().any(|&(row_start, row_end, start_col, width)| {
-                doc_row >= row_start
-                    && doc_row < row_end
-                    && col >= start_col as usize
-                    && col < start_col as usize + width as usize
-            }) {
+            if placements
+                .iter()
+                .any(|&(row_start, row_end, start_col, width)| {
+                    doc_row >= row_start
+                        && doc_row < row_end
+                        && col >= start_col as usize
+                        && col < start_col as usize + width as usize
+                })
+            {
                 continue;
             }
             if let Some(cell) = buf.cell_mut((x, y)) {
@@ -191,6 +196,43 @@ pub(crate) fn paint_sixel_backdrop(
                 }
             }
         }
+    }
+}
+
+/// Opaque row + ECH erase for the terminal line directly under a Sixel image (band spill).
+pub(crate) fn seal_sixel_spill_row(
+    frame: &mut ratatui::Frame,
+    text_area: ratatui::layout::Rect,
+    screen_y: u16,
+    bg: Color,
+) {
+    if screen_y < text_area.y || screen_y >= text_area.y.saturating_add(text_area.height) {
+        return;
+    }
+    let row = Rect::new(text_area.x, screen_y, text_area.width, 1);
+    erase_terminal_cells(frame, row);
+    let buf = frame.buffer_mut();
+    for x in text_area.x..text_area.x.saturating_add(text_area.width) {
+        if let Some(cell) = buf.cell_mut((x, screen_y)) {
+            cell.set_symbol(" ");
+            cell.set_bg(bg);
+        }
+    }
+}
+
+/// Screen Y of the terminal row immediately below an image's last reserved line.
+pub(crate) fn screen_row_below_image(
+    text_area: ratatui::layout::Rect,
+    scroll: u16,
+    document_row: usize,
+    image_height: u16,
+) -> Option<u16> {
+    let rel = document_row as i32 + image_height as i32 - scroll as i32;
+    let y = text_area.y as i32 + rel;
+    if y < text_area.y as i32 || y >= text_area.y as i32 + text_area.height as i32 {
+        None
+    } else {
+        Some(y as u16)
     }
 }
 
@@ -277,10 +319,11 @@ fn help_target_rows(path: &str, proto: ProtocolType) -> u16 {
         "demo.webp" => 24,
         _ => 12,
     };
-    // Sixel uses one pixel row per terminal row (halfblocks use two), so allocate more rows
-    // for comparable resolution on Konsole / Ptyxis / VTE.
     match proto {
+        // Sixel: one pixel row per terminal row — need extra rows for sharpness.
         ProtocolType::Sixel => ((f32::from(base) * 1.75).ceil() as u16).min(48),
+        // Konsole halfblocks: extra rows for sharper ▀▄ rendering (2 px per cell row).
+        ProtocolType::Halfblocks if is_konsole() => ((f32::from(base) * 1.5).ceil() as u16).min(40),
         _ => base,
     }
 }
