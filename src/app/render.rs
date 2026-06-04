@@ -1278,9 +1278,7 @@ impl App {
             .scroll;
         let body = crate::tui::render_markdown(&preview_markdown, preview_width);
         frame.render_widget(
-            Paragraph::new(body)
-                .wrap(Wrap { trim: false })
-                .scroll((scroll, 0)),
+            Paragraph::new(body).scroll((scroll, 0)),
             body_inner,
         );
 
@@ -2190,12 +2188,21 @@ impl App {
             .as_ref()
             .expect("ReleaseNOW dialog should stay open while rendering");
         frame.render_widget(body_block, sections[2]);
-        frame.render_widget(
-            Paragraph::new(dialog.rendered_body_lines())
-                .wrap(Wrap { trim: false })
-                .scroll((dialog.scroll_offset(), 0)),
-            body_inner,
-        );
+        let body_lines = dialog.rendered_body_lines();
+        let body_scroll = (dialog.scroll_offset(), 0);
+        if dialog.is_release_notes_preview() {
+            frame.render_widget(
+                Paragraph::new(body_lines).scroll(body_scroll),
+                body_inner,
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new(body_lines)
+                    .wrap(Wrap { trim: false })
+                    .scroll(body_scroll),
+                body_inner,
+            );
+        }
 
         if dialog.is_mirror_sync_mode() {
             let sync_label = if dialog.mirror_sync_running {
