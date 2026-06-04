@@ -417,6 +417,8 @@ impl App {
             .as_mut()
             .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
         dialog.release_notes_markdown = notes;
+        self.release_now_markdown_view = None;
+        self.release_now_markdown_source.clear();
         self.release_now_notes_dialog = None;
         self.status = StatusMessage::success("ReleaseNOW release notes updated.");
         Ok(())
@@ -728,7 +730,75 @@ impl App {
 
         self.release_now_notes_dialog = None;
         self.release_now_dialog = None;
+        self.release_now_markdown_view = None;
+        self.release_now_markdown_source.clear();
         self.status = StatusMessage::info("ReleaseNOW closed.");
+    }
+
+    pub(crate) fn ensure_release_now_markdown_view(&mut self) {
+        let Some(dialog) = self.release_now_dialog.as_ref() else {
+            self.release_now_markdown_view = None;
+            self.release_now_markdown_source.clear();
+            return;
+        };
+        if !dialog.is_release_notes_preview() {
+            self.release_now_markdown_view = None;
+            self.release_now_markdown_source.clear();
+            return;
+        }
+
+        let markdown = dialog.release_notes_markdown.clone();
+        let width = dialog.release_notes_layout_width();
+        if self.release_now_markdown_view.is_none()
+            || self.release_now_markdown_source != markdown
+        {
+            crate::tui::init_help_picker();
+            let picker = crate::tui::help_picker();
+            self.release_now_markdown_view =
+                Some(crate::tui::MarkdownView::new(&markdown, width, None, &picker));
+            self.release_now_markdown_source = markdown;
+        } else if let Some(view) = &mut self.release_now_markdown_view {
+            view.set_layout_width(width);
+        }
+    }
+
+    pub(crate) fn try_toggle_release_now_details_at_mouse(&mut self, mouse_row: u16) -> bool {
+        let Some(viewport) = self.release_now_log_viewport else {
+            return false;
+        };
+        if !self
+            .release_now_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.is_release_notes_preview())
+        {
+            return false;
+        }
+
+        self.ensure_release_now_markdown_view();
+        let document_line = self
+            .release_now_dialog
+            .as_ref()
+            .map(|dialog| {
+                dialog.scroll_offset() as usize + mouse_row.saturating_sub(viewport.y) as usize
+            })
+            .unwrap_or(0);
+        let toggled = self
+            .release_now_markdown_view
+            .as_mut()
+            .map(|view| view.toggle_details_at_document_line(document_line))
+            .unwrap_or(false);
+        if !toggled {
+            return false;
+        }
+
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.clear_body_selection();
+            if let Some(view) = &self.release_now_markdown_view {
+                dialog.release_notes_display_line_count = view.line_count();
+            }
+            dialog.scroll = dialog.scroll_offset();
+        }
+        true
     }
 
     pub(crate) fn scroll_release_now(&mut self, delta: i16) {
@@ -753,37 +823,46 @@ impl App {
         let Some(viewport) = self.release_now_log_viewport else {
             return false;
         };
+        self.ensure_release_now_markdown_view();
+        let row = mouse_row.saturating_sub(viewport.y);
+        let notes_view = self.release_now_markdown_view.as_ref();
         let Some(dialog) = &mut self.release_now_dialog else {
             return false;
         };
 
-        dialog.begin_body_selection(mouse_row.saturating_sub(viewport.y))
+        dialog.begin_body_selection(row, notes_view)
     }
 
     pub(crate) fn update_release_now_log_selection(&mut self, mouse_row: u16) -> bool {
         let Some(viewport) = self.release_now_log_viewport else {
             return false;
         };
+        self.ensure_release_now_markdown_view();
+        let row = mouse_row.saturating_sub(viewport.y);
+        let notes_view = self.release_now_markdown_view.as_ref();
         let Some(dialog) = &mut self.release_now_dialog else {
             return false;
         };
 
-        dialog.update_body_selection(mouse_row.saturating_sub(viewport.y))
+        dialog.update_body_selection(row, notes_view)
     }
 
     pub(crate) fn copy_selected_release_now_log(&mut self, mouse_row: u16) {
         let Some(viewport) = self.release_now_log_viewport else {
             return;
         };
+        self.ensure_release_now_markdown_view();
+        let row = mouse_row.saturating_sub(viewport.y);
+        let notes_view = self.release_now_markdown_view.as_ref();
         let Some(dialog) = &mut self.release_now_dialog else {
             return;
         };
 
         if !dialog.has_body_selection() {
-            let _ = dialog.begin_body_selection(mouse_row.saturating_sub(viewport.y));
+            let _ = dialog.begin_body_selection(row, notes_view);
         }
 
-        if let Some(text) = dialog.selected_body_text() {
+        if let Some(text) = dialog.selected_body_text(notes_view) {
             self.copy_text_to_clipboard(&text);
         }
     }
