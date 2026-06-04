@@ -21,7 +21,8 @@ use ratatui_image::{
 use crate::tui::centered_rect;
 use crate::tui::help::assets::{
     HELP_LAYOUT_WIDTH, erase_terminal_cells, help_picker, help_terminal_bg, help_uses_sixel,
-    paint_sixel_backdrop, safe_font_size, scale_image_to_cells,
+    paint_sixel_backdrop, safe_font_size, scale_image_to_cells, screen_row_below_image,
+    seal_sixel_spill_row,
 };
 use crate::tui::markdown_render::MarkdownView;
 
@@ -172,16 +173,20 @@ impl HelpModal {
             for (placement, prepared) in rendered.images.iter().zip(&self.prepared_images) {
                 let size = prepared.sliced.size();
                 let old_top = text_area.y as i32 + placement.row as i32 - self.last_scroll as i32;
+                let old_h = size.height as i32 + 1;
                 if old_top < text_area.y as i32 + text_area.height as i32
-                    && old_top + size.height as i32 > text_area.y as i32
+                    && old_top + old_h > text_area.y as i32
                 {
-                    let rect = Rect::new(
-                        text_area.x.saturating_add(placement.col as u16),
-                        old_top.max(text_area.y as i32) as u16,
-                        size.width,
-                        size.height,
-                    );
-                    erase_terminal_cells(frame, rect);
+                    let clip_top = old_top.max(text_area.y as i32) as u16;
+                    let clip_bot =
+                        (old_top + old_h).min(text_area.y as i32 + text_area.height as i32) as u16;
+                    let vis_h = clip_bot.saturating_sub(clip_top);
+                    if vis_h > 0 {
+                        erase_terminal_cells(
+                            frame,
+                            Rect::new(text_area.x, clip_top, text_area.width, vis_h),
+                        );
+                    }
                 }
             }
         }
@@ -192,6 +197,14 @@ impl HelpModal {
                 placement.row as i16 - self.scroll as i16,
             ));
             frame.render_widget(SlicedImage::new(&prepared.sliced, position), text_area);
+            if help_uses_sixel(&self.picker) {
+                let size = prepared.sliced.size();
+                if let Some(y) =
+                    screen_row_below_image(text_area, self.scroll, placement.row, size.height)
+                {
+                    seal_sixel_spill_row(frame, text_area, y, term_bg);
+                }
+            }
         }
 
         if help_uses_sixel(&self.picker) {
@@ -210,9 +223,9 @@ impl HelpModal {
             .zip(&self.prepared_images)
             .map(|(placement, prepared)| {
                 let size = prepared.sliced.size();
-                let row_start = placement.row.saturating_sub(1);
-                let row_end = placement.row + size.height as usize + 1;
-                (row_start, row_end, placement.col as u16, size.width)
+                // Only skip backdrop on cells where Sixel is drawn; spill row below gets painted.
+                let row_end = placement.row + size.height as usize;
+                (placement.row, row_end, placement.col as u16, size.width)
             })
             .collect()
     }
