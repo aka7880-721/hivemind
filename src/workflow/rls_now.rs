@@ -971,6 +971,24 @@ impl ReleaseNowDialog {
         }
     }
 
+    pub(crate) fn is_release_notes_preview(&self) -> bool {
+        matches!(self.mode, ReleaseNowMode::Configure)
+            && !self.running
+            && self.attach_changelog
+    }
+
+    fn release_notes_layout_width(&self) -> u16 {
+        self.body_viewport_width.saturating_sub(2).max(20)
+    }
+
+    fn release_notes_rendered_lines(&self) -> Vec<Line<'static>> {
+        crate::tui::render_markdown(
+            &self.release_notes_markdown,
+            self.release_notes_layout_width(),
+        )
+        .lines
+    }
+
     pub(crate) fn selected_option(&self) -> &ReleaseNowRunOption {
         &self.options[self
             .selected_option
@@ -1226,6 +1244,12 @@ impl ReleaseNowDialog {
             return None;
         }
 
+        if self.is_release_notes_preview() {
+            let scroll_offset = self.scroll_offset() as usize;
+            let index = scroll_offset + row_offset as usize;
+            return Some(index.min(count.saturating_sub(1)));
+        }
+
         let content_width = self.body_viewport_width.max(1) as usize;
         let scroll_offset = self.scroll_offset() as usize;
         let target_row = row_offset as usize;
@@ -1294,10 +1318,7 @@ impl ReleaseNowDialog {
                         self.log_display_lines()
                     }
                 } else if self.attach_changelog {
-                    self.release_notes_markdown
-                        .lines()
-                        .map(|line| Line::from(line.to_string()))
-                        .collect()
+                    self.release_notes_rendered_lines()
                 } else {
                     vec![
                         Line::from("Changelog attachment is disabled for this release.")
@@ -1388,9 +1409,14 @@ impl ReleaseNowDialog {
                             .collect()
                     }
                 } else if self.attach_changelog {
-                    self.release_notes_markdown
-                        .lines()
-                        .map(|line| line.to_string())
+                    self.release_notes_rendered_lines()
+                        .iter()
+                        .map(|line| {
+                            line.spans
+                                .iter()
+                                .map(|span| span.content.as_ref())
+                                .collect::<String>()
+                        })
                         .collect()
                 } else {
                     vec![
@@ -3825,5 +3851,88 @@ mod tests {
 
         assert!(dialog.scripts_to_run().is_empty());
         assert!(dialog.artifact_reuse_summary().is_some());
+    }
+
+    #[test]
+    fn release_notes_preview_renders_markdown_with_cte() {
+        let dialog = ReleaseNowDialog {
+            project_name: "Test".to_string(),
+            integration_mode: crate::config::IntegrationMode::GitHubEnabled,
+            scope_label: "main".to_string(),
+            scope: GitScopeContext {
+                display_name: "main".to_string(),
+                scope_kind: None,
+                repo_root: "/tmp".to_string(),
+                remote_spec: None,
+                secondary_remote_spec: None,
+                main_branch_name: Some("main".to_string()),
+                suggested_tag_name: "v0.3.2".to_string(),
+                path_filters: Vec::new(),
+                hide_pr_messages: false,
+                hide_bump_messages: false,
+                mini_commit_hashes: false,
+                changelog_wrap_detailed_if_top_picks: false,
+            },
+            changelog_enabled: true,
+            mirror_summary_to_root_changelog: false,
+            repo_root: "/tmp".to_string(),
+            tag_name: "v0.3.2".to_string(),
+            options: Vec::new(),
+            selected_option: 0,
+            attach_changelog: true,
+            release_notes_markdown: "## Features\n\n* first item\n* second item\n".to_string(),
+            release_notes_placeholder: String::new(),
+            warning_message: None,
+            mode: ReleaseNowMode::Configure,
+            running: false,
+            auto_follow: false,
+            cancel_requested: false,
+            warning_confirm_selected: false,
+            platform_artifact_statuses: Vec::new(),
+            artifact_strategy: ReleaseNowArtifactStrategy::Pending,
+            artifact_reuse_by_label: std::collections::HashMap::new(),
+            artifacts_choice_selected: 0,
+            customize_selected_platform: 0,
+            scroll: 0,
+            body_viewport_height: 20,
+            body_viewport_width: 80,
+            selection_anchor: None,
+            selection_focus: None,
+            summary: None,
+            summary_is_warning: false,
+            summary_is_error: false,
+            artifact_files: Vec::new(),
+            log_lines: Vec::new(),
+            quick_downloads: ReleaseNowQuickDownloadsSettings::default(),
+            readme_injection_enabled: false,
+            readme_inject_only_top_picks: false,
+            readme_inject_depth: crate::config::ReadmeInjectDepth::CurrentOnly,
+            readme_inject_at_row: 0,
+            release_title_template: String::new(),
+            mirror_sync_report: None,
+            mirror_sync_running: false,
+            mirror_sync_log_lines: Vec::new(),
+            started_at: None,
+            frozen_elapsed: None,
+        };
+
+        assert!(dialog.is_release_notes_preview());
+        let rendered: String = dialog
+            .rendered_body_lines()
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect();
+        assert!(
+            rendered.contains("Features"),
+            "expected rendered heading, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("first item") && rendered.contains("second item"),
+            "expected rendered list items, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("## Features"),
+            "raw markdown should be parsed, got:\n{rendered}"
+        );
     }
 }
