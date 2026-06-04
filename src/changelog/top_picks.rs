@@ -378,7 +378,7 @@ fn render_top_picks_intro(intro: &TopPicksIntro) -> Vec<String> {
                 lines.push(format!("<sup>_{}_</sup>  ", text));
             }
             TopPicksIntroLine::Bullet(text) => {
-                lines.push(format!("<sup>_- {}_</sup>", text));
+                lines.push(format!("<sup>_- {}_</sup>  ", text));
             }
         }
     }
@@ -880,8 +880,8 @@ mod tests {
         let output = render_top_picks_section(&picks, Some(&intro)).join("\n");
         assert!(output.contains("<sup>💬 Intro:</sup>"));
         assert!(output.contains("<sup>_This release focuses on these elements:_</sup>"));
-        assert!(output.contains("<sup>_- render_</sup>"));
-        assert!(output.contains("<sup>_- bugfixes_</sup>"));
+        assert!(output.contains("<sup>_- render_</sup>  "));
+        assert!(output.contains("<sup>_- bugfixes_</sup>  "));
         assert!(output.contains("#### **1."));
         assert!(output.contains("Rendering enhancements"));
     }

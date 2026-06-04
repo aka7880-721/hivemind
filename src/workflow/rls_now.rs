@@ -619,6 +619,8 @@ pub(crate) struct ReleaseNowDialog {
     pub(crate) scroll: u16,
     pub(crate) body_viewport_height: u16,
     pub(crate) body_viewport_width: u16,
+    /// Rendered line count for release-notes markdown preview (updated each frame).
+    pub(crate) release_notes_display_line_count: usize,
     pub(crate) selection_anchor: Option<usize>,
     pub(crate) selection_focus: Option<usize>,
     pub(crate) summary: Option<String>,
@@ -672,6 +674,7 @@ impl ReleaseNowDialog {
             scroll: 0,
             body_viewport_height: 0,
             body_viewport_width: 0,
+            release_notes_display_line_count: 0,
             selection_anchor: None,
             selection_focus: None,
             summary: None,
@@ -971,6 +974,43 @@ impl ReleaseNowDialog {
         }
     }
 
+    pub(crate) fn is_release_notes_preview(&self) -> bool {
+        matches!(self.mode, ReleaseNowMode::Configure)
+            && !self.running
+            && self.attach_changelog
+    }
+
+    pub(crate) fn release_notes_layout_width(&self) -> u16 {
+        self.body_viewport_width.saturating_sub(2).max(20)
+    }
+
+    pub(crate) fn clear_body_selection(&mut self) {
+        self.selection_anchor = None;
+        self.selection_focus = None;
+    }
+
+    fn release_notes_rendered_lines_fallback(&self) -> Vec<Line<'static>> {
+        crate::tui::render_markdown(
+            &self.release_notes_markdown,
+            self.release_notes_layout_width(),
+        )
+        .lines
+    }
+
+    fn release_notes_plain_lines_from_view(view: &crate::tui::MarkdownView) -> Vec<String> {
+        view
+            .render()
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
     pub(crate) fn selected_option(&self) -> &ReleaseNowRunOption {
         &self.options[self
             .selected_option
@@ -1162,8 +1202,12 @@ impl ReleaseNowDialog {
     }
 
     fn max_scroll_offset(&self) -> u16 {
-        self.body_plain_lines()
-            .len()
+        let line_count = if self.is_release_notes_preview() {
+            self.release_notes_display_line_count
+        } else {
+            self.body_plain_lines(None).len()
+        };
+        line_count
             .saturating_sub(self.body_viewport_height.max(1) as usize)
             .min(u16::MAX as usize) as u16
     }
@@ -1172,8 +1216,12 @@ impl ReleaseNowDialog {
         self.max_scroll_offset()
     }
 
-    pub(crate) fn begin_body_selection(&mut self, row_offset: u16) -> bool {
-        let Some(index) = self.body_line_index_for_row(row_offset) else {
+    pub(crate) fn begin_body_selection(
+        &mut self,
+        row_offset: u16,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> bool {
+        let Some(index) = self.body_line_index_for_row(row_offset, notes_view) else {
             return false;
         };
 
@@ -1185,11 +1233,15 @@ impl ReleaseNowDialog {
         true
     }
 
-    pub(crate) fn update_body_selection(&mut self, row_offset: u16) -> bool {
+    pub(crate) fn update_body_selection(
+        &mut self,
+        row_offset: u16,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> bool {
         let Some(anchor) = self.selection_anchor else {
             return false;
         };
-        let Some(index) = self.body_line_index_for_row(row_offset) else {
+        let Some(index) = self.body_line_index_for_row(row_offset, notes_view) else {
             return false;
         };
 
@@ -1202,15 +1254,13 @@ impl ReleaseNowDialog {
         self.selection_anchor.is_some() && self.selection_focus.is_some()
     }
 
-    pub(crate) fn selected_body_text(&self) -> Option<String> {
+    pub(crate) fn selected_body_text(
+        &self,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> Option<String> {
         let (start, end) = self.selection_range()?;
-        let lines = self.body_plain_lines();
+        let lines = self.body_plain_lines(notes_view);
         Some(lines[start..=end].join("\n"))
-    }
-
-    fn clear_body_selection(&mut self) {
-        self.selection_anchor = None;
-        self.selection_focus = None;
     }
 
     fn selection_range(&self) -> Option<(usize, usize)> {
@@ -1219,11 +1269,21 @@ impl ReleaseNowDialog {
         Some((start.min(end), start.max(end)))
     }
 
-    fn body_line_index_for_row(&self, row_offset: u16) -> Option<usize> {
-        let lines = self.body_plain_lines();
+    fn body_line_index_for_row(
+        &self,
+        row_offset: u16,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> Option<usize> {
+        let lines = self.body_plain_lines(notes_view);
         let count = lines.len();
         if count == 0 {
             return None;
+        }
+
+        if self.is_release_notes_preview() {
+            let scroll_offset = self.scroll_offset() as usize;
+            let index = scroll_offset + row_offset as usize;
+            return Some(index.min(count.saturating_sub(1)));
         }
 
         let content_width = self.body_viewport_width.max(1) as usize;
@@ -1264,7 +1324,10 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(crate) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
+    pub(crate) fn rendered_body_lines(
+        &self,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> Vec<Line<'static>> {
         let lines = match self.mode {
             ReleaseNowMode::MirrorSync => self.mirror_sync_body_lines(),
             ReleaseNowMode::BumpWarning => {
@@ -1294,10 +1357,9 @@ impl ReleaseNowDialog {
                         self.log_display_lines()
                     }
                 } else if self.attach_changelog {
-                    self.release_notes_markdown
-                        .lines()
-                        .map(|line| Line::from(line.to_string()))
-                        .collect()
+                    notes_view
+                        .map(|view| view.render().lines)
+                        .unwrap_or_else(|| self.release_notes_rendered_lines_fallback())
                 } else {
                     vec![
                         Line::from("Changelog attachment is disabled for this release.")
@@ -1361,7 +1423,7 @@ impl ReleaseNowDialog {
             .collect()
     }
 
-    fn body_plain_lines(&self) -> Vec<String> {
+    fn body_plain_lines(&self, notes_view: Option<&crate::tui::MarkdownView>) -> Vec<String> {
         match self.mode {
             ReleaseNowMode::MirrorSync => self.mirror_sync_plain_lines(),
             ReleaseNowMode::BumpWarning => {
@@ -1388,10 +1450,19 @@ impl ReleaseNowDialog {
                             .collect()
                     }
                 } else if self.attach_changelog {
-                    self.release_notes_markdown
-                        .lines()
-                        .map(|line| line.to_string())
-                        .collect()
+                    notes_view
+                        .map(Self::release_notes_plain_lines_from_view)
+                        .unwrap_or_else(|| {
+                            self.release_notes_rendered_lines_fallback()
+                                .iter()
+                                .map(|line| {
+                                    line.spans
+                                        .iter()
+                                        .map(|span| span.content.as_ref())
+                                        .collect::<String>()
+                                })
+                                .collect()
+                        })
                 } else {
                     vec![
                         "Changelog attachment is disabled for this release.".to_string(),
@@ -3803,6 +3874,7 @@ mod tests {
             scroll: 0,
             body_viewport_height: 0,
             body_viewport_width: 0,
+            release_notes_display_line_count: 0,
             selection_anchor: None,
             selection_focus: None,
             summary: None,
@@ -3825,5 +3897,89 @@ mod tests {
 
         assert!(dialog.scripts_to_run().is_empty());
         assert!(dialog.artifact_reuse_summary().is_some());
+    }
+
+    #[test]
+    fn release_notes_preview_renders_markdown_with_cte() {
+        let dialog = ReleaseNowDialog {
+            project_name: "Test".to_string(),
+            integration_mode: crate::config::IntegrationMode::GitHubEnabled,
+            scope_label: "main".to_string(),
+            scope: GitScopeContext {
+                display_name: "main".to_string(),
+                scope_kind: None,
+                repo_root: "/tmp".to_string(),
+                remote_spec: None,
+                secondary_remote_spec: None,
+                main_branch_name: Some("main".to_string()),
+                suggested_tag_name: "v0.3.2".to_string(),
+                path_filters: Vec::new(),
+                hide_pr_messages: false,
+                hide_bump_messages: false,
+                mini_commit_hashes: false,
+                changelog_wrap_detailed_if_top_picks: false,
+            },
+            changelog_enabled: true,
+            mirror_summary_to_root_changelog: false,
+            repo_root: "/tmp".to_string(),
+            tag_name: "v0.3.2".to_string(),
+            options: Vec::new(),
+            selected_option: 0,
+            attach_changelog: true,
+            release_notes_markdown: "## Features\n\n* first item\n* second item\n".to_string(),
+            release_notes_placeholder: String::new(),
+            warning_message: None,
+            mode: ReleaseNowMode::Configure,
+            running: false,
+            auto_follow: false,
+            cancel_requested: false,
+            warning_confirm_selected: false,
+            platform_artifact_statuses: Vec::new(),
+            artifact_strategy: ReleaseNowArtifactStrategy::Pending,
+            artifact_reuse_by_label: std::collections::HashMap::new(),
+            artifacts_choice_selected: 0,
+            customize_selected_platform: 0,
+            scroll: 0,
+            body_viewport_height: 20,
+            body_viewport_width: 80,
+            release_notes_display_line_count: 0,
+            selection_anchor: None,
+            selection_focus: None,
+            summary: None,
+            summary_is_warning: false,
+            summary_is_error: false,
+            artifact_files: Vec::new(),
+            log_lines: Vec::new(),
+            quick_downloads: ReleaseNowQuickDownloadsSettings::default(),
+            readme_injection_enabled: false,
+            readme_inject_only_top_picks: false,
+            readme_inject_depth: crate::config::ReadmeInjectDepth::CurrentOnly,
+            readme_inject_at_row: 0,
+            release_title_template: String::new(),
+            mirror_sync_report: None,
+            mirror_sync_running: false,
+            mirror_sync_log_lines: Vec::new(),
+            started_at: None,
+            frozen_elapsed: None,
+        };
+
+        assert!(dialog.is_release_notes_preview());
+        let rendered: String = dialog
+            .rendered_body_lines(None)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect();
+        assert!(
+            rendered.contains("Features"),
+            "expected rendered heading, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("first item") && rendered.contains("second item"),
+            "expected rendered list items, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("## Features"),
+            "raw markdown should be parsed, got:\n{rendered}"
+        );
     }
 }
