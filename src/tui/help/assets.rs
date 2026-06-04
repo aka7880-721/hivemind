@@ -6,10 +6,14 @@
 
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use comfy_txt_engine::markdown::ImageResolver;
 use image::imageops::FilterType;
-use ratatui_image::picker::{Capability, Picker, ProtocolType};
+use ratatui::style::Color;
+use ratatui_image::picker::{Capability, Picker, ProtocolType, cap_parser::QueryStdioOptions};
+
+static HELP_PICKER: OnceLock<Picker> = OnceLock::new();
 
 /// Markdown column width frozen when the help modal first opens (not terminal resize).
 pub const HELP_LAYOUT_WIDTH: u16 = 76;
@@ -41,17 +45,188 @@ impl HelpImageResolver {
     }
 }
 
+/// Query terminal capabilities once after entering the alternate screen (see `init_help_picker`).
+pub(crate) fn init_help_picker() {
+    let _ = HELP_PICKER.get_or_init(build_help_picker);
+}
+
+/// Cached picker from startup; falls back to a fresh query in unit tests.
+pub(crate) fn help_picker() -> Picker {
+    HELP_PICKER.get().cloned().unwrap_or_else(build_help_picker)
+}
+
+fn is_konsole() -> bool {
+    std::env::var("KONSOLE_VERSION").is_ok_and(|s| !s.is_empty())
+}
+
+fn is_ptyxis_or_vte() -> bool {
+    std::env::var("VTE_VERSION").is_ok_and(|s| !s.is_empty())
+        || std::env::var("PTYXIS_VERSION").is_ok_and(|s| !s.is_empty())
+        || std::env::var("TERM_PROGRAM").is_ok_and(|p| {
+            let lower = p.to_ascii_lowercase();
+            lower.contains("ptyxis")
+                || lower == "vte"
+                || lower.contains("gnome-terminal")
+                || lower == "tilix"
+        })
+}
+
+fn is_kitty_terminal() -> bool {
+    std::env::var("KITTY_WINDOW_ID").is_ok_and(|s| !s.is_empty())
+        || std::env::var("TERM").is_ok_and(|t| t.to_ascii_lowercase().contains("kitty"))
+}
+
+/// `ratatui-image` blacklists Kitty+Sixel IO probes for Konsole/WezTerm, which forces halfblocks
+/// and heavy pixelation. KDE/VTE terminals need Sixel detection instead.
+fn help_query_options() -> QueryStdioOptions {
+    let blacklist_protocols = if is_konsole() {
+        // Konsole kitty placeholders are incomplete — prefer sixel when both are reported.
+        vec![ProtocolType::Kitty]
+    } else if is_ptyxis_or_vte() {
+        // Allow Sixel detection (Ptyxis/VTE ≥0.62).
+        Vec::new()
+    } else {
+        Vec::new()
+    };
+
+    QueryStdioOptions {
+        terminal_background_color_osc: true,
+        blacklist_protocols,
+        ..QueryStdioOptions::default()
+    }
+}
+
+fn apply_help_protocol_preference(picker: &mut Picker) {
+    let caps = picker.capabilities().clone();
+
+    if is_kitty_terminal() && caps.contains(&Capability::Kitty) {
+        picker.set_protocol_type(ProtocolType::Kitty);
+        return;
+    }
+
+    if is_konsole() {
+        // Konsole: Sixel when advertised (enable in profile Advanced → Sixel).
+        picker.set_protocol_type(ProtocolType::Sixel);
+        return;
+    }
+
+    if is_ptyxis_or_vte() {
+        if caps.contains(&Capability::Sixel) {
+            picker.set_protocol_type(ProtocolType::Sixel);
+        } else {
+            // Forced sixel without support draws black boxes on VTE/Ptyxis.
+            picker.set_protocol_type(ProtocolType::Halfblocks);
+        }
+        return;
+    }
+
+    if caps.contains(&Capability::Kitty) {
+        picker.set_protocol_type(ProtocolType::Kitty);
+    } else if caps.contains(&Capability::Sixel) {
+        picker.set_protocol_type(ProtocolType::Sixel);
+    }
+
+    if let Some((r, g, b)) = caps.iter().find_map(|c| match c {
+        Capability::Background(r, g, b) => Some((*r, *g, *b)),
+        _ => None,
+    }) {
+        picker.set_background_color(Some(image::Rgba([r, g, b, 255])));
+    }
+}
+
+fn build_help_picker() -> Picker {
+    let mut picker = Picker::from_query_stdio_with_options(help_query_options())
+        .unwrap_or_else(|_| Picker::halfblocks());
+    apply_help_protocol_preference(&mut picker);
+    picker
+}
+
 /// Pick the best available terminal graphics protocol for help images.
 pub(crate) fn create_help_picker() -> Picker {
-    match Picker::from_query_stdio() {
-        Ok(mut picker) => {
-            let caps = picker.capabilities();
-            if caps.contains(&Capability::Kitty) && picker.protocol_type() != ProtocolType::Kitty {
-                picker.set_protocol_type(ProtocolType::Kitty);
+    build_help_picker()
+}
+
+pub(crate) fn help_uses_sixel(picker: &Picker) -> bool {
+    picker.protocol_type() == ProtocolType::Sixel
+}
+
+/// Terminal background for occluding Sixel bleed-through in unpainted cells.
+pub(crate) fn help_terminal_bg(picker: &Picker) -> Color {
+    picker
+        .capabilities()
+        .iter()
+        .find_map(|c| match c {
+            Capability::Background(r, g, b) => Some(Color::Rgb(*r, *g, *b)),
+            _ => None,
+        })
+        .unwrap_or(Color::Black)
+}
+
+/// Sixel is drawn below the cell grid; fill every non-image cell with an opaque background so
+/// graphics do not show through line gaps, indents, or blank lines (Konsole/VTE).
+pub(crate) fn paint_sixel_backdrop(
+    frame: &mut ratatui::Frame,
+    text_area: ratatui::layout::Rect,
+    scroll: u16,
+    placements: &[(usize, usize, u16, u16)],
+    bg: Color,
+) {
+    let buf = frame.buffer_mut();
+    for y in text_area.y..text_area.y.saturating_add(text_area.height) {
+        let doc_row = scroll as usize + (y - text_area.y) as usize;
+        for x in text_area.x..text_area.x.saturating_add(text_area.width) {
+            let col = (x - text_area.x) as usize;
+            if placements.iter().any(|&(row_start, row_end, start_col, width)| {
+                doc_row >= row_start
+                    && doc_row < row_end
+                    && col >= start_col as usize
+                    && col < start_col as usize + width as usize
+            }) {
+                continue;
             }
-            picker
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_bg(bg);
+                if cell.symbol().is_empty() {
+                    cell.set_symbol(" ");
+                }
+            }
         }
-        Err(_) => Picker::halfblocks(),
+    }
+}
+
+/// Erase terminal cells before redraw (clears stale Sixel bands after scroll).
+pub(crate) fn erase_terminal_cells(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    const ESC: &str = "\x1b";
+    let mut data = String::new();
+    if area.height == 1 {
+        use std::fmt::Write;
+        let _ = write!(data, "{ESC}[{}X", area.width);
+    } else {
+        use std::fmt::Write;
+        for _ in 0..area.height {
+            let _ = write!(data, "{ESC}[{}X{ESC}[1B", area.width);
+        }
+        let _ = write!(data, "{ESC}[{}A", area.height);
+    }
+    let pos = ratatui::layout::Position::new(area.x, area.y);
+    if let Some(cell) = frame.buffer_mut().cell_mut(pos) {
+        cell.set_symbol(&data);
+    }
+    let mut skip_first = true;
+    for y in area.y..area.y.saturating_add(area.height) {
+        for x in area.x..area.x.saturating_add(area.width) {
+            if skip_first {
+                skip_first = false;
+                continue;
+            }
+            if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
+                cell.set_skip(true);
+            }
+        }
+        skip_first = false;
     }
 }
 
@@ -96,11 +271,17 @@ fn pixel_to_cell(pw: u32, ph: u32, font_w: u16, font_h: u16, proto: ProtocolType
 }
 
 /// Fixed row targets per help asset (independent of terminal width after layout freeze).
-fn help_target_rows(path: &str) -> u16 {
-    match path {
+fn help_target_rows(path: &str, proto: ProtocolType) -> u16 {
+    let base = match path {
         "logo-protected.webp" | "logo.webp" => 12,
         "demo.webp" => 24,
         _ => 12,
+    };
+    // Sixel uses one pixel row per terminal row (halfblocks use two), so allocate more rows
+    // for comparable resolution on Konsole / Ptyxis / VTE.
+    match proto {
+        ProtocolType::Sixel => ((f32::from(base) * 1.75).ceil() as u16).min(48),
+        _ => base,
     }
 }
 
@@ -113,7 +294,7 @@ fn help_target_cell_dimensions(
     layout_width: u16,
 ) -> (u16, u16) {
     let max_w = layout_width.min(HELP_IMAGE_MAX_WIDTH);
-    let target_rows = help_target_rows(path);
+    let target_rows = help_target_rows(path, proto);
     let target_px_h = row_pixel_height(target_rows, font_h, proto);
     let scale_h = target_px_h as f64 / img.height().max(1) as f64;
     let nat_w_cells = (img.width() as f64 / font_w as f64).ceil() as u16;
