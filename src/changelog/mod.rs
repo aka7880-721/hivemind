@@ -2670,7 +2670,7 @@ mod tests {
                 .markdown
                 .contains("<sup>_This release focuses on:_</sup>")
         );
-        assert!(changelog.markdown.contains("<sup>_- render_</sup>"));
+        assert!(changelog.markdown.contains("<sup>_- render_</sup>  "));
         assert!(changelog.markdown.contains("Rendering enhancements"));
     }
 }
