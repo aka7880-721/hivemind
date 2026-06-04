@@ -619,6 +619,8 @@ pub(crate) struct ReleaseNowDialog {
     pub(crate) scroll: u16,
     pub(crate) body_viewport_height: u16,
     pub(crate) body_viewport_width: u16,
+    /// Rendered line count for release-notes markdown preview (updated each frame).
+    pub(crate) release_notes_display_line_count: usize,
     pub(crate) selection_anchor: Option<usize>,
     pub(crate) selection_focus: Option<usize>,
     pub(crate) summary: Option<String>,
@@ -672,6 +674,7 @@ impl ReleaseNowDialog {
             scroll: 0,
             body_viewport_height: 0,
             body_viewport_width: 0,
+            release_notes_display_line_count: 0,
             selection_anchor: None,
             selection_focus: None,
             summary: None,
@@ -977,16 +980,35 @@ impl ReleaseNowDialog {
             && self.attach_changelog
     }
 
-    fn release_notes_layout_width(&self) -> u16 {
+    pub(crate) fn release_notes_layout_width(&self) -> u16 {
         self.body_viewport_width.saturating_sub(2).max(20)
     }
 
-    fn release_notes_rendered_lines(&self) -> Vec<Line<'static>> {
+    pub(crate) fn clear_body_selection(&mut self) {
+        self.selection_anchor = None;
+        self.selection_focus = None;
+    }
+
+    fn release_notes_rendered_lines_fallback(&self) -> Vec<Line<'static>> {
         crate::tui::render_markdown(
             &self.release_notes_markdown,
             self.release_notes_layout_width(),
         )
         .lines
+    }
+
+    fn release_notes_plain_lines_from_view(view: &crate::tui::MarkdownView) -> Vec<String> {
+        view
+            .render()
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
     }
 
     pub(crate) fn selected_option(&self) -> &ReleaseNowRunOption {
@@ -1180,8 +1202,12 @@ impl ReleaseNowDialog {
     }
 
     fn max_scroll_offset(&self) -> u16 {
-        self.body_plain_lines()
-            .len()
+        let line_count = if self.is_release_notes_preview() {
+            self.release_notes_display_line_count
+        } else {
+            self.body_plain_lines(None).len()
+        };
+        line_count
             .saturating_sub(self.body_viewport_height.max(1) as usize)
             .min(u16::MAX as usize) as u16
     }
@@ -1190,8 +1216,12 @@ impl ReleaseNowDialog {
         self.max_scroll_offset()
     }
 
-    pub(crate) fn begin_body_selection(&mut self, row_offset: u16) -> bool {
-        let Some(index) = self.body_line_index_for_row(row_offset) else {
+    pub(crate) fn begin_body_selection(
+        &mut self,
+        row_offset: u16,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> bool {
+        let Some(index) = self.body_line_index_for_row(row_offset, notes_view) else {
             return false;
         };
 
@@ -1203,11 +1233,15 @@ impl ReleaseNowDialog {
         true
     }
 
-    pub(crate) fn update_body_selection(&mut self, row_offset: u16) -> bool {
+    pub(crate) fn update_body_selection(
+        &mut self,
+        row_offset: u16,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> bool {
         let Some(anchor) = self.selection_anchor else {
             return false;
         };
-        let Some(index) = self.body_line_index_for_row(row_offset) else {
+        let Some(index) = self.body_line_index_for_row(row_offset, notes_view) else {
             return false;
         };
 
@@ -1220,15 +1254,13 @@ impl ReleaseNowDialog {
         self.selection_anchor.is_some() && self.selection_focus.is_some()
     }
 
-    pub(crate) fn selected_body_text(&self) -> Option<String> {
+    pub(crate) fn selected_body_text(
+        &self,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> Option<String> {
         let (start, end) = self.selection_range()?;
-        let lines = self.body_plain_lines();
+        let lines = self.body_plain_lines(notes_view);
         Some(lines[start..=end].join("\n"))
-    }
-
-    fn clear_body_selection(&mut self) {
-        self.selection_anchor = None;
-        self.selection_focus = None;
     }
 
     fn selection_range(&self) -> Option<(usize, usize)> {
@@ -1237,8 +1269,12 @@ impl ReleaseNowDialog {
         Some((start.min(end), start.max(end)))
     }
 
-    fn body_line_index_for_row(&self, row_offset: u16) -> Option<usize> {
-        let lines = self.body_plain_lines();
+    fn body_line_index_for_row(
+        &self,
+        row_offset: u16,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> Option<usize> {
+        let lines = self.body_plain_lines(notes_view);
         let count = lines.len();
         if count == 0 {
             return None;
@@ -1288,7 +1324,10 @@ impl ReleaseNowDialog {
         }
     }
 
-    pub(crate) fn rendered_body_lines(&self) -> Vec<Line<'static>> {
+    pub(crate) fn rendered_body_lines(
+        &self,
+        notes_view: Option<&crate::tui::MarkdownView>,
+    ) -> Vec<Line<'static>> {
         let lines = match self.mode {
             ReleaseNowMode::MirrorSync => self.mirror_sync_body_lines(),
             ReleaseNowMode::BumpWarning => {
@@ -1318,7 +1357,9 @@ impl ReleaseNowDialog {
                         self.log_display_lines()
                     }
                 } else if self.attach_changelog {
-                    self.release_notes_rendered_lines()
+                    notes_view
+                        .map(|view| view.render().lines)
+                        .unwrap_or_else(|| self.release_notes_rendered_lines_fallback())
                 } else {
                     vec![
                         Line::from("Changelog attachment is disabled for this release.")
@@ -1382,7 +1423,7 @@ impl ReleaseNowDialog {
             .collect()
     }
 
-    fn body_plain_lines(&self) -> Vec<String> {
+    fn body_plain_lines(&self, notes_view: Option<&crate::tui::MarkdownView>) -> Vec<String> {
         match self.mode {
             ReleaseNowMode::MirrorSync => self.mirror_sync_plain_lines(),
             ReleaseNowMode::BumpWarning => {
@@ -1409,15 +1450,19 @@ impl ReleaseNowDialog {
                             .collect()
                     }
                 } else if self.attach_changelog {
-                    self.release_notes_rendered_lines()
-                        .iter()
-                        .map(|line| {
-                            line.spans
+                    notes_view
+                        .map(Self::release_notes_plain_lines_from_view)
+                        .unwrap_or_else(|| {
+                            self.release_notes_rendered_lines_fallback()
                                 .iter()
-                                .map(|span| span.content.as_ref())
-                                .collect::<String>()
+                                .map(|line| {
+                                    line.spans
+                                        .iter()
+                                        .map(|span| span.content.as_ref())
+                                        .collect::<String>()
+                                })
+                                .collect()
                         })
-                        .collect()
                 } else {
                     vec![
                         "Changelog attachment is disabled for this release.".to_string(),
@@ -3829,6 +3874,7 @@ mod tests {
             scroll: 0,
             body_viewport_height: 0,
             body_viewport_width: 0,
+            release_notes_display_line_count: 0,
             selection_anchor: None,
             selection_focus: None,
             summary: None,
@@ -3896,6 +3942,7 @@ mod tests {
             scroll: 0,
             body_viewport_height: 20,
             body_viewport_width: 80,
+            release_notes_display_line_count: 0,
             selection_anchor: None,
             selection_focus: None,
             summary: None,
@@ -3918,7 +3965,7 @@ mod tests {
 
         assert!(dialog.is_release_notes_preview());
         let rendered: String = dialog
-            .rendered_body_lines()
+            .rendered_body_lines(None)
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect();
