@@ -265,7 +265,7 @@ pub(crate) fn erase_terminal_cells(frame: &mut ratatui::Frame, area: ratatui::la
                 continue;
             }
             if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
-                cell.set_skip(true);
+                cell.set_diff_option(ratatui::buffer::CellDiffOption::Skip);
             }
         }
         skip_first = false;
