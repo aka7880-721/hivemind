@@ -5,7 +5,11 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use std::{borrow::Cow, fs, path::{Path, PathBuf}};
+use std::{
+    borrow::Cow,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use configparser::ini::Ini;
@@ -1659,10 +1663,8 @@ edition = "2024"
     fn collect_bump_scopes_resolves_relative_target_paths_against_repo_root() {
         use crate::config::{IntegrationMode, RepoConfig};
 
-        let dir = std::env::temp_dir().join(format!(
-            "comfygit-target-resolve-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("comfygit-target-resolve-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         let manifest = dir.join("Cargo.toml");

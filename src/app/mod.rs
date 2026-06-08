@@ -612,10 +612,8 @@ mod tests {
 
     #[test]
     fn distro_browser_resolves_repo_relative_script_path_with_flags() {
-        let root = std::env::temp_dir().join(format!(
-            "comfygit-distro-browser-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("comfygit-distro-browser-{}", std::process::id()));
         let scripts = root.join("scripts");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&scripts).expect("create script dir");
@@ -652,17 +650,22 @@ mod tests {
         );
 
         app.browser_dialog = Some(
-            FileBrowserDialog::new(
-                BrowseTarget::ProjectSettingsReleaseNowWindows,
-                resolved,
-            )
-            .expect("browser dialog should build"),
+            FileBrowserDialog::new(BrowseTarget::ProjectSettingsReleaseNowWindows, resolved)
+                .expect("browser dialog should build"),
         );
-        assert_eq!(app.browser_dialog.as_ref().unwrap().explorer.current().name, "../");
+        assert_eq!(
+            app.browser_dialog.as_ref().unwrap().explorer.current().name,
+            "../"
+        );
         app.confirm_browser_selection()
             .expect("parent entry should navigate from repo-relative start");
         assert_eq!(
-            app.browser_dialog.as_ref().unwrap().explorer.cwd().as_path(),
+            app.browser_dialog
+                .as_ref()
+                .unwrap()
+                .explorer
+                .cwd()
+                .as_path(),
             root.as_path()
         );
 
@@ -671,10 +674,8 @@ mod tests {
 
     #[test]
     fn browser_parent_entry_navigates_up_on_enter() {
-        let root = std::env::temp_dir().join(format!(
-            "comfygit-browser-parent-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("comfygit-browser-parent-{}", std::process::id()));
         let child = root.join("child");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&child).expect("create nested browse dirs");
@@ -687,12 +688,18 @@ mod tests {
             )
             .expect("browser dialog should build"),
         );
-        assert_eq!(app.browser_dialog.as_ref().unwrap().explorer.current().name, "../");
+        assert_eq!(
+            app.browser_dialog.as_ref().unwrap().explorer.current().name,
+            "../"
+        );
 
         app.confirm_browser_selection()
             .expect("parent entry should navigate");
 
-        let dialog = app.browser_dialog.as_ref().expect("browser should stay open");
+        let dialog = app
+            .browser_dialog
+            .as_ref()
+            .expect("browser should stay open");
         assert_eq!(dialog.explorer.cwd().as_path(), root.as_path());
         assert!(app.status.text.contains("parent folder"));
 
