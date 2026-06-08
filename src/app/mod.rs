@@ -611,6 +611,95 @@ mod tests {
     }
 
     #[test]
+    fn distro_browser_resolves_repo_relative_script_path_with_flags() {
+        let root = std::env::temp_dir().join(format!(
+            "comfygit-distro-browser-{}",
+            std::process::id()
+        ));
+        let scripts = root.join("scripts");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&scripts).expect("create script dir");
+
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            release_now: crate::config::ReleaseNowSettings {
+                enabled: true,
+                windows_script: "scripts/releaseNOW.sh --win64".to_string(),
+                ..Default::default()
+            },
+            repo: Some(RepoConfig::new(root.display().to_string(), None)),
+            ..Default::default()
+        }];
+        app.selected_project = 0;
+        app.overview_focused_scope = 0;
+        project_settings::sync_project_settings_state(&mut app);
+        app.project_settings_state.focus = ProjectSettingsFocus::ReleaseNowWindows;
+
+        let resolved = project_settings::resolved_project_settings_browser_path(
+            &app,
+            BrowseTarget::ProjectSettingsReleaseNowWindows,
+        );
+        assert_eq!(
+            resolved,
+            scripts.join("releaseNOW.sh").display().to_string(),
+            "browser should resolve repo-relative script paths before opening"
+        );
+
+        app.browser_dialog = Some(
+            FileBrowserDialog::new(
+                BrowseTarget::ProjectSettingsReleaseNowWindows,
+                resolved,
+            )
+            .expect("browser dialog should build"),
+        );
+        assert_eq!(app.browser_dialog.as_ref().unwrap().explorer.current().name, "../");
+        app.confirm_browser_selection()
+            .expect("parent entry should navigate from repo-relative start");
+        assert_eq!(
+            app.browser_dialog.as_ref().unwrap().explorer.cwd().as_path(),
+            root.as_path()
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn browser_parent_entry_navigates_up_on_enter() {
+        let root = std::env::temp_dir().join(format!(
+            "comfygit-browser-parent-{}",
+            std::process::id()
+        ));
+        let child = root.join("child");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&child).expect("create nested browse dirs");
+
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.browser_dialog = Some(
+            FileBrowserDialog::new(
+                BrowseTarget::ProjectSettingsReleaseNowWindows,
+                child.display().to_string(),
+            )
+            .expect("browser dialog should build"),
+        );
+        assert_eq!(app.browser_dialog.as_ref().unwrap().explorer.current().name, "../");
+
+        app.confirm_browser_selection()
+            .expect("parent entry should navigate");
+
+        let dialog = app.browser_dialog.as_ref().expect("browser should stay open");
+        assert_eq!(dialog.explorer.cwd().as_path(), root.as_path());
+        assert!(app.status.text.contains("parent folder"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn pss_text_input_captures_global_shortcuts() {
         let mut app = App::new_for_tests().expect("app should initialize");
         app.config.projects = vec![ProjectConfig {
