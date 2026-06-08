@@ -12,7 +12,6 @@ use arboard::Clipboard;
 #[cfg(target_os = "linux")]
 use arboard::{LinuxClipboardKind, SetExtLinux};
 use ratatui_comfy_toaster::{ToastBuilder, ToastInteraction, ToastType};
-use ratatui_explorer::Input as ExplorerInput;
 
 use crate::{
     changelog::{
@@ -2523,7 +2522,7 @@ impl App {
             | BrowseTarget::ProjectSettingsAliasDistPath
             | BrowseTarget::ProjectSettingsAliasUiPath
             | BrowseTarget::ProjectSettingsAliasCustomPath(_) => {
-                project_settings::initial_browser_path(self, target).unwrap_or_default()
+                project_settings::resolved_project_settings_browser_path(self, target)
             }
         }
     }
@@ -2533,38 +2532,40 @@ impl App {
             return Ok(());
         };
 
-        let selected = dialog.explorer.current().path.clone();
-        let selected_name = dialog.explorer.current().name.clone();
+        let current = dialog.explorer.current();
+        let selected_name = current.name.clone();
+        let selected_path = current.path.clone();
+        let is_directory = current.is_dir;
         let target = dialog.target;
         let select_directories = dialog.select_directories;
 
-        if selected.is_dir() {
+        if is_directory {
             if let Some(dialog) = &mut self.browser_dialog {
-                dialog.explorer.handle(ExplorerInput::Right)?;
+                dialog.explorer.set_cwd(&selected_path)?;
             }
             self.status = StatusMessage::info(if selected_name == "../" {
                 "Moved to the parent folder.".to_string()
             } else {
-                format!("Entered folder '{}'.", selected_name)
+                format!("Entered folder '{}'.", selected_name.trim_end_matches('/'))
             });
             return Ok(());
         }
 
-        if select_directories && !selected.is_dir() {
+        if select_directories && !is_directory {
             self.status = StatusMessage::warning(
                 "Select a directory for Repo root, or press U to use the current file's folder.",
             );
             return Ok(());
         }
 
-        if !select_directories && !selected.is_file() {
+        if !select_directories && !is_directory && !current.is_file() {
             self.status = StatusMessage::warning(
                 "Select a file for Target path. Use Right to enter directories.",
             );
             return Ok(());
         }
 
-        let selected = selected.display().to_string();
+        let selected = selected_path.display().to_string();
         match target {
             BrowseTarget::WizardTargetPath => self.wizard.set_target_path_from_browse(selected),
             BrowseTarget::WizardRepoRoot => self.wizard.set_repo_root_from_browse(selected),
@@ -2608,13 +2609,13 @@ impl App {
             return Ok(());
         }
 
-        let selected = dialog.explorer.current().path.clone();
-        let directory = if selected.is_dir() {
-            selected
-        } else if let Some(parent) = selected.parent() {
+        let current = dialog.explorer.current();
+        let directory = if current.is_dir {
+            current.path.clone()
+        } else if let Some(parent) = current.path.parent() {
             parent.to_path_buf()
         } else {
-            selected
+            current.path.clone()
         };
 
         let selected = directory.display().to_string();
