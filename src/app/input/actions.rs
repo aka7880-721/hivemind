@@ -749,13 +749,13 @@ impl App {
 
         let markdown = dialog.release_notes_markdown.clone();
         let width = dialog.release_notes_layout_width();
-        if self.release_now_markdown_view.is_none()
-            || self.release_now_markdown_source != markdown
+        if self.release_now_markdown_view.is_none() || self.release_now_markdown_source != markdown
         {
             crate::tui::init_help_picker();
             let picker = crate::tui::help_picker();
-            self.release_now_markdown_view =
-                Some(crate::tui::MarkdownView::new(&markdown, width, None, &picker));
+            self.release_now_markdown_view = Some(crate::tui::MarkdownView::new(
+                &markdown, width, None, &picker,
+            ));
             self.release_now_markdown_source = markdown;
         } else if let Some(view) = &mut self.release_now_markdown_view {
             view.set_layout_width(width);
