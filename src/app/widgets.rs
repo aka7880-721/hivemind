@@ -277,6 +277,28 @@ fn is_absolute_path_string(path: &str) -> bool {
         || (bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'/' || bytes[2] == b'\\'))
 }
 
+/// Resolve repo-relative paths to absolute filesystem paths for browsing and I/O.
+pub(crate) fn absolutize_path_for_repo_root(path: &str, repo_root: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if is_absolute_path_string(trimmed) {
+        return normalized_path_string(trimmed);
+    }
+
+    let root = repo_root.trim();
+    if root.is_empty() {
+        return normalized_path_string(trimmed);
+    }
+
+    std::path::Path::new(root)
+        .join(trimmed.trim_start_matches('/'))
+        .display()
+        .to_string()
+}
+
 /// Keep non-root paths relative to repo root for storage/display.
 pub(crate) fn normalize_path_for_repo_root(path: &str, repo_root: &str) -> String {
     let mut value = normalized_path_string(path);
