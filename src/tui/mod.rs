@@ -15,9 +15,7 @@ mod tiles;
 mod ui;
 
 pub(crate) use branding::{PixelLogo, choose_header_content};
-pub(crate) use help::{
-    HelpContext, HelpModal, assets::help_picker, init_help_picker,
-};
+pub(crate) use help::{HelpContext, HelpModal, assets::help_picker, init_help_picker};
 pub(crate) use markdown_render::{MarkdownView, markdown_line_count, render_markdown};
 pub(crate) use overview_tabs::{
     OverviewTab, apply_tab_selection_flash, comfy_tab_nav, overview_tab_index, overview_tab_rects,
