@@ -2521,6 +2521,10 @@ async fn run_script_with_live_logs(
     Ok(())
 }
 
+pub(crate) fn release_script_path_token(input: &str) -> &str {
+    parse_shell_args(input).0
+}
+
 fn parse_shell_args(input: &str) -> (&str, Vec<String>) {
     let trimmed = input.trim();
     if trimmed.is_empty() {
