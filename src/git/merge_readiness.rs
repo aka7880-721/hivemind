@@ -9,9 +9,7 @@ use std::{thread, time::Duration};
 
 use crate::{
     forge::ForgeKind,
-    git::{
-        GitCancellation, run_git_checked_with_cancel, switch_to_existing_branch_after_merge,
-    },
+    git::{GitCancellation, run_git_checked_with_cancel, switch_to_existing_branch_after_merge},
 };
 use anyhow::{Context, Result, bail};
 
