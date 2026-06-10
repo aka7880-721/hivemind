@@ -9,9 +9,13 @@ use std::{thread, time::Duration};
 
 use crate::{
     forge::ForgeKind,
-    git::{GitCancellation, run_git_checked_with_cancel, switch_to_existing_branch},
+    git::{
+        GitCancellation, run_git_checked_with_cancel, switch_to_existing_branch_after_merge,
+    },
 };
 use anyhow::{Context, Result, bail};
+
+const POST_MERGE_SYNC_STASH_MESSAGE: &str = "comfygit: auto-stash before post-merge sync";
 
 pub(crate) const MERGEABILITY_PENDING_RETRY_SECONDS: u64 = 5;
 pub(crate) const MERGEABILITY_PENDING_MAX_RETRIES: u32 = 3;
@@ -73,7 +77,7 @@ pub(crate) fn finish_after_pull_request_merge(
     target_branch: &str,
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
-    switch_to_existing_branch(repo_root, target_branch).with_context(|| {
+    switch_to_existing_branch_after_merge(repo_root, target_branch).with_context(|| {
         format!("failed to switch to target branch '{target_branch}' after merge")
     })?;
     sync_current_branch(repo_root, cancel)?;
@@ -81,12 +85,79 @@ pub(crate) fn finish_after_pull_request_merge(
 }
 
 pub(crate) fn sync_current_branch(repo_root: &str, cancel: Option<GitCancellation>) -> Result<()> {
-    let output = run_git_checked_with_cancel(repo_root, &["pull", "--ff-only"], cancel)?;
+    let stashed = stash_local_changes_before_sync(repo_root, cancel.clone())?;
+
+    match pull_ff_only(repo_root, cancel.clone()) {
+        Ok(output) => {
+            print_pull_output(output);
+            if stashed {
+                print_post_merge_stash_note();
+            }
+            Ok(())
+        }
+        Err(error) if is_local_changes_blocking_pull(&error) => {
+            if !stashed {
+                stash_local_changes_before_sync(repo_root, cancel.clone())?;
+            }
+            let output = pull_ff_only(repo_root, cancel)?;
+            print_pull_output(output);
+            print_post_merge_stash_note();
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn pull_ff_only(repo_root: &str, cancel: Option<GitCancellation>) -> Result<String> {
+    run_git_checked_with_cancel(repo_root, &["pull", "--ff-only"], cancel)
+}
+
+fn print_pull_output(output: String) {
     let output = output.trim();
     if !output.is_empty() {
-        println!("{}", output);
+        println!("{output}");
     }
-    Ok(())
+}
+
+fn worktree_is_clean(repo_root: &str, cancel: Option<GitCancellation>) -> Result<bool> {
+    let status = run_git_checked_with_cancel(repo_root, &["status", "--porcelain"], cancel)?;
+    Ok(status.trim().is_empty())
+}
+
+fn stash_local_changes_before_sync(
+    repo_root: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<bool> {
+    if worktree_is_clean(repo_root, cancel.clone())? {
+        return Ok(false);
+    }
+
+    run_git_checked_with_cancel(
+        repo_root,
+        &[
+            "stash",
+            "push",
+            "-m",
+            POST_MERGE_SYNC_STASH_MESSAGE,
+            "--include-untracked",
+        ],
+        cancel,
+    )?;
+    Ok(true)
+}
+
+fn is_local_changes_blocking_pull(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("Your local changes to the following files would be overwritten")
+        || message.contains("local changes would be overwritten by merge")
+        || message.contains("would be overwritten by checkout")
+}
+
+fn print_post_merge_stash_note() {
+    eprintln!(
+        "Note: local changes that blocked post-merge sync were stashed ({POST_MERGE_SYNC_STASH_MESSAGE})."
+    );
+    eprintln!("Run `git stash list` and `git stash pop` only if you still need those changes.");
 }
 
 pub(crate) fn format_non_mergeable_pull_request_error(
@@ -174,6 +245,19 @@ mod tests {
     fn mergeability_retry_policy_uses_three_five_second_retries() {
         assert_eq!(MERGEABILITY_PENDING_RETRY_SECONDS, 5);
         assert_eq!(MERGEABILITY_PENDING_MAX_RETRIES, 3);
+    }
+
+    #[test]
+    fn local_changes_blocking_pull_detection_matches_git_messages() {
+        let error = anyhow::anyhow!(
+            "git [\"pull\", \"--ff-only\"] failed in /repo: error: Your local changes to the following files would be overwritten by merge:\n\tapps/comfyhome-ui/Cargo.lock"
+        );
+        assert!(is_local_changes_blocking_pull(&error));
+
+        let checkout_error = anyhow::anyhow!(
+            "error: Your local changes to the following files would be overwritten by checkout:\n\tCargo.lock"
+        );
+        assert!(is_local_changes_blocking_pull(&checkout_error));
     }
 
     #[test]
