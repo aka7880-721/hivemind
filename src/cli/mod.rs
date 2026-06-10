@@ -3655,7 +3655,7 @@ fn affected_scope_indexes(
     Ok(vec![find_scope_for_cwd(project, resolved_project, cwd)?])
 }
 
-fn find_scope_for_cwd(
+pub(crate) fn find_scope_for_cwd(
     project: &ProjectConfig,
     resolved_project: &ProjectConfig,
     cwd: &Path,
