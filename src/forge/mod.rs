@@ -365,6 +365,23 @@ pub fn integration_mode_for_dual_remotes(
     }
 }
 
+pub fn integration_mode_for_repo_config(repo: &crate::config::RepoConfig) -> IntegrationMode {
+    if let (Some(gitlab_remote), Some(github_remote)) = (
+        repo.remote_url.as_deref(),
+        repo.secondary_remote_url.as_deref(),
+    ) && let Some(mode) = integration_mode_for_dual_remotes(gitlab_remote, github_remote)
+    {
+        return mode;
+    }
+
+    if let Some(remote_url) = repo.remote_url.as_deref() {
+        return integration_mode_for_remote_url(remote_url)
+            .unwrap_or(crate::config::IntegrationMode::GitLocalOnly);
+    }
+
+    crate::config::IntegrationMode::GitLocalOnly
+}
+
 pub fn ensure_forge_clis(integration_mode: IntegrationMode) -> Result<Vec<ForgeKind>> {
     match integration_mode {
         IntegrationMode::GitLabGitHubEnabled => {
