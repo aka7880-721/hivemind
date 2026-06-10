@@ -673,6 +673,74 @@ mod tests {
     }
 
     #[test]
+    fn scope_draft_from_branch_detects_gitlab_github_dual_remotes() {
+        use crate::app::background::ScopeDraft;
+
+        let branch = BranchConfig {
+            name: "core".to_string(),
+            label: "Core".to_string(),
+            scope_kind: BranchScopeKind::Branch,
+            repo: Some(RepoConfig {
+                local_root: "/tmp/core".to_string(),
+                remote_url: Some("git@gitlab.com:org/core.git".to_string()),
+                secondary_remote_url: Some("git@github.com:org/core.git".to_string()),
+                ..RepoConfig::default()
+            }),
+            changelog_enabled: false,
+            changelog_path: None,
+            changelog_hide_pr_messages: false,
+            changelog_hide_bump_messages: false,
+            changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
+            changelog_wrap_detailed_if_top_picks: false,
+            release_now: crate::config::ReleaseNowSettings::default(),
+            version_scheme: VersionScheme::SemVer,
+            targets: vec![TargetSpec {
+                label: "Version".to_string(),
+                path: "Cargo.toml".to_string(),
+                key_path: "package.version".to_string(),
+                format: TargetFormat::Toml,
+            }],
+            advanced_alias: Default::default(),
+        };
+
+        let scope = ScopeDraft::from_branch(&branch).expect("scope draft should build");
+        assert_eq!(
+            scope.integration_mode,
+            IntegrationMode::GitLabGitHubEnabled,
+            "dual GitLab/GitHub remotes should restore GitLab+GitHub integration"
+        );
+    }
+
+    #[test]
+    fn tag_dialog_left_arrow_edits_tag_name_without_changing_action() {
+        use crate::workflow::dialogs::{TagAction, TagDialog, TagDialogFocus};
+
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.tag_dialog = Some(TagDialog {
+            project_name: "demo".to_string(),
+            integration_mode: IntegrationMode::GitHubEnabled,
+            scopes: Vec::new(),
+            selected_scope: 0,
+            tag_name: TextInput::with_value("v1.2.3"),
+            annotation: String::new(),
+            actions: vec![TagAction::CreateLocal, TagAction::CreateAndPush],
+            action_index: 1,
+            focus: TagDialogFocus::TagName,
+        });
+
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .expect("left arrow should edit tag name");
+
+        let dialog = app
+            .tag_dialog
+            .as_ref()
+            .expect("tag dialog should stay open");
+        assert_eq!(dialog.action_index, 1);
+        assert!(dialog.focus_accepts_text());
+    }
+
+    #[test]
     fn browser_parent_entry_navigates_up_on_enter() {
         let root =
             std::env::temp_dir().join(format!("comfygit-browser-parent-{}", std::process::id()));
@@ -905,6 +973,7 @@ mod tests {
                     actions: vec![TagAction::CreateLocal],
                     integration_mode: IntegrationMode::GitLocalOnly,
                     action_index: 0,
+                    focus: crate::workflow::dialogs::TagDialogFocus::TagName,
                 },
                 changelog_enabled: true,
                 std_changelog_policy: StdChangelogExecutionPolicy::Auto,

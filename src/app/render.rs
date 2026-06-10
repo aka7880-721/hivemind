@@ -1657,9 +1657,9 @@ impl App {
             ))
             .style(Style::default().fg(Color::Yellow)),
             Line::from(if dialog.can_select_scope() {
-                "Edit the tag name, add an optional annotation, then run the selected action. [ and ] change scope."
+                "Type the tag name, then Tab to scope/action shortcuts. [ and ] change scope."
             } else {
-                "Edit the tag name, add an optional annotation, then run the selected action."
+                "Type the tag name, then Tab to action shortcuts."
             }),
         ];
         frame.render_widget(
@@ -1675,7 +1675,11 @@ impl App {
         let input_block = Block::default()
             .borders(Borders::ALL)
             .title(" value ")
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(if dialog.focus_accepts_text() {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            });
         frame.render_widget(
             Paragraph::new(dialog.tag_name.display_value(true))
                 .block(input_block)

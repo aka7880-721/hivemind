@@ -679,17 +679,9 @@ impl ScopeDraft {
             target_key_custom: target_key_is_custom(&target.path, &target.key_path),
             scope_kind: branch.scope_kind,
             repo: branch.repo.clone(),
-            integration_mode: if let Some(remote_url) = branch
-                .repo
-                .as_ref()
-                .and_then(|repo| repo.remote_url.as_ref())
-            {
-                crate::forge::integration_mode_for_remote_url(remote_url)
-                    .unwrap_or(IntegrationMode::GitLocalOnly)
-            } else if branch.repo.is_some() {
-                IntegrationMode::GitLocalOnly
-            } else {
-                IntegrationMode::LocalOnly
+            integration_mode: match branch.repo.as_ref() {
+                None => IntegrationMode::LocalOnly,
+                Some(repo) => crate::forge::integration_mode_for_repo_config(repo),
             },
             version_scheme: branch.version_scheme,
             format: target.format,
