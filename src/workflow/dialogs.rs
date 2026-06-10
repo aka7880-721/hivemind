@@ -624,6 +624,13 @@ fn wrapped_line_rows(line: &str, wrap_width: usize) -> usize {
     display_width.div_ceil(wrap_width)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum TagDialogFocus {
+    #[default]
+    TagName,
+    Controls,
+}
+
 #[derive(Clone)]
 pub(crate) struct TagDialog {
     pub(crate) project_name: String,
@@ -634,9 +641,14 @@ pub(crate) struct TagDialog {
     pub(crate) annotation: String,
     pub(crate) actions: Vec<TagAction>,
     pub(crate) action_index: usize,
+    pub(crate) focus: TagDialogFocus,
 }
 
 impl TagDialog {
+    pub(crate) fn focus_accepts_text(&self) -> bool {
+        self.focus == TagDialogFocus::TagName
+    }
+
     pub(crate) fn from_project(
         project: &ProjectConfig,
         preferred_scope: Option<usize>,
@@ -663,6 +675,7 @@ impl TagDialog {
             annotation: String::new(),
             actions,
             action_index,
+            focus: TagDialogFocus::TagName,
         })
     }
 
