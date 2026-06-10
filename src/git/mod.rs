@@ -377,14 +377,40 @@ pub(crate) fn create_branch_and_switch(repo_root: &str, branch_name: &str) -> Re
 }
 
 pub(crate) fn switch_to_existing_branch(repo_root: &str, branch_name: &str) -> Result<()> {
+    switch_to_existing_branch_with_options(repo_root, branch_name, false)
+}
+
+/// Switch to an integration branch after a remote merge, discarding tracked edits that
+/// would block checkout (for example a regenerated `Cargo.lock` left on the source branch).
+pub(crate) fn switch_to_existing_branch_after_merge(
+    repo_root: &str,
+    branch_name: &str,
+) -> Result<()> {
+    switch_to_existing_branch_with_options(repo_root, branch_name, true)
+}
+
+fn switch_to_existing_branch_with_options(
+    repo_root: &str,
+    branch_name: &str,
+    discard_blocking_changes: bool,
+) -> Result<()> {
     let current_branch = current_branch_with_cancel(repo_root, None)?;
     if current_branch.eq_ignore_ascii_case(branch_name) {
         return Ok(());
     }
 
-    let switch_output = run_git(repo_root, &["switch", branch_name])?;
+    let switch_args = if discard_blocking_changes {
+        vec!["switch", "--discard-changes", branch_name]
+    } else {
+        vec!["switch", branch_name]
+    };
+    let switch_output = run_git(repo_root, &switch_args)?;
     if !switch_output.success {
-        run_git_checked(repo_root, &["checkout", branch_name])?;
+        if discard_blocking_changes {
+            run_git_checked(repo_root, &["checkout", "-f", branch_name])?;
+        } else {
+            run_git_checked(repo_root, &["checkout", branch_name])?;
+        }
     }
 
     Ok(())
