@@ -1185,23 +1185,51 @@ impl App {
     }
 
     pub(crate) fn handle_tag_key(&mut self, key: KeyEvent) -> Result<()> {
+        let focus_accepts_text = self
+            .tag_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.focus_accepts_text());
+
+        if focus_accepts_text {
+            match key.code {
+                KeyCode::Esc => {
+                    self.tag_dialog = None;
+                    self.tag_annotation_dialog = None;
+                    self.status = StatusMessage::info("Tag creation cancelled.");
+                }
+                KeyCode::Tab => {
+                    if let Some(dialog) = &mut self.tag_dialog {
+                        dialog.focus = crate::workflow::dialogs::TagDialogFocus::Controls;
+                    }
+                }
+                KeyCode::Enter | KeyCode::F(2) => return self.create_local_tag(),
+                _ => {
+                    if let Some(dialog) = &mut self.tag_dialog {
+                        dialog.tag_name.handle_key(key);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Esc => {
                 self.tag_dialog = None;
                 self.tag_annotation_dialog = None;
                 self.status = StatusMessage::info("Tag creation cancelled.");
             }
-            KeyCode::Char('[') => self.rotate_tag_scope(-1),
-            KeyCode::Char(']') => self.rotate_tag_scope(1),
-            KeyCode::Char('a') => self.open_tag_annotation_dialog()?,
-            KeyCode::Left => self.rotate_tag_action(-1),
-            KeyCode::Right => self.rotate_tag_action(1),
-            KeyCode::Enter | KeyCode::F(2) => self.create_local_tag()?,
-            _ => {
+            KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(dialog) = &mut self.tag_dialog {
-                    dialog.tag_name.handle_key(key);
+                    dialog.focus = crate::workflow::dialogs::TagDialogFocus::TagName;
                 }
             }
+            KeyCode::Char('[') => self.rotate_tag_scope(-1),
+            KeyCode::Char(']') => self.rotate_tag_scope(1),
+            KeyCode::Char('a') | KeyCode::Char('A') => self.open_tag_annotation_dialog()?,
+            KeyCode::Left => self.rotate_tag_action(-1),
+            KeyCode::Right => self.rotate_tag_action(1),
+            KeyCode::Enter | KeyCode::F(2) => return self.create_local_tag(),
+            _ => {}
         }
         Ok(())
     }
