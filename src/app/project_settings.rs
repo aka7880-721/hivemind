@@ -18,7 +18,7 @@ use tui_checkbox::Checkbox;
 
 use super::{
     App, BROWSE_BUTTON_WIDTH, BrowseTarget, FORM_LABEL_WIDTH, FormRowButton, HitAction, HitTarget,
-    normalize_path_for_repo_root, visible_field_width,
+    absolutize_path_for_repo_root, normalize_path_for_repo_root, visible_field_width,
 };
 use crate::{
     config::{
@@ -1035,6 +1035,41 @@ pub(crate) fn open_browser_for_project_settings_focus(app: &mut App) -> Result<(
         _ => return Ok(()),
     };
     app.open_browser(target)
+}
+
+fn repo_root_for_project_settings_browser(app: &App) -> String {
+    let Some(project) = app.config.projects.get(app.selected_project) else {
+        return String::new();
+    };
+    let scope_index = active_scope_index(project, app.overview_focused_scope);
+    project
+        .repo_config_for_scope(scope_index)
+        .map(|repo| repo.local_root.trim().to_string())
+        .unwrap_or_default()
+}
+
+pub(crate) fn resolved_project_settings_browser_path(app: &App, target: BrowseTarget) -> String {
+    let repo_root = repo_root_for_project_settings_browser(app);
+    let path_part = match initial_browser_path(app, target) {
+        Some(raw) if !raw.trim().is_empty() => match target {
+            BrowseTarget::ProjectSettingsReleaseNowGeneral
+            | BrowseTarget::ProjectSettingsReleaseNowWindows
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+                crate::workflow::rls_now::release_script_path_token(raw.trim()).to_string()
+            }
+            _ => raw.trim().to_string(),
+        },
+        _ => return repo_root,
+    };
+
+    let absolute = absolutize_path_for_repo_root(&path_part, &repo_root);
+    if absolute.is_empty() {
+        repo_root
+    } else {
+        absolute
+    }
 }
 
 pub(crate) fn initial_browser_path(app: &App, target: BrowseTarget) -> Option<String> {

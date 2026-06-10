@@ -1,8 +1,8 @@
 [package]
 name = "comfygit"
-version = "0.36.3"
+version = "0.36.4"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.90"
 description = "Ratatui public edition of the original Comfy Version Bumper"
 authors = ["ComfyHome™ <dev@comfyhome.io>"]
 license = "SA-PS"
@@ -27,54 +27,60 @@ path = "src/bin/cg-bin.rs"
 
 [workspace]
 exclude = [
-    "src/components/comfy-toaster",
-    "src/components/comfy-tabs",
-    "src/components/comfy-text-engine",
+    "components/comfy-toaster",
+    "components/comfy-tabs",
+    "components/comfy-text-engine",
+    "components/comfy-loc",
 ]
 
 [dependencies]
 # Comfy dependencies
 ## ---------------------------------------------------------------
 ## T O A S T E R
-# -
+#
 ratatui-comfy-toaster = "0.4"
-#ratatui-comfy-toaster = { path = "src/components/comfy-toaster" }
+#ratatui-comfy-toaster = { path = "components/comfy-toaster" }
 #
 ## TABS
-#ratatui-comfy-tabs = { path = "src/components/comfy-tabs" }
-ratatui-comfy-tabs = "0.4"
+#ratatui-comfy-tabs = { path = "components/comfy-tabs" }
+ratatui-comfy-tabs = "0.5.9"
 #
 ## TEXT ENGINE
-ratatui-comfy-text-engine = { path = "src/components/comfy-text-engine", default-features = true, features = ["markdown", "image"] }
+ratatui-comfy-text-engine = { path = "components/comfy-text-engine", default-features = true, features = ["markdown", "image"] }
 #ratatui-comfy-text-engine = "0"
+## L O C
+#
+#comfy-loc = "0"
+comfy-loc = { package = "comfy-lines-of-code", path = "components/comfy-loc" }
+#
 # E N D ----------------------------------------------------------
-anyhow = "1"
-arboard = { version = "3", features = ["wayland-data-control"] }
+anyhow = "1.0.102"
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crossterm = { version = "0.29", default-features = false, features = ["bracketed-paste", "events"] }
-ctrlc = "3"
-directories = "6"
-image = { version = "0.25", default-features = false, features = ["png", "webp"] }
-ratatui = "0.30"
-ratatui-image = { version = "11", default-features = false, features = ["image-defaults", "crossterm"] }
+ctrlc = "3.5.2"
+directories = "6.0.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "webp"] }
+ratatui = "0.30.1"
+ratatui-image = { version = "11.0.4", default-features = false, features = ["image-defaults", "crossterm"] }
 ratatui-explorer = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-serde_yaml = "0.9"
-configparser = "1.0"
-roxmltree = "0.20"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+serde_yaml = "0.9.34"
+configparser = "3.2.0"
+roxmltree = "0.21.1"
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 toml = "1"
-toml_edit = "0.25"
+toml_edit = "0.25.12"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tui-textarea = "0.7"
 tui-overlay = "0.1.2"
 tui-checkbox = "0.4.4"
-unicode-segmentation = "1"
+unicode-segmentation = "1.13.3"
 unicode-width = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 # crates.io 0.29.0 pulls document-features unconditionally, which breaks cross builds
 # (proc-macro crate unavailable for the target triple). Upstream fixed on master.

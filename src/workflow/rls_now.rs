@@ -975,9 +975,7 @@ impl ReleaseNowDialog {
     }
 
     pub(crate) fn is_release_notes_preview(&self) -> bool {
-        matches!(self.mode, ReleaseNowMode::Configure)
-            && !self.running
-            && self.attach_changelog
+        matches!(self.mode, ReleaseNowMode::Configure) && !self.running && self.attach_changelog
     }
 
     pub(crate) fn release_notes_layout_width(&self) -> u16 {
@@ -998,8 +996,7 @@ impl ReleaseNowDialog {
     }
 
     fn release_notes_plain_lines_from_view(view: &crate::tui::MarkdownView) -> Vec<String> {
-        view
-            .render()
+        view.render()
             .lines
             .iter()
             .map(|line| {
@@ -2522,6 +2519,10 @@ async fn run_script_with_live_logs(
     .await?;
     emit_progress(vec![format!("[{}] Completed successfully.", script.label)]);
     Ok(())
+}
+
+pub(crate) fn release_script_path_token(input: &str) -> &str {
+    parse_shell_args(input).0
 }
 
 fn parse_shell_args(input: &str) -> (&str, Vec<String>) {

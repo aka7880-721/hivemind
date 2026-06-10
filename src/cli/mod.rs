@@ -47,7 +47,8 @@ use crate::{
         switch_to_existing_branch, switch_to_main_branch,
     },
     workflow::targets::{
-        BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version,
+        BumpTarget, collect_bump_scopes, resolve_project_target_paths, shared_bump_version,
+        write_target_version,
     },
     workflow::versioning::{BumpAction, VersionScheme},
     workflow::{
@@ -1059,7 +1060,7 @@ fn load_active_branch_cli_context() -> Result<ActiveBranchCliContext> {
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
     let project = find_project_for_cwd(&config.projects, &cwd)?;
-    let resolved_project = resolve_project_target_paths(project)?;
+    let resolved_project = resolve_project_target_paths(project);
     let scope_index = if project.project_type == ProjectType::AllInOne || project.unified_versioning
     {
         0
@@ -1084,7 +1085,7 @@ fn load_active_branch_cli_context() -> Result<ActiveBranchCliContext> {
 fn print_project_version(lookup: &str) -> Result<()> {
     let config = load_config()?;
     let project = find_project_by_lookup(&config.projects, lookup)?;
-    let resolved_project = resolve_project_target_paths(project)?;
+    let resolved_project = resolve_project_target_paths(project);
     let scopes = collect_bump_scopes(&resolved_project)?;
     if scopes.is_empty() {
         bail!("the matched project does not contain any bump targets")
@@ -1133,7 +1134,7 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
     let project = find_project_for_cwd(&config.projects, &cwd)?;
-    let resolved_project = resolve_project_target_paths(project)?;
+    let resolved_project = resolve_project_target_paths(project);
     let scopes = collect_bump_scopes(&resolved_project)?;
     if scopes.is_empty() {
         bail!("the matched project does not contain any bump targets")
@@ -3845,46 +3846,6 @@ fn common_ancestor(paths: Vec<PathBuf>) -> Option<PathBuf> {
     Some(root)
 }
 
-fn resolve_project_target_paths(project: &ProjectConfig) -> Result<ProjectConfig> {
-    let mut resolved = project.clone();
-
-    if resolved.project_type == ProjectType::AllInOne {
-        let project_root = resolved.project_root_base();
-        absolutize_targets(&mut resolved.targets, project_root.as_deref());
-        return Ok(resolved);
-    }
-
-    let project_root = resolved.project_root_base();
-    for branch in &mut resolved.branches {
-        let branch_root = branch
-            .repo
-            .as_ref()
-            .map(repo_root_path)
-            .or_else(|| project_root.clone());
-        absolutize_targets(&mut branch.targets, branch_root.as_deref());
-    }
-
-    Ok(resolved)
-}
-
-fn absolutize_targets(targets: &mut [TargetSpec], base_root: Option<&Path>) {
-    for target in targets {
-        let trimmed = target.path.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let path = Path::new(trimmed);
-        if path.is_absolute() {
-            continue;
-        }
-
-        if let Some(root) = base_root {
-            target.path = root.join(path).display().to_string();
-        }
-    }
-}
-
 fn parse_bump_action(value: &str) -> Result<BumpAction> {
     match value.trim().to_ascii_lowercase().as_str() {
         "maj" | "major" | "mj" | "mjr" | "big" | "." => Ok(BumpAction::Major),
@@ -4109,16 +4070,6 @@ fn parse_release_version(value: &str) -> Option<Vec<u64>> {
         .split('.')
         .map(|part| part.parse::<u64>().ok())
         .collect()
-}
-
-trait ProjectRootBase {
-    fn project_root_base(&self) -> Option<PathBuf>;
-}
-
-impl ProjectRootBase for ProjectConfig {
-    fn project_root_base(&self) -> Option<PathBuf> {
-        self.repo.as_ref().map(repo_root_path)
-    }
 }
 
 fn run_toppicks() -> Result<()> {

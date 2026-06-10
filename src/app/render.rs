@@ -1277,10 +1277,7 @@ impl App {
             .expect("checked above")
             .scroll;
         let body = crate::tui::render_markdown(&preview_markdown, preview_width);
-        frame.render_widget(
-            Paragraph::new(body).scroll((scroll, 0)),
-            body_inner,
-        );
+        frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), body_inner);
 
         let workflow_active = self
             .changelog_preview_dialog
@@ -2184,12 +2181,11 @@ impl App {
             dialog.set_body_viewport(body_inner.height, body_inner.width);
         }
         self.ensure_release_now_markdown_view();
-        if let Some(dialog) = &mut self.release_now_dialog {
-            if dialog.is_release_notes_preview()
-                && let Some(view) = &self.release_now_markdown_view
-            {
-                dialog.release_notes_display_line_count = view.line_count();
-            }
+        if let Some(dialog) = &mut self.release_now_dialog
+            && dialog.is_release_notes_preview()
+            && let Some(view) = &self.release_now_markdown_view
+        {
+            dialog.release_notes_display_line_count = view.line_count();
         }
         let notes_view = self.release_now_markdown_view.as_ref();
         let dialog = self
@@ -2200,10 +2196,7 @@ impl App {
         let body_lines = dialog.rendered_body_lines(notes_view);
         let body_scroll = (dialog.scroll_offset(), 0);
         if dialog.is_release_notes_preview() {
-            frame.render_widget(
-                Paragraph::new(body_lines).scroll(body_scroll),
-                body_inner,
-            );
+            frame.render_widget(Paragraph::new(body_lines).scroll(body_scroll), body_inner);
         } else {
             frame.render_widget(
                 Paragraph::new(body_lines)
