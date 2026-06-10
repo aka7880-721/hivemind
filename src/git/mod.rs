@@ -542,21 +542,19 @@ pub(crate) fn suggested_tag_name_for_scope(
         return slugify(&project.name);
     };
 
-    let scope_slug = project
-        .branches
-        .get(scope_index)
-        .map(|branch| slugify(branch.display_name()))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| slugify(&project.name));
-
     if let Ok(scopes) = collect_bump_scopes(project)
         && let Some(scope) = scopes.get(scope_index)
         && let Some(version) = &scope.current_version
     {
-        return format!("{}-v{}", scope_slug, version);
+        return format!("v{}", version);
     }
 
-    scope_slug
+    project
+        .branches
+        .get(scope_index)
+        .map(|branch| slugify(branch.display_name()))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| slugify(&project.name))
 }
 
 pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<GitScopeContext>> {
@@ -1328,6 +1326,66 @@ mod tests {
         let scopes = collect_all_branch_git_scope_contexts(&project).expect("scope contexts");
 
         assert_eq!(scopes[0].repo_root, "C:/repo/core");
+    }
+
+    #[test]
+    fn suggested_tag_name_for_scope_uses_version_only() {
+        let dir =
+            std::env::temp_dir().join(format!("comfygit-suggested-tag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            r#"[package]
+name = "api"
+version = "4.5.6"
+"#,
+        )
+        .expect("write manifest");
+
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
+            targets: Vec::new(),
+            branches: vec![BranchConfig {
+                name: "api".to_string(),
+                label: "API".to_string(),
+                scope_kind: BranchScopeKind::Service,
+                repo: Some(RepoConfig {
+                    local_root: dir.display().to_string(),
+                    ..RepoConfig::default()
+                }),
+                changelog_enabled: false,
+                changelog_path: None,
+                changelog_hide_pr_messages: false,
+                changelog_hide_bump_messages: false,
+                changelog_mini_commit_hashes: false,
+                changelog_mirror_summary_to_root_changelog: false,
+                changelog_wrap_detailed_if_top_picks: false,
+                release_now: crate::config::ReleaseNowSettings::default(),
+                version_scheme: VersionScheme::SemVer,
+                targets: vec![TargetSpec {
+                    label: "Version".to_string(),
+                    path: "Cargo.toml".to_string(),
+                    key_path: "package.version".to_string(),
+                    format: TargetFormat::Toml,
+                }],
+                advanced_alias: Default::default(),
+            }],
+            repo: None,
+            ..Default::default()
+        };
+
+        assert_eq!(suggested_tag_name_for_scope(&project, Some(0)), "v4.5.6");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
