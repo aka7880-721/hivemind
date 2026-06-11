@@ -25,14 +25,17 @@ use crossterm::{
 };
 
 use crate::{
-    cli::{best_effort_canonicalize, current_git_repo_root, find_project_for_cwd},
-    config::ConfigStore,
+    cli::{
+        best_effort_canonicalize, current_git_repo_root, find_project_for_cwd, find_scope_for_cwd,
+    },
+    config::{ConfigStore, ProjectType},
     git::{
         BranchNameOption, collect_all_branch_git_scope_contexts, create_branch_and_switch,
         current_branch_with_cancel, custom_branch_name_option_with_preview,
         fixed_branch_name_option_with_value, publish_branch_with_upstream,
         run_git_checked_with_cancel, specific_suffix_branch_name_option,
     },
+    workflow::targets::resolve_project_target_paths,
 };
 
 // ---------------------------------------------------------------------------
@@ -44,6 +47,7 @@ pub(crate) fn run_new_alt(option_name: Option<&str>) -> Result<()> {
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
     let project = find_project_for_cwd(&config.projects, &cwd)?;
+    let resolved_project = resolve_project_target_paths(project);
     let repo_root = current_git_repo_root(&cwd)?;
     let current_branch = current_branch_with_cancel(&repo_root, None)?;
 
@@ -79,7 +83,7 @@ pub(crate) fn run_new_alt(option_name: Option<&str>) -> Result<()> {
     create_branch_and_switch(&repo_root, &branch_name)?;
 
     if synced_work {
-        let remote_spec = resolve_remote_spec_for_repo(project, &cwd, &repo_root)?;
+        let remote_spec = resolve_remote_spec_for_repo(&resolved_project, &cwd, &repo_root)?;
         publish_branch_with_upstream(&repo_root, &branch_name, Some(&remote_spec), None)?;
         println!(
             "Created, switched to, and published branch '{}' to remote.",
@@ -465,12 +469,19 @@ fn resolve_remote_spec_for_repo(
     repo_root: &str,
 ) -> Result<String> {
     let contexts = collect_all_branch_git_scope_contexts(project)?;
-    let context = contexts
-        .iter()
-        .find(|context| {
-            cwd.starts_with(&context.repo_root) || context.repo_root.starts_with(repo_root)
+    let scope_index = if project.project_type == ProjectType::AllInOne || project.unified_versioning
+    {
+        0
+    } else {
+        find_scope_for_cwd(project, project, cwd)?
+    };
+    let canonical_repo_root = best_effort_canonicalize(std::path::Path::new(repo_root));
+    let context = contexts.get(scope_index).or_else(|| {
+        contexts.iter().find(|context| {
+            best_effort_canonicalize(std::path::Path::new(&context.repo_root))
+                == canonical_repo_root
         })
-        .or_else(|| contexts.first());
+    });
 
     context
         .and_then(|context| context.remote_spec.clone())
@@ -918,5 +929,84 @@ mod tests {
         let options =
             suggest_alt_branch_name_options("v0.1.5-dev-alt2", &[]).expect("suggest options");
         assert_eq!(options[0].preview(), "v0.1.5-dev-alt2A");
+    }
+
+    #[test]
+    fn resolve_remote_spec_for_repo_prefers_deepest_matching_scope() {
+        use std::path::Path;
+
+        use crate::config::{
+            BranchConfig, BranchScopeKind, ChangelogSettings, IntegrationMode, ProjectConfig,
+            ProjectType, RepoConfig,
+        };
+        use crate::workflow::versioning::VersionScheme;
+
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitHubEnabled,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
+            targets: Vec::new(),
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    label: "Core".to_string(),
+                    scope_kind: BranchScopeKind::Module,
+                    repo: Some(RepoConfig {
+                        local_root: "/tmp/comfyhome".to_string(),
+                        remote_url: Some(
+                            "git@gitlab.com:comfyhome/x-project/comfyhome.git".to_string(),
+                        ),
+                        ..RepoConfig::default()
+                    }),
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
+                    changelog_wrap_detailed_if_top_picks: false,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: Vec::new(),
+                    advanced_alias: Default::default(),
+                },
+                BranchConfig {
+                    name: "comfycast".to_string(),
+                    label: "ComfyCast".to_string(),
+                    scope_kind: BranchScopeKind::Module,
+                    repo: Some(RepoConfig {
+                        local_root: "/tmp/comfyhome/apps/modules/comfycast".to_string(),
+                        remote_url: Some("git@github.com:comfyhome/comfycast.git".to_string()),
+                        ..RepoConfig::default()
+                    }),
+                    changelog_enabled: false,
+                    changelog_path: None,
+                    changelog_hide_pr_messages: false,
+                    changelog_hide_bump_messages: false,
+                    changelog_mini_commit_hashes: false,
+                    changelog_mirror_summary_to_root_changelog: false,
+                    changelog_wrap_detailed_if_top_picks: false,
+                    release_now: crate::config::ReleaseNowSettings::default(),
+                    version_scheme: VersionScheme::SemVer,
+                    targets: Vec::new(),
+                    advanced_alias: Default::default(),
+                },
+            ],
+            repo: None,
+            ..Default::default()
+        };
+
+        let cwd = Path::new("/tmp/comfyhome/apps/modules/comfycast");
+        let remote =
+            resolve_remote_spec_for_repo(&project, cwd, "/tmp/comfyhome/apps/modules/comfycast")
+                .expect("resolve scope remote");
+
+        assert_eq!(remote, "git@github.com:comfyhome/comfycast.git");
     }
 }
