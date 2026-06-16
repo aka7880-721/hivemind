@@ -22,7 +22,7 @@ use crate::{
 
 const ANSI_CYAN: &str = "\x1b[36m";
 const ANSI_GREEN: &str = "\x1b[32m";
-const ANSI_BRIGHT_GREEN: &str = "\x1b[92m";
+const ANSI_BRIGHT_GREEN: &str = "\x1b[38;2;94;255;0m"; // RGB: 94, 255, 0
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_DARK_GREY: &str = "\x1b[90m";
 const ANSI_RESET: &str = "\x1b[0m";
