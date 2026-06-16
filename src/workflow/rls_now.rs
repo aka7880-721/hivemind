@@ -465,7 +465,8 @@ use crate::{
         recent_merge_check, run_git, run_git_checked, split_output_lines,
     },
     workflow::runtime::{
-        GIT_PUSH_TIMEOUT, NETWORK_RETRY_ATTEMPTS, run_blocking_job, run_command_with_retry_async,
+        GIT_PUSH_TIMEOUT, NETWORK_RETRY_ATTEMPTS, run_blocking_job, run_blocking_job_with_timeout,
+        run_command_with_retry_async,
     },
 };
 
@@ -473,6 +474,8 @@ use crate::{
 mod rls_now_qd;
 
 const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const RELEASE_NOW_QD_HISTORY_TIMEOUT: Duration = Duration::from_secs(15);
+const RELEASE_NOW_FORGE_CHECK_TIMEOUT: Duration = Duration::from_secs(45);
 const DEFAULT_RELEASE_NOTES: &str =
     "# Release Notes\n\nAdd release highlights here before publishing.";
 
@@ -2070,27 +2073,33 @@ fn forge_release_exists(
     tag_name: &str,
     remote_spec: Option<&str>,
 ) -> Result<bool> {
+    use crate::workflow::runtime::run_command_checked_with_timeout;
+
     let cli_name = forge.cli_name();
     let repo_args = release_cli_repo_args(forge, repo_root, remote_spec)?;
-    let mut release_view_args = vec![
+    let mut args = vec![
         "release".to_string(),
         "view".to_string(),
         tag_name.to_string(),
     ];
-    release_view_args.extend(repo_args);
-    Ok(Command::new(cli_name)
-        .current_dir(repo_root)
-        .args(release_view_args.iter().map(String::as_str))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| {
-            format!(
-                "failed to check for an existing {} release",
-                forge.display_name()
-            )
-        })?
-        .success())
+    args.extend(repo_args);
+    match run_command_checked_with_timeout(
+        repo_root,
+        cli_name,
+        &args,
+        RELEASE_NOW_FORGE_CHECK_TIMEOUT,
+        &format!("{cli_name} release view"),
+    ) {
+        Ok(()) => Ok(true),
+        Err(error) => {
+            let message = error.to_string().to_ascii_lowercase();
+            if message.contains("timed out") {
+                Err(error)
+            } else {
+                Ok(false)
+            }
+        }
+    }
 }
 
 pub(crate) async fn execute_release_now_async(
@@ -2390,7 +2399,7 @@ pub(crate) async fn execute_release_now_async(
                     .clone()
                     .expect("remote tag push guard ensures a configured remote is present");
                 emit_progress(vec![format!(
-                    "Pushing tag '{}' for {}.",
+                    "Pushing remote tag '{}' for {} (no forge release page for sibling scopes).",
                     composite_tag, sibling.display_name
                 )]);
                 push_scope_tag_async(sibling_git_root.clone(), Some(remote_spec), composite_tag)
@@ -2536,15 +2545,31 @@ pub(crate) async fn execute_release_now_async(
 
     // QD HTML is built from the same artifact list attached to this release (see rls_now_qd).
     emit_progress(vec![
-        "Preparing Quick-Download links for the forge release.".to_string(),
+        "Preparing Quick-Download links for the core forge release.".to_string(),
     ]);
     let mut qd_warnings = Vec::new();
-    let repo_root_for_history = request.repo_root.clone();
-    let tag_name_for_history = request.tag_name.clone();
-    let historical_qd_artifacts = run_blocking_job(move || {
-        historical_release_now_artifacts_for_tag(&repo_root_for_history, &tag_name_for_history)
-    })
-    .await?;
+    let historical_qd_artifacts = if request.quick_downloads.enabled {
+        emit_progress(vec![
+            "Loading historical Quick-Download artifact names.".to_string(),
+        ]);
+        let repo_root_for_history = request.repo_root.clone();
+        let tag_name_for_history = request.tag_name.clone();
+        match run_blocking_job_with_timeout(RELEASE_NOW_QD_HISTORY_TIMEOUT, move || {
+            historical_release_now_artifacts_for_tag(&repo_root_for_history, &tag_name_for_history)
+        })
+        .await?
+        {
+            Some(artifacts) => artifacts,
+            None => {
+                emit_progress(vec![
+                    "Warning: Historical Quick-Download lookup timed out; continuing with current artifacts only.".to_string(),
+                ]);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
     let qd_artifacts =
         rls_now_qd::merge_artifacts_for_quick_downloads(&artifact_files, &historical_qd_artifacts);
     let release_notes_for_github = rls_now_qd::finalize_release_notes_with_quick_downloads(
@@ -2560,9 +2585,11 @@ pub(crate) async fn execute_release_now_async(
     }
     emit_progress(vec!["Quick-Download links prepared.".to_string()]);
 
+    // Forge releases (GitHub/GitLab release pages + artifacts) are created only for the core
+    // repository/tag. Sibling module/service scopes may receive git tag pushes only.
     if request.integration_mode.is_dual_forge() {
         emit_progress(vec![format!(
-            "Publishing dual-forge releases for '{}'.",
+            "Publishing dual-forge releases for '{}' on the core repository.",
             request.tag_name
         )]);
         let primary_url = request
@@ -2639,7 +2666,7 @@ pub(crate) async fn execute_release_now_async(
         .await?;
     } else {
         emit_progress(vec![format!(
-            "Publishing {} release for '{}'.",
+            "Publishing {} release for '{}' on the core repository.",
             forge.display_name(),
             request.tag_name
         )]);
@@ -3123,23 +3150,32 @@ where
     let handle = spawn_blocking(move || operation(progress_tx));
     tokio::pin!(handle);
 
-    loop {
-        tokio::select! {
-            maybe_lines = progress_rx.recv() => {
-                if let Some(lines) = maybe_lines {
-                    emit_progress(lines);
+    tokio::time::timeout(RELEASE_NOW_TIMEOUT, async {
+        loop {
+            tokio::select! {
+                maybe_lines = progress_rx.recv() => {
+                    if let Some(lines) = maybe_lines {
+                        emit_progress(lines);
+                    }
                 }
-            }
-            result = &mut handle => {
-                let value = result
-                    .map_err(|error| anyhow!("background task failed: {error}"))??;
-                while let Ok(lines) = progress_rx.try_recv() {
-                    emit_progress(lines);
+                result = &mut handle => {
+                    let value = result
+                        .map_err(|error| anyhow!("background task failed: {error}"))??;
+                    while let Ok(lines) = progress_rx.try_recv() {
+                        emit_progress(lines);
+                    }
+                    return Ok(value);
                 }
-                return Ok(value);
             }
         }
-    }
+    })
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "ReleaseNOW forge operation timed out after {}s",
+            RELEASE_NOW_TIMEOUT.as_secs()
+        )
+    })?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3384,7 +3420,34 @@ async fn create_or_update_forge_release(
     let cli_name = forge.cli_name();
     let forge_label = forge.display_name();
     ensure_not_cancelled(&cancel)?;
-    let repo_args = release_cli_repo_args(forge, repo_root, remote_spec)?;
+    if tag_name.contains("+core.") {
+        bail!(
+            "internal error: composite sibling tags like '{tag_name}' must not be published as forge releases"
+        );
+    }
+
+    emit_progress(vec![format!(
+        "Preparing {forge_label} release metadata for '{tag_name}'."
+    )]);
+    let repo_root_for_prepare = repo_root.to_string();
+    let tag_name_for_prepare = tag_name.to_string();
+    let remote_spec_for_prepare = remote_spec.map(str::to_string);
+    let (repo_args, release_exists) = run_blocking_job(move || {
+        let repo_args = release_cli_repo_args(
+            forge,
+            &repo_root_for_prepare,
+            remote_spec_for_prepare.as_deref(),
+        )?;
+        let release_exists = forge_release_exists(
+            forge,
+            &repo_root_for_prepare,
+            &tag_name_for_prepare,
+            remote_spec_for_prepare.as_deref(),
+        )?;
+        Ok((repo_args, release_exists))
+    })
+    .await?;
+
     let notes_file = release_notes_markdown
         .filter(|notes| !notes.trim().is_empty())
         .map(write_release_notes_file)
@@ -3393,18 +3456,15 @@ async fn create_or_update_forge_release(
     emit_progress(vec![format!(
         "Checking whether a {forge_label} release already exists for '{tag_name}'."
     )]);
-    let repo_root_for_check = repo_root.to_string();
-    let tag_name_for_check = tag_name.to_string();
-    let remote_spec_for_check = remote_spec.map(str::to_string);
-    let release_exists = run_blocking_job(move || {
-        forge_release_exists(
-            forge,
-            &repo_root_for_check,
-            &tag_name_for_check,
-            remote_spec_for_check.as_deref(),
-        )
-    })
-    .await?;
+    if release_exists {
+        emit_progress(vec![format!(
+            "Found existing {forge_label} release '{tag_name}'."
+        )]);
+    } else {
+        emit_progress(vec![format!(
+            "No existing {forge_label} release found for '{tag_name}'."
+        )]);
+    }
 
     let result = async {
         if release_exists {
