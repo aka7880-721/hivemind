@@ -817,6 +817,12 @@ pub(crate) fn ensure_git_repo_with_cancel(
     }
 }
 
+pub(crate) fn git_worktree_root(repo_root: &str) -> Result<std::path::PathBuf> {
+    let output = run_git_checked(repo_root, &["rev-parse", "--show-toplevel"])?;
+    let path = std::path::PathBuf::from(output.trim());
+    Ok(crate::cli::best_effort_canonicalize(&path))
+}
+
 pub(crate) fn ensure_local_tag(
     repo_root: &str,
     tag_name: &str,
