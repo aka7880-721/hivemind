@@ -458,10 +458,11 @@ use crate::{
         BranchScopeKind, ProjectConfig, ProjectType, ReleaseNowQuickDownloadsSettings,
         ReleaseNowSettings,
     },
+    forge::ForgeKind,
     git::{
         GitCancellation, GitScopeContext, collect_all_branch_git_scope_contexts,
-        current_branch_with_cancel, ensure_local_tag, recent_merge_check, run_git, run_git_checked,
-        split_output_lines,
+        current_branch_with_cancel, ensure_local_tag, git_worktree_root, recent_merge_check,
+        run_git, run_git_checked, split_output_lines,
     },
     workflow::runtime::{
         GIT_PUSH_TIMEOUT, NETWORK_RETRY_ATTEMPTS, run_blocking_job, run_command_with_retry_async,
@@ -501,6 +502,44 @@ pub(crate) fn scope_repo_roots_equal(left: &str, right: &str) -> bool {
         == crate::cli::best_effort_canonicalize(Path::new(right.trim()))
 }
 
+pub(crate) fn scope_git_worktrees_equal(left: &str, right: &str) -> bool {
+    match (git_worktree_root(left), git_worktree_root(right)) {
+        (Ok(left_root), Ok(right_root)) => left_root == right_root,
+        _ => scope_repo_roots_equal(left, right),
+    }
+}
+
+fn forge_repo_identity(remote_url: &str) -> Option<String> {
+    for forge in [ForgeKind::GitHub, ForgeKind::GitLab] {
+        if let Some((owner, repo)) = forge.owner_repo_from_remote_url(remote_url) {
+            return Some(format!(
+                "{}/{}",
+                owner.to_ascii_lowercase(),
+                repo.trim_end_matches(".git").to_ascii_lowercase()
+            ));
+        }
+    }
+    None
+}
+
+pub(crate) fn scope_remotes_equivalent(
+    left: Option<&str>,
+    right: Option<&str>,
+) -> bool {
+    let left = left.map(str::trim).filter(|remote| !remote.is_empty());
+    let right = right.map(str::trim).filter(|remote| !remote.is_empty());
+    match (left, right) {
+        (Some(left), Some(right)) => match (
+            forge_repo_identity(left),
+            forge_repo_identity(right),
+        ) {
+            (Some(left_id), Some(right_id)) => left_id == right_id,
+            _ => left.eq_ignore_ascii_case(right),
+        },
+        _ => false,
+    }
+}
+
 pub(crate) fn scope_supports_remote_tag_push(scope: &crate::git::GitScopeContext) -> bool {
     scope
         .remote_spec
@@ -514,7 +553,20 @@ pub(crate) fn should_tag_sibling_scope(
     sibling: &crate::git::GitScopeContext,
     core_repo_root: &str,
 ) -> bool {
-    is_module_or_service_scope(sibling) && !scope_repo_roots_equal(&sibling.repo_root, core_repo_root)
+    is_module_or_service_scope(sibling)
+        && !scope_git_worktrees_equal(&sibling.repo_root, core_repo_root)
+}
+
+pub(crate) fn should_push_sibling_scope_tag(
+    sibling: &crate::git::GitScopeContext,
+    core: &crate::git::GitScopeContext,
+) -> bool {
+    scope_supports_remote_tag_push(sibling)
+        && should_tag_sibling_scope(sibling, &core.repo_root)
+        && !scope_remotes_equivalent(
+            sibling.remote_spec.as_deref(),
+            core.remote_spec.as_deref(),
+        )
 }
 
 #[cfg(test)]
@@ -2139,11 +2191,20 @@ pub(crate) async fn execute_release_now_async(
                 sibling.display_name, composite_tag
             )]);
 
-            let sibling_repo = sibling.repo_root.clone();
+            let sibling_git_root = run_blocking_job({
+                let sibling_repo = sibling.repo_root.clone();
+                move || {
+                    git_worktree_root(&sibling_repo).map(|path| path.to_string_lossy().into_owned())
+                }
+            })
+            .await?;
+
+            let sibling_repo_for_tag = sibling_git_root.clone();
             let tag_for_job = composite_tag.clone();
-            let created_sibling_tag =
-                run_blocking_job(move || ensure_local_tag(&sibling_repo, &tag_for_job, None))
-                    .await?;
+            let created_sibling_tag = run_blocking_job(move || {
+                ensure_local_tag(&sibling_repo_for_tag, &tag_for_job, None)
+            })
+            .await?;
             emit_progress(vec![if created_sibling_tag {
                 format!(
                     "Created local tag '{}' in {} repo.",
@@ -2181,7 +2242,7 @@ pub(crate) async fn execute_release_now_async(
             }
 
             ensure_not_cancelled(&cancel)?;
-            if scope_supports_remote_tag_push(sibling) {
+            if should_push_sibling_scope_tag(sibling, &request.scope) {
                 let remote_spec = sibling.remote_spec.clone().expect(
                     "remote tag push guard ensures a configured remote is present",
                 );
@@ -2190,11 +2251,16 @@ pub(crate) async fn execute_release_now_async(
                     composite_tag, sibling.display_name
                 )]);
                 push_scope_tag_async(
-                    sibling.repo_root.clone(),
+                    sibling_git_root.clone(),
                     Some(remote_spec),
                     composite_tag,
                 )
                 .await?;
+            } else if scope_supports_remote_tag_push(sibling) {
+                emit_progress(vec![format!(
+                    "Skipping remote tag push for '{}' (shares the core forge remote; local tag retained).",
+                    sibling.display_name
+                )]);
             } else {
                 emit_progress(vec![format!(
                     "Skipping remote tag push for '{}' (local-only scope; local tag retained).",
@@ -2205,6 +2271,7 @@ pub(crate) async fn execute_release_now_async(
     }
 
     let mut release_notes = Vec::new();
+    let mut generated_commit = None;
     if request.changelog_enabled {
         let repo_root_for_branch = request.repo_root.clone();
         let branch_name =
@@ -2269,9 +2336,48 @@ pub(crate) async fn execute_release_now_async(
                 ]);
             }
         }
+
+        ensure_not_cancelled(&cancel)?;
+        let repo_root_for_commit = request.repo_root.clone();
+        let tag_name_for_commit = request.tag_name.clone();
+        let artifact_files_for_commit = artifact_files.clone();
+        generated_commit = run_blocking_job(move || {
+            create_release_now_generated_files_commit(
+                &repo_root_for_commit,
+                &tag_name_for_commit,
+                &artifact_files_for_commit,
+                request.mirror_summary_to_root_changelog,
+            )
+        })
+        .await?;
+        emit_progress(vec![if generated_commit.is_some() {
+            "Committed ReleaseNOW changelog and memory files.".to_string()
+        } else {
+            "No ReleaseNOW generated file changes needed committing.".to_string()
+        }]);
+    } else if request.readme_injection_enabled {
+        ensure_not_cancelled(&cancel)?;
+        let repo_root_for_commit = request.repo_root.clone();
+        let tag_name_for_commit = request.tag_name.clone();
+        let artifact_files_for_commit = artifact_files.clone();
+        generated_commit = run_blocking_job(move || {
+            create_release_now_generated_files_commit(
+                &repo_root_for_commit,
+                &tag_name_for_commit,
+                &artifact_files_for_commit,
+                request.mirror_summary_to_root_changelog,
+            )
+        })
+        .await?;
+        emit_progress(vec![if generated_commit.is_some() {
+            "Committed ReleaseNOW changelog and memory files.".to_string()
+        } else {
+            "No ReleaseNOW generated file changes needed committing.".to_string()
+        }]);
     }
 
     // QD HTML is built from the same artifact list attached to this release (see rls_now_qd).
+    emit_progress(vec!["Preparing Quick-Download links for the forge release.".to_string()]);
     let mut qd_warnings = Vec::new();
     let historical_qd_artifacts =
         historical_release_now_artifacts_for_tag(&request.repo_root, &request.tag_name)?;
@@ -2363,6 +2469,11 @@ pub(crate) async fn execute_release_now_async(
         )
         .await?;
     } else {
+        emit_progress(vec![format!(
+            "Publishing {} release for '{}'.",
+            forge.display_name(),
+            request.tag_name
+        )]);
         create_or_update_forge_release(
             forge,
             &request.repo_root,
@@ -2377,64 +2488,49 @@ pub(crate) async fn execute_release_now_async(
         .await?;
     }
 
-    if request.changelog_enabled || request.readme_injection_enabled {
+    if let Some(generated_commit) = generated_commit {
         ensure_not_cancelled(&cancel)?;
-        let repo_root_for_commit = request.repo_root.clone();
-        let tag_name_for_commit = request.tag_name.clone();
-        let artifact_files_for_commit = artifact_files.clone();
-        let generated_commit = run_blocking_job(move || {
-            create_release_now_generated_files_commit(
-                &repo_root_for_commit,
-                &tag_name_for_commit,
-                &artifact_files_for_commit,
-                request.mirror_summary_to_root_changelog,
-            )
+        let remote_name = resolve_release_push_remote(
+            &request.repo_root,
+            request.scope.remote_spec.as_deref(),
+        )?;
+        let repo_root_for_branch = request.repo_root.clone();
+        let cancel_for_branch = cancel.clone();
+        let branch_name = run_blocking_job(move || {
+            current_branch_with_cancel(&repo_root_for_branch, Some(cancel_for_branch))
         })
         .await?;
 
-        if let Some(generated_commit) = generated_commit {
-            let remote_name = resolve_release_push_remote(
-                &request.repo_root,
-                request.scope.remote_spec.as_deref(),
-            )?;
-            let repo_root_for_branch = request.repo_root.clone();
-            let cancel_for_branch = cancel.clone();
-            let branch_name = run_blocking_job(move || {
-                current_branch_with_cancel(&repo_root_for_branch, Some(cancel_for_branch))
+        emit_progress(vec![format!(
+            "Pushing generated ReleaseNOW files to {}.",
+            remote_name
+        )]);
+        if let Err(push_error) = run_command_with_retry_async(
+            request.repo_root.clone(),
+            "git",
+            vec!["push".to_string(), remote_name.clone(), branch_name],
+            GIT_PUSH_TIMEOUT,
+            NETWORK_RETRY_ATTEMPTS,
+            "git push",
+        )
+        .await
+        {
+            let repo_root_for_rollback = request.repo_root.clone();
+            let rollback_result = run_blocking_job(move || {
+                rollback_release_now_generated_files_commit(
+                    &repo_root_for_rollback,
+                    &generated_commit,
+                )
             })
-            .await?;
-
-            emit_progress(vec![format!(
-                "Pushing generated ReleaseNOW files to {}.",
-                remote_name
-            )]);
-            if let Err(push_error) = run_command_with_retry_async(
-                request.repo_root.clone(),
-                "git",
-                vec!["push".to_string(), remote_name.clone(), branch_name],
-                GIT_PUSH_TIMEOUT,
-                NETWORK_RETRY_ATTEMPTS,
-                "git push",
-            )
-            .await
-            {
-                let repo_root_for_rollback = request.repo_root.clone();
-                let rollback_result = run_blocking_job(move || {
-                    rollback_release_now_generated_files_commit(
-                        &repo_root_for_rollback,
-                        &generated_commit,
-                    )
-                })
-                .await;
-                if let Err(rollback_error) = rollback_result {
-                    return Err(anyhow!(
-                        "{}; additionally failed to roll back the generated ReleaseNOW commit: {}",
-                        push_error,
-                        rollback_error
-                    ));
-                }
-                return Err(push_error);
+            .await;
+            if let Err(rollback_error) = rollback_result {
+                return Err(anyhow!(
+                    "{}; additionally failed to roll back the generated ReleaseNOW commit: {}",
+                    push_error,
+                    rollback_error
+                ));
             }
+            return Err(push_error);
         }
     }
 
@@ -3788,6 +3884,60 @@ mod tests {
 
         assert!(scope_supports_remote_tag_push(&with_remote));
         assert!(!scope_supports_remote_tag_push(&without_remote));
+    }
+
+    #[test]
+    fn scope_remotes_equivalent_matches_owner_repo_identities() {
+        assert!(scope_remotes_equivalent(
+            Some("git@github.com:org/core.git"),
+            Some("https://github.com/org/core.git"),
+        ));
+        assert!(!scope_remotes_equivalent(
+            Some("git@github.com:org/core.git"),
+            Some("git@github.com:org/cast.git"),
+        ));
+    }
+
+    #[test]
+    fn should_push_sibling_scope_tag_requires_distinct_remote_and_repo() {
+        let core = sample_scope(
+            "core",
+            BranchScopeKind::Branch,
+            "/tmp/core",
+            Some("git@github.com:org/core.git"),
+        );
+        let sibling = sample_scope(
+            "cast",
+            BranchScopeKind::Module,
+            "/tmp/cast",
+            Some("git@github.com:org/cast.git"),
+        );
+        let shared_remote = sample_scope(
+            "cast",
+            BranchScopeKind::Module,
+            "/tmp/cast-2",
+            Some("https://github.com/org/core.git"),
+        );
+
+        assert!(should_push_sibling_scope_tag(&sibling, &core));
+        assert!(!should_push_sibling_scope_tag(&shared_remote, &core));
+    }
+
+    #[test]
+    fn should_tag_sibling_scope_skips_nested_git_worktree_path() {
+        let dir = create_temp_repo_dir("nested-worktree");
+        crate::git::run_git_checked(dir.to_str().unwrap(), &["init"])
+            .expect("init temp git repo");
+        let nested = dir.join("apps/cast");
+        fs::create_dir_all(&nested).expect("create nested scope dir");
+
+        let cast = sample_scope(
+            "cast",
+            BranchScopeKind::Module,
+            nested.to_str().unwrap(),
+            None,
+        );
+        assert!(!should_tag_sibling_scope(&cast, dir.to_str().unwrap()));
     }
 
     #[test]
