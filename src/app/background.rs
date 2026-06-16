@@ -44,7 +44,7 @@ use crate::{
         load_change_range_for_refs_with_cancel, load_change_range_for_tags_with_cancel,
         load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
     },
-    workflow::rls_now::format_branched_scope_tag,
+    workflow::rls_now::{format_branched_scope_tag, is_module_or_service_scope},
     workflow::targets::{ProbeKind, TargetProbe, collect_bump_scopes},
     workflow::versioning::{BumpAction, VersionScheme},
     workflow::{OverviewBumpWorkflow, git_flow},
@@ -1872,10 +1872,7 @@ pub(crate) fn build_branched_core_release_notes(
         if index == core_scope_index {
             continue;
         }
-        if !matches!(
-            sibling.scope_kind,
-            Some(BranchScopeKind::Module) | Some(BranchScopeKind::Service)
-        ) {
+        if !is_module_or_service_scope(sibling) {
             continue;
         }
         let composite_tag = format_branched_scope_tag(&sibling.suggested_tag_name, core_tag);
@@ -1906,10 +1903,7 @@ pub(crate) fn append_branched_sibling_sections_to_notes(
         if index == core_scope_index {
             continue;
         }
-        if !matches!(
-            sibling.scope_kind,
-            Some(BranchScopeKind::Module) | Some(BranchScopeKind::Service)
-        ) {
+        if !is_module_or_service_scope(sibling) {
             continue;
         }
         let composite_tag = format_branched_scope_tag(&sibling.suggested_tag_name, core_tag);
