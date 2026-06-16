@@ -22,6 +22,7 @@ use crate::{
 
 const ANSI_CYAN: &str = "\x1b[36m";
 const ANSI_GREEN: &str = "\x1b[32m";
+const ANSI_BRIGHT_GREEN: &str = "\x1b[92m";
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_DARK_GREY: &str = "\x1b[90m";
 const ANSI_RESET: &str = "\x1b[0m";
@@ -159,7 +160,7 @@ fn run_mirror_sync_push(
     )?;
     println!();
     if follow_up.in_sync() {
-        println!("{ANSI_GREEN}GitLab and GitHub remotes are now in sync.{ANSI_RESET}");
+        println!("{ANSI_BRIGHT_GREEN}GitLab and GitHub remotes are now in sync.{ANSI_RESET}");
     } else {
         println!("{ANSI_YELLOW}Sync finished, but remotes still appear out of sync.{ANSI_RESET}");
         for line in follow_up.summary_lines() {
