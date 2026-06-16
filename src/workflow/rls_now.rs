@@ -448,10 +448,16 @@ use tokio::{
 use crate::{
     app::{
         StdChangelogExecutionPolicy, append_background_tag_summary_notes,
+        append_branched_sibling_sections_to_notes, build_branched_core_release_notes,
         build_release_notes_markdown, execute_standard_changelog_for_tag,
     },
-    changelog::clear_top_picks_edits,
-    config::{ProjectConfig, ReleaseNowQuickDownloadsSettings, ReleaseNowSettings},
+    changelog::{
+        archive_changelog_markdown, clear_top_picks_edits, find_archived_changelog_markdown,
+    },
+    config::{
+        BranchScopeKind, ProjectConfig, ProjectType, ReleaseNowQuickDownloadsSettings,
+        ReleaseNowSettings,
+    },
     git::{
         GitCancellation, GitScopeContext, collect_all_branch_git_scope_contexts,
         current_branch_with_cancel, ensure_local_tag, recent_merge_check, run_git, run_git_checked,
@@ -468,6 +474,61 @@ mod rls_now_qd;
 const RELEASE_NOW_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const DEFAULT_RELEASE_NOTES: &str =
     "# Release Notes\n\nAdd release highlights here before publishing.";
+
+pub(crate) fn strip_tag_v_prefix(tag: &str) -> String {
+    tag.trim().trim_start_matches('v').to_string()
+}
+
+pub(crate) fn format_branched_scope_tag(sm_version: &str, core_tag: &str) -> String {
+    format!(
+        "{} (core-{})",
+        sm_version.trim(),
+        strip_tag_v_prefix(core_tag)
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn core_scope_index(project: &ProjectConfig) -> Option<usize> {
+    if project.project_type != ProjectType::Branched {
+        return None;
+    }
+    project
+        .branches
+        .iter()
+        .position(|branch| branch.scope_kind == BranchScopeKind::Branch)
+}
+
+pub(crate) fn is_release_capable_scope(project: &ProjectConfig, scope_index: usize) -> bool {
+    if project.project_type == ProjectType::AllInOne {
+        return true;
+    }
+    project
+        .branches
+        .get(scope_index)
+        .is_some_and(|branch| branch.scope_kind == BranchScopeKind::Branch)
+}
+
+pub(crate) fn is_branched_core_release(project: &ProjectConfig, scope_index: usize) -> bool {
+    project.project_type == ProjectType::Branched
+        && project
+            .branches
+            .get(scope_index)
+            .is_some_and(|branch| branch.scope_kind == BranchScopeKind::Branch)
+}
+
+pub(crate) fn release_now_std_changelog_policy(
+    project: &ProjectConfig,
+    scope_index: usize,
+) -> StdChangelogExecutionPolicy {
+    if project
+        .release_now_for_scope(scope_index)
+        .allow_non_main_release_flow
+    {
+        StdChangelogExecutionPolicy::ForceGenerate
+    } else {
+        StdChangelogExecutionPolicy::Auto
+    }
+}
 
 fn resolve_release_push_remote(repo_root: &str, configured_remote: Option<&str>) -> Result<String> {
     if let Some(configured_remote) = configured_remote
@@ -634,6 +695,8 @@ pub(crate) struct ReleaseNowDialog {
     pub(crate) readme_inject_depth: crate::config::ReadmeInjectDepth,
     pub(crate) readme_inject_at_row: u16,
     pub(crate) release_title_template: String,
+    pub(crate) project: ProjectConfig,
+    pub(crate) scope_index: usize,
     pub(crate) integration_mode: crate::config::IntegrationMode,
     pub(crate) mirror_sync_report: Option<crate::git::MirrorSyncReport>,
     pub(crate) mirror_sync_running: bool,
@@ -688,6 +751,8 @@ impl ReleaseNowDialog {
             readme_inject_depth: validation.readme_inject_depth,
             readme_inject_at_row: validation.readme_inject_at_row,
             release_title_template: validation.release_title_template,
+            project: validation.project,
+            scope_index: validation.scope_index,
             mirror_sync_report: validation
                 .mirror_sync_report
                 .map(|report| (*report).clone()),
@@ -1633,6 +1698,8 @@ impl ReleaseNowDialog {
 #[derive(Clone)]
 pub(crate) struct ReleaseNowValidation {
     pub(crate) project_name: String,
+    pub(crate) project: ProjectConfig,
+    pub(crate) scope_index: usize,
     pub(crate) integration_mode: crate::config::IntegrationMode,
     pub(crate) scope_label: String,
     pub(crate) scope: GitScopeContext,
@@ -1669,6 +1736,8 @@ pub(crate) struct ReleaseNowScript {
 #[derive(Clone)]
 pub(crate) struct ReleaseNowExecutionRequest {
     pub(crate) scope_label: String,
+    pub(crate) project: ProjectConfig,
+    pub(crate) scope_index: usize,
     pub(crate) integration_mode: crate::config::IntegrationMode,
     pub(crate) scope: GitScopeContext,
     pub(crate) changelog_enabled: bool,
@@ -1724,6 +1793,12 @@ pub(crate) fn validate_release_now(
 
     crate::forge::ensure_forge_authenticated(project.integration_mode)?;
 
+    if !is_release_capable_scope(project, scope_index) {
+        bail!(
+            "ReleaseNOW is only available for Core scope in branched projects (or All-In-One projects)"
+        );
+    }
+
     let contexts = collect_all_branch_git_scope_contexts(project)?;
     if contexts.is_empty() {
         bail!("ReleaseNOW requires at least one git-backed scope")
@@ -1753,11 +1828,20 @@ pub(crate) fn validate_release_now(
     let options = collect_release_now_options(project.release_now_for_scope(scope_index))?;
     let warning_message =
         build_recent_merge_warning(project, &contexts, scope_index, cancel.clone())?;
-    let release_notes_markdown = build_release_notes_markdown(&scope.suggested_tag_name, &scope)
-        .unwrap_or_else(|_| DEFAULT_RELEASE_NOTES.to_string());
+    let release_notes_markdown = if is_branched_core_release(project, scope_index)
+        && project.changelog_enabled_for_scope(scope_index)
+    {
+        build_branched_core_release_notes(project, &scope.suggested_tag_name, scope_index, cancel)
+            .unwrap_or_else(|_| DEFAULT_RELEASE_NOTES.to_string())
+    } else {
+        build_release_notes_markdown(&scope.suggested_tag_name, &scope)
+            .unwrap_or_else(|_| DEFAULT_RELEASE_NOTES.to_string())
+    };
 
     Ok(ReleaseNowValidation {
         project_name: project.name.clone(),
+        project: project.clone(),
+        scope_index,
         integration_mode: project.integration_mode,
         scope_label: scope
             .scope_kind
@@ -1799,6 +1883,8 @@ pub(crate) fn validate_release_now(
 pub(crate) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowExecutionRequest {
     ReleaseNowExecutionRequest {
         scope_label: dialog.scope_label.clone(),
+        project: dialog.project.clone(),
+        scope_index: dialog.scope_index,
         integration_mode: dialog.integration_mode,
         scope: dialog.scope.clone(),
         changelog_enabled: dialog.changelog_enabled,
@@ -1828,8 +1914,25 @@ pub(crate) fn build_execution_request(dialog: &ReleaseNowDialog) -> ReleaseNowEx
     }
 }
 
+async fn push_scope_tag_async(
+    repo_root: String,
+    remote_spec: Option<String>,
+    tag_name: String,
+) -> Result<()> {
+    let remote = resolve_release_push_remote(&repo_root, remote_spec.as_deref())?;
+    run_command_with_retry_async(
+        repo_root,
+        "git",
+        vec!["push".to_string(), remote, tag_name],
+        GIT_PUSH_TIMEOUT,
+        NETWORK_RETRY_ATTEMPTS,
+        "git push",
+    )
+    .await
+}
+
 pub(crate) async fn execute_release_now_async(
-    request: ReleaseNowExecutionRequest,
+    mut request: ReleaseNowExecutionRequest,
     cancel: GitCancellation,
     mut emit_progress: impl FnMut(Vec<String>) + Send,
 ) -> Result<ReleaseNowExecutionOutcome> {
@@ -1984,6 +2087,85 @@ pub(crate) async fn execute_release_now_async(
         )
     }]);
 
+    if is_branched_core_release(&request.project, request.scope_index) {
+        let contexts = collect_all_branch_git_scope_contexts(&request.project)?;
+        let policy = release_now_std_changelog_policy(&request.project, request.scope_index);
+        let core_tag = request.tag_name.clone();
+
+        for (index, sibling) in contexts.iter().enumerate() {
+            if index == request.scope_index {
+                continue;
+            }
+            if !matches!(
+                sibling.scope_kind,
+                Some(BranchScopeKind::Module) | Some(BranchScopeKind::Service)
+            ) {
+                continue;
+            }
+
+            let composite_tag = format_branched_scope_tag(&sibling.suggested_tag_name, &core_tag);
+            emit_progress(vec![format!(
+                "Tagging sibling scope '{}' as '{}'.",
+                sibling.display_name, composite_tag
+            )]);
+
+            let sibling_repo = sibling.repo_root.clone();
+            let tag_for_job = composite_tag.clone();
+            let created_sibling_tag =
+                run_blocking_job(move || ensure_local_tag(&sibling_repo, &tag_for_job, None))
+                    .await?;
+            emit_progress(vec![if created_sibling_tag {
+                format!(
+                    "Created local tag '{}' in {} repo.",
+                    composite_tag, sibling.display_name
+                )
+            } else {
+                format!(
+                    "Local tag '{}' already exists in {} repo.",
+                    composite_tag, sibling.display_name
+                )
+            }]);
+
+            if request.project.changelog_enabled_for_scope(index) {
+                let sibling_repo_for_branch = sibling.repo_root.clone();
+                let sibling_branch = run_blocking_job(move || {
+                    current_branch_with_cancel(&sibling_repo_for_branch, None)
+                })
+                .await?;
+                let sibling_std_outcome = execute_standard_changelog_for_tag(
+                    sibling,
+                    &composite_tag,
+                    &sibling_branch,
+                    policy,
+                )
+                .await?;
+                for line in &sibling_std_outcome.summary_notes {
+                    emit_progress(vec![line.clone()]);
+                }
+                for line in &sibling_std_outcome.replay_notices {
+                    emit_progress(vec![line.clone()]);
+                }
+                for line in &sibling_std_outcome.replay_errors {
+                    emit_progress(vec![format!("Warning: {}", line)]);
+                }
+            }
+
+            ensure_not_cancelled(&cancel)?;
+            let remote_spec = sibling.remote_spec.clone().ok_or_else(|| {
+                anyhow!(
+                    "sibling scope '{}' has no remote configured for tag push",
+                    sibling.display_name
+                )
+            })?;
+            emit_progress(vec![format!(
+                "Pushing tag '{}' for {}.",
+                composite_tag, sibling.display_name
+            )]);
+            push_scope_tag_async(sibling.repo_root.clone(), Some(remote_spec), composite_tag)
+                .await?;
+        }
+    }
+
     let mut release_notes = Vec::new();
     if request.changelog_enabled {
         let repo_root_for_branch = request.repo_root.clone();
@@ -1993,11 +2175,12 @@ pub(crate) async fn execute_release_now_async(
         emit_progress(vec![
             "Syncing standard changelog archive, summary, and memory state.".to_string(),
         ]);
+        let policy = release_now_std_changelog_policy(&request.project, request.scope_index);
         let std_outcome = execute_standard_changelog_for_tag(
             &request.scope,
             &request.tag_name,
             &branch_name,
-            StdChangelogExecutionPolicy::Auto,
+            policy,
         )
         .await?;
         for line in &std_outcome.summary_notes {
@@ -2010,6 +2193,32 @@ pub(crate) async fn execute_release_now_async(
             emit_progress(vec![format!("Warning: {}", line)]);
         }
         release_notes.extend(std_outcome.summary_notes);
+
+        if is_branched_core_release(&request.project, request.scope_index) {
+            let mut merged_notes = run_blocking_job({
+                let repo_root = request.repo_root.clone();
+                let tag_name = request.tag_name.clone();
+                move || find_archived_changelog_markdown(&repo_root, &tag_name)
+            })
+            .await?
+            .or(request.release_notes_markdown.clone())
+            .unwrap_or_default();
+            append_branched_sibling_sections_to_notes(
+                &request.project,
+                &request.tag_name,
+                request.scope_index,
+                &mut merged_notes,
+                Some(cancel.clone()),
+            )?;
+            let repo_root = request.repo_root.clone();
+            let tag_name = request.tag_name.clone();
+            let notes_for_archive = merged_notes.clone();
+            run_blocking_job(move || {
+                archive_changelog_markdown(&repo_root, &tag_name, &notes_for_archive)
+            })
+            .await?;
+            request.release_notes_markdown = Some(merged_notes);
+        }
 
         if request.mirror_summary_to_root_changelog {
             let repo_root_for_mirror = request.repo_root.clone();
@@ -3462,6 +3671,7 @@ fn write_release_notes_file(notes: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use crate::config::ReleaseNowSettings;
+    use crate::config::{BranchConfig, BranchScopeKind};
     use std::{env, fs};
 
     fn create_temp_repo_dir(test_name: &str) -> PathBuf {
@@ -3477,6 +3687,90 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("create temp repo dir");
         dir
+    }
+
+    #[test]
+    fn format_branched_scope_tag_composes_core_suffix() {
+        assert_eq!(
+            format_branched_scope_tag("v0.5.2", "v0.9.1"),
+            "v0.5.2 (core-0.9.1)"
+        );
+    }
+
+    #[test]
+    fn strip_tag_v_prefix_removes_leading_v() {
+        assert_eq!(strip_tag_v_prefix("v0.9.1"), "0.9.1");
+        assert_eq!(strip_tag_v_prefix("0.9.1"), "0.9.1");
+    }
+
+    #[test]
+    fn core_scope_index_finds_branch_scope() {
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            branches: vec![
+                BranchConfig {
+                    name: "api".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    ..BranchConfig::default()
+                },
+                BranchConfig {
+                    name: "core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    ..BranchConfig::default()
+                },
+            ],
+            ..ProjectConfig::default()
+        };
+
+        assert_eq!(core_scope_index(&project), Some(1));
+    }
+
+    #[test]
+    fn is_release_capable_scope_allows_core_and_all_in_one() {
+        let branched = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    ..BranchConfig::default()
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    ..BranchConfig::default()
+                },
+            ],
+            ..ProjectConfig::default()
+        };
+
+        assert!(is_release_capable_scope(&branched, 0));
+        assert!(!is_release_capable_scope(&branched, 1));
+
+        let all_in_one = ProjectConfig {
+            name: "solo".to_string(),
+            project_type: ProjectType::AllInOne,
+            ..ProjectConfig::default()
+        };
+        assert!(is_release_capable_scope(&all_in_one, 0));
+    }
+
+    #[test]
+    fn release_now_std_changelog_policy_honors_allow_non_main_setting() {
+        let mut project = ProjectConfig::default();
+        project.release_now.allow_non_main_release_flow = true;
+        assert_eq!(
+            release_now_std_changelog_policy(&project, 0),
+            StdChangelogExecutionPolicy::ForceGenerate
+        );
+
+        project.release_now.allow_non_main_release_flow = false;
+        assert_eq!(
+            release_now_std_changelog_policy(&project, 0),
+            StdChangelogExecutionPolicy::Auto
+        );
     }
 
     #[test]
@@ -3825,7 +4119,6 @@ mod tests {
         };
         let dialog = ReleaseNowDialog {
             project_name: "Test".to_string(),
-            integration_mode: crate::config::IntegrationMode::GitHubEnabled,
             scope_label: "main".to_string(),
             scope: GitScopeContext {
                 display_name: "main".to_string(),
@@ -3889,6 +4182,9 @@ mod tests {
             readme_inject_depth: crate::config::ReadmeInjectDepth::CurrentOnly,
             readme_inject_at_row: 0,
             release_title_template: String::new(),
+            project: ProjectConfig::default(),
+            scope_index: 0,
+            integration_mode: crate::config::IntegrationMode::GitHubEnabled,
             mirror_sync_report: None,
             mirror_sync_running: false,
             mirror_sync_log_lines: Vec::new(),
@@ -3904,7 +4200,6 @@ mod tests {
     fn release_notes_preview_renders_markdown_with_cte() {
         let dialog = ReleaseNowDialog {
             project_name: "Test".to_string(),
-            integration_mode: crate::config::IntegrationMode::GitHubEnabled,
             scope_label: "main".to_string(),
             scope: GitScopeContext {
                 display_name: "main".to_string(),
@@ -3957,6 +4252,9 @@ mod tests {
             readme_inject_depth: crate::config::ReadmeInjectDepth::CurrentOnly,
             readme_inject_at_row: 0,
             release_title_template: String::new(),
+            project: ProjectConfig::default(),
+            scope_index: 0,
+            integration_mode: crate::config::IntegrationMode::GitHubEnabled,
             mirror_sync_report: None,
             mirror_sync_running: false,
             mirror_sync_log_lines: Vec::new(),
