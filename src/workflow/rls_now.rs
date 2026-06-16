@@ -487,6 +487,36 @@ pub(crate) fn format_branched_scope_tag(sm_version: &str, core_tag: &str) -> Str
     )
 }
 
+pub(crate) fn is_module_or_service_scope(scope: &crate::git::GitScopeContext) -> bool {
+    matches!(
+        scope.scope_kind,
+        Some(BranchScopeKind::Module) | Some(BranchScopeKind::Service)
+    )
+}
+
+pub(crate) fn scope_repo_roots_equal(left: &str, right: &str) -> bool {
+    use std::path::Path;
+
+    crate::cli::best_effort_canonicalize(Path::new(left.trim()))
+        == crate::cli::best_effort_canonicalize(Path::new(right.trim()))
+}
+
+pub(crate) fn scope_supports_remote_tag_push(scope: &crate::git::GitScopeContext) -> bool {
+    scope
+        .remote_spec
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|remote| !remote.is_empty())
+}
+
+/// Module/service scopes are tagged in their own git repo, never in the core repo.
+pub(crate) fn should_tag_sibling_scope(
+    sibling: &crate::git::GitScopeContext,
+    core_repo_root: &str,
+) -> bool {
+    is_module_or_service_scope(sibling) && !scope_repo_roots_equal(&sibling.repo_root, core_repo_root)
+}
+
 #[cfg(test)]
 pub(crate) fn core_scope_index(project: &ProjectConfig) -> Option<usize> {
     if project.project_type != ProjectType::Branched {
@@ -2093,13 +2123,13 @@ pub(crate) async fn execute_release_now_async(
         let core_tag = request.tag_name.clone();
 
         for (index, sibling) in contexts.iter().enumerate() {
-            if index == request.scope_index {
-                continue;
-            }
-            if !matches!(
-                sibling.scope_kind,
-                Some(BranchScopeKind::Module) | Some(BranchScopeKind::Service)
-            ) {
+            if !should_tag_sibling_scope(sibling, &request.repo_root) {
+                if is_module_or_service_scope(sibling) {
+                    emit_progress(vec![format!(
+                        "Skipping tag for sibling scope '{}' because it shares the core repository.",
+                        sibling.display_name
+                    )]);
+                }
                 continue;
             }
 
@@ -2151,18 +2181,26 @@ pub(crate) async fn execute_release_now_async(
             }
 
             ensure_not_cancelled(&cancel)?;
-            let remote_spec = sibling.remote_spec.clone().ok_or_else(|| {
-                anyhow!(
-                    "sibling scope '{}' has no remote configured for tag push",
-                    sibling.display_name
+            if scope_supports_remote_tag_push(sibling) {
+                let remote_spec = sibling.remote_spec.clone().expect(
+                    "remote tag push guard ensures a configured remote is present",
+                );
+                emit_progress(vec![format!(
+                    "Pushing tag '{}' for {}.",
+                    composite_tag, sibling.display_name
+                )]);
+                push_scope_tag_async(
+                    sibling.repo_root.clone(),
+                    Some(remote_spec),
+                    composite_tag,
                 )
-            })?;
-            emit_progress(vec![format!(
-                "Pushing tag '{}' for {}.",
-                composite_tag, sibling.display_name
-            )]);
-            push_scope_tag_async(sibling.repo_root.clone(), Some(remote_spec), composite_tag)
                 .await?;
+            } else {
+                emit_progress(vec![format!(
+                    "Skipping remote tag push for '{}' (local-only scope; local tag retained).",
+                    sibling.display_name
+                )]);
+            }
         }
     }
 
@@ -3672,7 +3710,30 @@ mod tests {
     use super::*;
     use crate::config::ReleaseNowSettings;
     use crate::config::{BranchConfig, BranchScopeKind};
+    use crate::git::GitScopeContext;
     use std::{env, fs};
+
+    fn sample_scope(
+        display_name: &str,
+        scope_kind: BranchScopeKind,
+        repo_root: &str,
+        remote: Option<&str>,
+    ) -> GitScopeContext {
+        GitScopeContext {
+            display_name: display_name.to_string(),
+            scope_kind: Some(scope_kind),
+            repo_root: repo_root.to_string(),
+            remote_spec: remote.map(str::to_string),
+            secondary_remote_spec: None,
+            main_branch_name: None,
+            suggested_tag_name: "v0.1.0".to_string(),
+            path_filters: Vec::new(),
+            hide_pr_messages: false,
+            hide_bump_messages: false,
+            mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
+        }
+    }
 
     fn create_temp_repo_dir(test_name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -3701,6 +3762,32 @@ mod tests {
     fn strip_tag_v_prefix_removes_leading_v() {
         assert_eq!(strip_tag_v_prefix("v0.9.1"), "0.9.1");
         assert_eq!(strip_tag_v_prefix("0.9.1"), "0.9.1");
+    }
+
+    #[test]
+    fn should_tag_sibling_scope_requires_distinct_module_service_repo() {
+        let core_root = "/tmp/cg-core-repo";
+        let module = sample_scope("api", BranchScopeKind::Module, "/tmp/cg-api-repo", None);
+        let shared = sample_scope("ui", BranchScopeKind::Service, core_root, None);
+        let core = sample_scope("core", BranchScopeKind::Branch, core_root, Some("origin"));
+
+        assert!(should_tag_sibling_scope(&module, core_root));
+        assert!(!should_tag_sibling_scope(&shared, core_root));
+        assert!(!should_tag_sibling_scope(&core, core_root));
+    }
+
+    #[test]
+    fn scope_supports_remote_tag_push_requires_configured_remote() {
+        let with_remote = sample_scope(
+            "api",
+            BranchScopeKind::Module,
+            "/tmp/api",
+            Some("git@github.com:org/api.git"),
+        );
+        let without_remote = sample_scope("ui", BranchScopeKind::Service, "/tmp/ui", None);
+
+        assert!(scope_supports_remote_tag_push(&with_remote));
+        assert!(!scope_supports_remote_tag_push(&without_remote));
     }
 
     #[test]
