@@ -522,20 +522,16 @@ fn forge_repo_identity(remote_url: &str) -> Option<String> {
     None
 }
 
-pub(crate) fn scope_remotes_equivalent(
-    left: Option<&str>,
-    right: Option<&str>,
-) -> bool {
+pub(crate) fn scope_remotes_equivalent(left: Option<&str>, right: Option<&str>) -> bool {
     let left = left.map(str::trim).filter(|remote| !remote.is_empty());
     let right = right.map(str::trim).filter(|remote| !remote.is_empty());
     match (left, right) {
-        (Some(left), Some(right)) => match (
-            forge_repo_identity(left),
-            forge_repo_identity(right),
-        ) {
-            (Some(left_id), Some(right_id)) => left_id == right_id,
-            _ => left.eq_ignore_ascii_case(right),
-        },
+        (Some(left), Some(right)) => {
+            match (forge_repo_identity(left), forge_repo_identity(right)) {
+                (Some(left_id), Some(right_id)) => left_id == right_id,
+                _ => left.eq_ignore_ascii_case(right),
+            }
+        }
         _ => false,
     }
 }
@@ -563,10 +559,7 @@ pub(crate) fn should_push_sibling_scope_tag(
 ) -> bool {
     scope_supports_remote_tag_push(sibling)
         && should_tag_sibling_scope(sibling, &core.repo_root)
-        && !scope_remotes_equivalent(
-            sibling.remote_spec.as_deref(),
-            core.remote_spec.as_deref(),
-        )
+        && !scope_remotes_equivalent(sibling.remote_spec.as_deref(), core.remote_spec.as_deref())
 }
 
 #[cfg(test)]
@@ -2243,19 +2236,16 @@ pub(crate) async fn execute_release_now_async(
 
             ensure_not_cancelled(&cancel)?;
             if should_push_sibling_scope_tag(sibling, &request.scope) {
-                let remote_spec = sibling.remote_spec.clone().expect(
-                    "remote tag push guard ensures a configured remote is present",
-                );
+                let remote_spec = sibling
+                    .remote_spec
+                    .clone()
+                    .expect("remote tag push guard ensures a configured remote is present");
                 emit_progress(vec![format!(
                     "Pushing tag '{}' for {}.",
                     composite_tag, sibling.display_name
                 )]);
-                push_scope_tag_async(
-                    sibling_git_root.clone(),
-                    Some(remote_spec),
-                    composite_tag,
-                )
-                .await?;
+                push_scope_tag_async(sibling_git_root.clone(), Some(remote_spec), composite_tag)
+                    .await?;
             } else if scope_supports_remote_tag_push(sibling) {
                 emit_progress(vec![format!(
                     "Skipping remote tag push for '{}' (shares the core forge remote; local tag retained).",
@@ -2377,7 +2367,9 @@ pub(crate) async fn execute_release_now_async(
     }
 
     // QD HTML is built from the same artifact list attached to this release (see rls_now_qd).
-    emit_progress(vec!["Preparing Quick-Download links for the forge release.".to_string()]);
+    emit_progress(vec![
+        "Preparing Quick-Download links for the forge release.".to_string(),
+    ]);
     let mut qd_warnings = Vec::new();
     let historical_qd_artifacts =
         historical_release_now_artifacts_for_tag(&request.repo_root, &request.tag_name)?;
@@ -2490,10 +2482,8 @@ pub(crate) async fn execute_release_now_async(
 
     if let Some(generated_commit) = generated_commit {
         ensure_not_cancelled(&cancel)?;
-        let remote_name = resolve_release_push_remote(
-            &request.repo_root,
-            request.scope.remote_spec.as_deref(),
-        )?;
+        let remote_name =
+            resolve_release_push_remote(&request.repo_root, request.scope.remote_spec.as_deref())?;
         let repo_root_for_branch = request.repo_root.clone();
         let cancel_for_branch = cancel.clone();
         let branch_name = run_blocking_job(move || {
@@ -3926,8 +3916,7 @@ mod tests {
     #[test]
     fn should_tag_sibling_scope_skips_nested_git_worktree_path() {
         let dir = create_temp_repo_dir("nested-worktree");
-        crate::git::run_git_checked(dir.to_str().unwrap(), &["init"])
-            .expect("init temp git repo");
+        crate::git::run_git_checked(dir.to_str().unwrap(), &["init"]).expect("init temp git repo");
         let nested = dir.join("apps/cast");
         fs::create_dir_all(&nested).expect("create nested scope dir");
 
