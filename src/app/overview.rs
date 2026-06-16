@@ -650,6 +650,10 @@ pub(super) fn render_dashboard_tiles(
                 build_dev_tile_display(activity, placeholder.as_ref(), dev_mode);
             let (rls_display, rls_output) =
                 build_release_tile_display(activity, placeholder.as_ref(), release_mode);
+            let rls_enabled = project.project_type == crate::config::ProjectType::AllInOne
+                || project.branches.get(scope_index).is_some_and(|branch| {
+                    branch.scope_kind == crate::config::BranchScopeKind::Branch
+                });
             let tile = OverviewTileData {
                 name: scope.display_name.clone(),
                 scheme: scope.scheme,
@@ -673,6 +677,7 @@ pub(super) fn render_dashboard_tiles(
                 dev_output,
                 rls_display,
                 rls_output,
+                rls_enabled,
                 selected,
             };
             let hotspots = render_overview_tile(frame, tile_rect, &tile);
@@ -683,10 +688,12 @@ pub(super) fn render_dashboard_tiles(
                 hotspots.title_rect,
                 HitAction::SelectOverviewScope(scope_index),
             ));
-            app.hit_targets.push(HitTarget::new(
-                hotspots.view_rect,
-                HitAction::OpenOverviewReleaseNow(scope_index),
-            ));
+            if rls_enabled {
+                app.hit_targets.push(HitTarget::new(
+                    hotspots.view_rect,
+                    HitAction::OpenOverviewReleaseNow(scope_index),
+                ));
+            }
             app.hit_targets.push(HitTarget::new(
                 hotspots.bump_rect,
                 HitAction::BeginOverviewBump(scope_index),
