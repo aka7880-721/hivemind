@@ -25,6 +25,21 @@ where
         .map_err(|error| anyhow!("background task failed: {error}"))?
 }
 
+pub(crate) async fn run_blocking_job_with_timeout<T, F>(
+    timeout: Duration,
+    operation: F,
+) -> Result<Option<T>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    match tokio::time::timeout(timeout, run_blocking_job(operation)).await {
+        Ok(Ok(value)) => Ok(Some(value)),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Ok(None),
+    }
+}
+
 pub(crate) async fn run_command_with_retry_async(
     repo_root: String,
     program: &'static str,
