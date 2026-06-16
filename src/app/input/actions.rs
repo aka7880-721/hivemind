@@ -343,6 +343,13 @@ impl App {
             }
         });
 
+        if !crate::workflow::rls_now::is_release_capable_scope(&project, scope_index) {
+            self.status = StatusMessage::info(
+                "ReleaseNOW is only available for Core scope in branched projects (or All-In-One projects).",
+            );
+            return Ok(());
+        }
+
         self.bump_dialog = None;
         self.tag_dialog = None;
         self.tag_annotation_dialog = None;
@@ -657,7 +664,9 @@ impl App {
             dialog.begin_running();
         }
 
-        self.schedule_foreground_job(BackgroundJobRequest::RunReleaseNow { request })?;
+        self.schedule_foreground_job(BackgroundJobRequest::RunReleaseNow {
+            request: Box::new(request),
+        })?;
         self.status = StatusMessage::info(
             "Running ReleaseNOW for the selected scope. Live logs will stream into the dialog.",
         );
@@ -1125,7 +1134,7 @@ impl App {
                     .is_some_and(|report| !report.in_sync());
                 let warning_pending = validation.warning_message.is_some();
                 self.release_now_dialog =
-                    Some(rls_now::ReleaseNowDialog::from_validation(validation));
+                    Some(rls_now::ReleaseNowDialog::from_validation(*validation));
                 self.release_now_notes_dialog = None;
                 self.status = if mirror_sync_pending {
                     StatusMessage::warning(
