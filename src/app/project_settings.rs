@@ -2196,6 +2196,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ReadmeInjectOnlyTopPicks
             | ProjectSettingsFocus::AdvancedAliasEnabled
             | ProjectSettingsFocus::ReleaseNowEnabled
+            | ProjectSettingsFocus::ReleaseNowAllowNonMain
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
 }
@@ -2487,7 +2488,7 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
     Ok(())
 }
 
-fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
+pub(crate) fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
         return Ok(());
     };
@@ -2644,7 +2645,10 @@ fn active_scope_kind(project: &ProjectConfig, scope_index: usize) -> &'static st
 
 #[cfg(test)]
 mod project_settings_tab_tests {
-    use super::{ProjectSettingsTab, project_settings_tab_strip, show_distro_tab_for_scope};
+    use super::{
+        ProjectSettingsFocus, ProjectSettingsTab, is_checkbox_field, project_settings_tab_strip,
+        show_distro_tab_for_scope,
+    };
     use crate::config::{BranchConfig, BranchScopeKind, ProjectConfig, ProjectType};
 
     fn branched_project() -> ProjectConfig {
@@ -2684,5 +2688,12 @@ mod project_settings_tab_tests {
         assert!(core_tabs.contains(&ProjectSettingsTab::RlsQd));
         assert!(!module_tabs.contains(&ProjectSettingsTab::Distro));
         assert!(!module_tabs.contains(&ProjectSettingsTab::RlsQd));
+    }
+
+    #[test]
+    fn release_now_allow_non_main_is_checkbox_field() {
+        assert!(is_checkbox_field(
+            ProjectSettingsFocus::ReleaseNowAllowNonMain
+        ));
     }
 }
