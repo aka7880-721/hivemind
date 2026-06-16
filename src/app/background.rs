@@ -2281,8 +2281,8 @@ mod branched_release_notes_tests {
         notes.push_str(&format!("## {} — {}\n\n", "API Module", composite_tag));
         notes.push_str(sibling_body);
 
-        assert_eq!(composite_tag, "v0.5.2 (core-0.9.1)");
-        assert!(notes.contains("## API Module — v0.5.2 (core-0.9.1)"));
+        assert_eq!(composite_tag, "v0.5.2+core.0.9.1");
+        assert!(notes.contains("## API Module — v0.5.2+core.0.9.1"));
         assert_eq!(notes.matches("### Top Picks").count(), 2);
         assert!(notes.contains("- core fix"));
         assert!(notes.contains("- module fix"));
