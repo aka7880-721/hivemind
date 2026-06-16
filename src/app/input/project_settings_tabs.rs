@@ -161,7 +161,7 @@ impl App {
         let scope_index =
             project_settings::active_scope_index(project, self.overview_focused_scope);
         let release_now = project.release_now_for_scope(scope_index).enabled;
-        let default_strip = project_settings_tab_strip(project, release_now);
+        let default_strip = project_settings_tab_strip(project, scope_index, release_now);
         let strip =
             merge_project_settings_tab_order(&default_strip, &self.project_settings_tab_order);
         let labels: Vec<&str> = strip
