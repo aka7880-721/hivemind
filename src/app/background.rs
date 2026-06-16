@@ -1856,6 +1856,18 @@ fn build_scope_changelog_section(
     .markdown)
 }
 
+fn iter_branched_sibling_changelog_scopes<'a>(
+    project: &'a ProjectConfig,
+    contexts: &'a [crate::git::GitScopeContext],
+    core_scope_index: usize,
+) -> impl Iterator<Item = (usize, &'a crate::git::GitScopeContext)> + 'a {
+    contexts.iter().enumerate().filter(move |(index, sibling)| {
+        *index != core_scope_index
+            && is_module_or_service_scope(sibling)
+            && project.changelog_enabled_for_scope(*index)
+    })
+}
+
 pub(crate) fn build_branched_core_release_notes(
     project: &ProjectConfig,
     core_tag: &str,
@@ -1868,13 +1880,9 @@ pub(crate) fn build_branched_core_release_notes(
         .ok_or_else(|| anyhow!("core scope index {core_scope_index} is out of range"))?;
     let mut notes = build_release_notes_markdown(core_tag, core_scope)?;
 
-    for (index, sibling) in contexts.iter().enumerate() {
-        if index == core_scope_index {
-            continue;
-        }
-        if !is_module_or_service_scope(sibling) {
-            continue;
-        }
+    for (_index, sibling) in
+        iter_branched_sibling_changelog_scopes(project, &contexts, core_scope_index)
+    {
         let composite_tag = format_branched_scope_tag(&sibling.suggested_tag_name, core_tag);
         let section = build_scope_changelog_section(sibling, &composite_tag, cancel.clone())?;
         if section.trim().is_empty() {
@@ -1899,13 +1907,9 @@ pub(crate) fn append_branched_sibling_sections_to_notes(
     cancel: Option<GitCancellation>,
 ) -> Result<()> {
     let contexts = collect_all_branch_git_scope_contexts(project)?;
-    for (index, sibling) in contexts.iter().enumerate() {
-        if index == core_scope_index {
-            continue;
-        }
-        if !is_module_or_service_scope(sibling) {
-            continue;
-        }
+    for (_index, sibling) in
+        iter_branched_sibling_changelog_scopes(project, &contexts, core_scope_index)
+    {
         let composite_tag = format_branched_scope_tag(&sibling.suggested_tag_name, core_tag);
         let section = build_scope_changelog_section(sibling, &composite_tag, cancel.clone())?;
         if section.trim().is_empty() {
@@ -2264,7 +2268,58 @@ impl App {
 
 #[cfg(test)]
 mod branched_release_notes_tests {
+    use super::iter_branched_sibling_changelog_scopes;
+    use crate::config::{BranchConfig, BranchScopeKind, ProjectConfig, ProjectType};
+    use crate::git::GitScopeContext;
     use crate::workflow::rls_now::format_branched_scope_tag;
+
+    fn scope(
+        display_name: &str,
+        scope_kind: BranchScopeKind,
+        changelog_enabled: bool,
+    ) -> (BranchConfig, GitScopeContext) {
+        let branch = BranchConfig {
+            name: display_name.to_string(),
+            scope_kind,
+            changelog_enabled,
+            ..BranchConfig::default()
+        };
+        let context = GitScopeContext {
+            display_name: display_name.to_string(),
+            scope_kind: Some(scope_kind),
+            repo_root: format!("/tmp/{display_name}"),
+            remote_spec: None,
+            secondary_remote_spec: None,
+            main_branch_name: None,
+            suggested_tag_name: "v0.1.0".to_string(),
+            path_filters: Vec::new(),
+            hide_pr_messages: false,
+            hide_bump_messages: false,
+            mini_commit_hashes: false,
+            changelog_wrap_detailed_if_top_picks: false,
+        };
+        (branch, context)
+    }
+
+    #[test]
+    fn sibling_changelog_merge_skips_scopes_with_changelog_disabled() {
+        let (ui_branch, ui_scope) = scope("Dioxus UI", BranchScopeKind::Service, false);
+        let (core_branch, core_scope) = scope("Core", BranchScopeKind::Branch, true);
+        let (cast_branch, cast_scope) = scope("Cast", BranchScopeKind::Module, true);
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            branches: vec![ui_branch, core_branch, cast_branch],
+            ..ProjectConfig::default()
+        };
+        let contexts = vec![ui_scope, core_scope, cast_scope];
+
+        let included = iter_branched_sibling_changelog_scopes(&project, &contexts, 1)
+            .map(|(index, sibling)| (index, sibling.display_name.clone()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(included, vec![(2, "Cast".to_string())]);
+    }
 
     #[test]
     fn merged_branched_notes_preserve_top_picks_headers_per_scope() {
