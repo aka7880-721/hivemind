@@ -131,6 +131,7 @@ impl App {
             project_settings::active_scope_index(&project, self.overview_focused_scope);
         let default_strip = project_settings::project_settings_tab_strip(
             &project,
+            scope_index,
             project.release_now_for_scope(scope_index).enabled,
         );
         let strip = project_settings::merge_project_settings_tab_order(
