@@ -81,6 +81,7 @@ impl App {
             HitAction::SelectProject(index) => {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
                 self.prime_selected_project_dashboard_data();
+                project_settings::invalidate_project_settings_state(self);
                 self.dashboard_focus = DashboardPane::Projects;
             }
             HitAction::SelectOverviewScope(scope_index) => {
