@@ -44,6 +44,7 @@ use crate::{
         load_change_range_for_refs_with_cancel, load_change_range_for_tags_with_cancel,
         load_history_ranges_with_cancel, load_recent_change_range_with_cancel,
     },
+    workflow::rls_now::format_branched_scope_tag,
     workflow::targets::{ProbeKind, TargetProbe, collect_bump_scopes},
     workflow::versioning::{BumpAction, VersionScheme},
     workflow::{OverviewBumpWorkflow, git_flow},
@@ -99,7 +100,7 @@ pub(crate) enum BackgroundJobRequest {
         scope_index: usize,
     },
     RunReleaseNow {
-        request: rls_now::ReleaseNowExecutionRequest,
+        request: Box<rls_now::ReleaseNowExecutionRequest>,
     },
     ReleaseNowMirrorSync {
         repo_root: String,
@@ -145,7 +146,7 @@ pub(crate) enum BackgroundJobOutput {
         project_index: usize,
         summaries: Vec<Option<RepoActivitySummary>>,
     },
-    ReleaseNowValidated(rls_now::ReleaseNowValidation),
+    ReleaseNowValidated(Box<rls_now::ReleaseNowValidation>),
     ReleaseNowLogChunk(Vec<String>),
     ReleaseNowCompleted(rls_now::ReleaseNowExecutionOutcome),
     ReleaseNowMirrorSyncResult(rls_now::ReleaseNowMirrorSyncResult),
@@ -1002,15 +1003,15 @@ async fn run_background_job(
         BackgroundJobRequest::ValidateReleaseNow {
             project,
             scope_index,
-        } => Ok(BackgroundJobOutput::ReleaseNowValidated(
+        } => Ok(BackgroundJobOutput::ReleaseNowValidated(Box::new(
             run_blocking_job(move || {
                 rls_now::validate_release_now(&project, scope_index, Some(cancel))
             })
             .await?,
-        )),
+        ))),
         BackgroundJobRequest::RunReleaseNow { request } => {
             Ok(BackgroundJobOutput::ReleaseNowCompleted(
-                rls_now::execute_release_now_async(request, cancel, move |lines| {
+                rls_now::execute_release_now_async(*request, cancel, move |lines| {
                     progress.send(BackgroundJobOutput::ReleaseNowLogChunk(lines));
                 })
                 .await?,
@@ -1808,6 +1809,124 @@ pub(crate) fn build_release_notes_markdown(
     .markdown)
 }
 
+fn build_scope_changelog_section(
+    scope: &crate::git::GitScopeContext,
+    tag_name: &str,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let variator_storage = crate::config::ConfigStore::locate()
+        .ok()
+        .and_then(|s| s.load().ok())
+        .and_then(|c| c.projects.into_iter().next())
+        .map(|p| p.variator_storage)
+        .unwrap_or_default();
+    let top_picks_edits = current_release_top_picks_edits(&scope.repo_root);
+    let sorted_tags = sorted_local_tags_with_cancel(&scope.repo_root, cancel.clone())?;
+    if let Some(previous_tag) = previous_tag_for_replay(&sorted_tags, tag_name) {
+        let range = load_change_range_for_tags_with_cancel(scope, &previous_tag, tag_name, cancel)?;
+        if range.lines.is_empty() {
+            return Ok(String::new());
+        }
+        return Ok(rls_changelog_gen(
+            tag_name.to_string(),
+            &range.lines,
+            Some(&previous_tag),
+            scope.hide_pr_messages,
+            scope.hide_bump_messages,
+            scope.mini_commit_hashes,
+            scope.changelog_wrap_detailed_if_top_picks,
+            top_picks_edits.as_deref(),
+            variator_storage,
+        )
+        .markdown);
+    }
+
+    let recent_range = load_recent_change_range_with_cancel(scope, cancel)?;
+    Ok(rls_changelog_gen(
+        tag_name.to_string(),
+        &recent_range.lines,
+        None,
+        scope.hide_pr_messages,
+        scope.hide_bump_messages,
+        scope.mini_commit_hashes,
+        scope.changelog_wrap_detailed_if_top_picks,
+        top_picks_edits.as_deref(),
+        variator_storage,
+    )
+    .markdown)
+}
+
+pub(crate) fn build_branched_core_release_notes(
+    project: &ProjectConfig,
+    core_tag: &str,
+    core_scope_index: usize,
+    cancel: Option<GitCancellation>,
+) -> Result<String> {
+    let contexts = collect_all_branch_git_scope_contexts(project)?;
+    let core_scope = contexts
+        .get(core_scope_index)
+        .ok_or_else(|| anyhow!("core scope index {core_scope_index} is out of range"))?;
+    let mut notes = build_release_notes_markdown(core_tag, core_scope)?;
+
+    for (index, sibling) in contexts.iter().enumerate() {
+        if index == core_scope_index {
+            continue;
+        }
+        if !matches!(
+            sibling.scope_kind,
+            Some(BranchScopeKind::Module) | Some(BranchScopeKind::Service)
+        ) {
+            continue;
+        }
+        let composite_tag = format_branched_scope_tag(&sibling.suggested_tag_name, core_tag);
+        let section = build_scope_changelog_section(sibling, &composite_tag, cancel.clone())?;
+        if section.trim().is_empty() {
+            continue;
+        }
+        notes.push_str("\n\n---\n\n");
+        notes.push_str(&format!(
+            "## {} — {}\n\n",
+            sibling.display_name, composite_tag
+        ));
+        notes.push_str(section.trim());
+    }
+
+    Ok(notes)
+}
+
+pub(crate) fn append_branched_sibling_sections_to_notes(
+    project: &ProjectConfig,
+    core_tag: &str,
+    core_scope_index: usize,
+    notes: &mut String,
+    cancel: Option<GitCancellation>,
+) -> Result<()> {
+    let contexts = collect_all_branch_git_scope_contexts(project)?;
+    for (index, sibling) in contexts.iter().enumerate() {
+        if index == core_scope_index {
+            continue;
+        }
+        if !matches!(
+            sibling.scope_kind,
+            Some(BranchScopeKind::Module) | Some(BranchScopeKind::Service)
+        ) {
+            continue;
+        }
+        let composite_tag = format_branched_scope_tag(&sibling.suggested_tag_name, core_tag);
+        let section = build_scope_changelog_section(sibling, &composite_tag, cancel.clone())?;
+        if section.trim().is_empty() {
+            continue;
+        }
+        notes.push_str("\n\n---\n\n");
+        notes.push_str(&format!(
+            "## {} — {}\n\n",
+            sibling.display_name, composite_tag
+        ));
+        notes.push_str(section.trim());
+    }
+    Ok(())
+}
+
 pub(crate) fn latest_public_release_tag(repo_root: &str) -> Result<Option<String>> {
     let Some(forge) = crate::forge::detect_forge_for_repo(repo_root) else {
         return Ok(None);
@@ -2146,5 +2265,26 @@ impl App {
         self.overview_activity_refresh_inflight = true;
         self.overview_activity_refresh_pending = false;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod branched_release_notes_tests {
+    use crate::workflow::rls_now::format_branched_scope_tag;
+
+    #[test]
+    fn merged_branched_notes_preserve_top_picks_headers_per_scope() {
+        let composite_tag = format_branched_scope_tag("v0.5.2", "v0.9.1");
+        let mut notes = "# Core Release\n\n### Top Picks\n- core fix".to_string();
+        let sibling_body = "### Top Picks\n- module fix";
+        notes.push_str("\n\n---\n\n");
+        notes.push_str(&format!("## {} — {}\n\n", "API Module", composite_tag));
+        notes.push_str(sibling_body);
+
+        assert_eq!(composite_tag, "v0.5.2 (core-0.9.1)");
+        assert!(notes.contains("## API Module — v0.5.2 (core-0.9.1)"));
+        assert_eq!(notes.matches("### Top Picks").count(), 2);
+        assert!(notes.contains("- core fix"));
+        assert!(notes.contains("- module fix"));
     }
 }
