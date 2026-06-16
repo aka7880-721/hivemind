@@ -481,7 +481,7 @@ pub(crate) fn strip_tag_v_prefix(tag: &str) -> String {
 
 pub(crate) fn format_branched_scope_tag(sm_version: &str, core_tag: &str) -> String {
     format!(
-        "{} (core-{})",
+        "{}+core.{}",
         sm_version.trim(),
         strip_tag_v_prefix(core_tag)
     )
@@ -3693,7 +3693,7 @@ mod tests {
     fn format_branched_scope_tag_composes_core_suffix() {
         assert_eq!(
             format_branched_scope_tag("v0.5.2", "v0.9.1"),
-            "v0.5.2 (core-0.9.1)"
+            "v0.5.2+core.0.9.1"
         );
     }
 
