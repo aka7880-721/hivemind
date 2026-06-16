@@ -817,6 +817,12 @@ pub(crate) fn ensure_git_repo_with_cancel(
     }
 }
 
+pub(crate) fn git_worktree_root(repo_root: &str) -> Result<std::path::PathBuf> {
+    let output = run_git_checked(repo_root, &["rev-parse", "--show-toplevel"])?;
+    let path = std::path::PathBuf::from(output.trim());
+    Ok(crate::cli::best_effort_canonicalize(&path))
+}
+
 pub(crate) fn ensure_local_tag(
     repo_root: &str,
     tag_name: &str,
@@ -833,6 +839,30 @@ pub(crate) fn ensure_local_tag(
         }
         Ok(true)
     }
+}
+
+/// Creates or moves a lightweight/annotated tag to the current `HEAD`.
+pub(crate) fn ensure_local_tag_at_head(
+    repo_root: &str,
+    tag_name: &str,
+    annotation: Option<&str>,
+) -> Result<bool> {
+    let head = run_git_checked(repo_root, &["rev-parse", "HEAD"])?
+        .trim()
+        .to_string();
+    let already_at_head = run_git_checked(repo_root, &["rev-parse", tag_name])
+        .map(|rev| rev.trim() == head)
+        .unwrap_or(false);
+    if already_at_head {
+        return Ok(false);
+    }
+
+    if let Some(annotation) = annotation.filter(|annotation| !annotation.trim().is_empty()) {
+        run_git_checked(repo_root, &["tag", "-f", "-a", tag_name, "-m", annotation])?;
+    } else {
+        run_git_checked(repo_root, &["tag", "-f", tag_name])?;
+    }
+    Ok(true)
 }
 
 pub(crate) fn run_git(repo_root: &str, args: &[&str]) -> Result<GitOutput> {
