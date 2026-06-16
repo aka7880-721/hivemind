@@ -303,7 +303,13 @@ pub(super) fn ensure_dashboard_tile_state(app: &mut App, scopes: &[BumpScope]) {
     app.overview_tile_rls_modes = vec![rls_mode; scopes.len()];
     app.overview_tile_last_rotation_at = Instant::now();
     app.overview_tile_scroll = 0;
-    app.overview_focused_scope = 0;
+    let previous_focus = app.overview_focused_scope;
+    app.overview_focused_scope = previous_focus.min(scopes.len().saturating_sub(1));
+    if previous_focus != app.overview_focused_scope
+        && app.overview_tab == OverviewTab::ProjectSettings
+    {
+        crate::app::project_settings::invalidate_project_settings_state(app);
+    }
 }
 
 pub(super) fn cycle_overview_tile_info(
@@ -795,8 +801,15 @@ pub(super) fn render_dashboard_tiles(
 }
 
 pub(super) fn select_dashboard_overview_scope(app: &mut App, scope_index: usize) -> Result<()> {
+    if app.overview_tab == OverviewTab::ProjectSettings {
+        let _ = crate::app::project_settings::persist_project_settings_inputs(app);
+    }
     app.dashboard_focus = DashboardPane::Overview;
+    let scope_changed = app.overview_focused_scope != scope_index;
     app.overview_focused_scope = scope_index;
+    if scope_changed {
+        crate::app::project_settings::invalidate_project_settings_state(app);
+    }
     ensure_dashboard_recent_changes(app);
     if let Some(dialog) = &mut app.overview_recent_changes {
         dialog.select_scope(scope_index)?;
@@ -2094,6 +2107,48 @@ mod tests {
 
         assert_eq!(app.overview_tile_dev_modes, vec![0]);
         assert_eq!(app.overview_tile_rls_modes, vec![1]);
+    }
+
+    #[test]
+    fn ensure_dashboard_tile_state_preserves_focused_scope_on_cache_rebuild() {
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.overview_focused_scope = 1;
+        app.overview_tile_project = None;
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    ..BranchConfig::default()
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    ..BranchConfig::default()
+                },
+            ],
+            ..Default::default()
+        }];
+        let scopes = vec![
+            BumpScope {
+                display_name: "core".to_string(),
+                scope_kind: None,
+                scheme: VersionScheme::SemVer,
+                current_version: None,
+                targets: Vec::new(),
+            },
+            BumpScope {
+                display_name: "api".to_string(),
+                scope_kind: None,
+                scheme: VersionScheme::SemVer,
+                current_version: None,
+                targets: Vec::new(),
+            },
+        ];
+
+        ensure_dashboard_tile_state(&mut app, &scopes);
+
+        assert_eq!(app.overview_focused_scope, 1);
     }
 
     #[test]
