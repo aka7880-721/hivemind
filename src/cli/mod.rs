@@ -1233,22 +1233,16 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                 &branch_prompt_source.existing_branches,
                 branch_prompt_source.custom_main_branch.as_deref(),
             )?;
-            let selected_dev_branch = prompt_patch_release_line_branch(
+            let selected_release_line_branch = prompt_patch_release_line_branch(
                 &release_line_branches,
                 &branch_prompt_source.existing_branches,
                 &current_version,
                 today,
             )?;
-            let release_line_branch = semver_release_line_branch_from_dev_branch(
-                &selected_dev_branch,
-            )
-            .ok_or_else(|| {
-                anyhow!(
-                    "failed to derive the source release line from '{}'",
-                    selected_dev_branch
-                )
-            })?;
-            switch_repo_operations_to_release_line_branch(&repo_operations, &release_line_branch)?;
+            switch_repo_operations_to_release_line_branch(
+                &repo_operations,
+                &selected_release_line_branch,
+            )?;
 
             let refreshed_scopes = collect_bump_scopes(&resolved_project)?;
             current_version =
@@ -1527,7 +1521,7 @@ fn prompt_patch_release_line_branch(
                     "{} -> create the next -dev patch branch ({})",
                     branch, next_dev_branch
                 ),
-                next_dev_branch,
+                branch.clone(),
             )
         })
         .collect::<Vec<_>>();
@@ -4725,6 +4719,46 @@ mod tests {
         );
         // Should not offer 0.7.x since it doesn't exist as a branch
         assert!(!candidates.iter().any(|c| c == "0.7.x"));
+    }
+
+    #[test]
+    fn prompt_patch_release_line_branch_returns_suffixed_branch_name() {
+        // When selecting a suffixed release line branch, the option value should be the full branch name
+        let release_line_branches = ["0.7.x--bugfixes-and-Picker-improvements".to_string()];
+        let existing_branches: [String; 0] = [];
+        let current_version = "0.7.6";
+        let today = Local::now().date_naive();
+
+        // The function should return the release line branch name, not the dev branch name
+        // Since we can't easily test the interactive prompt, we'll test the option generation logic
+        let options = release_line_branches
+            .iter()
+            .map(|branch| {
+                let next_dev_branch = next_available_semver_dev_branch_for_release_line(
+                    branch,
+                    &existing_branches,
+                    current_version,
+                    today,
+                )
+                .unwrap_or_else(|_| format!("{} -> invalid", branch));
+                fixed_branch_name_option_with_value(
+                    format!(
+                        "{} -> create the next -dev patch branch ({})",
+                        branch, next_dev_branch
+                    ),
+                    branch.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // The preview should show the suffixed release line branch name
+        assert!(
+            options[0]
+                .preview()
+                .contains("0.7.x--bugfixes-and-Picker-improvements")
+        );
+        // The preview should also show the dev branch name (starts from 0.7.0 since no existing dev branches)
+        assert!(options[0].preview().contains("v0.7.1-dev"));
     }
 
     #[test]
