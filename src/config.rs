@@ -766,6 +766,8 @@ impl Default for ReleaseNowQuickDownloadsSettings {
 #[serde(default)]
 pub struct ReleaseNowSettings {
     pub enabled: bool,
+    #[serde(default)]
+    pub allow_non_main_release_flow: bool,
     pub general_script: String,
     pub windows_script: String,
     pub linux_arm_script: String,
@@ -1813,5 +1815,33 @@ format = "json"
         assert_eq!(settings.path_for_sub("docs"), Some("documentation"));
         assert!(settings.path_for_sub("missing").is_none());
         assert!(AdvancedAliasSettings::is_reserved_name("dist"));
+    }
+
+    #[test]
+    fn release_now_allow_non_main_roundtrips_in_branch_config() {
+        let config = AppConfig {
+            schema_version: SCHEMA_VERSION,
+            projects: vec![ProjectConfig {
+                name: "demo".to_string(),
+                project_type: ProjectType::Branched,
+                branches: vec![BranchConfig {
+                    name: "core".to_string(),
+                    release_now: ReleaseNowSettings {
+                        enabled: true,
+                        allow_non_main_release_flow: true,
+                        ..ReleaseNowSettings::default()
+                    },
+                    ..BranchConfig::default()
+                }],
+                ..ProjectConfig::default()
+            }],
+            ui: UiSettings::default(),
+        };
+
+        let rendered = toml::to_string_pretty(&config).expect("config should render");
+        let loaded: AppConfig = toml::from_str(&rendered).expect("config should parse");
+        let release_now = &loaded.projects[0].branches[0].release_now;
+        assert!(release_now.enabled);
+        assert!(release_now.allow_non_main_release_flow);
     }
 }

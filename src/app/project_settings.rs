@@ -18,12 +18,12 @@ use tui_checkbox::Checkbox;
 
 use super::{
     App, BROWSE_BUTTON_WIDTH, BrowseTarget, FORM_LABEL_WIDTH, FormRowButton, HitAction, HitTarget,
-    normalize_path_for_repo_root, visible_field_width,
+    absolutize_path_for_repo_root, normalize_path_for_repo_root, visible_field_width,
 };
 use crate::{
     config::{
-        DEFAULT_CHANGELOG_PATH, MirrorSyncAfterMerge, PostMergeSourceBranch, ProjectConfig,
-        ProjectType, ReadmeInjectDepth,
+        BranchScopeKind, DEFAULT_CHANGELOG_PATH, MirrorSyncAfterMerge, PostMergeSourceBranch,
+        ProjectConfig, ProjectType, ReadmeInjectDepth,
     },
     tui::{center_vertically, project_settings_tab_nav},
     workflow::dialogs::TextInput,
@@ -44,8 +44,19 @@ pub(crate) enum ProjectSettingsTab {
     RlsQd,
 }
 
+pub(crate) fn show_distro_tab_for_scope(project: &ProjectConfig, scope_index: usize) -> bool {
+    if project.project_type != ProjectType::Branched {
+        return true;
+    }
+    project
+        .branches
+        .get(scope_index)
+        .is_some_and(|branch| branch.scope_kind == BranchScopeKind::Branch)
+}
+
 pub(crate) fn project_settings_tab_strip(
     project: &ProjectConfig,
+    scope_index: usize,
     release_now_enabled: bool,
 ) -> Vec<ProjectSettingsTab> {
     let mut tabs = vec![ProjectSettingsTab::General];
@@ -53,9 +64,11 @@ pub(crate) fn project_settings_tab_strip(
         tabs.push(ProjectSettingsTab::Git);
     }
     tabs.push(ProjectSettingsTab::Changelogs);
-    tabs.push(ProjectSettingsTab::Distro);
-    if release_now_enabled {
-        tabs.push(ProjectSettingsTab::RlsQd);
+    if show_distro_tab_for_scope(project, scope_index) {
+        tabs.push(ProjectSettingsTab::Distro);
+        if release_now_enabled {
+            tabs.push(ProjectSettingsTab::RlsQd);
+        }
     }
     tabs
 }
@@ -93,9 +106,10 @@ impl ProjectSettingsTab {
         self,
         delta: isize,
         project: &ProjectConfig,
+        scope_index: usize,
         release_now_enabled: bool,
     ) -> Self {
-        let tabs = project_settings_tab_strip(project, release_now_enabled);
+        let tabs = project_settings_tab_strip(project, scope_index, release_now_enabled);
         let index = tabs.iter().position(|tab| *tab == self).unwrap_or(0) as isize;
         tabs[(index + delta).rem_euclid(tabs.len() as isize) as usize]
     }
@@ -123,6 +137,7 @@ pub(crate) enum ProjectSettingsFocus {
     ChangelogMirrorSummaryToRootChangelog,
     ChangelogWrapDetailedIfTopPicks,
     ReleaseNowEnabled,
+    ReleaseNowAllowNonMain,
     ReleaseNowGeneral,
     ReleaseNowWindows,
     ReleaseNowLinuxArm,
@@ -308,6 +323,7 @@ impl ProjectSettingsState {
             ProjectSettingsTab::Distro => {
                 let mut fields = vec![ProjectSettingsFocus::ReleaseNowEnabled];
                 if project.release_now_for_scope(scope_index).enabled {
+                    fields.push(ProjectSettingsFocus::ReleaseNowAllowNonMain);
                     fields.extend([
                         ProjectSettingsFocus::ReleaseNowGeneral,
                         ProjectSettingsFocus::ReleaseNowWindows,
@@ -686,6 +702,14 @@ pub(crate) fn sync_project_settings_state(app: &mut App) {
     {
         app.project_settings_tab = ProjectSettingsTab::Distro;
     }
+    if !show_distro_tab_for_scope(&project, scope_index)
+        && matches!(
+            app.project_settings_tab,
+            ProjectSettingsTab::Distro | ProjectSettingsTab::RlsQd
+        )
+    {
+        app.project_settings_tab = ProjectSettingsTab::Changelogs;
+    }
     app.project_settings_state.sync_from_project(
         app.selected_project,
         app.project_settings_tab,
@@ -704,9 +728,9 @@ pub(crate) fn step_project_settings_tab(app: &mut App, delta: isize) {
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
     let release_now_enabled = project.release_now_for_scope(scope_index).enabled;
-    app.project_settings_tab = app
-        .project_settings_tab
-        .step(delta, &project, release_now_enabled);
+    app.project_settings_tab =
+        app.project_settings_tab
+            .step(delta, &project, scope_index, release_now_enabled);
     crate::app::ui_settings::flash_project_settings_tab_strip(app);
     app.project_settings_state.scroll = 0;
     app.project_settings_state.follow_focus = true;
@@ -1037,6 +1061,41 @@ pub(crate) fn open_browser_for_project_settings_focus(app: &mut App) -> Result<(
     app.open_browser(target)
 }
 
+fn repo_root_for_project_settings_browser(app: &App) -> String {
+    let Some(project) = app.config.projects.get(app.selected_project) else {
+        return String::new();
+    };
+    let scope_index = active_scope_index(project, app.overview_focused_scope);
+    project
+        .repo_config_for_scope(scope_index)
+        .map(|repo| repo.local_root.trim().to_string())
+        .unwrap_or_default()
+}
+
+pub(crate) fn resolved_project_settings_browser_path(app: &App, target: BrowseTarget) -> String {
+    let repo_root = repo_root_for_project_settings_browser(app);
+    let path_part = match initial_browser_path(app, target) {
+        Some(raw) if !raw.trim().is_empty() => match target {
+            BrowseTarget::ProjectSettingsReleaseNowGeneral
+            | BrowseTarget::ProjectSettingsReleaseNowWindows
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxArm
+            | BrowseTarget::ProjectSettingsReleaseNowLinuxAmd
+            | BrowseTarget::ProjectSettingsReleaseNowMacOs => {
+                crate::workflow::rls_now::release_script_path_token(raw.trim()).to_string()
+            }
+            _ => raw.trim().to_string(),
+        },
+        _ => return repo_root,
+    };
+
+    let absolute = absolutize_path_for_repo_root(&path_part, &repo_root);
+    if absolute.is_empty() {
+        repo_root
+    } else {
+        absolute
+    }
+}
+
 pub(crate) fn initial_browser_path(app: &App, target: BrowseTarget) -> Option<String> {
     match target {
         BrowseTarget::ProjectSettingsChangelogPath => Some(
@@ -1143,8 +1202,11 @@ fn render_project_settings_tabs(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     };
     let scope_index = active_scope_index(&project, app.overview_focused_scope);
-    let default_strip =
-        project_settings_tab_strip(&project, project.release_now_for_scope(scope_index).enabled);
+    let default_strip = project_settings_tab_strip(
+        &project,
+        scope_index,
+        project.release_now_for_scope(scope_index).enabled,
+    );
     let strip = merge_project_settings_tab_order(&default_strip, &app.project_settings_tab_order);
     let labels: Vec<&str> = strip
         .iter()
@@ -1587,6 +1649,9 @@ fn build_distro_rows(project: &ProjectConfig, scope_index: usize) -> Vec<Project
         ProjectSettingsRow::Checkbox(ProjectSettingsFocus::ReleaseNowEnabled),
     ];
     if project.release_now_for_scope(scope_index).enabled {
+        rows.push(ProjectSettingsRow::Checkbox(
+            ProjectSettingsFocus::ReleaseNowAllowNonMain,
+        ));
         rows.extend([
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowGeneral),
             ProjectSettingsRow::Path(ProjectSettingsFocus::ReleaseNowWindows),
@@ -1725,6 +1790,11 @@ fn render_checkbox_row(
         ProjectSettingsFocus::ChangelogEnabled => project.changelog_enabled_for_scope(scope_index),
         ProjectSettingsFocus::ReleaseNowEnabled => {
             project.release_now_for_scope(scope_index).enabled
+        }
+        ProjectSettingsFocus::ReleaseNowAllowNonMain => {
+            project
+                .release_now_for_scope(scope_index)
+                .allow_non_main_release_flow
         }
         ProjectSettingsFocus::QuickDownloadsEnabled => {
             project
@@ -2078,6 +2148,9 @@ fn checkbox_label(field: ProjectSettingsFocus) -> &'static str {
         ProjectSettingsFocus::ReleaseNowEnabled => {
             "Enable Release-NOW capabilities for this project/scope"
         }
+        ProjectSettingsFocus::ReleaseNowAllowNonMain => {
+            "Allow non-main release flow (Release-NOW enabled from any branch)"
+        }
         ProjectSettingsFocus::QuickDownloadsEnabled => "Quick-Downloads Enabled",
         ProjectSettingsFocus::AdvancedAliasEnabled => "Advanced Alias functionality",
         _ => "",
@@ -2123,6 +2196,7 @@ fn is_checkbox_field(field: ProjectSettingsFocus) -> bool {
             | ProjectSettingsFocus::ReadmeInjectOnlyTopPicks
             | ProjectSettingsFocus::AdvancedAliasEnabled
             | ProjectSettingsFocus::ReleaseNowEnabled
+            | ProjectSettingsFocus::ReleaseNowAllowNonMain
             | ProjectSettingsFocus::QuickDownloadsEnabled
     )
 }
@@ -2243,6 +2317,19 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
             app.status = super::StatusMessage::success(format!(
                 "Release-NOW capabilities {} for {}.",
                 if settings.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                scope_name
+            ));
+        }
+        ProjectSettingsFocus::ReleaseNowAllowNonMain => {
+            let settings = active_project.release_now_for_scope_mut(scope_index);
+            settings.allow_non_main_release_flow = !settings.allow_non_main_release_flow;
+            app.status = super::StatusMessage::success(format!(
+                "Non-main Release-NOW flow {} for {}.",
+                if settings.allow_non_main_release_flow {
                     "enabled"
                 } else {
                     "disabled"
@@ -2401,7 +2488,7 @@ fn toggle_focused_project_settings_control(app: &mut App) -> Result<()> {
     Ok(())
 }
 
-fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
+pub(crate) fn persist_project_settings_inputs(app: &mut App) -> Result<()> {
     let Some(project) = app.config.projects.get(app.selected_project).cloned() else {
         return Ok(());
     };
@@ -2553,5 +2640,60 @@ fn active_scope_kind(project: &ProjectConfig, scope_index: usize) -> &'static st
             .unwrap_or("Scope")
     } else {
         "Project"
+    }
+}
+
+#[cfg(test)]
+mod project_settings_tab_tests {
+    use super::{
+        ProjectSettingsFocus, ProjectSettingsTab, is_checkbox_field, project_settings_tab_strip,
+        show_distro_tab_for_scope,
+    };
+    use crate::config::{BranchConfig, BranchScopeKind, ProjectConfig, ProjectType};
+
+    fn branched_project() -> ProjectConfig {
+        ProjectConfig {
+            name: "demo".to_string(),
+            project_type: ProjectType::Branched,
+            branches: vec![
+                BranchConfig {
+                    name: "core".to_string(),
+                    scope_kind: BranchScopeKind::Branch,
+                    ..BranchConfig::default()
+                },
+                BranchConfig {
+                    name: "api".to_string(),
+                    scope_kind: BranchScopeKind::Service,
+                    ..BranchConfig::default()
+                },
+            ],
+            ..ProjectConfig::default()
+        }
+    }
+
+    #[test]
+    fn distro_tab_visible_for_core_scope_only() {
+        let project = branched_project();
+        assert!(show_distro_tab_for_scope(&project, 0));
+        assert!(!show_distro_tab_for_scope(&project, 1));
+    }
+
+    #[test]
+    fn project_settings_tab_strip_omits_distro_for_module_scope() {
+        let project = branched_project();
+        let core_tabs = project_settings_tab_strip(&project, 0, true);
+        let module_tabs = project_settings_tab_strip(&project, 1, true);
+
+        assert!(core_tabs.contains(&ProjectSettingsTab::Distro));
+        assert!(core_tabs.contains(&ProjectSettingsTab::RlsQd));
+        assert!(!module_tabs.contains(&ProjectSettingsTab::Distro));
+        assert!(!module_tabs.contains(&ProjectSettingsTab::RlsQd));
+    }
+
+    #[test]
+    fn release_now_allow_non_main_is_checkbox_field() {
+        assert!(is_checkbox_field(
+            ProjectSettingsFocus::ReleaseNowAllowNonMain
+        ));
     }
 }

@@ -23,6 +23,7 @@ pub(crate) const CALVER_TILE_HEIGHT: u16 = 9;
 const SEMVER_LEFT_WIDTH: usize = 5;
 const CALVER_ACTION_WIDTH: usize = 6;
 const RLS_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Indexed(207));
+const RLS_BUTTON_DISABLED_STYLE: Style = Style::new().fg(Color::DarkGray).bg(Color::DarkGray);
 const BUMP_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::Indexed(46));
 const TAG_BUTTON_STYLE: Style = Style::new().fg(Color::Black).bg(Color::LightYellow);
 
@@ -35,6 +36,7 @@ pub(crate) struct OverviewTileData {
     pub(crate) dev_output: String,
     pub(crate) rls_display: String,
     pub(crate) rls_output: String,
+    pub(crate) rls_enabled: bool,
     pub(crate) selected: bool,
 }
 
@@ -90,6 +92,11 @@ fn render_semver_tile(
         button_slots[1] + 2,
         button_slots[2] + 2,
     ];
+    let rls_style = if tile.rls_enabled {
+        RLS_BUTTON_STYLE
+    } else {
+        RLS_BUTTON_DISABLED_STYLE
+    };
     let button_line = build_button_line(right_width, &button_positions, &["BUMP", "TAG", "RLS"]);
 
     let rows = [
@@ -134,7 +141,7 @@ fn render_semver_tile(
         &[
             StyledRange::new(6 + button_positions[0], 6, BUMP_BUTTON_STYLE),
             StyledRange::new(6 + button_positions[1], 5, TAG_BUTTON_STYLE),
-            StyledRange::new(6 + button_positions[2], 5, RLS_BUTTON_STYLE),
+            StyledRange::new(6 + button_positions[2], 5, rls_style),
         ],
     );
 
@@ -223,7 +230,8 @@ fn render_calver_tile(
     for (row_offset, label) in [(3_u16, "bump"), (4, "rls"), (5, "tag")].into_iter() {
         let action_start = 1 + detail_width + 1;
         let action_style = match label {
-            "rls" => RLS_BUTTON_STYLE,
+            "rls" if tile.rls_enabled => RLS_BUTTON_STYLE,
+            "rls" => RLS_BUTTON_DISABLED_STYLE,
             "bump" => BUMP_BUTTON_STYLE,
             _ => TAG_BUTTON_STYLE,
         };

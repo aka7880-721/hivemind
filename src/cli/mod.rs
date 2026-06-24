@@ -47,7 +47,8 @@ use crate::{
         switch_to_existing_branch, switch_to_main_branch,
     },
     workflow::targets::{
-        BumpTarget, collect_bump_scopes, shared_bump_version, write_target_version,
+        BumpTarget, collect_bump_scopes, resolve_project_target_paths, shared_bump_version,
+        write_target_version,
     },
     workflow::versioning::{BumpAction, VersionScheme},
     workflow::{
@@ -1059,7 +1060,7 @@ fn load_active_branch_cli_context() -> Result<ActiveBranchCliContext> {
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
     let project = find_project_for_cwd(&config.projects, &cwd)?;
-    let resolved_project = resolve_project_target_paths(project)?;
+    let resolved_project = resolve_project_target_paths(project);
     let scope_index = if project.project_type == ProjectType::AllInOne || project.unified_versioning
     {
         0
@@ -1084,7 +1085,7 @@ fn load_active_branch_cli_context() -> Result<ActiveBranchCliContext> {
 fn print_project_version(lookup: &str) -> Result<()> {
     let config = load_config()?;
     let project = find_project_by_lookup(&config.projects, lookup)?;
-    let resolved_project = resolve_project_target_paths(project)?;
+    let resolved_project = resolve_project_target_paths(project);
     let scopes = collect_bump_scopes(&resolved_project)?;
     if scopes.is_empty() {
         bail!("the matched project does not contain any bump targets")
@@ -1133,7 +1134,7 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
     let cwd =
         best_effort_canonicalize(&env::current_dir().context("failed to read current directory")?);
     let project = find_project_for_cwd(&config.projects, &cwd)?;
-    let resolved_project = resolve_project_target_paths(project)?;
+    let resolved_project = resolve_project_target_paths(project);
     let scopes = collect_bump_scopes(&resolved_project)?;
     if scopes.is_empty() {
         bail!("the matched project does not contain any bump targets")
@@ -1232,22 +1233,38 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                 &branch_prompt_source.existing_branches,
                 branch_prompt_source.custom_main_branch.as_deref(),
             )?;
-            let selected_dev_branch = prompt_patch_release_line_branch(
+            let selected_release_line_branch = prompt_patch_release_line_branch(
                 &release_line_branches,
                 &branch_prompt_source.existing_branches,
                 &current_version,
                 today,
             )?;
-            let release_line_branch = semver_release_line_branch_from_dev_branch(
-                &selected_dev_branch,
-            )
-            .ok_or_else(|| {
-                anyhow!(
-                    "failed to derive the source release line from '{}'",
-                    selected_dev_branch
-                )
-            })?;
-            switch_repo_operations_to_release_line_branch(&repo_operations, &release_line_branch)?;
+            switch_repo_operations_to_release_line_branch(
+                &repo_operations,
+                &selected_release_line_branch,
+            )?;
+
+            // Check if the release line branch is behind main
+            let repo_root = preferred_repo_root_from_operations(&repo_operations)?;
+            let custom_main_branch = branch_prompt_source.custom_main_branch.as_deref();
+            if let Ok((main_ahead, _main_behind)) = crate::git::branch_divergence_counts_from_main(
+                repo_root,
+                &selected_release_line_branch,
+                custom_main_branch,
+            ) {
+                // If main is ahead of the release line branch (i.e., release line is behind main)
+                if main_ahead > 0 {
+                    let message = format!(
+                        "It seems this release line branch '{}' is {} commit(s) behind `main`. Would you like to perform `cg rrt`?",
+                        selected_release_line_branch, main_ahead
+                    );
+                    if prompt_yes_no(&message, false)? {
+                        with_cli_git_cancellation(|cancel| {
+                            run_reroot(repo_root, custom_main_branch, RerootMode::Merge, cancel)
+                        })?;
+                    }
+                }
+            }
 
             let refreshed_scopes = collect_bump_scopes(&resolved_project)?;
             current_version =
@@ -1257,7 +1274,24 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                 &branch_prompt_source.existing_branches,
                 today,
             )?;
-            Some(format!("v{}-dev", next_version))
+
+            // Ask if user wants to append text to the dev branch name
+            let dev_branch_suffix = if prompt_yes_no(
+                "Would you like to append text to the dev branch name?",
+                false,
+            )? {
+                let suffix = prompt_branch_name_input("Enter text to append")?;
+                let sanitized = crate::git::sanitize_branch_fragment(&suffix)
+                    .ok_or_else(|| anyhow!("branch suffix cannot be empty"))?;
+                Some(sanitized)
+            } else {
+                None
+            };
+
+            match dev_branch_suffix {
+                Some(suffix) => Some(format!("v{}-dev--{}", next_version, suffix)),
+                None => Some(format!("v{}-dev", next_version)),
+            }
         } else {
             let branch_name_options =
                 suggest_branch_name_options(crate::git::BranchNameSuggestionRequest {
@@ -1434,7 +1468,20 @@ fn merge_patch_release_line_branch_candidates(
         } else if is_comfygit_dev_source_branch(branch)
             && let Some(line) = semver_release_line_branch_from_dev_branch(branch)
         {
-            push_unique_release_line_branch(&mut candidates, &line);
+            // Only add derived release line if the base release line actually exists
+            // (e.g., don't derive 0.7.x from v0.7.6-dev if 0.7.x doesn't exist)
+            // Exception: allow deriving when no release lines exist at all (for creating new release lines)
+            let has_any_release_line = unmerged_branches
+                .iter()
+                .chain(existing_branches.iter())
+                .any(|b| is_release_line_branch(scheme, b));
+            let base_line_exists = unmerged_branches
+                .iter()
+                .chain(existing_branches.iter())
+                .any(|b| b == &line);
+            if !has_any_release_line || base_line_exists {
+                push_unique_release_line_branch(&mut candidates, &line);
+            }
         }
     }
 
@@ -1444,8 +1491,21 @@ fn merge_patch_release_line_branch_candidates(
         }
     }
 
+    // Only add release line from current version if the exact line exists as a branch
+    // (not just a suffixed variant like 0.7.x--suffix), to avoid offering non-existent branches
+    // Exception: allow adding when no release lines exist at all (for creating new release lines)
     if let Some(line) = semver_release_line_from_version(current_version) {
-        push_unique_release_line_branch(&mut candidates, &line);
+        let has_any_release_line = unmerged_branches
+            .iter()
+            .chain(existing_branches.iter())
+            .any(|b| is_release_line_branch(scheme, b));
+        let exact_line_exists = unmerged_branches
+            .iter()
+            .chain(existing_branches.iter())
+            .any(|branch| branch == &line);
+        if !has_any_release_line || exact_line_exists {
+            push_unique_release_line_branch(&mut candidates, &line);
+        }
     }
 
     candidates.sort_by_cached_key(|branch| normalize_release_line_branch(branch));
@@ -1500,7 +1560,7 @@ fn prompt_patch_release_line_branch(
                     "{} -> create the next -dev patch branch ({})",
                     branch, next_dev_branch
                 ),
-                next_dev_branch,
+                branch.clone(),
             )
         })
         .collect::<Vec<_>>();
@@ -2682,6 +2742,23 @@ fn prompt_branch_name_input(label: &str) -> Result<String> {
     Ok(branch_name.trim().to_string())
 }
 
+fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
+    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
+    print!("{prompt} {suffix} ");
+    io::stdout()
+        .flush()
+        .context("failed to flush yes/no prompt")?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .context("failed to read yes/no input")?;
+    let answer = line.trim().to_ascii_lowercase();
+    if answer.is_empty() {
+        return Ok(default_yes);
+    }
+    Ok(matches!(answer.as_str(), "y" | "yes"))
+}
+
 fn digit_to_index(character: char) -> Option<usize> {
     character
         .to_digit(10)
@@ -3654,7 +3731,7 @@ fn affected_scope_indexes(
     Ok(vec![find_scope_for_cwd(project, resolved_project, cwd)?])
 }
 
-fn find_scope_for_cwd(
+pub(crate) fn find_scope_for_cwd(
     project: &ProjectConfig,
     resolved_project: &ProjectConfig,
     cwd: &Path,
@@ -3843,46 +3920,6 @@ fn common_ancestor(paths: Vec<PathBuf>) -> Option<PathBuf> {
         root.push(component.as_os_str());
     }
     Some(root)
-}
-
-fn resolve_project_target_paths(project: &ProjectConfig) -> Result<ProjectConfig> {
-    let mut resolved = project.clone();
-
-    if resolved.project_type == ProjectType::AllInOne {
-        let project_root = resolved.project_root_base();
-        absolutize_targets(&mut resolved.targets, project_root.as_deref());
-        return Ok(resolved);
-    }
-
-    let project_root = resolved.project_root_base();
-    for branch in &mut resolved.branches {
-        let branch_root = branch
-            .repo
-            .as_ref()
-            .map(repo_root_path)
-            .or_else(|| project_root.clone());
-        absolutize_targets(&mut branch.targets, branch_root.as_deref());
-    }
-
-    Ok(resolved)
-}
-
-fn absolutize_targets(targets: &mut [TargetSpec], base_root: Option<&Path>) {
-    for target in targets {
-        let trimmed = target.path.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let path = Path::new(trimmed);
-        if path.is_absolute() {
-            continue;
-        }
-
-        if let Some(root) = base_root {
-            target.path = root.join(path).display().to_string();
-        }
-    }
 }
 
 fn parse_bump_action(value: &str) -> Result<BumpAction> {
@@ -4109,16 +4146,6 @@ fn parse_release_version(value: &str) -> Option<Vec<u64>> {
         .split('.')
         .map(|part| part.parse::<u64>().ok())
         .collect()
-}
-
-trait ProjectRootBase {
-    fn project_root_base(&self) -> Option<PathBuf>;
-}
-
-impl ProjectRootBase for ProjectConfig {
-    fn project_root_base(&self) -> Option<PathBuf> {
-        self.repo.as_ref().map(repo_root_path)
-    }
 }
 
 fn run_toppicks() -> Result<()> {
@@ -4717,6 +4744,93 @@ mod tests {
         let candidates =
             merge_patch_release_line_branch_candidates(VersionScheme::SemVer, &[], &[], "0.35.9");
         assert_eq!(candidates, vec!["0.35.x".to_string()]);
+    }
+
+    #[test]
+    fn merge_patch_release_line_candidates_does_not_offer_nonexistent_base_line() {
+        // When only 0.7.x--suffix exists, should NOT offer 0.7.x (the base line doesn't exist)
+        let candidates = merge_patch_release_line_branch_candidates(
+            VersionScheme::SemVer,
+            &[],
+            &["0.7.x--bugfixes-and-Picker-improvements".to_string()],
+            "0.7.6",
+        );
+        // Should only offer the suffixed variant, not the non-existent base line
+        assert!(!candidates.iter().any(|c| c == "0.7.x"));
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c == "0.7.x--bugfixes-and-Picker-improvements")
+        );
+    }
+
+    #[test]
+    fn merge_patch_release_line_candidates_does_not_derive_nonexistent_base_from_dev() {
+        // When v0.7.6-dev exists but 0.7.x doesn't, should NOT derive 0.7.x from the dev branch
+        let candidates = merge_patch_release_line_branch_candidates(
+            VersionScheme::SemVer,
+            &["v0.7.6-dev".to_string()],
+            &["0.7.x--bugfixes-and-Picker-improvements".to_string()],
+            "0.7.6",
+        );
+        // Should not offer 0.7.x since it doesn't exist as a branch
+        assert!(!candidates.iter().any(|c| c == "0.7.x"));
+    }
+
+    #[test]
+    fn prompt_patch_release_line_branch_returns_suffixed_branch_name() {
+        // When selecting a suffixed release line branch, the option value should be the full branch name
+        let release_line_branches = ["0.7.x--bugfixes-and-Picker-improvements".to_string()];
+        let existing_branches: [String; 0] = [];
+        let current_version = "0.7.6";
+        let today = Local::now().date_naive();
+
+        // The function should return the release line branch name, not the dev branch name
+        // Since we can't easily test the interactive prompt, we'll test the option generation logic
+        let options = release_line_branches
+            .iter()
+            .map(|branch| {
+                let next_dev_branch = next_available_semver_dev_branch_for_release_line(
+                    branch,
+                    &existing_branches,
+                    current_version,
+                    today,
+                )
+                .unwrap_or_else(|_| format!("{} -> invalid", branch));
+                fixed_branch_name_option_with_value(
+                    format!(
+                        "{} -> create the next -dev patch branch ({})",
+                        branch, next_dev_branch
+                    ),
+                    branch.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // The preview should show the suffixed release line branch name
+        assert!(
+            options[0]
+                .preview()
+                .contains("0.7.x--bugfixes-and-Picker-improvements")
+        );
+        // The preview should also show the dev branch name (starts from 0.7.0 since no existing dev branches)
+        assert!(options[0].preview().contains("v0.7.1-dev"));
+    }
+
+    #[test]
+    fn sanitize_branch_fragment_converts_spaces_to_dashes() {
+        // Test that sanitize_branch_fragment converts spaces and punctuation to dashes
+        let result = crate::git::sanitize_branch_fragment("Some appended text");
+        assert_eq!(result, Some("Some-appended-text".to_string()));
+
+        let result = crate::git::sanitize_branch_fragment("menu-hotfix");
+        assert_eq!(result, Some("menu-hotfix".to_string()));
+
+        let result = crate::git::sanitize_branch_fragment("  multiple  spaces  ");
+        assert_eq!(result, Some("multiple-spaces".to_string()));
+
+        let result = crate::git::sanitize_branch_fragment("");
+        assert_eq!(result, None);
     }
 
     #[test]

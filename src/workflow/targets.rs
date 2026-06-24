@@ -5,7 +5,11 @@
 //
 // For details, see the LICENSE file in the repository root.
 
-use std::{borrow::Cow, fs, path::Path};
+use std::{
+    borrow::Cow,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use configparser::ini::Ini;
@@ -15,7 +19,7 @@ use serde_yaml::Value as YamlValue;
 use toml_edit::{DocumentMut, Item, Value, value};
 
 use crate::{
-    config::{BranchScopeKind, ProjectConfig, ProjectType, TargetFormat, TargetSpec},
+    config::{BranchScopeKind, ProjectConfig, ProjectType, RepoConfig, TargetFormat, TargetSpec},
     workflow::versioning::VersionScheme,
 };
 
@@ -107,7 +111,57 @@ pub(crate) fn probe_target(
     })
 }
 
+pub(crate) fn resolve_project_target_paths(project: &ProjectConfig) -> ProjectConfig {
+    let mut resolved = project.clone();
+
+    if resolved.project_type == ProjectType::AllInOne {
+        let project_root = project_root_base(&resolved);
+        absolutize_targets(&mut resolved.targets, project_root.as_deref());
+        return resolved;
+    }
+
+    let project_root = project_root_base(&resolved);
+    for branch in &mut resolved.branches {
+        let branch_root = branch
+            .repo
+            .as_ref()
+            .map(repo_root_path)
+            .or_else(|| project_root.clone());
+        absolutize_targets(&mut branch.targets, branch_root.as_deref());
+    }
+
+    resolved
+}
+
+fn repo_root_path(repo: &RepoConfig) -> PathBuf {
+    PathBuf::from(repo.local_root.trim())
+}
+
+fn project_root_base(project: &ProjectConfig) -> Option<PathBuf> {
+    project.repo.as_ref().map(repo_root_path)
+}
+
+fn absolutize_targets(targets: &mut [TargetSpec], base_root: Option<&Path>) {
+    for target in targets {
+        let trimmed = target.path.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let path = Path::new(trimmed);
+        if path.is_absolute() {
+            continue;
+        }
+
+        if let Some(root) = base_root {
+            target.path = root.join(path).display().to_string();
+        }
+    }
+}
+
 pub(crate) fn collect_bump_scopes(project: &ProjectConfig) -> Result<Vec<BumpScope>> {
+    let project = resolve_project_target_paths(project);
+
     if project.project_type == ProjectType::AllInOne {
         return Ok(vec![build_bump_scope(
             project.name.clone(),
@@ -1603,5 +1657,50 @@ edition = "2024"
         ];
 
         assert!(shared_bump_version(&scopes).is_none());
+    }
+
+    #[test]
+    fn collect_bump_scopes_resolves_relative_target_paths_against_repo_root() {
+        use crate::config::{IntegrationMode, RepoConfig};
+
+        let dir =
+            std::env::temp_dir().join(format!("comfygit-target-resolve-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let manifest = dir.join("Cargo.toml");
+        fs::write(
+            &manifest,
+            r#"[package]
+name = "demo"
+version = "9.8.7"
+"#,
+        )
+        .expect("write manifest");
+
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            targets: vec![TargetSpec {
+                label: "Cargo".to_string(),
+                path: "Cargo.toml".to_string(),
+                key_path: "package.version".to_string(),
+                format: TargetFormat::Toml,
+            }],
+            repo: Some(RepoConfig::new(dir.display().to_string(), None)),
+            ..Default::default()
+        };
+
+        let scopes = collect_bump_scopes(&project).expect("scopes should resolve");
+        assert_eq!(
+            scopes[0].current_version.as_deref(),
+            Some("9.8.7"),
+            "relative target paths should resolve against repo root after relocation"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

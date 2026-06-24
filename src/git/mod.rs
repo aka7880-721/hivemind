@@ -268,7 +268,7 @@ pub(crate) fn git_remote_names(repo_root: &str) -> Result<Vec<String>> {
     )?))
 }
 
-fn branch_divergence_counts_with_cancel(
+pub(crate) fn branch_divergence_counts_with_cancel(
     repo_root: &str,
     branch_name: &str,
     upstream_ref: &str,
@@ -279,6 +279,20 @@ fn branch_divergence_counts_with_cancel(
         repo_root,
         &["rev-list", "--left-right", "--count", &comparison],
         cancel,
+    )?;
+    parse_left_right_counts(&output)
+}
+
+pub(crate) fn branch_divergence_counts_from_main(
+    repo_root: &str,
+    branch_name: &str,
+    custom_main_branch: Option<&str>,
+) -> Result<(usize, usize)> {
+    let main_branch = resolve_main_branch_name(repo_root, custom_main_branch)?;
+    let comparison = format!("{}...{}", main_branch, branch_name);
+    let output = run_git_checked(
+        repo_root,
+        &["rev-list", "--left-right", "--count", &comparison],
     )?;
     parse_left_right_counts(&output)
 }
@@ -377,14 +391,40 @@ pub(crate) fn create_branch_and_switch(repo_root: &str, branch_name: &str) -> Re
 }
 
 pub(crate) fn switch_to_existing_branch(repo_root: &str, branch_name: &str) -> Result<()> {
+    switch_to_existing_branch_with_options(repo_root, branch_name, false)
+}
+
+/// Switch to an integration branch after a remote merge, discarding tracked edits that
+/// would block checkout (for example a regenerated `Cargo.lock` left on the source branch).
+pub(crate) fn switch_to_existing_branch_after_merge(
+    repo_root: &str,
+    branch_name: &str,
+) -> Result<()> {
+    switch_to_existing_branch_with_options(repo_root, branch_name, true)
+}
+
+fn switch_to_existing_branch_with_options(
+    repo_root: &str,
+    branch_name: &str,
+    discard_blocking_changes: bool,
+) -> Result<()> {
     let current_branch = current_branch_with_cancel(repo_root, None)?;
     if current_branch.eq_ignore_ascii_case(branch_name) {
         return Ok(());
     }
 
-    let switch_output = run_git(repo_root, &["switch", branch_name])?;
+    let switch_args = if discard_blocking_changes {
+        vec!["switch", "--discard-changes", branch_name]
+    } else {
+        vec!["switch", branch_name]
+    };
+    let switch_output = run_git(repo_root, &switch_args)?;
     if !switch_output.success {
-        run_git_checked(repo_root, &["checkout", branch_name])?;
+        if discard_blocking_changes {
+            run_git_checked(repo_root, &["checkout", "-f", branch_name])?;
+        } else {
+            run_git_checked(repo_root, &["checkout", branch_name])?;
+        }
     }
 
     Ok(())
@@ -542,21 +582,19 @@ pub(crate) fn suggested_tag_name_for_scope(
         return slugify(&project.name);
     };
 
-    let scope_slug = project
-        .branches
-        .get(scope_index)
-        .map(|branch| slugify(branch.display_name()))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| slugify(&project.name));
-
     if let Ok(scopes) = collect_bump_scopes(project)
         && let Some(scope) = scopes.get(scope_index)
         && let Some(version) = &scope.current_version
     {
-        return format!("{}-v{}", scope_slug, version);
+        return format!("v{}", version);
     }
 
-    scope_slug
+    project
+        .branches
+        .get(scope_index)
+        .map(|branch| slugify(branch.display_name()))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| slugify(&project.name))
 }
 
 pub(crate) fn collect_git_scope_contexts(project: &ProjectConfig) -> Result<Vec<GitScopeContext>> {
@@ -793,6 +831,12 @@ pub(crate) fn ensure_git_repo_with_cancel(
     }
 }
 
+pub(crate) fn git_worktree_root(repo_root: &str) -> Result<std::path::PathBuf> {
+    let output = run_git_checked(repo_root, &["rev-parse", "--show-toplevel"])?;
+    let path = std::path::PathBuf::from(output.trim());
+    Ok(crate::cli::best_effort_canonicalize(&path))
+}
+
 pub(crate) fn ensure_local_tag(
     repo_root: &str,
     tag_name: &str,
@@ -809,6 +853,30 @@ pub(crate) fn ensure_local_tag(
         }
         Ok(true)
     }
+}
+
+/// Creates or moves a lightweight/annotated tag to the current `HEAD`.
+pub(crate) fn ensure_local_tag_at_head(
+    repo_root: &str,
+    tag_name: &str,
+    annotation: Option<&str>,
+) -> Result<bool> {
+    let head = run_git_checked(repo_root, &["rev-parse", "HEAD"])?
+        .trim()
+        .to_string();
+    let already_at_head = run_git_checked(repo_root, &["rev-parse", tag_name])
+        .map(|rev| rev.trim() == head)
+        .unwrap_or(false);
+    if already_at_head {
+        return Ok(false);
+    }
+
+    if let Some(annotation) = annotation.filter(|annotation| !annotation.trim().is_empty()) {
+        run_git_checked(repo_root, &["tag", "-f", "-a", tag_name, "-m", annotation])?;
+    } else {
+        run_git_checked(repo_root, &["tag", "-f", tag_name])?;
+    }
+    Ok(true)
 }
 
 pub(crate) fn run_git(repo_root: &str, args: &[&str]) -> Result<GitOutput> {
@@ -1331,6 +1399,66 @@ mod tests {
     }
 
     #[test]
+    fn suggested_tag_name_for_scope_uses_version_only() {
+        let dir =
+            std::env::temp_dir().join(format!("comfygit-suggested-tag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            r#"[package]
+name = "api"
+version = "4.5.6"
+"#,
+        )
+        .expect("write manifest");
+
+        let project = ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::Branched,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: false,
+            version_scheme: VersionScheme::SemVer,
+            changelog: ChangelogSettings::default(),
+            release_now: crate::config::ReleaseNowSettings::default(),
+            tile_info: crate::config::TileInfoSettings::default(),
+            targets: Vec::new(),
+            branches: vec![BranchConfig {
+                name: "api".to_string(),
+                label: "API".to_string(),
+                scope_kind: BranchScopeKind::Service,
+                repo: Some(RepoConfig {
+                    local_root: dir.display().to_string(),
+                    ..RepoConfig::default()
+                }),
+                changelog_enabled: false,
+                changelog_path: None,
+                changelog_hide_pr_messages: false,
+                changelog_hide_bump_messages: false,
+                changelog_mini_commit_hashes: false,
+                changelog_mirror_summary_to_root_changelog: false,
+                changelog_wrap_detailed_if_top_picks: false,
+                release_now: crate::config::ReleaseNowSettings::default(),
+                version_scheme: VersionScheme::SemVer,
+                targets: vec![TargetSpec {
+                    label: "Version".to_string(),
+                    path: "Cargo.toml".to_string(),
+                    key_path: "package.version".to_string(),
+                    format: TargetFormat::Toml,
+                }],
+                advanced_alias: Default::default(),
+            }],
+            repo: None,
+            ..Default::default()
+        };
+
+        assert_eq!(suggested_tag_name_for_scope(&project, Some(0)), "v4.5.6");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn relative_git_timestamps_are_compacted() {
         let now = chrono::Local::now().timestamp();
         let two_days_ago = (now - 60 * 60 * 24 * 2).to_string();
@@ -1404,6 +1532,48 @@ mod tests {
 
         fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
         fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+
+    #[test]
+    fn branch_divergence_counts_from_main_calculates_divergence() {
+        let repo_dir = create_temp_repo_dir("divergence-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+
+        // Create initial commit on main
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write tracked file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        // Create release line branch
+        run_git_checked(&repo_root, &["checkout", "-b", "0.7.x"])
+            .expect("create release line branch");
+
+        // Add commit to release line branch
+        fs::write(repo_dir.join("release.txt"), "release\n").expect("write release file");
+        run_git_checked(&repo_root, &["add", "release.txt"]).expect("stage release file");
+        run_git_checked(&repo_root, &["commit", "-m", "release"]).expect("commit release file");
+
+        // Switch back to main and add more commits
+        run_git_checked(&repo_root, &["checkout", "main"]).expect("switch to main");
+        fs::write(repo_dir.join("main1.txt"), "main1\n").expect("write main1 file");
+        run_git_checked(&repo_root, &["add", "main1.txt"]).expect("stage main1 file");
+        run_git_checked(&repo_root, &["commit", "-m", "main1"]).expect("commit main1 file");
+        fs::write(repo_dir.join("main2.txt"), "main2\n").expect("write main2 file");
+        run_git_checked(&repo_root, &["add", "main2.txt"]).expect("stage main2 file");
+        run_git_checked(&repo_root, &["commit", "-m", "main2"]).expect("commit main2 file");
+
+        // Check divergence: main is 2 commits ahead of 0.7.x, but 0.7.x is 1 commit ahead of main
+        let (main_ahead, main_behind) =
+            branch_divergence_counts_from_main(&repo_root, "0.7.x", None)
+                .expect("calculate divergence");
+        assert_eq!(main_ahead, 2, "main should be 2 commits ahead");
+        assert_eq!(
+            main_behind, 1,
+            "main should be 1 commit behind (release commit)"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
     }
 
     #[test]

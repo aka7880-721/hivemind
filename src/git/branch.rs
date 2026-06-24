@@ -418,7 +418,7 @@ fn next_available_non_mainline_semver_dev_branch(
     }
 }
 
-fn sanitize_branch_fragment(value: &str) -> Option<String> {
+pub(crate) fn sanitize_branch_fragment(value: &str) -> Option<String> {
     let mut sanitized = String::new();
     let mut last_was_separator = true;
 

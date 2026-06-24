@@ -161,6 +161,8 @@ pub(crate) struct App {
     browser_dialog: Option<FileBrowserDialog>,
     pub(crate) snif_dialog: Option<crate::tui::SnifModal>,
     help_modal: Option<HelpModal>,
+    release_now_markdown_view: Option<crate::tui::MarkdownView>,
+    release_now_markdown_source: String,
     overview_tab_strip_area: Option<Rect>,
     project_settings_tab_strip_area: Option<Rect>,
     recent_changes_tab_strip_area: Option<Rect>,
@@ -300,6 +302,8 @@ impl App {
             browser_dialog: None,
             snif_dialog: None,
             help_modal: None,
+            release_now_markdown_view: None,
+            release_now_markdown_source: String::new(),
             overview_tab_strip_area: None,
             project_settings_tab_strip_area: None,
             recent_changes_tab_strip_area: None,
@@ -607,6 +611,170 @@ mod tests {
     }
 
     #[test]
+    fn distro_browser_resolves_repo_relative_script_path_with_flags() {
+        let root =
+            std::env::temp_dir().join(format!("comfygit-distro-browser-{}", std::process::id()));
+        let scripts = root.join("scripts");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&scripts).expect("create script dir");
+
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.config.projects = vec![ProjectConfig {
+            name: "demo".to_string(),
+            alias: String::new(),
+            project_type: ProjectType::AllInOne,
+            integration_mode: IntegrationMode::GitLocalOnly,
+            unified_versioning: true,
+            version_scheme: VersionScheme::SemVer,
+            release_now: crate::config::ReleaseNowSettings {
+                enabled: true,
+                windows_script: "scripts/releaseNOW.sh --win64".to_string(),
+                ..Default::default()
+            },
+            repo: Some(RepoConfig::new(root.display().to_string(), None)),
+            ..Default::default()
+        }];
+        app.selected_project = 0;
+        app.overview_focused_scope = 0;
+        project_settings::sync_project_settings_state(&mut app);
+        app.project_settings_state.focus = ProjectSettingsFocus::ReleaseNowWindows;
+
+        let resolved = project_settings::resolved_project_settings_browser_path(
+            &app,
+            BrowseTarget::ProjectSettingsReleaseNowWindows,
+        );
+        assert_eq!(
+            resolved,
+            scripts.join("releaseNOW.sh").display().to_string(),
+            "browser should resolve repo-relative script paths before opening"
+        );
+
+        app.browser_dialog = Some(
+            FileBrowserDialog::new(BrowseTarget::ProjectSettingsReleaseNowWindows, resolved)
+                .expect("browser dialog should build"),
+        );
+        assert_eq!(
+            app.browser_dialog.as_ref().unwrap().explorer.current().name,
+            "../"
+        );
+        app.confirm_browser_selection()
+            .expect("parent entry should navigate from repo-relative start");
+        assert_eq!(
+            app.browser_dialog
+                .as_ref()
+                .unwrap()
+                .explorer
+                .cwd()
+                .as_path(),
+            root.as_path()
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scope_draft_from_branch_detects_gitlab_github_dual_remotes() {
+        use crate::app::background::ScopeDraft;
+
+        let branch = BranchConfig {
+            name: "core".to_string(),
+            label: "Core".to_string(),
+            scope_kind: BranchScopeKind::Branch,
+            repo: Some(RepoConfig {
+                local_root: "/tmp/core".to_string(),
+                remote_url: Some("git@gitlab.com:org/core.git".to_string()),
+                secondary_remote_url: Some("git@github.com:org/core.git".to_string()),
+                ..RepoConfig::default()
+            }),
+            changelog_enabled: false,
+            changelog_path: None,
+            changelog_hide_pr_messages: false,
+            changelog_hide_bump_messages: false,
+            changelog_mini_commit_hashes: false,
+            changelog_mirror_summary_to_root_changelog: false,
+            changelog_wrap_detailed_if_top_picks: false,
+            release_now: crate::config::ReleaseNowSettings::default(),
+            version_scheme: VersionScheme::SemVer,
+            targets: vec![TargetSpec {
+                label: "Version".to_string(),
+                path: "Cargo.toml".to_string(),
+                key_path: "package.version".to_string(),
+                format: TargetFormat::Toml,
+            }],
+            advanced_alias: Default::default(),
+        };
+
+        let scope = ScopeDraft::from_branch(&branch).expect("scope draft should build");
+        assert_eq!(
+            scope.integration_mode,
+            IntegrationMode::GitLabGitHubEnabled,
+            "dual GitLab/GitHub remotes should restore GitLab+GitHub integration"
+        );
+    }
+
+    #[test]
+    fn tag_dialog_left_arrow_edits_tag_name_without_changing_action() {
+        use crate::workflow::dialogs::{TagAction, TagDialog, TagDialogFocus};
+
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.tag_dialog = Some(TagDialog {
+            project_name: "demo".to_string(),
+            integration_mode: IntegrationMode::GitHubEnabled,
+            scopes: Vec::new(),
+            selected_scope: 0,
+            tag_name: TextInput::with_value("v1.2.3"),
+            annotation: String::new(),
+            actions: vec![TagAction::CreateLocal, TagAction::CreateAndPush],
+            action_index: 1,
+            focus: TagDialogFocus::TagName,
+        });
+
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .expect("left arrow should edit tag name");
+
+        let dialog = app
+            .tag_dialog
+            .as_ref()
+            .expect("tag dialog should stay open");
+        assert_eq!(dialog.action_index, 1);
+        assert!(dialog.focus_accepts_text());
+    }
+
+    #[test]
+    fn browser_parent_entry_navigates_up_on_enter() {
+        let root =
+            std::env::temp_dir().join(format!("comfygit-browser-parent-{}", std::process::id()));
+        let child = root.join("child");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&child).expect("create nested browse dirs");
+
+        let mut app = App::new_for_tests().expect("app should initialize");
+        app.browser_dialog = Some(
+            FileBrowserDialog::new(
+                BrowseTarget::ProjectSettingsReleaseNowWindows,
+                child.display().to_string(),
+            )
+            .expect("browser dialog should build"),
+        );
+        assert_eq!(
+            app.browser_dialog.as_ref().unwrap().explorer.current().name,
+            "../"
+        );
+
+        app.confirm_browser_selection()
+            .expect("parent entry should navigate");
+
+        let dialog = app
+            .browser_dialog
+            .as_ref()
+            .expect("browser should stay open");
+        assert_eq!(dialog.explorer.cwd().as_path(), root.as_path());
+        assert!(app.status.text.contains("parent folder"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn pss_text_input_captures_global_shortcuts() {
         let mut app = App::new_for_tests().expect("app should initialize");
         app.config.projects = vec![ProjectConfig {
@@ -805,6 +973,7 @@ mod tests {
                     actions: vec![TagAction::CreateLocal],
                     integration_mode: IntegrationMode::GitLocalOnly,
                     action_index: 0,
+                    focus: crate::workflow::dialogs::TagDialogFocus::TagName,
                 },
                 changelog_enabled: true,
                 std_changelog_policy: StdChangelogExecutionPolicy::Auto,

@@ -4,6 +4,8 @@
 // Licensed under the ComfyGit SA-PS License
 // For details, see the LICENSE file in the repository root.
 
+pub(crate) mod assets;
+pub(crate) use assets::init_help_picker;
 mod content;
 mod context;
 mod modal;

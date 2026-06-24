@@ -12,7 +12,6 @@ use arboard::Clipboard;
 #[cfg(target_os = "linux")]
 use arboard::{LinuxClipboardKind, SetExtLinux};
 use ratatui_comfy_toaster::{ToastBuilder, ToastInteraction, ToastType};
-use ratatui_explorer::Input as ExplorerInput;
 
 use crate::{
     changelog::{
@@ -82,6 +81,7 @@ impl App {
             HitAction::SelectProject(index) => {
                 self.selected_project = index.min(self.config.projects.len().saturating_sub(1));
                 self.prime_selected_project_dashboard_data();
+                project_settings::invalidate_project_settings_state(self);
                 self.dashboard_focus = DashboardPane::Projects;
             }
             HitAction::SelectOverviewScope(scope_index) => {
@@ -344,6 +344,13 @@ impl App {
             }
         });
 
+        if !crate::workflow::rls_now::is_release_capable_scope(&project, scope_index) {
+            self.status = StatusMessage::info(
+                "ReleaseNOW is only available for Core scope in branched projects (or All-In-One projects).",
+            );
+            return Ok(());
+        }
+
         self.bump_dialog = None;
         self.tag_dialog = None;
         self.tag_annotation_dialog = None;
@@ -417,6 +424,8 @@ impl App {
             .as_mut()
             .ok_or_else(|| anyhow!("ReleaseNOW is not open"))?;
         dialog.release_notes_markdown = notes;
+        self.release_now_markdown_view = None;
+        self.release_now_markdown_source.clear();
         self.release_now_notes_dialog = None;
         self.status = StatusMessage::success("ReleaseNOW release notes updated.");
         Ok(())
@@ -656,7 +665,9 @@ impl App {
             dialog.begin_running();
         }
 
-        self.schedule_foreground_job(BackgroundJobRequest::RunReleaseNow { request })?;
+        self.schedule_foreground_job(BackgroundJobRequest::RunReleaseNow {
+            request: Box::new(request),
+        })?;
         self.status = StatusMessage::info(
             "Running ReleaseNOW for the selected scope. Live logs will stream into the dialog.",
         );
@@ -728,7 +739,75 @@ impl App {
 
         self.release_now_notes_dialog = None;
         self.release_now_dialog = None;
+        self.release_now_markdown_view = None;
+        self.release_now_markdown_source.clear();
         self.status = StatusMessage::info("ReleaseNOW closed.");
+    }
+
+    pub(crate) fn ensure_release_now_markdown_view(&mut self) {
+        let Some(dialog) = self.release_now_dialog.as_ref() else {
+            self.release_now_markdown_view = None;
+            self.release_now_markdown_source.clear();
+            return;
+        };
+        if !dialog.is_release_notes_preview() {
+            self.release_now_markdown_view = None;
+            self.release_now_markdown_source.clear();
+            return;
+        }
+
+        let markdown = dialog.release_notes_markdown.clone();
+        let width = dialog.release_notes_layout_width();
+        if self.release_now_markdown_view.is_none() || self.release_now_markdown_source != markdown
+        {
+            crate::tui::init_help_picker();
+            let picker = crate::tui::help_picker();
+            self.release_now_markdown_view = Some(crate::tui::MarkdownView::new(
+                &markdown, width, None, &picker,
+            ));
+            self.release_now_markdown_source = markdown;
+        } else if let Some(view) = &mut self.release_now_markdown_view {
+            view.set_layout_width(width);
+        }
+    }
+
+    pub(crate) fn try_toggle_release_now_details_at_mouse(&mut self, mouse_row: u16) -> bool {
+        let Some(viewport) = self.release_now_log_viewport else {
+            return false;
+        };
+        if !self
+            .release_now_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.is_release_notes_preview())
+        {
+            return false;
+        }
+
+        self.ensure_release_now_markdown_view();
+        let document_line = self
+            .release_now_dialog
+            .as_ref()
+            .map(|dialog| {
+                dialog.scroll_offset() as usize + mouse_row.saturating_sub(viewport.y) as usize
+            })
+            .unwrap_or(0);
+        let toggled = self
+            .release_now_markdown_view
+            .as_mut()
+            .map(|view| view.toggle_details_at_document_line(document_line))
+            .unwrap_or(false);
+        if !toggled {
+            return false;
+        }
+
+        if let Some(dialog) = &mut self.release_now_dialog {
+            dialog.clear_body_selection();
+            if let Some(view) = &self.release_now_markdown_view {
+                dialog.release_notes_display_line_count = view.line_count();
+            }
+            dialog.scroll = dialog.scroll_offset();
+        }
+        true
     }
 
     pub(crate) fn scroll_release_now(&mut self, delta: i16) {
@@ -753,37 +832,46 @@ impl App {
         let Some(viewport) = self.release_now_log_viewport else {
             return false;
         };
+        self.ensure_release_now_markdown_view();
+        let row = mouse_row.saturating_sub(viewport.y);
+        let notes_view = self.release_now_markdown_view.as_ref();
         let Some(dialog) = &mut self.release_now_dialog else {
             return false;
         };
 
-        dialog.begin_body_selection(mouse_row.saturating_sub(viewport.y))
+        dialog.begin_body_selection(row, notes_view)
     }
 
     pub(crate) fn update_release_now_log_selection(&mut self, mouse_row: u16) -> bool {
         let Some(viewport) = self.release_now_log_viewport else {
             return false;
         };
+        self.ensure_release_now_markdown_view();
+        let row = mouse_row.saturating_sub(viewport.y);
+        let notes_view = self.release_now_markdown_view.as_ref();
         let Some(dialog) = &mut self.release_now_dialog else {
             return false;
         };
 
-        dialog.update_body_selection(mouse_row.saturating_sub(viewport.y))
+        dialog.update_body_selection(row, notes_view)
     }
 
     pub(crate) fn copy_selected_release_now_log(&mut self, mouse_row: u16) {
         let Some(viewport) = self.release_now_log_viewport else {
             return;
         };
+        self.ensure_release_now_markdown_view();
+        let row = mouse_row.saturating_sub(viewport.y);
+        let notes_view = self.release_now_markdown_view.as_ref();
         let Some(dialog) = &mut self.release_now_dialog else {
             return;
         };
 
         if !dialog.has_body_selection() {
-            let _ = dialog.begin_body_selection(mouse_row.saturating_sub(viewport.y));
+            let _ = dialog.begin_body_selection(row, notes_view);
         }
 
-        if let Some(text) = dialog.selected_body_text() {
+        if let Some(text) = dialog.selected_body_text(notes_view) {
             self.copy_text_to_clipboard(&text);
         }
     }
@@ -1047,7 +1135,7 @@ impl App {
                     .is_some_and(|report| !report.in_sync());
                 let warning_pending = validation.warning_message.is_some();
                 self.release_now_dialog =
-                    Some(rls_now::ReleaseNowDialog::from_validation(validation));
+                    Some(rls_now::ReleaseNowDialog::from_validation(*validation));
                 self.release_now_notes_dialog = None;
                 self.status = if mirror_sync_pending {
                     StatusMessage::warning(
@@ -2444,7 +2532,7 @@ impl App {
             | BrowseTarget::ProjectSettingsAliasDistPath
             | BrowseTarget::ProjectSettingsAliasUiPath
             | BrowseTarget::ProjectSettingsAliasCustomPath(_) => {
-                project_settings::initial_browser_path(self, target).unwrap_or_default()
+                project_settings::resolved_project_settings_browser_path(self, target)
             }
         }
     }
@@ -2454,38 +2542,40 @@ impl App {
             return Ok(());
         };
 
-        let selected = dialog.explorer.current().path.clone();
-        let selected_name = dialog.explorer.current().name.clone();
+        let current = dialog.explorer.current();
+        let selected_name = current.name.clone();
+        let selected_path = current.path.clone();
+        let is_directory = current.is_dir;
         let target = dialog.target;
         let select_directories = dialog.select_directories;
 
-        if selected.is_dir() {
+        if is_directory {
             if let Some(dialog) = &mut self.browser_dialog {
-                dialog.explorer.handle(ExplorerInput::Right)?;
+                dialog.explorer.set_cwd(&selected_path)?;
             }
             self.status = StatusMessage::info(if selected_name == "../" {
                 "Moved to the parent folder.".to_string()
             } else {
-                format!("Entered folder '{}'.", selected_name)
+                format!("Entered folder '{}'.", selected_name.trim_end_matches('/'))
             });
             return Ok(());
         }
 
-        if select_directories && !selected.is_dir() {
+        if select_directories && !is_directory {
             self.status = StatusMessage::warning(
                 "Select a directory for Repo root, or press U to use the current file's folder.",
             );
             return Ok(());
         }
 
-        if !select_directories && !selected.is_file() {
+        if !select_directories && !is_directory && !current.is_file() {
             self.status = StatusMessage::warning(
                 "Select a file for Target path. Use Right to enter directories.",
             );
             return Ok(());
         }
 
-        let selected = selected.display().to_string();
+        let selected = selected_path.display().to_string();
         match target {
             BrowseTarget::WizardTargetPath => self.wizard.set_target_path_from_browse(selected),
             BrowseTarget::WizardRepoRoot => self.wizard.set_repo_root_from_browse(selected),
@@ -2529,13 +2619,13 @@ impl App {
             return Ok(());
         }
 
-        let selected = dialog.explorer.current().path.clone();
-        let directory = if selected.is_dir() {
-            selected
-        } else if let Some(parent) = selected.parent() {
+        let current = dialog.explorer.current();
+        let directory = if current.is_dir {
+            current.path.clone()
+        } else if let Some(parent) = current.path.parent() {
             parent.to_path_buf()
         } else {
-            selected
+            current.path.clone()
         };
 
         let selected = directory.display().to_string();

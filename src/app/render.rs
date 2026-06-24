@@ -1277,12 +1277,7 @@ impl App {
             .expect("checked above")
             .scroll;
         let body = crate::tui::render_markdown(&preview_markdown, preview_width);
-        frame.render_widget(
-            Paragraph::new(body)
-                .wrap(Wrap { trim: false })
-                .scroll((scroll, 0)),
-            body_inner,
-        );
+        frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), body_inner);
 
         let workflow_active = self
             .changelog_preview_dialog
@@ -1662,9 +1657,9 @@ impl App {
             ))
             .style(Style::default().fg(Color::Yellow)),
             Line::from(if dialog.can_select_scope() {
-                "Edit the tag name, add an optional annotation, then run the selected action. [ and ] change scope."
+                "Type the tag name, then Tab to scope/action shortcuts. [ and ] change scope."
             } else {
-                "Edit the tag name, add an optional annotation, then run the selected action."
+                "Type the tag name, then Tab to action shortcuts."
             }),
         ];
         frame.render_widget(
@@ -1680,7 +1675,11 @@ impl App {
         let input_block = Block::default()
             .borders(Borders::ALL)
             .title(" value ")
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(if dialog.focus_accepts_text() {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            });
         frame.render_widget(
             Paragraph::new(dialog.tag_name.display_value(true))
                 .block(input_block)
@@ -2185,17 +2184,31 @@ impl App {
         if let Some(dialog) = &mut self.release_now_dialog {
             dialog.set_body_viewport(body_inner.height, body_inner.width);
         }
+        self.ensure_release_now_markdown_view();
+        if let Some(dialog) = &mut self.release_now_dialog
+            && dialog.is_release_notes_preview()
+            && let Some(view) = &self.release_now_markdown_view
+        {
+            dialog.release_notes_display_line_count = view.line_count();
+        }
+        let notes_view = self.release_now_markdown_view.as_ref();
         let dialog = self
             .release_now_dialog
             .as_ref()
             .expect("ReleaseNOW dialog should stay open while rendering");
         frame.render_widget(body_block, sections[2]);
-        frame.render_widget(
-            Paragraph::new(dialog.rendered_body_lines())
-                .wrap(Wrap { trim: false })
-                .scroll((dialog.scroll_offset(), 0)),
-            body_inner,
-        );
+        let body_lines = dialog.rendered_body_lines(notes_view);
+        let body_scroll = (dialog.scroll_offset(), 0);
+        if dialog.is_release_notes_preview() {
+            frame.render_widget(Paragraph::new(body_lines).scroll(body_scroll), body_inner);
+        } else {
+            frame.render_widget(
+                Paragraph::new(body_lines)
+                    .wrap(Wrap { trim: false })
+                    .scroll(body_scroll),
+                body_inner,
+            );
+        }
 
         if dialog.is_mirror_sync_mode() {
             let sync_label = if dialog.mirror_sync_running {

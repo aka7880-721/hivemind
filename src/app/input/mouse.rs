@@ -34,6 +34,11 @@ impl App {
                         help.scroll_wheel(3);
                     }
                 }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(help) = &mut self.help_modal {
+                        help.handle_mouse(mouse);
+                    }
+                }
                 _ => {}
             }
             return;
@@ -328,6 +333,9 @@ impl App {
                     return;
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
+                    if in_log_viewport && self.try_toggle_release_now_details_at_mouse(mouse.row) {
+                        return;
+                    }
                     if in_log_viewport && self.begin_release_now_log_selection(mouse.row) {
                         return;
                     }

@@ -45,6 +45,14 @@ pub(crate) enum HelpContext {
 }
 
 impl HelpContext {
+    /// Directory under `src/tui/help/` for resolving relative image paths in markdown.
+    pub(crate) fn asset_dir(self) -> Option<&'static str> {
+        match self {
+            Self::DashboardProjects => Some("pages/dashboard"),
+            _ => None,
+        }
+    }
+
     pub(crate) fn title(self) -> &'static str {
         match self {
             Self::DashboardProjects => "Projects Pane",

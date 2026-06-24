@@ -4,37 +4,82 @@
 // Licensed under the ComfyGit SA-PS License
 // For details, see the LICENSE file in the repository root.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use std::process::Stdio;
+
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::text::{Line, Text};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui_image::{
+    Resize,
+    picker::Picker,
+    sliced::{SignedPosition, SlicedImage, SlicedProtocol},
+};
 
 use crate::tui::centered_rect;
+use crate::tui::help::assets::{
+    erase_terminal_cells, help_picker, help_terminal_bg, help_uses_sixel, paint_sixel_backdrop,
+    safe_font_size, scale_image_to_cells, screen_row_below_image, seal_sixel_spill_row,
+};
+use crate::tui::markdown_render::MarkdownView;
 
 use super::content::markdown_for;
 use super::context::HelpContext;
-use crate::tui::markdown_render::{markdown_line_count, render_markdown};
+
+struct PreparedImage {
+    sliced: SlicedProtocol,
+}
 
 pub(crate) struct HelpModal {
     pub(crate) context: HelpContext,
     scroll: u16,
-    /// Updated each frame so scroll limits match the rendered layout width.
-    body_width: u16,
+    last_scroll: u16,
+    markdown: MarkdownView,
+    text_area: Rect,
+    picker: Picker,
+    prepared_images: Vec<PreparedImage>,
 }
 
 impl HelpModal {
     pub(crate) fn new(context: HelpContext) -> Self {
+        let picker = help_picker();
+        let markdown = MarkdownView::new(markdown_for(context), 120, context.asset_dir(), &picker);
+        let prepared_images = Self::prepare_images(&picker, &markdown.render());
         Self {
             context,
             scroll: 0,
-            body_width: 80,
+            last_scroll: 0,
+            markdown,
+            text_area: Rect::default(),
+            picker,
+            prepared_images,
         }
     }
 
     pub(crate) fn scroll_wheel(&mut self, delta: i16) {
         self.scroll_by(delta);
+    }
+
+    pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return false;
+        }
+        if !self
+            .text_area
+            .contains(Position::new(mouse.column, mouse.row))
+        {
+            return false;
+        }
+        let rel_row = mouse.row.saturating_sub(self.text_area.y) as usize;
+        let document_line = self.scroll as usize + rel_row;
+        let column = mouse.column.saturating_sub(self.text_area.x);
+        if let Some(url) = self.markdown.link_at_document_line(document_line, column) {
+            open_url(&url);
+            return true;
+        }
+        self.markdown.toggle_details_at_document_line(document_line)
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> bool {
@@ -49,6 +94,10 @@ impl HelpModal {
             KeyCode::Down if key.modifiers.is_empty() => self.scroll_by(1),
             KeyCode::Home => self.scroll = 0,
             KeyCode::End => self.scroll = self.max_scroll(),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let document_line = self.scroll as usize;
+                self.markdown.toggle_details_at_document_line(document_line);
+            }
             _ => {}
         }
         false
@@ -73,7 +122,7 @@ impl HelpModal {
 
         frame.render_widget(
             Paragraph::new(Line::from(
-                "? or Esc close  |  ↑/↓ PgUp/PgDn or wheel scroll  |  Home/End jump",
+                "? or Esc close  |  scroll  |  click links / summary  |  Home/End",
             ))
             .style(Style::default().fg(Color::DarkGray)),
             sections[0],
@@ -82,19 +131,120 @@ impl HelpModal {
         let body_block = Block::default().borders(Borders::ALL);
         let body_inner = body_block.inner(sections[1]);
         frame.render_widget(body_block, sections[1]);
+        self.text_area = body_inner;
+        let layout_w = body_inner.width.saturating_sub(2).max(20);
+        self.markdown.set_layout_width(layout_w);
 
-        self.body_width = body_inner.width.max(20);
-        let body = render_markdown(markdown_for(self.context), self.body_width);
+        let rendered = self.markdown.render();
+        let text_area = body_inner;
+
+        if self.prepared_images.len() != rendered.images.len() {
+            self.prepared_images = Self::prepare_images(&self.picker, &rendered);
+        }
+
+        let term_bg = help_terminal_bg(&self.picker);
+        let image_bands = self.image_bands(&rendered.images);
+        let body = Text::from(rendered.lines);
         frame.render_widget(
             Paragraph::new(body)
-                .wrap(Wrap { trim: false })
-                .scroll((self.scroll, 0)),
-            body_inner,
+                .scroll((self.scroll, 0))
+                .style(Style::default().bg(term_bg)),
+            text_area,
         );
+        if help_uses_sixel(&self.picker) {
+            paint_sixel_backdrop(frame, text_area, self.scroll, &image_bands, term_bg);
+        }
+
+        if help_uses_sixel(&self.picker) && self.last_scroll != self.scroll {
+            for (placement, prepared) in rendered.images.iter().zip(&self.prepared_images) {
+                let size = prepared.sliced.size();
+                let old_top = text_area.y as i32 + placement.row as i32 - self.last_scroll as i32;
+                let old_h = size.height as i32 + 1;
+                if old_top < text_area.y as i32 + text_area.height as i32
+                    && old_top + old_h > text_area.y as i32
+                {
+                    let clip_top = old_top.max(text_area.y as i32) as u16;
+                    let clip_bot =
+                        (old_top + old_h).min(text_area.y as i32 + text_area.height as i32) as u16;
+                    let vis_h = clip_bot.saturating_sub(clip_top);
+                    if vis_h > 0 {
+                        erase_terminal_cells(
+                            frame,
+                            Rect::new(text_area.x, clip_top, text_area.width, vis_h),
+                        );
+                    }
+                }
+            }
+        }
+
+        for (placement, prepared) in rendered.images.iter().zip(&self.prepared_images) {
+            let position = SignedPosition::from((
+                placement.col as i16,
+                placement.row as i16 - self.scroll as i16,
+            ));
+            frame.render_widget(SlicedImage::new(&prepared.sliced, position), text_area);
+            if help_uses_sixel(&self.picker) {
+                let size = prepared.sliced.size();
+                if let Some(y) =
+                    screen_row_below_image(text_area, self.scroll, placement.row, size.height)
+                {
+                    seal_sixel_spill_row(frame, text_area, y, term_bg);
+                }
+            }
+        }
+
+        if help_uses_sixel(&self.picker) {
+            paint_sixel_backdrop(frame, text_area, self.scroll, &image_bands, term_bg);
+        }
+
+        self.last_scroll = self.scroll;
+    }
+
+    fn image_bands(
+        &self,
+        placements: &[comfy_txt_engine::markdown::image::ImagePlacement],
+    ) -> Vec<(usize, usize, u16, u16)> {
+        placements
+            .iter()
+            .zip(&self.prepared_images)
+            .map(|(placement, prepared)| {
+                let size = prepared.sliced.size();
+                // Only skip backdrop on cells where Sixel is drawn; spill row below gets painted.
+                let row_end = placement.row + size.height as usize;
+                (placement.row, row_end, placement.col as u16, size.width)
+            })
+            .collect()
+    }
+
+    fn prepare_images(
+        picker: &Picker,
+        rendered: &comfy_txt_engine::markdown::RenderedMarkdown,
+    ) -> Vec<PreparedImage> {
+        let (font_w, font_h) = safe_font_size(picker);
+        let proto = picker.protocol_type();
+        rendered
+            .images
+            .iter()
+            .filter_map(|placement| {
+                let scaled = scale_image_to_cells(
+                    &placement.image,
+                    placement.width_cells,
+                    placement.height_cells,
+                    font_w,
+                    font_h,
+                    proto,
+                );
+                let size = Size::new(placement.width_cells, placement.height_cells);
+                SlicedProtocol::new_with_resize(picker, scaled, size, Resize::Fit(None))
+                    .ok()
+                    .map(|sliced| PreparedImage { sliced })
+            })
+            .collect()
     }
 
     fn max_scroll(&self) -> u16 {
-        markdown_line_count(markdown_for(self.context), self.body_width)
+        self.markdown
+            .line_count()
             .saturating_sub(1)
             .min(u16::MAX as usize) as u16
     }
@@ -106,5 +256,44 @@ impl HelpModal {
             self.scroll = self.scroll.saturating_add(delta as u16);
         }
         self.scroll = self.scroll.min(self.max_scroll());
+    }
+}
+
+fn open_url(url: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .env_remove("DRI_PRIME")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = url;
+        false
     }
 }
