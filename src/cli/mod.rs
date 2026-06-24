@@ -1244,6 +1244,28 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                 &selected_release_line_branch,
             )?;
 
+            // Check if the release line branch is behind main
+            let repo_root = preferred_repo_root_from_operations(&repo_operations)?;
+            let custom_main_branch = branch_prompt_source.custom_main_branch.as_deref();
+            if let Ok((main_ahead, _main_behind)) = crate::git::branch_divergence_counts_from_main(
+                repo_root,
+                &selected_release_line_branch,
+                custom_main_branch,
+            ) {
+                // If main is ahead of the release line branch (i.e., release line is behind main)
+                if main_ahead > 0 {
+                    let message = format!(
+                        "It seems this release line branch '{}' is {} commit(s) behind `main`. Would you like to perform `cg rrt`?",
+                        selected_release_line_branch, main_ahead
+                    );
+                    if prompt_yes_no(&message, false)? {
+                        with_cli_git_cancellation(|cancel| {
+                            run_reroot(repo_root, custom_main_branch, RerootMode::Merge, cancel)
+                        })?;
+                    }
+                }
+            }
+
             let refreshed_scopes = collect_bump_scopes(&resolved_project)?;
             current_version =
                 resolve_bump_current_version(project, &refreshed_scopes, scope_index)?;
