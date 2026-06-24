@@ -1252,7 +1252,24 @@ pub(crate) fn run_bump(action_name: &str, option_name: Option<&str>) -> Result<(
                 &branch_prompt_source.existing_branches,
                 today,
             )?;
-            Some(format!("v{}-dev", next_version))
+
+            // Ask if user wants to append text to the dev branch name
+            let dev_branch_suffix = if prompt_yes_no(
+                "Would you like to append text to the dev branch name?",
+                false,
+            )? {
+                let suffix = prompt_branch_name_input("Enter text to append")?;
+                let sanitized = crate::git::sanitize_branch_fragment(&suffix)
+                    .ok_or_else(|| anyhow!("branch suffix cannot be empty"))?;
+                Some(sanitized)
+            } else {
+                None
+            };
+
+            match dev_branch_suffix {
+                Some(suffix) => Some(format!("v{}-dev--{}", next_version, suffix)),
+                None => Some(format!("v{}-dev", next_version)),
+            }
         } else {
             let branch_name_options =
                 suggest_branch_name_options(crate::git::BranchNameSuggestionRequest {
@@ -2701,6 +2718,23 @@ fn prompt_branch_name_input(label: &str) -> Result<String> {
         .context("failed to read branch name input")?;
 
     Ok(branch_name.trim().to_string())
+}
+
+fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
+    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
+    print!("{prompt} {suffix} ");
+    io::stdout()
+        .flush()
+        .context("failed to flush yes/no prompt")?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .context("failed to read yes/no input")?;
+    let answer = line.trim().to_ascii_lowercase();
+    if answer.is_empty() {
+        return Ok(default_yes);
+    }
+    Ok(matches!(answer.as_str(), "y" | "yes"))
 }
 
 fn digit_to_index(character: char) -> Option<usize> {
@@ -4759,6 +4793,22 @@ mod tests {
         );
         // The preview should also show the dev branch name (starts from 0.7.0 since no existing dev branches)
         assert!(options[0].preview().contains("v0.7.1-dev"));
+    }
+
+    #[test]
+    fn sanitize_branch_fragment_converts_spaces_to_dashes() {
+        // Test that sanitize_branch_fragment converts spaces and punctuation to dashes
+        let result = crate::git::sanitize_branch_fragment("Some appended text");
+        assert_eq!(result, Some("Some-appended-text".to_string()));
+
+        let result = crate::git::sanitize_branch_fragment("menu-hotfix");
+        assert_eq!(result, Some("menu-hotfix".to_string()));
+
+        let result = crate::git::sanitize_branch_fragment("  multiple  spaces  ");
+        assert_eq!(result, Some("multiple-spaces".to_string()));
+
+        let result = crate::git::sanitize_branch_fragment("");
+        assert_eq!(result, None);
     }
 
     #[test]
