@@ -268,7 +268,7 @@ pub(crate) fn git_remote_names(repo_root: &str) -> Result<Vec<String>> {
     )?))
 }
 
-fn branch_divergence_counts_with_cancel(
+pub(crate) fn branch_divergence_counts_with_cancel(
     repo_root: &str,
     branch_name: &str,
     upstream_ref: &str,
@@ -279,6 +279,20 @@ fn branch_divergence_counts_with_cancel(
         repo_root,
         &["rev-list", "--left-right", "--count", &comparison],
         cancel,
+    )?;
+    parse_left_right_counts(&output)
+}
+
+pub(crate) fn branch_divergence_counts_from_main(
+    repo_root: &str,
+    branch_name: &str,
+    custom_main_branch: Option<&str>,
+) -> Result<(usize, usize)> {
+    let main_branch = resolve_main_branch_name(repo_root, custom_main_branch)?;
+    let comparison = format!("{}...{}", main_branch, branch_name);
+    let output = run_git_checked(
+        repo_root,
+        &["rev-list", "--left-right", "--count", &comparison],
     )?;
     parse_left_right_counts(&output)
 }
@@ -1518,6 +1532,48 @@ version = "4.5.6"
 
         fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
         fs::remove_dir_all(&bare_dir).expect("remove bare repo dir");
+    }
+
+    #[test]
+    fn branch_divergence_counts_from_main_calculates_divergence() {
+        let repo_dir = create_temp_repo_dir("divergence-worktree");
+        let repo_root = repo_dir.to_string_lossy().to_string();
+        init_temp_git_repo(&repo_root);
+
+        // Create initial commit on main
+        fs::write(repo_dir.join("tracked.txt"), "base\n").expect("write tracked file");
+        run_git_checked(&repo_root, &["add", "tracked.txt"]).expect("stage file");
+        run_git_checked(&repo_root, &["commit", "-m", "base"]).expect("commit base file");
+
+        // Create release line branch
+        run_git_checked(&repo_root, &["checkout", "-b", "0.7.x"])
+            .expect("create release line branch");
+
+        // Add commit to release line branch
+        fs::write(repo_dir.join("release.txt"), "release\n").expect("write release file");
+        run_git_checked(&repo_root, &["add", "release.txt"]).expect("stage release file");
+        run_git_checked(&repo_root, &["commit", "-m", "release"]).expect("commit release file");
+
+        // Switch back to main and add more commits
+        run_git_checked(&repo_root, &["checkout", "main"]).expect("switch to main");
+        fs::write(repo_dir.join("main1.txt"), "main1\n").expect("write main1 file");
+        run_git_checked(&repo_root, &["add", "main1.txt"]).expect("stage main1 file");
+        run_git_checked(&repo_root, &["commit", "-m", "main1"]).expect("commit main1 file");
+        fs::write(repo_dir.join("main2.txt"), "main2\n").expect("write main2 file");
+        run_git_checked(&repo_root, &["add", "main2.txt"]).expect("stage main2 file");
+        run_git_checked(&repo_root, &["commit", "-m", "main2"]).expect("commit main2 file");
+
+        // Check divergence: main is 2 commits ahead of 0.7.x, but 0.7.x is 1 commit ahead of main
+        let (main_ahead, main_behind) =
+            branch_divergence_counts_from_main(&repo_root, "0.7.x", None)
+                .expect("calculate divergence");
+        assert_eq!(main_ahead, 2, "main should be 2 commits ahead");
+        assert_eq!(
+            main_behind, 1,
+            "main should be 1 commit behind (release commit)"
+        );
+
+        fs::remove_dir_all(&repo_dir).expect("remove worktree repo dir");
     }
 
     #[test]
