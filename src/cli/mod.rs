@@ -1445,8 +1445,16 @@ fn merge_patch_release_line_branch_candidates(
         }
     }
 
+    // Only add release line from current version if it actually exists as a branch
+    // (either unmerged or existing), to avoid offering non-existent branches
     if let Some(line) = semver_release_line_from_version(current_version) {
-        push_unique_release_line_branch(&mut candidates, &line);
+        let line_exists = unmerged_branches
+            .iter()
+            .chain(existing_branches.iter())
+            .any(|branch| branch == &line);
+        if line_exists {
+            push_unique_release_line_branch(&mut candidates, &line);
+        }
     }
 
     candidates.sort_by_cached_key(|branch| normalize_release_line_branch(branch));
