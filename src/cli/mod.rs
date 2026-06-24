@@ -1435,7 +1435,20 @@ fn merge_patch_release_line_branch_candidates(
         } else if is_comfygit_dev_source_branch(branch)
             && let Some(line) = semver_release_line_branch_from_dev_branch(branch)
         {
-            push_unique_release_line_branch(&mut candidates, &line);
+            // Only add derived release line if the base release line actually exists
+            // (e.g., don't derive 0.7.x from v0.7.6-dev if 0.7.x doesn't exist)
+            // Exception: allow deriving when no release lines exist at all (for creating new release lines)
+            let has_any_release_line = unmerged_branches
+                .iter()
+                .chain(existing_branches.iter())
+                .any(|b| is_release_line_branch(scheme, b));
+            let base_line_exists = unmerged_branches
+                .iter()
+                .chain(existing_branches.iter())
+                .any(|b| b == &line);
+            if !has_any_release_line || base_line_exists {
+                push_unique_release_line_branch(&mut candidates, &line);
+            }
         }
     }
 
@@ -1445,14 +1458,19 @@ fn merge_patch_release_line_branch_candidates(
         }
     }
 
-    // Only add release line from current version if it actually exists as a branch
-    // (either unmerged or existing), to avoid offering non-existent branches
+    // Only add release line from current version if the exact line exists as a branch
+    // (not just a suffixed variant like 0.7.x--suffix), to avoid offering non-existent branches
+    // Exception: allow adding when no release lines exist at all (for creating new release lines)
     if let Some(line) = semver_release_line_from_version(current_version) {
-        let line_exists = unmerged_branches
+        let has_any_release_line = unmerged_branches
+            .iter()
+            .chain(existing_branches.iter())
+            .any(|b| is_release_line_branch(scheme, b));
+        let exact_line_exists = unmerged_branches
             .iter()
             .chain(existing_branches.iter())
             .any(|branch| branch == &line);
-        if line_exists {
+        if !has_any_release_line || exact_line_exists {
             push_unique_release_line_branch(&mut candidates, &line);
         }
     }
@@ -4676,6 +4694,37 @@ mod tests {
         let candidates =
             merge_patch_release_line_branch_candidates(VersionScheme::SemVer, &[], &[], "0.35.9");
         assert_eq!(candidates, vec!["0.35.x".to_string()]);
+    }
+
+    #[test]
+    fn merge_patch_release_line_candidates_does_not_offer_nonexistent_base_line() {
+        // When only 0.7.x--suffix exists, should NOT offer 0.7.x (the base line doesn't exist)
+        let candidates = merge_patch_release_line_branch_candidates(
+            VersionScheme::SemVer,
+            &[],
+            &["0.7.x--bugfixes-and-Picker-improvements".to_string()],
+            "0.7.6",
+        );
+        // Should only offer the suffixed variant, not the non-existent base line
+        assert!(!candidates.iter().any(|c| c == "0.7.x"));
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c == "0.7.x--bugfixes-and-Picker-improvements")
+        );
+    }
+
+    #[test]
+    fn merge_patch_release_line_candidates_does_not_derive_nonexistent_base_from_dev() {
+        // When v0.7.6-dev exists but 0.7.x doesn't, should NOT derive 0.7.x from the dev branch
+        let candidates = merge_patch_release_line_branch_candidates(
+            VersionScheme::SemVer,
+            &["v0.7.6-dev".to_string()],
+            &["0.7.x--bugfixes-and-Picker-improvements".to_string()],
+            "0.7.6",
+        );
+        // Should not offer 0.7.x since it doesn't exist as a branch
+        assert!(!candidates.iter().any(|c| c == "0.7.x"));
     }
 
     #[test]
